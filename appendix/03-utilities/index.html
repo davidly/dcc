@@ -1,0 +1,3092 @@
+<!DOCTYPE html><html lang="en" class="no-js"><head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="MkDocs documentation for DCC C Compiler, its runtime, and dccrtlstrip size analysis.">
+      
+      
+        <meta name="author" content="David Lee">
+      
+      
+      
+        <link rel="prev" href="../02-runtime-sizes/">
+      
+      
+        <link rel="next" href="../05-building-project-docs/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Utilities - DCC C Compiler Reference</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <link href="../../assets/stylesheets/glightbox.min.css" rel="stylesheet"><script src="../../assets/javascripts/glightbox.min.js"></script><style id="glightbox-style">
+            html.glightbox-open { overflow: initial; height: 100%; }
+            .gslide-title { margin-top: 0px; user-select: text; }
+            .gslide-desc { color: #666; user-select: text; }
+            .gslide-image img { background: white; }
+            .gscrollbar-fixer { padding-right: 15px; }
+            .gdesc-inner { font-size: 0.75rem; }
+            body[data-md-color-scheme="slate"] .gdesc-inner { background: var(--md-default-bg-color); }
+            body[data-md-color-scheme="slate"] .gslide-title { color: var(--md-default-fg-color); }
+            body[data-md-color-scheme="slate"] .gslide-desc { color: var(--md-default-fg-color); }
+        </style></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#utilities" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DCC C Compiler Reference" class="md-header__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DCC C Compiler Reference
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Utilities
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink" aria-label="Switch to dark mode" type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 2c-1.82 0-3.53.5-5 1.35C8 5.08 10 8.3 10 12s-2 6.92-5 8.65C6.47 21.5 8.18 22 10 22a10 10 0 0 0 10-10A10 10 0 0 0 10 2"></path></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="cyan" aria-label="Switch to light mode" type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"></path></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required="">
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix="">
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DCC C Compiler Reference" class="md-nav__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    DCC C Compiler Reference
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix="">
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-setup-toolchain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The toolchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-vscode-debugging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code debugging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-debug-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugger host and I/O adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-agent-skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agentic skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../01-c-conformance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C conformance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../02-build-and-link/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building and linking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../03-types-and-conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Types and conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../04-operators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operators
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10">
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Library reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/01-assert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    assert.h: Diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/07-ctype/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ctype.h: Character handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/02-errno/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    errno.h: Error reporting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/03-float/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    float.h: Floating-point limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/04-limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    limits.h: Integer limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/17-locale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    locale.h: Localization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/08-math/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    math.h: Floating point math
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/09-setjmp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    setjmp.h: Non-local jumps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/16-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    signal.h: Signal handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/10-stdarg/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdarg.h: Variadic arguments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/11-stdbool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdbool.h: Boolean type
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/12-stddef/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stddef.h: Common definitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/13-stdint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdint.h: Fixed-width integers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/05-stdio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdio.h: Console and file I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/06-stdlib/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdlib.h: Memory and utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/14-string/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    string.h: String handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/15-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    time.h: Date and time
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../10-system-and-cpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System and CP/M services
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../11-limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../12-examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worked examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" checked="">
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compiler architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-dccrtlstrip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../02-runtime-sizes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime function sizes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#build-driver-mash-maps1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build Driver (ma.sh / ma.ps1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#toolchain-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Toolchain Commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#native-assembler-m80c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native Assembler (m80c)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#native-linker-l80c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native Linker (l80c)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-pipeline-helper-dccmake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build Pipeline Helper (dccmake)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#peephole-optimizer-dccpeep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peephole Optimizer (dccpeep)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-suite-runner-runallps1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Suite Runner (runall.ps1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mir-verifier-and-loop-regressions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MIR Verifier and Loop Regressions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#host-unit-test-validator-validate-unit-testps1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host Unit Test Validator (validate-unit-test.ps1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-overrides-tests_test_overridesjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Overrides (tests/_test_overrides.json)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-reporting-runallps1-report" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Reporting (runall.ps1 -Report)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stack-size-measurement-stacksizesh-stacksizebat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stack Size Measurement (stacksize.sh / stacksize.bat)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../05-building-project-docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building project docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#build-driver-mash-maps1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build Driver (ma.sh / ma.ps1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#toolchain-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Toolchain Commands
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#native-assembler-m80c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native Assembler (m80c)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#native-linker-l80c" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Native Linker (l80c)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-pipeline-helper-dccmake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build Pipeline Helper (dccmake)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#peephole-optimizer-dccpeep" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peephole Optimizer (dccpeep)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-suite-runner-runallps1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Suite Runner (runall.ps1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#mir-verifier-and-loop-regressions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MIR Verifier and Loop Regressions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#host-unit-test-validator-validate-unit-testps1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Host Unit Test Validator (validate-unit-test.ps1)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#test-overrides-tests_test_overridesjson" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Overrides (tests/_test_overrides.json)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#performance-reporting-runallps1-report" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Reporting (runall.ps1 -Report)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stack-size-measurement-stacksizesh-stacksizebat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stack Size Measurement (stacksize.sh / stacksize.bat)
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="utilities">Utilities<a class="headerlink" href="#utilities" title="Permanent link">¶</a></h1>
+<p>Developer scripts for building and testing DCC C Compiler programs.</p>
+<p>Use the source-built <a href="#build-pipeline-helper-dccmake"><code>dccmake</code></a> tools for
+application projects. Run the optional scripts below from the DCC C Compiler
+checkout. The Linux/macOS single-app shell helper does not require PowerShell.</p>
+<h2 id="build-driver-mash-maps1">Build Driver (<code>ma.sh</code> / <code>ma.ps1</code>)<a class="headerlink" href="#build-driver-mash-maps1" title="Permanent link">¶</a></h2>
+<p>The build driver compiles one app, optionally runs <code>dccpeep</code>, strips the
+runtime, assembles, and links a <code>.COM</code> executable.</p>
+<p>Use <code>scripts/ma.sh</code> on Linux/macOS, or <code>scripts/ma.ps1</code> with Windows PowerShell
+5.1 or PowerShell 7+. These are optional checkout helpers; use <code>dccmake</code>
+directly for project builds.</p>
+<h3 id="build-driver-usage">Build Driver Usage<a class="headerlink" href="#build-driver-usage" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">ma</span><span class="p">.</span><span class="n">ps1</span> <span class="p">&lt;</span><span class="n">name</span><span class="p">&gt;</span> <span class="no">[mode] [options]</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>./scripts/ma.sh<span class="w"> </span>&lt;name&gt;<span class="w"> </span><span class="o">[</span>mode<span class="o">]</span><span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+</code></pre></div>
+<ul>
+<li><code>&lt;name&gt;</code> — Test app name (e.g., <code>triangle</code>, <code>sieve</code>, <code>ttt</code>)</li>
+<li><code>[mode]</code> — Build mode: <code>full</code> (both builds), <code>fast</code> (optimized), or <code>nopeep</code>
+  (without the additional peephole pass). The shell driver defaults to <code>fast</code>; the PowerShell driver
+  defaults to <code>full</code>.</li>
+</ul>
+<h3 id="build-driver-examples">Build Driver Examples<a class="headerlink" href="#build-driver-examples" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">ma</span><span class="p">.</span><span class="n">ps1</span> <span class="n">triangle</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">ma</span><span class="p">.</span><span class="n">ps1</span> <span class="n">sieve</span> <span class="n">nopeep</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">ma</span><span class="p">.</span><span class="n">ps1</span> <span class="n">cobint</span> <span class="n">-Mode</span> <span class="n">fast</span> <span class="n">-BuildDir</span> <span class="n">mybuild</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>./scripts/ma.sh<span class="w"> </span>triangle
+./scripts/ma.sh<span class="w"> </span>sieve<span class="w"> </span>nopeep
+./scripts/ma.sh<span class="w"> </span>cobint<span class="w"> </span>--mode<span class="w"> </span>fast<span class="w"> </span>--build-dir<span class="w"> </span>mybuild
+</code></pre></div>
+<h3 id="build-driver-parameters">Build Driver Parameters<a class="headerlink" href="#build-driver-parameters" title="Permanent link">¶</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-Name</code> / positional name</td>
+<td>(required)</td>
+<td>App name without <code>.c</code> extension</td>
+</tr>
+<tr>
+<td><code>-Mode</code> / <code>--mode</code></td>
+<td><code>fast</code> (shell), <code>full</code> (PowerShell)</td>
+<td>Build mode: <code>full</code>, <code>fast</code>, or <code>nopeep</code></td>
+</tr>
+<tr>
+<td><code>-SourcePath</code> / <code>--source-path</code></td>
+<td>Search by name</td>
+<td>Explicit C source path</td>
+</tr>
+<tr>
+<td><code>-BuildDir</code> / <code>--build-dir</code></td>
+<td><code>build</code></td>
+<td>Build directory for artifacts</td>
+</tr>
+<tr>
+<td><code>-Emulator</code> / <code>--emulator</code></td>
+<td><code>ntvcm</code></td>
+<td>Emulator command for CP/M tools</td>
+</tr>
+<tr>
+<td><code>-UseEmulatedM80</code> / <code>--emulated-m80</code></td>
+<td>off</td>
+<td>Assemble with M80.COM under <code>ntvcm</code> instead of native <a href="#native-assembler-m80c"><code>m80c</code></a></td>
+</tr>
+<tr>
+<td><code>-UseEmulatedL80</code> / <code>--emulated-l80</code></td>
+<td>off</td>
+<td>Link with L80.COM under <code>ntvcm</code> instead of native <a href="#native-linker-l80c"><code>l80c</code></a></td>
+</tr>
+</tbody>
+</table>
+<p>The wrapper accepts only the parameters above. Use <code>dccmake</code> directly for
+project settings such as debug builds, per-format overrides, and multi-module
+input lists.</p>
+<h3 id="environment-variables">Environment Variables<a class="headerlink" href="#environment-variables" title="Permanent link">¶</a></h3>
+<ul>
+<li><code>DCC_STACK_SIZE</code> — C stack reserve in bytes; when unset, <code>dcc</code> uses its default</li>
+<li><code>DCC_FORCE_STACK_CHECK</code> — Force <code>-fstack-check</code> on all builds</li>
+<li><code>DCC_FLOATIO</code> — Set to <code>1</code> to force <code>%f</code> support on every <code>printf</code>-family call</li>
+<li><code>DCC_LONGIO</code> — Set to <code>1</code> to force long-format support on every <code>printf</code>-family call</li>
+<li><code>DCC_USE_EMULATED_M80</code>, <code>DCC_USE_EMULATED_L80</code> — Set to <code>1</code> to select the
+  real CP/M assembler or linker under <code>ntvcm</code></li>
+<li><code>DCC_ARGS</code> — Extra whitespace-separated <code>dcc</code> options such as <code>-DNAME=1 -UOLD</code></li>
+<li><code>NTVCM_ARGS</code> — Extra whitespace-separated <code>ntvcm</code> options such as <code>-p -s:4000000</code></li>
+<li><code>DCC_HOME</code> — optional toolchain asset root; used to find <code>include/</code>, <code>lib/</code>, and CP/M tools</li>
+<li><code>DCC_INCLUDE</code> — extra include directories, separated by the host path separator</li>
+<li><code>DCC_LIB</code> — extra runtime/tool asset roots, separated by the host path separator</li>
+<li><code>DCC_RUNTIME</code> — explicit path to <code>DCCRTL.MAC</code></li>
+<li><code>DCC</code>, <code>DCCPEEP</code>, <code>DCCRTLSTRIP</code>, <code>NTVCM</code>, <code>M80</code>, <code>M80C</code>, <code>L80</code>, <code>L80C</code> — Tool paths</li>
+</ul>
+<p>Run <code>./scripts/ma.ps1 -Help</code> on Windows or <code>./scripts/ma.sh --help</code> on Linux/macOS for the full option map, including which
+<code>dcc</code> options are owned by the helper pipeline.</p>
+<h2 id="toolchain-commands">Toolchain Commands<a class="headerlink" href="#toolchain-commands" title="Permanent link">¶</a></h2>
+<p>The DCC C Compiler toolchain is a small set of host tools, CP/M tools, and
+runtime assets. The build drivers resolve these commands from explicit settings
+or environment variables first, then from the local checkout or <code>PATH</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Role</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dcc</code></td>
+<td>C compiler</td>
+<td>Host command that translates C source to M80-compatible <code>.MAC</code> assembly</td>
+</tr>
+<tr>
+<td><code>dccmake</code></td>
+<td>Build pipeline helper</td>
+<td>Owns the normal compile, optimize, strip, assemble, and link pipeline; see <a href="#build-pipeline-helper-dccmake">Build Pipeline Helper (<code>dccmake</code>)</a></td>
+</tr>
+<tr>
+<td><code>dccpeep</code></td>
+<td>Peephole optimizer</td>
+<td>Host command that rewrites generated <code>.MAC</code> files when <code>dcc-peep=true</code></td>
+</tr>
+<tr>
+<td><code>dccrtlstrip</code></td>
+<td>Application/runtime stripper</td>
+<td>Host command that removes unreachable marked app blocks and writes a reduced runtime; see <a href="../01-dccrtlstrip/">DCCRTL strip appendix</a></td>
+</tr>
+<tr>
+<td><code>DCCRTL.MAC</code></td>
+<td>Runtime source</td>
+<td>Full CP/M runtime consumed by <code>dccrtlstrip</code></td>
+</tr>
+<tr>
+<td><a href="#native-assembler-m80c"><code>m80c</code></a></td>
+<td>Native assembler</td>
+<td>Host command, LINK-80-<code>.REL</code>-compatible; default assembler, no <code>ntvcm</code> needed</td>
+</tr>
+<tr>
+<td><a href="#native-linker-l80c"><code>l80c</code></a></td>
+<td>Native linker</td>
+<td>Host command, consumes the same <code>.REL</code> format; default linker, no <code>ntvcm</code> needed</td>
+</tr>
+<tr>
+<td><code>ntvcm</code></td>
+<td>CP/M emulator</td>
+<td>Only needed for the real M80/L80 fallback path, and to run the final <code>.COM</code> programs</td>
+</tr>
+<tr>
+<td><code>m80.com</code></td>
+<td>CP/M assembler</td>
+<td>Real Microsoft assembler; assembles <code>.MAC</code> to <code>.REL</code> under <code>ntvcm</code> when <code>dcc-use-emulated-m80=true</code></td>
+</tr>
+<tr>
+<td><code>l80.com</code></td>
+<td>CP/M linker</td>
+<td>Real Microsoft linker; links <code>.REL</code> files to <code>.COM</code> under <code>ntvcm</code> when <code>dcc-use-emulated-l80=true</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="native-assembler-m80c">Native Assembler (<code>m80c</code>)<a class="headerlink" href="#native-assembler-m80c" title="Permanent link">¶</a></h2>
+<p><code>m80c</code> is the host-native assembler used by the normal DCC build pipeline. It
+accepts the 8080 and Z80 source forms used by DCC, performs two assembly passes,
+and writes LINK-80-compatible <code>.REL</code> objects without running Microsoft
+<code>M80.COM</code> under an emulator.</p>
+<h3 id="m80c-cli-usage">m80c CLI usage<a class="headerlink" href="#m80c-cli-usage" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code>m80c [rel-output[,listing-output]]=source[.MAC] [options]
+</code></pre></div>
+<p>An omitted extension defaults to <code>.MAC</code>, <code>.REL</code>, or <code>.PRN</code> as appropriate.
+Use <code>*</code> in an output position to suppress that explicit name. Output basenames
+use CP/M-style uppercase spelling.</p>
+<p>Common examples:</p>
+<div class="highlight"><pre><span></span><code>m80c<span class="w"> </span><span class="s2">"=FOO.MAC"</span><span class="w"> </span>/X<span class="w"> </span>/O<span class="w"> </span>/Z<span class="w"> </span>/L
+m80c<span class="w"> </span><span class="s2">"FOO.REL,FOO.PRN=FOO.MAC"</span><span class="w"> </span>/Z
+m80c<span class="w"> </span><span class="s2">"=FOO.MAC"</span><span class="w"> </span>/X<span class="w"> </span>/O<span class="w"> </span>/Z<span class="w"> </span>/L<span class="w"> </span>/C
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/Z</code></td>
+<td>on</td>
+<td>Select Z80 mnemonic interpretation. For example, operand-free <code>CPI</code> is the Z80 block-compare instruction.</td>
+</tr>
+<tr>
+<td><code>/I</code></td>
+<td>off</td>
+<td>Select Intel 8080 mnemonic interpretation. For example, <code>CPI value</code> is immediate compare.</td>
+</tr>
+<tr>
+<td><code>/L</code></td>
+<td>off</td>
+<td>Write the <code>.PRN</code> assembly listing.</td>
+</tr>
+<tr>
+<td><code>/R</code></td>
+<td>when a REL output is named</td>
+<td>Request <code>.REL</code> object output.</td>
+</tr>
+<tr>
+<td><code>/O</code></td>
+<td>off</td>
+<td>Request <code>.REL</code> object output in the conventional M80 command form. Native listings remain hexadecimal.</td>
+</tr>
+<tr>
+<td><code>/H</code></td>
+<td>accepted</td>
+<td>Select hexadecimal listing compatibility; hexadecimal is already the native listing format.</td>
+</tr>
+<tr>
+<td><code>/M</code></td>
+<td>off</td>
+<td>Materialize <code>DS</code> storage as zero bytes instead of leaving reserved gaps.</td>
+</tr>
+<tr>
+<td><code>/C</code></td>
+<td>off</td>
+<td>Write the per-module <code>.SYM</code> sidecar used by native <a href="#native-linker-l80c"><code>l80c</code></a> to preserve relocated local symbols.</td>
+</tr>
+<tr>
+<td><code>/X</code></td>
+<td>accepted</td>
+<td>Accepted for M80 command compatibility; native <code>m80c</code> has no separate cross-reference output mode.</td>
+</tr>
+</tbody>
+</table>
+<p>The assembler always writes <code>.LNK</code> segment-size metadata. When DCC source debug
+markers are present, it also writes <code>.DBG</code> source/symbol metadata; <code>/C</code> is not
+required for <code>.DBG</code>. Assembly errors are recorded in the listing when <code>/L</code> is
+enabled and cause a nonzero exit status.</p>
+<h2 id="native-linker-l80c">Native Linker (<code>l80c</code>)<a class="headerlink" href="#native-linker-l80c" title="Permanent link">¶</a></h2>
+<p><code>l80c</code> is the host-native linker used by the normal DCC build pipeline. It
+consumes the LINK-80-compatible <code>.REL</code> files produced by
+<a href="#native-assembler-m80c"><code>m80c</code></a>, resolves
+PUBLIC/EXTRN symbols, relocates CSEG and DSEG values, and writes a CP/M <code>.COM</code>
+image plus a linked <code>.SYM</code> file. Unlike <code>L80.COM</code>, it uses host memory rather
+than CP/M's 64K address space, so large links do not exhaust the linker's own
+workspace.</p>
+<h3 id="l80c-cli-usage">l80c CLI usage<a class="headerlink" href="#l80c-cli-usage" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code>l80c [/P:origin,]module1,module2,...,output/N/E/Y [-o output[.COM]] [-v]
+</code></pre></div>
+<p>Module and output names conventionally use CP/M uppercase spelling. <code>.REL</code> is
+added to module names automatically. Repeating the final module with <code>/N/E/Y</code>,
+as in a Microsoft LINK-80 command, does not link it twice.</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/P:&lt;hex-address&gt;</code></td>
+<td><code>100</code></td>
+<td>Set the linked program origin. The address must fit in 16 bits.</td>
+</tr>
+<tr>
+<td><code>output/N/E/Y</code></td>
+<td>Last module</td>
+<td>Select the output basename using conventional LINK-80 syntax. <code>/N</code>, <code>/E</code>, and <code>/Y</code> do not otherwise change native non-interactive linking.</td>
+</tr>
+<tr>
+<td><code>-o &lt;name&gt;</code></td>
+<td>Output marker or last module</td>
+<td>Select the output basename explicitly. Either <code>APP</code> or <code>APP.COM</code> produces <code>APP.COM</code> and <code>APP.SYM</code>.</td>
+</tr>
+<tr>
+<td><code>-v</code></td>
+<td>off</td>
+<td>Print loaded modules, origin, linked size, and output path.</td>
+</tr>
+</tbody>
+</table>
+<p>The normal DCC command is:</p>
+<div class="highlight"><pre><span></span><code>l80c<span class="w"> </span><span class="s2">"/P:100,RTLMIN,FOO,FOO/N/E/Y"</span>
+</code></pre></div>
+<h3 id="program-origins">Program origins<a class="headerlink" href="#program-origins" title="Permanent link">¶</a></h3>
+<p>Use <code>/P:100</code> for ordinary CP/M applications. CP/M loads a headerless <code>.COM</code>
+file at <code>0100H</code>, so this origin writes the linked program directly with no
+entry wrapper.</p>
+<p><code>l80c</code> also implements LINK-80-compatible nonstandard origins:</p>
+<ul>
+<li><code>0101H</code> or <code>0102H</code>: place the program at that address without generating a
+  jump because the program occupies part of LINK-80's <code>0100H</code>-<code>0102H</code> entry
+  slot.</li>
+<li>Above <code>0102H</code>: put <code>JP &lt;start-address&gt;</code> at <code>0100H</code>, pad to the requested
+  origin, and place the relocated program there.</li>
+<li>Below <code>0100H</code>: store the payload after the CP/M entry point and add a small
+  8080/Z80-compatible bootstrap that copies it to the linked origin before
+  jumping to the program start.</li>
+</ul>
+<p>Nonstandard origins are useful for fixed-address code, overlays or separately
+loaded modules, programs reserving low TPA space for a loader or shared data,
+and system utilities that deliberately relocate or take over the machine.
+High origins remain normal CP/M programs through the generated entry jump.
+Low origins, especially zero, overwrite CP/M low memory and therefore suit only
+specialized programs that do not expect CP/M services to remain intact.</p>
+<div class="admonition important">
+<p class="admonition-title">Not a bare-metal output mode</p>
+<p><code>/P:0</code> still produces a CP/M-loadable <code>.COM</code> with an entry/copy bootstrap.
+It does not emit a raw image beginning at file offset zero. A future
+bare-metal target should use a separate explicit raw-binary option so its
+startup, memory map, stack, and runtime assumptions are unambiguous.</p>
+</div>
+<p>Native <code>l80c</code> currently supports the CSEG/DSEG REL records used by DCC. It
+rejects ASEG, COMMON, malformed records, undefined externals, duplicate globals,
+and images extending past <code>FFFFH</code> rather than guessing and producing a bad
+executable.</p>
+<h2 id="build-pipeline-helper-dccmake">Build Pipeline Helper (<code>dccmake</code>)<a class="headerlink" href="#build-pipeline-helper-dccmake" title="Permanent link">¶</a></h2>
+<p><code>dccmake</code> is the lower-level build helper used by the test runner and by
+repeatable local builds. It compiles one or more C source files, optionally runs
+<code>dccpeep</code>, removes unreachable application functions and objects, strips the
+runtime with <code>dccrtlstrip</code>, then assembles and links with
+native <a href="#native-assembler-m80c"><code>m80c</code></a>/<a href="#native-linker-l80c"><code>l80c</code></a> by
+default (or the real M80/L80 under <code>ntvcm</code> when
+<code>dcc-use-emulated-m80</code>/<code>dcc-use-emulated-l80</code> is set - real L80 runs inside
+<code>ntvcm</code>'s emulated 64K CP/M address space, so its own symbol/relocation
+workspace can run out of memory on large <code>nopeep</code> builds well before the
+target program itself would not fit; <a href="#native-linker-l80c"><code>l80c</code></a> has no such
+ceiling).</p>
+<p>Use <code>dccmake</code> directly when you want one command that owns the whole DCC C
+Compiler pipeline but still lets you choose the exact source files, output name,
+runtime, include directories, and tool paths.</p>
+<h3 id="dccmake-cli-usage">dccmake CLI Usage<a class="headerlink" href="#dccmake-cli-usage" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code>dccmake<span class="w"> </span><span class="o">[</span><span class="nv">key</span><span class="o">=</span>value<span class="w"> </span>...<span class="o">]</span><span class="w"> </span><span class="o">[</span>dcc-style-options<span class="o">]</span>
+dccmake<span class="w"> </span>--dcc-input<span class="w"> </span>main.c,module.c<span class="w"> </span>--dcc-output<span class="w"> </span>APP
+dccmake<span class="w"> </span>main.c<span class="w"> </span>module.c<span class="w"> </span>dcc-output<span class="o">=</span>APP<span class="w"> </span>dcc-peep<span class="o">=</span><span class="nb">true</span>
+</code></pre></div>
+<p>Command-line settings may be written as <code>key=value</code>, <code>--key=value</code>, or
+<code>--key value</code>. Positional <code>.c</code> arguments are treated as <code>dcc-input</code> files. Files
+after the first input are compiled with <code>-module</code> automatically.</p>
+<h3 id="dccmake-cli-examples">dccmake CLI Examples<a class="headerlink" href="#dccmake-cli-examples" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code>dccmake<span class="w"> </span>tests/sieve.c<span class="w"> </span>dcc-output<span class="o">=</span>SIEVE
+dccmake<span class="w"> </span>tests/sieve.c<span class="w"> </span>dcc-output<span class="o">=</span>SIEVE<span class="w"> </span>dcc-peep<span class="o">=</span><span class="nb">false</span>
+dccmake<span class="w"> </span>main.c<span class="w"> </span>module1.c<span class="w"> </span>module2.c<span class="w"> </span>dcc-output<span class="o">=</span>APP<span class="w"> </span>dcc-include-directory<span class="o">=</span>include
+dccmake<span class="w"> </span>tests/attnc99.c<span class="w"> </span>dcc-output<span class="o">=</span>ATTNC99<span class="w"> </span>dcc-stack-bytes<span class="o">=</span><span class="m">768</span><span class="w"> </span>dcc-peep<span class="o">=</span><span class="nb">true</span>
+</code></pre></div>
+<p><code>dccmake</code> also accepts common <code>dcc</code>-style options and maps them onto pipeline
+settings:</p>
+<div class="highlight"><pre><span></span><code>dccmake<span class="w"> </span>tests/tprintf.c<span class="w"> </span>dcc-output<span class="o">=</span>TPRINTF<span class="w"> </span>-ffloatio<span class="w">  </span><span class="c1"># blanket force-on override</span>
+dccmake<span class="w"> </span>tests/app.c<span class="w"> </span>dcc-output<span class="o">=</span>APP<span class="w"> </span>-I<span class="w"> </span>include<span class="w"> </span>-DDEBUG<span class="o">=</span><span class="m">1</span><span class="w"> </span>-UOLD
+dccmake<span class="w"> </span>tests/app.c<span class="w"> </span>dcc-output<span class="o">=</span>APP<span class="w"> </span>-stack<span class="w"> </span><span class="m">1024</span><span class="w"> </span>-fstack-check
+</code></pre></div>
+<h3 id="dccmaketxt-files">dccmake.txt Files<a class="headerlink" href="#dccmaketxt-files" title="Permanent link">¶</a></h3>
+<p>When a <code>dccmake.txt</code> file exists in the current directory, <code>dccmake</code> reads it
+first and then applies command-line settings as overrides. The file uses one
+<code>key=value</code> setting per line. Blank lines are ignored, and text after <code>#</code> is a
+comment.</p>
+<p>Values may reference environment variables with <code>${NAME}</code>. The variable must be
+set, and malformed references are errors. This is useful for checking a project
+configuration into source control without hard-coding checkout-specific paths.</p>
+<div class="highlight"><pre><span></span><code># dccmake configuration for ATTNC99
+dcc-input=attnc99.c
+dcc-output=ATTNC99
+dcc-peep=true
+dcc-build-dir=build
+dcc-runtime=${DCC_DIR}/DCCRTL.MAC
+dcc-include-directory=${DCC_DIR}
+dcc-tool=${DCC_DIR}/dcc
+dccpeep-tool=${DCC_DIR}/dccpeep
+dccrtlstrip-tool=${DCC_DIR}/dccrtlstrip
+m80c-tool=${DCC_DIR}/m80c
+l80c-tool=${DCC_DIR}/l80c
+</code></pre></div>
+<p>With that file in place, set the tool roots and build the app:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">DCC_DIR</span><span class="o">=</span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/GitHub/dcc"</span>
+
+dccmake
+</code></pre></div>
+<p>On Windows, set <code>DCC_DIR</code> in PowerShell and append <code>.exe</code> to the five host-tool
+paths. Emulator paths are unnecessary for the default native build pipeline.</p>
+<p>The generated CP/M executable lands in the configured build directory, for
+example <code>build/ATTNC99.COM</code>. To place that executable beside your source,
+copy just the selected output:</p>
+<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>build/ATTNC99.COM<span class="w"> </span>.
+</code></pre></div>
+<p>For source debugging, keep its matching <code>.DBG</code> alongside it. Preserve the
+build directory when it contains other applications, fixtures, or outputs you
+still need.</p>
+<p>Command-line values override the file, so this builds the same app without the
+peephole optimizer:</p>
+<div class="highlight"><pre><span></span><code>dccmake<span class="w"> </span>dcc-peep<span class="o">=</span><span class="nb">false</span>
+</code></pre></div>
+<h3 id="dccmake-settings">dccmake Settings<a class="headerlink" href="#dccmake-settings" title="Permanent link">¶</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dcc-input</code></td>
+<td>(required)</td>
+<td>Comma-separated C sources; positional <code>.c</code> arguments are also accepted</td>
+</tr>
+<tr>
+<td><code>dcc-output</code></td>
+<td>First input base name</td>
+<td>CP/M 8-character output base name</td>
+</tr>
+<tr>
+<td><code>dcc-floatio</code></td>
+<td><code>false</code></td>
+<td>Force <code>%f</code> support on every <code>printf</code>-family call when true; literal formats are normally detected per call</td>
+</tr>
+<tr>
+<td><code>dcc-no-floatio</code></td>
+<td><code>false</code></td>
+<td>Force <code>%f</code> support off even for matching literals or the non-literal fallback</td>
+</tr>
+<tr>
+<td><code>dcc-flongio</code></td>
+<td><code>false</code></td>
+<td>Force long-format support on every <code>printf</code>-family call when true; literal formats are normally detected per call</td>
+</tr>
+<tr>
+<td><code>dcc-no-longio</code></td>
+<td><code>false</code></td>
+<td>Force long-format support off even for matching literals or the non-literal fallback</td>
+</tr>
+<tr>
+<td><code>dcc-hexio</code></td>
+<td><code>false</code></td>
+<td>Force <code>%x</code>/<code>%X</code> support on every <code>printf</code>-family call</td>
+</tr>
+<tr>
+<td><code>dcc-no-hexio</code></td>
+<td><code>false</code></td>
+<td>Force <code>%x</code>/<code>%X</code> support off, even for matching formats</td>
+</tr>
+<tr>
+<td><code>dcc-octio</code></td>
+<td><code>false</code></td>
+<td>Force <code>%o</code> support on every <code>printf</code>-family call</td>
+</tr>
+<tr>
+<td><code>dcc-no-octio</code></td>
+<td><code>false</code></td>
+<td>Force <code>%o</code> support off, even for matching formats</td>
+</tr>
+<tr>
+<td><code>dcc-stack-bytes</code></td>
+<td><code>512</code></td>
+<td>Stack reserve passed to <code>dcc</code> with <code>-stack</code></td>
+</tr>
+<tr>
+<td><code>dcc-stack-check</code></td>
+<td>Environment/default</td>
+<td>Pass <code>-fstack-check</code> to <code>dcc</code></td>
+</tr>
+<tr>
+<td><code>dcc-no-narrow</code></td>
+<td><code>false</code></td>
+<td>Pass <code>-fno-narrow</code> to disable byte-narrowing passes</td>
+</tr>
+<tr>
+<td><code>dcc-debug</code></td>
+<td><code>false</code></td>
+<td><code>true</code> emits full conservative debug metadata; <code>lines</code> emits release-identical optimized metadata with ranged variable locations. Both require native <a href="#native-assembler-m80c"><code>m80c</code></a></td>
+</tr>
+<tr>
+<td><code>dcc-include-directory</code></td>
+<td>Auto-adds <code>.</code> when standard headers are in the current directory</td>
+<td>Comma-separated include directories; <code>dcc-include</code> is an alias</td>
+</tr>
+<tr>
+<td><code>dcc-define</code></td>
+<td>none</td>
+<td>Comma-separated <code>NAME[=value]</code> entries passed to <code>dcc</code> as <code>-D</code>; <code>dcc-defines</code> is an alias</td>
+</tr>
+<tr>
+<td><code>dcc-undefine</code></td>
+<td>none</td>
+<td>Comma-separated names passed to <code>dcc</code> as <code>-U</code>; <code>dcc-undefines</code> is an alias</td>
+</tr>
+<tr>
+<td><code>dcc-peep</code></td>
+<td><code>true</code></td>
+<td>Run <code>dccpeep</code> after compiling each <code>.MAC</code> file</td>
+</tr>
+<tr>
+<td><code>dcc-peep-debug</code></td>
+<td><code>false</code></td>
+<td>Run <code>dccpeep</code> over full conservative <code>-g</code> output; use <code>dcc-debug=lines</code> for release-identical optimized code</td>
+</tr>
+<tr>
+<td><code>dcc-strip-unused</code></td>
+<td><code>true</code></td>
+<td>Remove application functions and objects unreachable across all input modules. Set <code>false</code> when producing a module intended for a separate later link</td>
+</tr>
+<tr>
+<td><code>dcc-build-dir</code></td>
+<td><code>build</code></td>
+<td>Artifact directory</td>
+</tr>
+<tr>
+<td><code>dcc-runtime</code></td>
+<td><code>DCC_RUNTIME</code>, local <code>DCCRTL.MAC</code>, or <code>DCCRTL.MAC</code></td>
+<td>Runtime source passed to <code>dccrtlstrip</code></td>
+</tr>
+<tr>
+<td><code>dcc-tool</code></td>
+<td><code>DCC</code>, local <code>dcc</code>, or <code>dcc</code></td>
+<td>DCC compiler command</td>
+</tr>
+<tr>
+<td><code>dccpeep-tool</code></td>
+<td><code>DCCPEEP</code>, local <code>dccpeep</code>, or <code>dccpeep</code></td>
+<td>Peephole optimizer command</td>
+</tr>
+<tr>
+<td><code>dccrtlstrip-tool</code></td>
+<td><code>DCCRTLSTRIP</code>, local <code>dccrtlstrip</code>, or <code>dccrtlstrip</code></td>
+<td>Application/runtime stripper command</td>
+</tr>
+<tr>
+<td><code>ntvcm-tool</code></td>
+<td><code>NTVCM</code> or <code>ntvcm</code></td>
+<td>Emulator command used to run M80/L80 (only when either is emulated)</td>
+</tr>
+<tr>
+<td><code>m80-command</code></td>
+<td><code>M80</code> or <code>m80</code></td>
+<td>CP/M assembler command passed to <code>ntvcm</code>; emulated-M80 path only</td>
+</tr>
+<tr>
+<td><code>m80c-tool</code></td>
+<td><code>M80C</code>, local <code>m80c</code>, or <code>m80c</code></td>
+<td>Native host assembler command (default, no <code>ntvcm</code>); see <a href="#native-assembler-m80c"><code>m80c</code></a></td>
+</tr>
+<tr>
+<td><code>dcc-use-emulated-m80</code></td>
+<td><code>false</code></td>
+<td>Assemble with real <code>M80.COM</code> under <code>ntvcm</code> instead of native <a href="#native-assembler-m80c"><code>m80c</code></a></td>
+</tr>
+<tr>
+<td><code>l80-command</code></td>
+<td><code>L80</code> or <code>l80</code></td>
+<td>CP/M linker command passed to <code>ntvcm</code>; emulated-L80 path only</td>
+</tr>
+<tr>
+<td><code>l80c-tool</code></td>
+<td><code>L80C</code>, local <code>l80c</code>, or <code>l80c</code></td>
+<td>Native host linker command (default, no <code>ntvcm</code>); see <a href="#native-linker-l80c"><code>l80c</code></a></td>
+</tr>
+<tr>
+<td><code>dcc-use-emulated-l80</code></td>
+<td><code>false</code></td>
+<td>Link with real <code>L80.COM</code> under <code>ntvcm</code> instead of native <a href="#native-linker-l80c"><code>l80c</code></a></td>
+</tr>
+</tbody>
+</table>
+<p><code>dccmake</code> initializes its Boolean settings from the matching environment
+variables before reading <code>dccmake.txt</code>: <code>DCC_FLOATIO</code>, <code>DCC_NO_FLOATIO</code>,
+<code>DCC_LONGIO</code>, <code>DCC_NO_LONGIO</code>, <code>DCC_HEXIO</code>, <code>DCC_NO_HEXIO</code>, <code>DCC_OCTIO</code>,
+<code>DCC_NO_OCTIO</code>, <code>DCC_FORCE_STACK_CHECK</code>, <code>DCC_NO_NARROW</code>, <code>DCC_DEBUG</code>,
+<code>DCC_DEBUG_LINES</code>,
+<code>DCC_PEEP_DEBUG</code>, <code>DCC_USE_EMULATED_M80</code>, and
+<code>DCC_USE_EMULATED_L80</code>. File settings and then command-line settings override
+those defaults.</p>
+<p>With all formatted-I/O settings at their default <code>false</code>, <code>dccmake</code> passes no
+override to dcc and adds no forced keep root to <code>dccrtlstrip</code>. dcc therefore
+performs its normal per-call detection for float, long, hexadecimal, and octal
+formats. The force-on settings are neutral when false; use a <code>dcc-no-*io</code>
+setting only when that format support must be forced off.</p>
+<p>Source input basenames and the output name must be CP/M 8.3-clean. For example,
+<code>module1.c</code> is valid, but a generated module output base longer than eight
+characters is not.</p>
+<h3 id="dccmake-dcc-style-options">dccmake dcc-style Options<a class="headerlink" href="#dccmake-dcc-style-options" title="Permanent link">¶</a></h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Equivalent setting</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-f</code>, <code>-ffloatio</code></td>
+<td><code>dcc-floatio=true</code></td>
+</tr>
+<tr>
+<td><code>-fno-floatio</code></td>
+<td><code>dcc-no-floatio=true</code></td>
+</tr>
+<tr>
+<td><code>-fl</code>, <code>-flongio</code></td>
+<td><code>dcc-flongio=true</code></td>
+</tr>
+<tr>
+<td><code>-fno-longio</code></td>
+<td><code>dcc-no-longio=true</code></td>
+</tr>
+<tr>
+<td><code>-fhexio</code></td>
+<td><code>dcc-hexio=true</code></td>
+</tr>
+<tr>
+<td><code>-fno-hexio</code></td>
+<td><code>dcc-no-hexio=true</code></td>
+</tr>
+<tr>
+<td><code>-foctio</code></td>
+<td><code>dcc-octio=true</code></td>
+</tr>
+<tr>
+<td><code>-fno-octio</code></td>
+<td><code>dcc-no-octio=true</code></td>
+</tr>
+<tr>
+<td><code>-s &lt;bytes&gt;</code>, <code>-stack &lt;bytes&gt;</code>, <code>-stack=&lt;bytes&gt;</code></td>
+<td><code>dcc-stack-bytes=&lt;bytes&gt;</code></td>
+</tr>
+<tr>
+<td><code>-fstack-check</code></td>
+<td><code>dcc-stack-check=true</code></td>
+</tr>
+<tr>
+<td><code>-fno-narrow</code></td>
+<td><code>dcc-no-narrow=true</code></td>
+</tr>
+<tr>
+<td><code>-g</code></td>
+<td><code>dcc-debug=true</code></td>
+</tr>
+<tr>
+<td><code>-gline</code></td>
+<td><code>dcc-debug=lines</code></td>
+</tr>
+<tr>
+<td><code>-femulated-m80</code></td>
+<td><code>dcc-use-emulated-m80=true</code></td>
+</tr>
+<tr>
+<td><code>-femulated-l80</code></td>
+<td><code>dcc-use-emulated-l80=true</code></td>
+</tr>
+<tr>
+<td><code>-I &lt;dir&gt;</code>, <code>-Idir</code></td>
+<td>Add an include directory</td>
+</tr>
+<tr>
+<td><code>-D &lt;name&gt;[=value]</code>, <code>-Dname=value</code></td>
+<td>Pass a define to <code>dcc</code></td>
+</tr>
+<tr>
+<td><code>-U &lt;name&gt;</code>, <code>-Uname</code></td>
+<td>Pass an undefine to <code>dcc</code></td>
+</tr>
+<tr>
+<td><code>-v</code>, <code>--version</code></td>
+<td>Print <code>dccmake</code> version</td>
+</tr>
+</tbody>
+</table>
+<p><code>-c</code> and <code>-module</code> are rejected because <code>dccmake</code> decides module mode from the
+input order.</p>
+<h2 id="peephole-optimizer-dccpeep">Peephole Optimizer (<code>dccpeep</code>)<a class="headerlink" href="#peephole-optimizer-dccpeep" title="Permanent link">¶</a></h2>
+<p><code>dccmake</code> runs <code>dccpeep</code> after compilation when <code>dcc-peep=true</code>. It can also be
+invoked directly:</p>
+<div class="highlight"><pre><span></span><code>dccpeep<span class="w"> </span><span class="o">[</span>-Ot<span class="p">|</span>-Os<span class="o">]</span><span class="w"> </span><span class="o">[</span>-fstats<span class="o">]</span><span class="w"> </span>input.mac<span class="w"> </span>output.mac
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-Ot</code></td>
+<td>Optimize for execution time (default)</td>
+</tr>
+<tr>
+<td><code>-Os</code></td>
+<td>Optimize for code size</td>
+</tr>
+<tr>
+<td><code>-fstats</code></td>
+<td>Print optimization statistics</td>
+</tr>
+</tbody>
+</table>
+<h2 id="test-suite-runner-runallps1">Test Suite Runner (<code>runall.ps1</code>)<a class="headerlink" href="#test-suite-runner-runallps1" title="Permanent link">¶</a></h2>
+<p>Builds and runs the test suite against per-app baselines in <code>tests/baselines/</code>.
+It uses <code>dccmake</code> for builds and <code>tests/_test_overrides.json</code> for test-specific
+runtime arguments, stack sizes, and optional DCC C Compiler build flags.</p>
+<p>Runs in parallel by default:</p>
+<ul>
+<li>Each app builds in its own directory below a per-invocation
+  <code>&lt;build-root&gt;/run-&lt;pid&gt;/</code> folder, so concurrent builds do not clobber shared
+  artifacts.</li>
+<li>The per-invocation folder is removed automatically on exit; pass <code>-KeepBuild</code>
+  to retain it. On Linux, the build root defaults to <code>/dev/shm/dcc-runall</code> when
+  available; elsewhere it defaults to <code>build</code>.</li>
+<li>Failures print as each app completes. PASS lines are suppressed by default;
+  pass <code>-FailuresOnly:$false</code> to show every result.</li>
+<li>Use <code>-Serial</code> to fall back to sequential builds in the shared <code>build/</code>
+  directory.</li>
+<li>Pass <code>-Extended</code> to also run the imported c-testsuite single-exec corpus
+  (via <code>runall-extended.ps1</code>) after the main suite.</li>
+<li>The lightweight stack-overflow guard (<code>-fstack-check</code>) is <strong>on by default</strong>;
+  pass <code>-NoStackCheck</code> to build without it.</li>
+<li>Z80 cycle counts and <code>.COM</code> sizes are checked against
+  <code>tests/perf_baselines.csv</code> by default, with no separate benchmark pass. Use
+  <code>-NoPerfCheck</code> to skip this check or <code>-UpdatePerfBaseline</code> after an intentional
+  measured change.</li>
+<li>Pass <code>-Report</code> to append cycles, <code>.COM</code> sizes, and clock-normalized times to a
+  historical CSV report. Report mode implies <code>-NoStackCheck</code>.</li>
+</ul>
+<h3 id="test-runner-usage">Test Runner Usage<a class="headerlink" href="#test-runner-usage" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="no">[options]</span>
+</code></pre></div>
+<p>With no options, the suite runs in parallel, enables <code>-fstack-check</code>, and uses
+<code>-Mode fast</code>. Use <code>-Mode full</code> to run builds with and without <code>dccpeep</code>.</p>
+<h3 id="test-runner-examples">Test Runner Examples<a class="headerlink" href="#test-runner-examples" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span>                       <span class="c"># quick optimized-only default</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Help</span>                 <span class="c"># show help and exit</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Serial</span>               <span class="c"># sequential fallback</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-NoStackCheck</span>         <span class="c"># build without the stack guard</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-ThrottleLimit</span> <span class="n">8</span>      <span class="c"># cap concurrency</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Emulator</span> <span class="n">altair</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Mode</span> <span class="n">fast</span>            <span class="c"># optimized build only</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Mode</span> <span class="n">nopeep</span>          <span class="c"># build without dccpeep only</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Apps</span> <span class="n">tprintf</span><span class="p">,</span><span class="n">tlong</span>   <span class="c"># selected apps only</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-FailFast</span>             <span class="c"># stop dispatching after a failure</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-FailuresOnly</span><span class="p">:</span><span class="nv">$false</span>  <span class="c"># include PASS lines</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Extended</span>             <span class="c"># also run extended c-testsuite</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-KeepBuild</span>            <span class="c"># keep the per-run build folder</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Report</span>               <span class="c"># also append perf_results.csv</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Mode</span> <span class="n">full</span> <span class="n">-UpdatePerfBaseline</span>
+</code></pre></div>
+<h3 id="build-modes">Build Modes<a class="headerlink" href="#build-modes" title="Permanent link">¶</a></h3>
+<p>The <code>-Mode</code> parameter selects which optimization pass(es) to build and verify.
+<strong>The default is <code>fast</code>.</strong></p>
+<ul>
+<li><strong><code>fast</code></strong> — optimized: runs the <code>dccpeep</code> peephole optimizer after compiling.
+  This produces the optimized CP/M Z80 binary.</li>
+<li><strong><code>nopeep</code></strong> — skips <code>dccpeep</code>. Compiler MIR optimizations and application
+  stripping still run; this is not an <code>-O0</code> build.</li>
+<li><strong><code>full</code></strong> — builds and verifies each app <strong>twice</strong>, once in each mode,
+  against the same baseline. This catches optimizer bugs that change a program's
+  output.</li>
+</ul>
+<h3 id="test-runner-parameters">Test Runner Parameters<a class="headerlink" href="#test-runner-parameters" title="Permanent link">¶</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-Emulator</code></td>
+<td><code>ntvcm</code></td>
+<td>Emulator command for running .COM files</td>
+</tr>
+<tr>
+<td><code>-NoStackCheck</code></td>
+<td>(off)</td>
+<td>Disable <code>-fstack-check</code> (the guard is ON by default)</td>
+</tr>
+<tr>
+<td><code>-UseEmulatedM80</code></td>
+<td>(off)</td>
+<td>Assemble with M80.COM under <code>ntvcm</code> instead of native <a href="#native-assembler-m80c"><code>m80c</code></a></td>
+</tr>
+<tr>
+<td><code>-UseEmulatedL80</code></td>
+<td>(off)</td>
+<td>Link with L80.COM under <code>ntvcm</code> instead of native <a href="#native-linker-l80c"><code>l80c</code></a></td>
+</tr>
+<tr>
+<td><code>-BuildDir</code></td>
+<td><code>build</code></td>
+<td>Build directory for artifacts</td>
+</tr>
+<tr>
+<td><code>-NoRamDisk</code></td>
+<td>(off)</td>
+<td>On Linux, disable the automatic <code>/dev/shm/dcc-runall</code> build root</td>
+</tr>
+<tr>
+<td><code>-BaselineDir</code></td>
+<td><code>tests/baselines</code></td>
+<td>Directory of per-app <code>&lt;app&gt;.txt</code> baselines</td>
+</tr>
+<tr>
+<td><code>-Mode</code></td>
+<td><code>fast</code></td>
+<td>Build mode: <code>fast</code> (with dccpeep), <code>nopeep</code> (without dccpeep), or <code>full</code> (both)</td>
+</tr>
+<tr>
+<td><code>-Apps</code></td>
+<td>all tests</td>
+<td>Comma-separated app names to run</td>
+</tr>
+<tr>
+<td><code>-RunTimeout</code></td>
+<td><code>60</code></td>
+<td>Per-build and per-emulator-run timeout in seconds</td>
+</tr>
+<tr>
+<td><code>-Help</code></td>
+<td>(off)</td>
+<td>Show help text and exit without building or running tests</td>
+</tr>
+<tr>
+<td><code>-Extended</code></td>
+<td>(off)</td>
+<td>Also run the extended c-testsuite corpus after the main suite</td>
+</tr>
+<tr>
+<td><code>-Serial</code></td>
+<td>(off)</td>
+<td>Run sequentially instead of the default parallel mode</td>
+</tr>
+<tr>
+<td><code>-ThrottleLimit</code></td>
+<td>CPU core count</td>
+<td>Max concurrent apps in parallel mode</td>
+</tr>
+<tr>
+<td><code>-KeepBuild</code></td>
+<td>(off)</td>
+<td>Keep the per-invocation run folder instead of removing it on exit (parallel mode)</td>
+</tr>
+<tr>
+<td><code>-FailFast</code></td>
+<td>(off)</td>
+<td>Stop dispatching new apps after the first correctness or performance failure</td>
+</tr>
+<tr>
+<td><code>-FailuresOnly</code></td>
+<td>on</td>
+<td>Suppress PASS lines; pass <code>-FailuresOnly:$false</code> for full output</td>
+</tr>
+<tr>
+<td><code>-Report</code></td>
+<td>(off)</td>
+<td>Append cycle, normalized-time, and <code>.COM</code> size metrics to a CSV report; implies <code>-NoStackCheck</code></td>
+</tr>
+<tr>
+<td><code>-ReportFile</code></td>
+<td><code>perf_results.csv</code></td>
+<td>CSV path used by <code>-Report</code></td>
+</tr>
+<tr>
+<td><code>-ReportClockHz</code></td>
+<td><code>400000000</code></td>
+<td>Nominal clock used to derive report milliseconds from Z80 cycles; does not throttle execution</td>
+</tr>
+<tr>
+<td><code>-NoPerfCheck</code></td>
+<td>(off)</td>
+<td>Skip the default cycle-count and <code>.COM</code> size regression check</td>
+</tr>
+<tr>
+<td><code>-UpdatePerfBaseline</code></td>
+<td>(off)</td>
+<td>Update checked performance columns for the modes built by this run</td>
+</tr>
+<tr>
+<td><code>-PerfBaselineFile</code></td>
+<td><code>tests/perf_baselines.csv</code></td>
+<td>Checked cycle-count and <code>.COM</code> size baseline</td>
+</tr>
+<tr>
+<td><code>-NarrowDiff</code></td>
+<td>(off)</td>
+<td>Compare normal and <code>-fno-narrow</code> runs to detect narrowing behavior changes</td>
+</tr>
+<tr>
+<td><code>-TimingBreakdown</code></td>
+<td>(off)</td>
+<td>Print suite-phase and aggregate build-pipeline timing percentages</td>
+</tr>
+</tbody>
+</table>
+<h3 id="output">Output<a class="headerlink" href="#output" title="Permanent link">¶</a></h3>
+<p>Reports:</p>
+<ul>
+<li>Total apps discovered</li>
+<li>Passed/failed/skipped counts</li>
+<li>Per-app build and execution status (live in parallel mode)</li>
+<li>Output verification against baseline</li>
+<li>Optional CSV performance report when <code>-Report</code> is passed</li>
+<li>Exit code 0 on success, 1 on failure</li>
+</ul>
+<h2 id="mir-verifier-and-loop-regressions">MIR Verifier and Loop Regressions<a class="headerlink" href="#mir-verifier-and-loop-regressions" title="Permanent link">¶</a></h2>
+<p>The host MIR verifier tests construct valid and deliberately malformed MIR
+directly against the compiler implementation. Unlike the native C validator
+below, they test compiler-internal contracts rather than application output.
+They cover structural and ABI checks, reachable-value dominance, PHI edges,
+call-argument dominance, loop-entry promotion, and irreducible control flow.</p>
+<p>From the repository root, with CMake and a host C compiler installed:</p>
+<div class="highlight"><pre><span></span><code>cmake<span class="w"> </span>-S<span class="w"> </span>src/dcc<span class="w"> </span>-B<span class="w"> </span>build/mir-tests<span class="w"> </span>-DDCC_BUILD_MIR_TESTS<span class="o">=</span>ON<span class="w"> </span>-DCMAKE_BUILD_TYPE<span class="o">=</span>Release
+cmake<span class="w"> </span>--build<span class="w"> </span>build/mir-tests<span class="w"> </span>--target<span class="w"> </span>mir-verify-test<span class="w"> </span>--config<span class="w"> </span>Release<span class="w"> </span>--parallel
+ctest<span class="w"> </span>--test-dir<span class="w"> </span>build/mir-tests<span class="w"> </span>-C<span class="w"> </span>Release<span class="w"> </span>--output-on-failure
+</code></pre></div>
+<p><code>DCC_BUILD_MIR_TESTS</code> is an opt-in build option, not a switch for compiler
+verification. Production dominance verification is always enabled. CI builds
+and runs this host test target on Linux, macOS, and Windows.</p>
+<p>For Clang/GCC sanitizer testing, configure a separate build directory:</p>
+<div class="highlight"><pre><span></span><code>cmake<span class="w"> </span>-S<span class="w"> </span>src/dcc<span class="w"> </span>-B<span class="w"> </span>build/mir-tests-sanitize<span class="w"> </span>-DDCC_BUILD_MIR_TESTS<span class="o">=</span>ON<span class="w"> </span>-DCMAKE_BUILD_TYPE<span class="o">=</span>Debug<span class="w"> </span>-DCMAKE_C_FLAGS<span class="o">=</span><span class="s2">"-fsanitize=address,undefined -fno-omit-frame-pointer"</span>
+cmake<span class="w"> </span>--build<span class="w"> </span>build/mir-tests-sanitize<span class="w"> </span>--target<span class="w"> </span>mir-verify-test<span class="w"> </span>--parallel
+<span class="nv">ASAN_OPTIONS</span><span class="o">=</span><span class="nv">detect_leaks</span><span class="o">=</span><span class="m">0</span><span class="w"> </span><span class="nv">UBSAN_OPTIONS</span><span class="o">=</span><span class="nv">halt_on_error</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>ctest<span class="w"> </span>--test-dir<span class="w"> </span>build/mir-tests-sanitize<span class="w"> </span>--output-on-failure
+</code></pre></div>
+<p>Target execution tests use the built DCC toolchain, PowerShell 7, and <code>ntvcm</code>
+on <code>PATH</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">pwsh</span> <span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">run-mir-clobber-tests</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Cases</span> <span class="n">domloop</span>
+<span class="n">pwsh</span> <span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">run-mir-clobber-tests</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Cases</span> <span class="n">semantics</span>
+</code></pre></div>
+<p><code>domloop</code> checks zero-, one-, and multi-iteration loops, initialized and
+body-defined values, successive scopes, and branch-dependent loop updates.
+The body-defined cases enter the loop before using the value; they do not
+assert a result for an uninitialized C read. <code>semantics</code> checks pointer
+scaling, call conversions, and volatile access counts and flags in MIR.
+Both fixtures run in release, full-debug, and line-debug modes, with and
+without peephole optimization and stack checks. The complete clobber suite
+runs in CI and can be invoked by omitting <code>-Cases</code>.</p>
+<p>See <a href="../00-architecture/#verification-promotion-and-allocation">verification, promotion, and allocation</a>
+for the compiler pipeline these tests exercise.</p>
+<h2 id="host-unit-test-validator-validate-unit-testps1">Host Unit Test Validator (<code>validate-unit-test.ps1</code>)<a class="headerlink" href="#host-unit-test-validator-validate-unit-testps1" title="Permanent link">¶</a></h2>
+<p>Compiles each <code>tests/*.c</code> program with a native host C compiler, runs the host
+executable, and compares stdout with <code>tests/baselines/&lt;app&gt;.txt</code>. This is a
+read-only baseline check: it never rewrites baseline files. It is useful for
+checking that the unit-test sources and expected output still make sense on a
+normal C implementation before comparing them with the DCC C Compiler output.</p>
+<p>Host compiler selection follows <code>scripts/build-dcc.ps1</code>:</p>
+<ul>
+<li>Windows uses MSVC <code>cl.exe</code> after locating the Visual Studio C++ build tools.
+  On Windows ARM64, it uses the native ARM64 MSVC tools.</li>
+<li>macOS uses <code>clang</code> by default.</li>
+<li>Linux uses <code>gcc</code> by default.</li>
+<li>Unix-like hosts can override the compiler with <code>-CC</code> or the <code>CC</code> environment
+  variable, for example <code>-CC clang</code> or <code>CC=clang</code>.</li>
+</ul>
+<p>Tests that need CP/M or Z80-only behavior, such as BDOS calls, direct port I/O,
+<code>getch</code>/<code>kbhit</code>, inline <code>#asm</code>, or CP/M vector reads, are skipped because a host
+compiler cannot run those semantics. The script also honors
+<code>tests/_test_overrides.json</code> for app arguments, stdin, ignored apps, and
+host-only skip settings.</p>
+<h3 id="host-validator-usage">Host Validator Usage<a class="headerlink" href="#host-validator-usage" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">validate-unit-test</span><span class="p">.</span><span class="n">ps1</span> <span class="no">[options]</span>
+</code></pre></div>
+<h3 id="host-validator-examples">Host Validator Examples<a class="headerlink" href="#host-validator-examples" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">validate-unit-test</span><span class="p">.</span><span class="n">ps1</span>              <span class="c"># validate every runnable test</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">validate-unit-test</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-App</span> <span class="n">tprintf</span> <span class="c"># validate one test app</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">validate-unit-test</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-CC</span> <span class="n">clang</span>    <span class="c"># use clang on Linux/macOS</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">validate-unit-test</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Serial</span>      <span class="c"># sequential fallback</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">validate-unit-test</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Help</span>        <span class="c"># show help and exit</span>
+</code></pre></div>
+<h3 id="host-validator-parameters">Host Validator Parameters<a class="headerlink" href="#host-validator-parameters" title="Permanent link">¶</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-BuildDir</code></td>
+<td><code>build/host-validate</code></td>
+<td>Directory for host compiler outputs</td>
+</tr>
+<tr>
+<td><code>-BaselineDir</code></td>
+<td><code>tests/baselines</code></td>
+<td>Directory of per-app <code>&lt;app&gt;.txt</code> baselines</td>
+</tr>
+<tr>
+<td><code>-CC</code></td>
+<td>platform default</td>
+<td>C compiler override on macOS/Linux; ignored on Windows</td>
+</tr>
+<tr>
+<td><code>-App</code></td>
+<td>all tests</td>
+<td>Validate one test app, without the <code>.c</code> extension</td>
+</tr>
+<tr>
+<td><code>-RunTimeout</code></td>
+<td><code>10</code></td>
+<td>Seconds to allow each host executable to run</td>
+</tr>
+<tr>
+<td><code>-Serial</code></td>
+<td>(off)</td>
+<td>Run sequentially instead of the default parallel mode</td>
+</tr>
+<tr>
+<td><code>-ThrottleLimit</code></td>
+<td>CPU core count</td>
+<td>Max concurrent apps in parallel mode</td>
+</tr>
+<tr>
+<td><code>-Help</code></td>
+<td>(off)</td>
+<td>Show help text and exit without building or running tests</td>
+</tr>
+</tbody>
+</table>
+<h3 id="linux-32-bit-validation">Linux 32-bit Validation<a class="headerlink" href="#linux-32-bit-validation" title="Permanent link">¶</a></h3>
+<p>On Linux, the validator can extend coverage by using GCC's <code>-m32</code> mode when the
+compiler can build and link 32-bit executables. The script probes this
+automatically: if the probe succeeds, Linux GCC host validations run with
+<code>-m32</code>; if it fails, the script keeps using the normal compiler mode.</p>
+<p>This matters because the DCC C Compiler has 16-bit pointers and 32-bit <code>long</code>, so a 32-bit host
+build can run a few host-only tests that are skipped on a normal 64-bit Linux
+compiler. Install the normal C build tools plus the 32-bit development libraries
+for your distribution, then rerun the validator.</p>
+<p>Common Linux packages:</p>
+<table>
+<thead>
+<tr>
+<th>Distribution</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Debian/Ubuntu</td>
+<td><code>sudo apt update &amp;&amp; sudo apt install build-essential gcc-multilib libc6-dev-i386</code></td>
+</tr>
+<tr>
+<td>Fedora</td>
+<td><code>sudo dnf groupinstall "Development Tools" &amp;&amp; sudo dnf install glibc-devel.i686 libgcc.i686</code></td>
+</tr>
+<tr>
+<td>RHEL/CentOS</td>
+<td><code>sudo dnf groupinstall "Development Tools" &amp;&amp; sudo dnf install glibc-devel.i686 libgcc.i686</code></td>
+</tr>
+<tr>
+<td>Arch</td>
+<td>Enable the <code>multilib</code> repository, then <code>sudo pacman -S base-devel lib32-glibc</code></td>
+</tr>
+<tr>
+<td>openSUSE</td>
+<td><code>sudo zypper install -t pattern devel_C_C++ &amp;&amp; sudo zypper install gcc-32bit glibc-devel-32bit</code></td>
+</tr>
+</tbody>
+</table>
+<p>After installation, this should be enough to enable the extended path:</p>
+<div class="highlight"><pre><span></span><code><span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">validate-unit-test</span><span class="p">.</span><span class="n">ps1</span>
+</code></pre></div>
+<p>The script prints the selected compiler line near the start of the run. When the
+32-bit probe succeeds on Linux GCC, that line includes <code>(-m32)</code>.</p>
+<h2 id="test-overrides-tests_test_overridesjson">Test Overrides (<code>tests/_test_overrides.json</code>)<a class="headerlink" href="#test-overrides-tests_test_overridesjson" title="Permanent link">¶</a></h2>
+<p>Per-test run configuration used by <code>runall.ps1</code>.
+It lives in the <code>tests/</code> folder (alongside the test sources it configures) and
+is named with a leading underscore so it sorts to the top of the directory.</p>
+<p>Most tests need no entry — they compile cleanly, take no arguments, and use the
+default 512-byte stack. This file only lists the exceptions.</p>
+<h3 id="schema">Schema<a class="headerlink" href="#schema" title="Permanent link">¶</a></h3>
+<p>The file is a single JSON object with an <code>apps</code> array. Each element configures
+one test, keyed by <code>name</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"apps"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;app&gt;"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;string&gt;"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"fixtures"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"&lt;file&gt;"</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">"extra_scenarios"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"suffix"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;name&gt;"</span><span class="p">,</span><span class="w"> </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;string&gt;"</span><span class="p">,</span><span class="w"> </span><span class="nt">"fixtures"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"&lt;file&gt;"</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<span class="w">      </span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>string</td>
+<td>yes</td>
+<td>—</td>
+<td>Test name, without the <code>.c</code> extension (e.g. <code>ttt</code>, <code>cobint</code>)</td>
+</tr>
+<tr>
+<td><code>args</code></td>
+<td>string</td>
+<td>no</td>
+<td><code>""</code></td>
+<td>Command-line arguments passed to the program when run. Multi-token strings are split on whitespace (e.g. <code>"a bb ccc"</code>)</td>
+</tr>
+<tr>
+<td><code>stdin</code></td>
+<td>string</td>
+<td>no</td>
+<td><code>""</code></td>
+<td>Text piped to the program's standard input during execution (for keyboard/input-driven tests)</td>
+</tr>
+<tr>
+<td><code>stack_size</code></td>
+<td>integer</td>
+<td>no</td>
+<td><code>512</code></td>
+<td>C stack reserve in bytes, passed to <code>dcc</code> as <code>-stack</code>. Used by recursive apps that need more headroom</td>
+</tr>
+<tr>
+<td><code>dcc_args</code></td>
+<td>string</td>
+<td>no</td>
+<td><code>""</code></td>
+<td>Extra DCC C Compiler build arguments passed through <code>dccmake</code> (for example <code>-DNAME=1 -UOLD</code>)</td>
+</tr>
+<tr>
+<td><code>dcc_floatio</code></td>
+<td>boolean</td>
+<td>no</td>
+<td>environment/default</td>
+<td>True forces <code>-ffloatio</code>; false leaves per-call auto-detection active for this app</td>
+</tr>
+<tr>
+<td><code>dcc_longio</code></td>
+<td>boolean</td>
+<td>no</td>
+<td>environment/default</td>
+<td>True forces <code>-flongio</code>; false leaves per-call auto-detection active for this app</td>
+</tr>
+<tr>
+<td><code>fixtures</code></td>
+<td>string array</td>
+<td>no</td>
+<td><code>[]</code></td>
+<td>Files from <code>tests/</code> copied into the app build directory under uppercase CP/M names</td>
+</tr>
+<tr>
+<td><code>extra_scenarios</code></td>
+<td>object array</td>
+<td>no</td>
+<td><code>[]</code></td>
+<td>Additional argument/input/fixture scenarios run against the same built <code>.COM</code></td>
+</tr>
+<tr>
+<td><code>ignore</code></td>
+<td>boolean</td>
+<td>no</td>
+<td><code>false</code></td>
+<td>When <code>true</code>, the test is skipped entirely (not built or run)</td>
+</tr>
+<tr>
+<td><code>perf_ignore</code></td>
+<td>boolean</td>
+<td>no</td>
+<td><code>false</code></td>
+<td>Exclude nondeterministic apps from cycle-count regression checks</td>
+</tr>
+<tr>
+<td><code>narrow_diff_ignore</code></td>
+<td>boolean</td>
+<td>no</td>
+<td><code>false</code></td>
+<td>Exclude layout-sensitive apps from <code>-NarrowDiff</code></td>
+</tr>
+<tr>
+<td><code>host</code></td>
+<td>boolean</td>
+<td>no</td>
+<td><code>false</code></td>
+<td>Skip ordinary host validation; with the 32-bit requirement below, allow only the Linux <code>-m32</code> path</td>
+</tr>
+<tr>
+<td><code>requires-32bit-linux-host-compiler</code></td>
+<td>boolean</td>
+<td>no</td>
+<td><code>false</code></td>
+<td>With <code>host: true</code>, allow host validation only when Linux GCC's probed <code>-m32</code> mode is active</td>
+</tr>
+<tr>
+<td><code>requires-non-msvc-host-compiler</code></td>
+<td>boolean</td>
+<td>no</td>
+<td><code>false</code></td>
+<td>Skip host validation under MSVC</td>
+</tr>
+<tr>
+<td><code>requires-non-macos-host-compiler</code></td>
+<td>boolean</td>
+<td>no</td>
+<td><code>false</code></td>
+<td>Skip host validation on macOS</td>
+</tr>
+<tr>
+<td><code>host-cflags</code></td>
+<td>string</td>
+<td>no</td>
+<td><code>""</code></td>
+<td>Replace the default GCC/Clang flags for this app's host build</td>
+</tr>
+</tbody>
+</table>
+<p>Each <code>extra_scenarios</code> object accepts a required <code>suffix</code> plus optional <code>args</code>,
+<code>stdin</code>, and <code>fixtures</code>. It reuses the primary <code>.COM</code> and compares output with
+<code>tests/baselines/&lt;app&gt;_&lt;suffix&gt;.txt</code>. Entries with none of the optional
+properties have no effect, so an app only appears here if it overrides at least
+one default.</p>
+<h3 id="example">Example<a class="headerlink" href="#example" title="Permanent link">¶</a></h3>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"apps"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pint"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="s2">"e.pas"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"stack_size"</span><span class="p">:</span><span class="w"> </span><span class="mi">768</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"fixtures"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"E.PAS"</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">"extra_scenarios"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"suffix"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ttt"</span><span class="p">,</span><span class="w"> </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ttt.pas"</span><span class="p">,</span><span class="w"> </span><span class="nt">"fixtures"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"TTT.PAS"</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+<span class="w">      </span><span class="p">]</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tkbd"</span><span class="p">,</span><span class="w"> </span><span class="nt">"stdin"</span><span class="p">:</span><span class="w"> </span><span class="s2">"x"</span><span class="p">,</span><span class="w"> </span><span class="nt">"perf_ignore"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"tstackov"</span><span class="p">,</span><span class="w"> </span><span class="nt">"host"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">"narrow_diff_ignore"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="w"> </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"na"</span><span class="p">,</span><span class="w"> </span><span class="nt">"ignore"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="common-reasons-to-add-an-entry">Common reasons to add an entry<a class="headerlink" href="#common-reasons-to-add-an-entry" title="Permanent link">¶</a></h3>
+<ul>
+<li><strong>Program reads a data file</strong> — declare it in <code>fixtures</code> and pass its CP/M
+  name in <code>args</code>; only that app's build directory receives the file.</li>
+<li><strong>One binary needs several datasets</strong> — use <code>extra_scenarios</code> to rerun the
+  same <code>.COM</code> with separate arguments, fixtures, and baselines.</li>
+<li><strong>Program reads from stdin</strong> — set <code>stdin</code> for tests that require scripted
+  keyboard/input text (for example, <code>tkbd</code> expects <code>x</code>).</li>
+<li><strong>Deep recursion</strong> — apps such as <code>triangle</code> (768) and <code>cobint</code> (1536) need a
+  larger <code>stack_size</code> than the 512-byte default, especially under
+  <code>-fstack-check</code>.</li>
+<li><strong>Cannot be auto-tested</strong> — set <code>ignore: true</code> for interactive programs
+  (<code>na</code>, an editor that waits for keystrokes), tests that intentionally fail to
+  compile (<code>tc89fltb</code>), or deliberate stack-smashers (<code>spsmash</code>).</li>
+<li><strong>Results are inherently nondeterministic</strong> — use <code>perf_ignore</code> for timing-
+  or filesystem-sensitive apps, and <code>narrow_diff_ignore</code> only when output
+  legitimately depends on stack layout.</li>
+<li><strong>Host compiler coverage is conditional</strong> — use the host requirement fields
+  for ABI, compiler, or libc differences; <code>host-cflags</code> handles per-test C mode
+  or optimizer requirements.</li>
+</ul>
+<p>To change a test's run behavior, edit <code>tests/_test_overrides.json</code> and re-run
+the suite. See also <code>tests/README.md</code> in the repository for how tests,
+baselines, and this file relate.</p>
+<h2 id="performance-reporting-runallps1-report">Performance Reporting (<code>runall.ps1 -Report</code>)<a class="headerlink" href="#performance-reporting-runallps1-report" title="Permanent link">¶</a></h2>
+<p><code>runall.ps1 -Report</code> appends historical performance data during the normal
+verified suite; it does not add a separate benchmark pass. Every <code>ntvcm</code> run
+already uses <code>-p -s:0</code>, so execution remains unthrottled while the runner records
+the emulator's host-independent Z80 cycle count and the <code>.COM</code> size.</p>
+<p>Report mode implies <code>-NoStackCheck</code>. The <code>peep_ms</code> and <code>nopeep_ms</code> values are
+derived as <code>cycles / ReportClockHz * 1000</code>, using a default nominal clock of
+400 MHz; <code>ReportClockHz</code> never changes emulator speed. Set it to <code>0</code> to leave
+the derived millisecond fields empty while retaining cycles and sizes.</p>
+<div class="highlight"><pre><span></span><code><span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Report</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Report</span> <span class="n">-ReportFile</span> <span class="n">results</span><span class="p">.</span><span class="n">csv</span>
+<span class="p">./</span><span class="n">scripts</span><span class="p">/</span><span class="n">runall</span><span class="p">.</span><span class="n">ps1</span> <span class="n">-Report</span> <span class="n">-ReportClockHz</span> <span class="n">0</span>
+</code></pre></div>
+<p>Results are written to <code>perf_results.csv</code> by default. <strong>Results append to the
+file</strong>, so each report run adds a new row per app:</p>
+<div class="highlight"><pre><span></span><code>machine,os,utc-timestamp,app,peep_ms,peep_cycles,peep_size,nopeep_ms,nopeep_cycles,nopeep_size,clock_hz
+z80-lab,macOS,2026-08-18T12:00:00Z,sieve,0.75,300000,2176,,,,400000000
+</code></pre></div>
+<p><strong>Columns:</strong></p>
+<ul>
+<li><code>machine</code> — Name of the machine running the benchmark</li>
+<li><code>os</code> — Host operating-system name</li>
+<li><code>utc-timestamp</code> — UTC timestamp (ISO 8601 format, e.g., <code>2026-06-16T07:18:39Z</code>)</li>
+<li><code>app</code> — Application name</li>
+<li><code>peep_ms</code> — Clock-normalized milliseconds for the optimized build</li>
+<li><code>peep_cycles</code> — Z80 cycles reported for the optimized build</li>
+<li><code>peep_size</code> — Binary size in bytes (optimized)</li>
+<li><code>nopeep_ms</code> — Clock-normalized milliseconds for the build without dccpeep</li>
+<li><code>nopeep_cycles</code> — Z80 cycles reported for the build without dccpeep</li>
+<li><code>nopeep_size</code> — Binary size in bytes (without dccpeep)</li>
+<li><code>clock_hz</code> — Nominal <code>ReportClockHz</code> used for the millisecond calculation</li>
+</ul>
+<p>The <code>-ReportFile</code> parameter controls the output path. The <code>-Mode</code> parameter
+controls which CSV columns are populated: <code>-Mode full</code> fills both <code>peep_*</code> and
+<code>nopeep_*</code>; single-mode runs fill only the selected mode's columns. In the CSV,
+<code>peep_*</code> columns hold optimized-build measurements.</p>
+<h3 id="checked-performance-baselines">Checked performance baselines<a class="headerlink" href="#checked-performance-baselines" title="Permanent link">¶</a></h3>
+<p>Normal stack-checked runs compare each built mode's cycle count and <code>.COM</code> size
+with <code>tests/perf_baselines.csv</code>. This check is on by default and uses the same
+execution as output verification. <code>-NoPerfCheck</code>, <code>-NoStackCheck</code>, and <code>-Report</code>
+skip it. After an intentional, verified change, run with
+<code>-UpdatePerfBaseline</code>; only the mode columns built by that invocation are
+rewritten.</p>
+<h2 id="stack-size-measurement-stacksizesh-stacksizebat">Stack Size Measurement (<code>stacksize.sh</code> / <code>stacksize.bat</code>)<a class="headerlink" href="#stack-size-measurement-stacksizesh-stacksizebat" title="Permanent link">¶</a></h2>
+<p>Finds the minimum C stack reserve an app needs under DCC C Compiler's lightweight
+stack-overflow guard (<code>-fstack-check</code>). See the
+<a href="../../02-build-and-link/#measuring-the-stack-an-app-needs">Building and linking</a>
+section for full documentation, or run <code>scripts/stacksize.sh --help</code>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer">
+        
+          
+          <a href="../02-runtime-sizes/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Runtime function sizes">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Runtime function sizes
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../05-building-project-docs/" class="md-footer__link md-footer__link--next" aria-label="Next: Building project docs">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Building project docs
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"></path></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright © 2026 David Lee
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.footer", "content.code.copy", "navigation.tabs.sticky", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  
+<script id="init-glightbox">const lightbox = GLightbox({"touchNavigation": true, "loop": false, "zoomable": true, "draggable": true, "openEffect": "zoom", "closeEffect": "zoom", "slideEffect": "slide"});
+document$.subscribe(()=>{ lightbox.reload(); });
+</script></body></html>

@@ -1,0 +1,2032 @@
+<!DOCTYPE html><html lang="en" class="no-js"><head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="MkDocs documentation for DCC C Compiler, its runtime, and dccrtlstrip size analysis.">
+      
+      
+        <meta name="author" content="David Lee">
+      
+      
+      
+        <link rel="prev" href="../01-c-conformance/">
+      
+      
+        <link rel="next" href="../03-types-and-conventions/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Building and linking - DCC C Compiler Reference</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <link href="../assets/stylesheets/glightbox.min.css" rel="stylesheet"><script src="../assets/javascripts/glightbox.min.js"></script><style id="glightbox-style">
+            html.glightbox-open { overflow: initial; height: 100%; }
+            .gslide-title { margin-top: 0px; user-select: text; }
+            .gslide-desc { color: #666; user-select: text; }
+            .gslide-image img { background: white; }
+            .gscrollbar-fixer { padding-right: 15px; }
+            .gdesc-inner { font-size: 0.75rem; }
+            body[data-md-color-scheme="slate"] .gdesc-inner { background: var(--md-default-bg-color); }
+            body[data-md-color-scheme="slate"] .gslide-title { color: var(--md-default-fg-color); }
+            body[data-md-color-scheme="slate"] .gslide-desc { color: var(--md-default-fg-color); }
+        </style></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#building-and-linking" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="DCC C Compiler Reference" class="md-header__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DCC C Compiler Reference
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Building and linking
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink" aria-label="Switch to dark mode" type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 2c-1.82 0-3.53.5-5 1.35C8 5.08 10 8.3 10 12s-2 6.92-5 8.65C6.47 21.5 8.18 22 10 22a10 10 0 0 0 10-10A10 10 0 0 0 10 2"></path></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="cyan" aria-label="Switch to light mode" type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"></path></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required="">
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix="">
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="DCC C Compiler Reference" class="md-nav__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    DCC C Compiler Reference
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix="">
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-setup-toolchain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The toolchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-vscode-debugging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code debugging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-debug-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugger host and I/O adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-agent-skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agentic skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-c-conformance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C conformance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building and linking
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building and linking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#build-with-dccmake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build with dccmake
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-build-script" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The build script
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-compiler-invocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The compiler invocation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options-that-affect-the-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options that affect the runtime
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#including-headers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Including headers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-module-symbol-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-module symbol names
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-types-and-conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Types and conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../04-operators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operators
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10">
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Library reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/01-assert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    assert.h: Diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/07-ctype/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ctype.h: Character handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/02-errno/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    errno.h: Error reporting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/03-float/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    float.h: Floating-point limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/04-limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    limits.h: Integer limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/17-locale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    locale.h: Localization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/08-math/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    math.h: Floating point math
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/09-setjmp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    setjmp.h: Non-local jumps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/16-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    signal.h: Signal handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/10-stdarg/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdarg.h: Variadic arguments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/11-stdbool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdbool.h: Boolean type
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/12-stddef/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stddef.h: Common definitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/13-stdint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdint.h: Fixed-width integers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/05-stdio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdio.h: Console and file I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/06-stdlib/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdlib.h: Memory and utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/14-string/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    string.h: String handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/15-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    time.h: Date and time
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../10-system-and-cpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System and CP/M services
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../11-limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../12-examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worked examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13">
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/00-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compiler architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/01-dccrtlstrip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/02-runtime-sizes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime function sizes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/03-utilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/05-building-project-docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building project docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#build-with-dccmake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build with dccmake
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-build-script" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The build script
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-compiler-invocation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The compiler invocation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options-that-affect-the-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options that affect the runtime
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#including-headers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Including headers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-module-symbol-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-module symbol names
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#memory-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory layout
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="building-and-linking">Building and linking<a class="headerlink" href="#building-and-linking" title="Permanent link">¶</a></h1>
+<p>This page covers the path from a <code>.c</code> file to a runnable CP/M <code>.COM</code> program and
+the compiler options that most affect the result. You typically do this in your
+<strong>own project directory</strong> — DCC C Compiler and ntvcm are general-purpose tools for building
+CP/M / Z80 C apps anywhere, not just inside the DCC C Compiler repo. As long as the tools
+are on your <code>PATH</code> (see <a href="../00-setup-toolchain/">Setting up the toolchain</a>), the
+commands below work from any folder that holds your <code>.c</code> sources.</p>
+<h2 id="build-with-dccmake">Build with dccmake<a class="headerlink" href="#build-with-dccmake" title="Permanent link">¶</a></h2>
+<p><code>dccmake</code> is the native build driver. With the tools on <code>PATH</code> and the DCC
+headers and runtime configured for your project, it builds one or more sources:</p>
+<div class="highlight"><pre><span></span><code>dccmake<span class="w"> </span>main.c<span class="w"> </span>dcc-output<span class="o">=</span>MAIN
+dccmake<span class="w"> </span>main.c<span class="w"> </span>helper.c<span class="w"> </span>dcc-output<span class="o">=</span>MAIN<span class="w"> </span>dcc-stack-check<span class="o">=</span><span class="nb">true</span>
+ntvcm<span class="w"> </span>build/MAIN.COM
+</code></pre></div>
+<p>The first source is the application translation unit; subsequent sources are
+compiled with <code>-module</code>. Outputs go to <code>build/</code> by default. Source basenames
+and the output name must be CP/M 8.3-compatible (at most eight characters before
+the extension, and three after it). Host directory paths can be longer.</p>
+<p>For repeatable builds, put settings in <code>dccmake.txt</code> in the working directory:</p>
+<div class="highlight"><pre><span></span><code><span class="na">dcc-input</span><span class="o">=</span><span class="s">main.c,helper.c</span>
+<span class="na">dcc-output</span><span class="o">=</span><span class="s">MAIN</span>
+<span class="na">dcc-stack-bytes</span><span class="o">=</span><span class="s">1024</span>
+<span class="na">dcc-stack-check</span><span class="o">=</span><span class="s">true</span>
+<span class="na">dcc-peep</span><span class="o">=</span><span class="s">true</span>
+</code></pre></div>
+<p>Run <code>dccmake</code> without source arguments to use that configuration. For projects
+outside the checkout, also configure <code>dcc-include-directory</code> and
+<code>dcc-runtime</code> as described in the <a href="../appendix/03-utilities/#build-pipeline-helper-dccmake">dccmake reference</a>.
+That reference covers tool overrides, configuration precedence, debug modes,
+and the optional emulated assembler/linker paths.</p>
+<h2 id="the-build-script">The build script<a class="headerlink" href="#the-build-script" title="Permanent link">¶</a></h2>
+<p>Use <code>dccmake</code> for application projects. The source checkout also provides
+optional single-app helper scripts. From the checkout on Linux/macOS, run:</p>
+<div class="highlight"><pre><span></span><code>./scripts/ma.sh<span class="w"> </span>foo<span class="w"> </span>--mode<span class="w"> </span>fast
+</code></pre></div>
+<p>On Windows, use the PowerShell driver. It works with the Windows PowerShell 5.1
+already included with Windows, as well as PowerShell 7+:</p>
+<div class="highlight"><pre><span></span><code><span class="n">powershell</span><span class="p">.</span><span class="n">exe</span> <span class="n">-ExecutionPolicy</span> <span class="n">Bypass</span> <span class="o">-File</span> <span class="p">.\</span><span class="n">scripts</span><span class="p">\</span><span class="n">ma</span><span class="p">.</span><span class="n">ps1</span> <span class="n">foo</span> <span class="n">-Mode</span> <span class="n">fast</span>    <span class="c"># builds foo.c -&gt; FOO.COM</span>
+<span class="n">powershell</span><span class="p">.</span><span class="n">exe</span> <span class="n">-ExecutionPolicy</span> <span class="n">Bypass</span> <span class="o">-File</span> <span class="p">.\</span><span class="n">scripts</span><span class="p">\</span><span class="n">ma</span><span class="p">.</span><span class="n">ps1</span> <span class="n">foo</span> <span class="n">-Mode</span> <span class="n">nopeep</span>  <span class="c"># skip the dccpeep optimizer</span>
+</code></pre></div>
+<p>This runs the compiler, the optional <code>dccpeep</code> peephole optimizer,
+<code>dccrtlstrip</code>, <a href="../appendix/03-utilities/#native-assembler-m80c"><code>m80c</code></a>, and
+<a href="../appendix/03-utilities/#native-linker-l80c"><code>l80c</code></a>. Whole-program
+application stripping and runtime trimming are both part of the normal build
+path, keeping unreachable app functions/objects and unused library routines out
+of the final <code>.COM</code> file. The script resolves each tool from your <code>PATH</code> or its
+documented environment-variable override.</p>
+<p>The native linker normally uses <code>/P:100</code>, CP/M's standard <code>.COM</code> load address.
+For fixed-address, overlay, or relocating system programs,
+<a href="../appendix/03-utilities/#native-linker-l80c"><code>l80c</code></a> also supports LINK-80-style
+nonstandard origins and generates the required CP/M entry jump/bootstrap. Its
+utility reference covers the CLI options, origin layouts, and limitations.</p>
+<!-- markdownlint-disable MD046 -->
+<details class="note">
+<summary>The manual pipeline (click to expand)</summary>
+<p>For manual builds or custom build systems, the full pipeline for <code>foo.c</code> is
+shown below. Every build tool runs natively on the host; only the resulting
+<code>FOO.COM</code> needs CP/M or an emulator.</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio"><input id="__tabbed_1_2" name="__tabbed_1" type="radio"><div class="tabbed-labels"><label for="__tabbed_1_1">Windows</label><label for="__tabbed_1_2">macOS / Linux</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<p>Compile and optionally optimize:</p>
+<div class="highlight"><pre><span></span><code><span class="n">dcc</span> <span class="n">-I</span> <span class="n">C</span><span class="p">:\</span><span class="n">path</span><span class="p">\</span><span class="n">to</span><span class="p">\</span><span class="n">dcc</span> <span class="n">-stack</span> <span class="n">512</span> <span class="n">foo</span><span class="p">.</span><span class="n">c</span> <span class="n">-o</span> <span class="n">FOO</span><span class="p">.</span><span class="n">MAC</span>
+<span class="n">dccpeep</span> <span class="n">FOO</span><span class="p">.</span><span class="n">MAC</span> <span class="n">_PEEPOUT</span><span class="p">.</span><span class="n">MAC</span>
+<span class="nb">Move-Item</span> <span class="n">-Force</span> <span class="n">_PEEPOUT</span><span class="p">.</span><span class="n">MAC</span> <span class="n">FOO</span><span class="p">.</span><span class="n">MAC</span>
+</code></pre></div>
+<p>Strip unreachable application blocks, then assemble:</p>
+<div class="highlight"><pre><span></span><code><span class="n">dccrtlstrip</span> <span class="p">-</span><span class="n">-strip-apps</span> <span class="n">FOO</span><span class="p">.</span><span class="n">MAC</span>
+<span class="n">m80c</span> <span class="s2">"=FOO.MAC"</span> <span class="p">/</span><span class="n">X</span> <span class="p">/</span><span class="n">O</span> <span class="p">/</span><span class="n">Z</span> <span class="p">/</span><span class="n">L</span>
+</code></pre></div>
+<p>Copy and trim the runtime, then assemble and link:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">Copy-Item</span> <span class="n">C</span><span class="p">:\</span><span class="n">path</span><span class="p">\</span><span class="n">to</span><span class="p">\</span><span class="n">dcc</span><span class="p">\</span><span class="n">DCCRTL</span><span class="p">.</span><span class="n">MAC</span> <span class="n">DCCRTL</span><span class="p">.</span><span class="n">MAC</span>
+<span class="n">dccrtlstrip</span> <span class="n">-r</span> <span class="n">DCCRTL</span><span class="p">.</span><span class="n">MAC</span> <span class="n">-o</span> <span class="n">RTLMIN</span><span class="p">.</span><span class="n">MAC</span> <span class="n">FOO</span><span class="p">.</span><span class="n">MAC</span>
+<span class="n">m80c</span> <span class="s2">"=RTLMIN.MAC"</span> <span class="p">/</span><span class="n">X</span> <span class="p">/</span><span class="n">O</span> <span class="p">/</span><span class="n">Z</span>
+<span class="n">l80c</span> <span class="s2">"/P:100,RTLMIN,FOO,FOO/N/E/Y"</span>
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>Compile and optionally optimize:</p>
+<div class="highlight"><pre><span></span><code>dcc<span class="w"> </span>-I<span class="w"> </span>/path/to/dcc<span class="w"> </span>-stack<span class="w"> </span><span class="m">512</span><span class="w"> </span>foo.c<span class="w"> </span>-o<span class="w"> </span>FOO.MAC
+dccpeep<span class="w"> </span>FOO.MAC<span class="w"> </span>_PEEPOUT.MAC
+mv<span class="w"> </span>_PEEPOUT.MAC<span class="w"> </span>FOO.MAC
+</code></pre></div>
+<p>Strip and assemble the application, trim and assemble the runtime,
+then link:</p>
+<div class="highlight"><pre><span></span><code>dccrtlstrip<span class="w"> </span>--strip-apps<span class="w"> </span>FOO.MAC
+m80c<span class="w"> </span><span class="s2">"=FOO.MAC"</span><span class="w"> </span>/X<span class="w"> </span>/O<span class="w"> </span>/Z<span class="w"> </span>/L
+cp<span class="w"> </span>/path/to/dcc/DCCRTL.MAC<span class="w"> </span>DCCRTL.MAC
+dccrtlstrip<span class="w"> </span>-r<span class="w"> </span>DCCRTL.MAC<span class="w"> </span>-o<span class="w"> </span>RTLMIN.MAC<span class="w"> </span>FOO.MAC
+m80c<span class="w"> </span><span class="s2">"=RTLMIN.MAC"</span><span class="w"> </span>/X<span class="w"> </span>/O<span class="w"> </span>/Z
+l80c<span class="w"> </span><span class="s2">"/P:100,RTLMIN,FOO,FOO/N/E/Y"</span>
+</code></pre></div>
+</div>
+</div>
+</div>
+<p>Replace <code>/path/to/dcc</code> (or <code>C:\path\to\dcc</code>) with the checkout
+directory containing the standard headers and <code>DCCRTL.MAC</code>. Native
+<a href="../appendix/03-utilities/#native-assembler-m80c"><code>m80c</code></a> accepts normal host
+line endings; no CP/M text conversion is needed.</p>
+<p>To cross-check compatibility with the original Microsoft tools, use
+<code>dccmake foo.c dcc-output=FOO dcc-use-emulated-m80=true dcc-use-emulated-l80=true</code>
+with the project's headers, runtime, and emulated tools configured. That optional path stages
+<code>M80.COM</code>/<code>L80.COM</code>, converts text to CP/M CRLF, and runs them under
+<code>ntvcm</code>.</p>
+</details>
+<!-- markdownlint-enable MD046 -->
+
+<h2 id="the-compiler-invocation">The compiler invocation<a class="headerlink" href="#the-compiler-invocation" title="Permanent link">¶</a></h2>
+<div class="highlight"><pre><span></span><code>dcc [options] input.c [-o output.mac]
+</code></pre></div>
+<p>Common options:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-o file</code></td>
+<td>Write <a href="../appendix/03-utilities/#native-assembler-m80c"><code>m80c</code></a>-compatible assembly to <code>file</code>; default is <code>out.mac</code>, <code>-</code> is stdout.</td>
+</tr>
+<tr>
+<td><code>-c</code>, <code>-module</code></td>
+<td>Emit a separately compilable module, not a final program translation unit.</td>
+</tr>
+<tr>
+<td><code>-f</code>, <code>-ffloatio</code></td>
+<td>Force <code>%f</code> support on every <code>printf</code>-family call.</td>
+</tr>
+<tr>
+<td><code>-fl</code>, <code>-flongio</code></td>
+<td>Force 32-bit <code>long</code> formats on every <code>printf</code>-family call.</td>
+</tr>
+<tr>
+<td><code>-fno-floatio</code>, <code>-fno-longio</code></td>
+<td>Force the corresponding format paths off, overriding automatic detection.</td>
+</tr>
+<tr>
+<td><code>-fhexio</code>, <code>-fno-hexio</code></td>
+<td>Force hexadecimal output support on or off.</td>
+</tr>
+<tr>
+<td><code>-foctio</code>, <code>-fno-octio</code></td>
+<td>Force octal output support on or off.</td>
+</tr>
+<tr>
+<td><code>-g</code></td>
+<td>Emit full source-debug metadata with conservative code generation.</td>
+</tr>
+<tr>
+<td><code>-gline</code></td>
+<td>Emit optimized debug metadata while retaining release code generation.</td>
+</tr>
+<tr>
+<td><code>-fstack-check</code></td>
+<td>Guard function prologues and VLA allocations against stack reserve overflow.</td>
+</tr>
+<tr>
+<td><code>-fno-narrow</code></td>
+<td>Disable integer-array, scalar, and loop-counter byte-narrowing optimizations.</td>
+</tr>
+<tr>
+<td><code>-s bytes</code>, <code>-stack bytes</code>, <code>--stack bytes</code></td>
+<td>Reserve stack bytes; default is 512.</td>
+</tr>
+<tr>
+<td><code>-s=bytes</code>, <code>-stack=bytes</code>, <code>--stack=bytes</code></td>
+<td>Equivalent attached forms for the stack size.</td>
+</tr>
+<tr>
+<td><code>-I dir</code>, <code>-Idir</code></td>
+<td>Add an include search directory.</td>
+</tr>
+<tr>
+<td><code>-D name[=value]</code>, <code>-Dname[=value]</code></td>
+<td>Predefine a macro.</td>
+</tr>
+<tr>
+<td><code>-U name</code>, <code>-Uname</code></td>
+<td>Undefine a preprocessor macro.</td>
+</tr>
+<tr>
+<td><code>-v</code>, <code>--version</code></td>
+<td>Print the compiler version and exit.</td>
+</tr>
+<tr>
+<td><code>-h</code>, <code>--help</code></td>
+<td>Print compiler help and exit.</td>
+</tr>
+</tbody>
+</table>
+<p>There is no <code>-std=c89</code>, <code>-std=c99</code>, or <code>-std=c11</code> mode selector: the
+<a href="../01-c-conformance/">documented language subset</a> is always in effect. Unknown
+compiler options are currently ignored, so an accepted command line does not
+prove that a familiar desktop-compiler flag took effect.</p>
+<h2 id="options-that-affect-the-runtime">Options that affect the runtime<a class="headerlink" href="#options-that-affect-the-runtime" title="Permanent link">¶</a></h2>
+<p>For each <code>printf</code>-family call with a compile-time literal format, dcc detects
+<code>%f</code>, long, hexadecimal, and octal conversions and selects the smallest matching
+runtime entry automatically. Calls with non-literal formats conservatively
+include all of those conversion paths.</p>
+<ul>
+<li><strong><code>-f</code> / <code>-ffloatio</code></strong> — force floating-point <code>%f</code> support on every
+    <code>printf</code>-family call, including calls whose literal format does not use it.
+    This is normally useful only when forcing a whole-program policy; non-literal
+    formats already use a conservative fallback.</li>
+<li><strong><code>-fl</code> / <code>-flongio</code></strong> — similarly force 32-bit <code>long</code> formats (<code>%ld</code>, <code>%lu</code>,
+    <code>%lx</code>, <code>%lX</code>, <code>%ls</code>) on every <code>printf</code>-family call.</li>
+<li><strong><code>-fno-floatio</code> / <code>-fno-longio</code></strong> — force the corresponding support off,
+    even for a literal that uses it or a non-literal fallback. Use these
+    size-oriented overrides only when no affected conversion can reach any call.
+    None of these options adds floating-point <code>scanf</code> input.</li>
+<li><strong><code>-s</code> / <code>-stack</code> / <code>--stack</code></strong> — reserve stack space (default 512; accepted
+  range 0..32767). The heap used by <code>malloc</code> lives between the end of BSS and
+  the bottom of the stack, so growing the stack shrinks the heap and vice versa.
+  By default there are no runtime checks that stop the stack from smashing the
+  heap.</li>
+<li><strong><code>-fstack-check</code></strong> — opt in to a lightweight stack-overflow guard. The DCC C Compiler emits
+  a short <code>call __stchk</code> in each function prologue (after the frame is set up)
+  that compares the live stack pointer against the heap ceiling. If the stack
+  has grown into the heap, the program prints <code>?stack overflow</code> and exits with
+  return code <code>0FFh</code> instead of silently corrupting memory. The guard costs a
+  few bytes and one call per function, so it is <strong>off by default</strong>; turn it on
+    while developing or for deeply recursive code. The <code>stacksize</code> utility
+    (below) uses this guard to measure the minimum <code>-stack</code> reserve an app needs.
+    This option sets the initial state for the translation unit; source can then
+    use <a href="../03-types-and-conventions/#supported-pragmas"><code>#pragma stack_check(on)</code> / <code>#pragma stack_check(off)</code></a>
+    to control guard emission in source order.</li>
+<li><strong><code>-Dname[=value]</code></strong> — predefine a macro. <code>_DCC_=1</code> is always defined.</li>
+</ul>
+<h3 id="measuring-the-stack-an-app-needs">Measuring the stack an app needs<a class="headerlink" href="#measuring-the-stack-an-app-needs" title="Permanent link">¶</a></h3>
+<p>The repo ships a <code>stacksize</code> utility that builds your app with <code>-fstack-check</code>
+forced on and sweeps the <code>-stack</code> reserve upward until it runs without tripping
+the guard, then prints the minimum and a recommended value with headroom. Run it
+against an app/test name (and pass any program arguments after <code>--</code>):</p>
+<!-- markdownlint-disable MD046 -->
+<div class="tabbed-set tabbed-alternate" data-tabs="2:5"><input checked="checked" id="__tabbed_2_1" name="__tabbed_2" type="radio"><input id="__tabbed_2_2" name="__tabbed_2" type="radio"><input id="__tabbed_2_3" name="__tabbed_2" type="radio"><input id="__tabbed_2_4" name="__tabbed_2" type="radio"><input id="__tabbed_2_5" name="__tabbed_2" type="radio"><div class="tabbed-labels"><label for="__tabbed_2_1">Windows</label><label for="__tabbed_2_2">macOS</label><label for="__tabbed_2_3">Ubuntu</label><label for="__tabbed_2_4">Ubuntu ARM64</label><label for="__tabbed_2_5">Windows ARM64</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><span class="c1">rem simple app</span>
+scripts\stacksize.bat triangle
+
+<span class="c1">rem app that needs a data-file argument</span>
+scripts\stacksize.bat cobint -- e.cob
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><span class="c1"># simple app</span>
+scripts/stacksize.sh<span class="w"> </span>triangle
+
+<span class="c1"># app that needs a data-file argument</span>
+scripts/stacksize.sh<span class="w"> </span>cobint<span class="w"> </span>--<span class="w"> </span>e.cob
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><span class="c1"># simple app</span>
+scripts/stacksize.sh<span class="w"> </span>triangle
+
+<span class="c1"># app that needs a data-file argument</span>
+scripts/stacksize.sh<span class="w"> </span>cobint<span class="w"> </span>--<span class="w"> </span>e.cob
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><span class="c1"># simple app</span>
+scripts/stacksize.sh<span class="w"> </span>triangle
+
+<span class="c1"># app that needs a data-file argument</span>
+scripts/stacksize.sh<span class="w"> </span>cobint<span class="w"> </span>--<span class="w"> </span>e.cob
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code><span class="c1">rem simple app</span>
+scripts\stacksize.bat triangle
+
+<span class="c1">rem app that needs a data-file argument</span>
+scripts\stacksize.bat cobint -- e.cob
+</code></pre></div>
+</div>
+</div>
+</div>
+<!-- markdownlint-enable MD046 -->
+
+<p>Both honour the same <code>START</code> / <code>STEP</code> / <code>MAX</code> / <code>MODE</code> / <code>EMU</code> environment
+variables; see <a href="https://github.com/davidly/dcc/blob/main/scripts/README.md"><code>scripts/README.md</code></a>
+for the full reference.</p>
+<h2 id="including-headers">Including headers<a class="headerlink" href="#including-headers" title="Permanent link">¶</a></h2>
+<p>Include the standard headers as usual:</p>
+<div class="highlight"><pre><span></span><code><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stdio.h&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stdlib.h&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;string.h&gt;</span>
+</code></pre></div>
+<p>DCC searches the name as given (including the working directory), then the
+including file's directory, then each <code>-I</code> directory in command-line order.
+The bundled headers live beside <code>DCCRTL.MAC</code> at the root of the source checkout.
+For an external <code>dccmake</code> project, set <code>dcc-include-directory=/path/to/dcc</code>
+and <code>dcc-runtime=/path/to/dcc/DCCRTL.MAC</code>, replacing <code>/path/to/dcc</code> with that
+checkout's path. When invoking the compiler directly, use <code>-I /path/to/dcc</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">Missing system headers are silently ignored</p>
+<p>An unresolved <code>&lt;header.h&gt;</code> include is skipped; an unresolved
+<code>"header.h"</code> include is an error. Successful compilation therefore does
+not prove that a system header was found. Missing prototypes can produce
+wrong calls, especially for pointer, <code>long</code>, or <code>float</code> results. Use DCC's
+headers, not your host compiler's standard-library headers.</p>
+</div>
+<h2 id="multi-module-symbol-names">Multi-module symbol names<a class="headerlink" href="#multi-module-symbol-names" title="Permanent link">¶</a></h2>
+<p><a href="../appendix/03-utilities/#native-assembler-m80c"><code>m80c</code></a> and
+<a href="../appendix/03-utilities/#native-linker-l80c"><code>l80c</code></a> keep only the <strong>first 6
+characters</strong> of a public (external) symbol.
+DCC C Compiler emits each external C identifier as <code>_</code> followed by the name, so the leading
+underscore consumes one of those six characters. The practical rule for any
+program built from more than one <code>.c</code> file is:</p>
+<blockquote>
+<p><strong>Every non-<code>static</code> function and non-<code>static</code> file-scope variable must be
+unique within its first 5 characters across all linked modules.</strong></p>
+</blockquote>
+<p>Names that only differ after the fifth character collapse to the same public
+symbol. For example <code>i_idxins</code>, <code>i_idxbld</code>, and <code>i_idxlookup</code> all become
+<code>_I_IDX</code> and are indistinguishable to the linker.</p>
+<p>Anything used in only one translation unit should be declared <code>static</code>. A
+<code>static</code> symbol has internal linkage, so DCC C Compiler gives it a private, generated
+assembler name and the 6-character rule does not apply to it.</p>
+<h3 id="how-a-collision-shows-up">How a collision shows up<a class="headerlink" href="#how-a-collision-shows-up" title="Permanent link">¶</a></h3>
+<!-- markdownlint-disable MD046 -->
+<ul>
+<li>
+<p><strong>Within one file</strong>, DCC C Compiler catches it at compile time and stops with an error
+  naming both symbols, for example:</p>
+<div class="highlight"><pre><span></span><code>global names 'i_idxins' and 'i_idxbld' are not distinguishable in M80's
+6 significant character public symbols (both become '_I_IDX'); rename one
+</code></pre></div>
+</li>
+</ul>
+<!-- markdownlint-enable MD046 -->
+
+<ul>
+<li><strong>Across different files</strong>, DCC C Compiler cannot see the clash.
+  <a href="../appendix/03-utilities/#native-linker-l80c"><code>l80c</code></a> reports a multiply
+  defined global rather than silently binding a call to the wrong definition.</li>
+</ul>
+<h3 id="fixing-collisions">Fixing collisions<a class="headerlink" href="#fixing-collisions" title="Permanent link">¶</a></h3>
+<ul>
+<li>Rename the offending identifiers so they differ within the first 5
+  characters (put the distinguishing letters early: <code>ixins</code>, <code>ixbld</code>,
+  <code>ixlook</code> rather than a shared <code>i_idx…</code> prefix).</li>
+<li>Or make single-file helpers <code>static</code>.</li>
+</ul>
+<p>Struct, union, and enum tags, <code>typedef</code> names, struct members, macros, enum
+constants, and local variables never become public symbols, so they are exempt.</p>
+<h3 id="detecting-collisions">Detecting collisions<a class="headerlink" href="#detecting-collisions" title="Permanent link">¶</a></h3>
+<p>After a build, scan the emitted <code>.MAC</code> modules for external names that share a
+6-character prefix:</p>
+<div class="highlight"><pre><span></span><code>grep<span class="w"> </span>-rhiE<span class="w"> </span><span class="s1">'^[[:space:]]*public '</span><span class="w"> </span>build/*.MAC<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'{print $2}'</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>sort<span class="w"> </span>-u<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'{k=toupper(substr($0,1,6));</span>
+<span class="s1">          if (seen[k]) print "COLLISION " k ": " first[k] " &lt;&gt; " $0;</span>
+<span class="s1">          else { seen[k]=1; first[k]=$0 }}'</span>
+</code></pre></div>
+<p>Any line printed is a pair you must rename or make <code>static</code>.</p>
+<h2 id="memory-layout">Memory layout<a class="headerlink" href="#memory-layout" title="Permanent link">¶</a></h2>
+<p>CP/M loads <code>.COM</code> files in one way. BSS begins immediately after the loaded
+image. The CP/M loader itself sets <code>SP</code> to its own small CCP stack, not to the
+top of free memory; DCCRTL's startup code is what then sets <code>SP</code> to the
+highest free byte before your program runs. The heap grows on demand between
+the end of BSS and the bottom of the stack. Because there is no guard between
+them by default, size the stack deliberately with <code>-stack</code> for programs with
+deep recursion or large frames — or build with <code>-fstack-check</code> (above) to turn
+an overflow into a clean <code>?stack overflow</code> exit.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer">
+        
+          
+          <a href="../01-c-conformance/" class="md-footer__link md-footer__link--prev" aria-label="Previous: C conformance">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                C conformance
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../03-types-and-conventions/" class="md-footer__link md-footer__link--next" aria-label="Next: Types and conventions">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Types and conventions
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"></path></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright © 2026 David Lee
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.footer", "content.code.copy", "navigation.tabs.sticky", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  
+<script id="init-glightbox">const lightbox = GLightbox({"touchNavigation": true, "loop": false, "zoomable": true, "draggable": true, "openEffect": "zoom", "closeEffect": "zoom", "slideEffect": "slide"});
+document$.subscribe(()=>{ lightbox.reload(); });
+</script></body></html>
