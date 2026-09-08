@@ -278,10 +278,18 @@ unreviewed raw outcomes from 59,000 to 58,816. Two permanent diagnostics cover
 the remaining do-while and generic-statement message cases. No source or
 function classification changed.
 
-- Review the remaining 59,000 unreviewed raw uncovered outcomes rather than
+The following host/matrix batch exercises safe MIR query defaults and scope
+restoration, parameter/IY emitters, isolated field resolution, five-argument
+recovery, and every fixed spilled candidate with exact diagnostic/control
+output equivalence. Coverage is now 4,103/4,384 functions,
+168,353/190,636 lines, 86,027/144,936 native branch outcomes, and
+152,004/170,483 regions. The raw ledger has 58,603 uncovered outcomes, one
+reviewed and 58,602 unreviewed, plus 281 unexecuted included functions.
+
+- Review the remaining 58,602 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
-- Cover the 326 unexecuted included functions or justify their classification.
+- Cover the 281 unexecuted included functions or justify their classification.
 - Extend near-match/generic equivalence beyond the six enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
   callbacks, and current memory/call forms.

@@ -290,6 +290,14 @@ With those tests, coverage is 4,063/4,384 functions, 167,810/190,636 lines,
 ledger has 58,817 uncovered outcomes, one reviewed and 58,816 unreviewed, plus
 321 unexecuted included functions. The work remains far from 100%.
 
+The following host/matrix batch exercises safe MIR query defaults and scope
+restoration, parameter/IY emitters, isolated field resolution, five-argument
+recovery, and every fixed spilled candidate with exact diagnostic/control
+output equivalence. Coverage is now 4,103/4,384 functions,
+168,353/190,636 lines, 86,027/144,936 native branch outcomes, and
+152,004/170,483 regions. The raw ledger has 58,603 uncovered outcomes, one
+reviewed and 58,602 unreviewed, plus 281 unexecuted included functions.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |

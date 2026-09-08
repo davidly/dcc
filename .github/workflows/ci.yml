@@ -105,7 +105,9 @@ jobs:
 
       - name: Run AST diagnostic dump test
         shell: pwsh
-        run: ./scripts/test-ast-dump.ps1
+        run: |
+          ./scripts/test-ast-dump.ps1
+          ./scripts/test-mir-candidate-matrix.ps1
 
       - name: Validate AST coverage classifications
         if: runner.os == 'Linux'

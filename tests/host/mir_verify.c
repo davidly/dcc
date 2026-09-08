@@ -2,6 +2,8 @@
 #include "../../src/dcc/dcc.c"
 #undef main
 #include "dcc_mir_internal.h"
+#include "dcc_ast_gen_internal.h"
+#include "dcc_mir_machine_internal.h"
 #include <limits.h>
 
 static int failures;
@@ -172,6 +174,220 @@ static void verify_mir_stream_io(void)
     mir_stream_close(NULL);
 }
 
+static void verify_ast_kind_names(void)
+{
+    static const char *names[] = {
+        "none", "int", "float", "str", "ident", "call", "index", "member",
+        "unary", "postfix", "binary", "logand", "logor", "assign", "cond",
+        "cast", "compound-literal", "comma", "sizeof-expr", "sizeof-type",
+        "expr-stmt", "compound", "decl", "if", "while", "do-while", "for",
+        "switch", "case", "default", "return", "break", "continue", "goto",
+        "label", "empty"
+    };
+    int kind;
+
+    if ((int)(sizeof(names) / sizeof(names[0])) != AST_EMPTY + 1) {
+        fprintf(stderr, "FAIL AST kind name inventory\n");
+        ++failures;
+        return;
+    }
+    for (kind = AST_NONE; kind <= AST_EMPTY; ++kind)
+        if (strcmp(ast_kind_name(kind), names[kind]) != 0) {
+            fprintf(stderr, "FAIL AST kind name %d\n", kind);
+            ++failures;
+        }
+    if (strcmp(ast_kind_name(-1), "?") != 0 ||
+        strcmp(ast_kind_name(AST_DIVMOD_CALL), "?") != 0) {
+        fprintf(stderr, "FAIL synthetic AST kind names\n");
+        ++failures;
+    }
+}
+
+static void verify_simple_mir_feature_queries(void)
+{
+    const struct MirInsn *parameter = (const struct MirInsn *)1;
+    long constant = -1;
+    int ok = 1;
+
+    setup(3, 1, 1);
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL simple MIR feature query verification\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    mir_reset_phi_return_forwarding_count();
+    mir_reset_boolean_phi_branch_simplification_count();
+    ok = ok && mir_affine_value(0, &parameter, &constant, 0) &&
+         parameter == NULL && constant == 0;
+    ok = ok && mir_first_nonlabel_successor(0) == 1;
+    ok = ok && mir_boolean_phi_branch_candidate_count() == 0;
+    ok = ok && mir_phi_return_forwarding_count_value() == 0;
+    ok = ok && mir_extended_integer_constant_conversion_folds() == 0;
+    ok = ok && mir_repeated_named_pointer_load_count() == 0;
+    ok = ok && mir_value_number_global_field_loads() == 0;
+    ok = ok && mir_global_field_value_numbering_count() == 0;
+    ok = ok && mir_eliminate_common_block_expressions() == 0;
+    ok = ok && mir_common_block_expression_elimination_count() == 0;
+    ok = ok && mir_eliminate_common_region_expressions() == 0;
+    ok = ok && mir_lazy_byte_parameter_count() == 0;
+    ok = ok && mir_homed_rematerializable_wide_candidate_count() == 0;
+    mir_begin_strict_phi_fallthrough();
+    ok = ok && !mir_strict_phi_fallthrough_was_used();
+    mir_end_strict_phi_fallthrough();
+    ok = ok && !mir_strict_phi_fallthrough_was_used();
+    mir_begin_block_cse_address_rematerialization();
+    ok = ok && mir_address_rematerialization_candidate_count() == 0;
+    mir_end_block_cse_address_rematerialization();
+    ok = ok && mir_begin_rematerialized_home_allocation();
+    ok = ok && mir_rematerialized_home_allocation_is_active();
+    ok = ok && !mir_begin_rematerialized_home_allocation();
+    mir_end_rematerialized_home_allocation();
+    ok = ok && !mir_rematerialized_home_allocation_is_active();
+    mir_end_rematerialized_home_allocation();
+    if (!ok) {
+        fprintf(stderr, "FAIL simple MIR feature query contract\n");
+        ++failures;
+    }
+    clear_liveness();
+}
+
+static void verify_parameter_emitters(void)
+{
+    struct MirInsn parameter;
+    MirStream *stream;
+    char output[512];
+    size_t length;
+    int ok = 1;
+
+    memset(&parameter, 0, sizeof(parameter));
+    parameter.opcode = MIR_PARAM;
+    parameter.object = 0;
+    mir.object_count = 1;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    mir.objects[0].storage = SC_PARAM;
+    mir.objects[0].type = TYPE_INT;
+    mir.objects[0].offset = 4;
+    stream = mir_stream_open();
+    if (stream == NULL) {
+        fprintf(stderr, "FAIL MIR parameter emitter stream allocation\n");
+        ++failures;
+        return;
+    }
+    ok = ok && !mir_emit_load_param(stream, NULL);
+    ok = ok && mir_emit_load_param(stream, &parameter);
+    ok = ok && mir_emit_load_param_de(stream, &parameter);
+    mir_emit_iy_prologue(stream);
+    mir.objects[0].type = TYPE_LONG;
+    mir.objects[0].offset = 6;
+    ok = ok && mir_emit_load_param_wide(stream, &parameter);
+    mir.objects[0].offset = 126;
+    ok = ok && !mir_emit_load_param_wide(stream, &parameter);
+    mir_stream_rewind(stream);
+    memset(output, 0, sizeof(output));
+    length = mir_stream_read(output, 1, sizeof(output) - 1, stream);
+    ok = ok && length > 0;
+    ok = ok && strstr(output, "\tld l,(ix+4)\n\tld h,(ix+5)\n") != NULL;
+    ok = ok && strstr(output, "\tld e,(ix+4)\n\tld d,(ix+5)\n") != NULL;
+    ok = ok && strstr(output, "\tpush iy\n\tpush ix\n") != NULL;
+    ok = ok && strstr(output,
+        "\tld l,(ix+6)\n\tld h,(ix+7)\n"
+        "\tld e,(ix+8)\n\tld d,(ix+9)\n") != NULL;
+    if (!ok) {
+        fprintf(stderr, "FAIL MIR parameter emitter contract\n");
+        ++failures;
+    }
+    mir_stream_close(stream);
+}
+
+static void verify_member_metadata_and_address(void)
+{
+    struct AstNode ident;
+    struct AstNode member;
+    struct FieldDef *field;
+    struct Sym *global;
+    struct MirResolvedNamedAddress resolved;
+    int sid = add_struct_def("verify_record_type");
+    int ok = 1;
+
+    if (nfield_defs >= MAX_FIELDS) {
+        fprintf(stderr, "FAIL field table capacity in member metadata test\n");
+        ++failures;
+        return;
+    }
+    field = &field_defs[nfield_defs++];
+    memset(field, 0, sizeof(*field));
+    strcpy(field->name, "value");
+    field->parent_struct_id = sid;
+    field->type = TYPE_INT;
+    field->offset = 2;
+    global = add_global(
+        "verify_record_value", make_struct_type(sid), SC_GLOBAL);
+    global->is_static = 1;
+    memset(&ident, 0, sizeof(ident));
+    memset(&member, 0, sizeof(member));
+    ident.kind = AST_IDENT;
+    ident.sval = global->name;
+    member.kind = AST_MEMBER;
+    member.a = &ident;
+    member.sval = field->name;
+    ok = ok && ast_member_field_value_type(&member) == TYPE_INT;
+    field->is_array = 1;
+    field->elem_type = TYPE_CHAR;
+    ok = ok && ast_member_field_value_type(&member) == TYPE_CHAR;
+    field->is_array = 0;
+
+    setup(4, 2, 1);
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].type = type_add_ptr(global->type);
+    strcpy(mir.insns[1].name, global->name);
+    mir.insns[2].opcode = MIR_MEMBER_ADDRESS;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    mir.insns[2].immediate = field->offset;
+    strcpy(mir.insns[2].name, field->name);
+    mir.insns[3].src1 = 1;
+    ok = ok && mir_resolve_isolated_global_field_address(1, &resolved);
+    ok = ok && resolved.root == &mir.insns[1];
+    ok = ok && resolved.storage == SC_GLOBAL && resolved.offset == 2;
+    ok = ok && resolved.member_depth == 1 && !resolved.has_index;
+    ok = ok && strcmp(resolved.base_name, global->name) == 0;
+    ok = ok && strcmp(resolved.leaf_member_name, field->name) == 0;
+    mir.insns[2].opcode = MIR_INDEX_ADDRESS;
+    ok = ok && !mir_resolve_isolated_global_field_address(1, &resolved);
+    if (!ok) {
+        fprintf(stderr, "FAIL member metadata and isolated address contract\n");
+        ++failures;
+    }
+}
+
+static void verify_five_call_arguments(void)
+{
+    int arguments[5];
+    int argument;
+    int ok = 1;
+
+    setup(9, 1, 1);
+    mir.next_call_id = 1;
+    for (argument = 0; argument < 5; ++argument) {
+        struct MirInsn *insn = &mir.insns[argument + 2];
+        insn->opcode = MIR_ARG;
+        insn->src1 = 0;
+        insn->immediate = argument;
+    }
+    mir.insns[7].opcode = MIR_CALL;
+    ok = ok && mir_machine_five_call_arguments(&mir.insns[7], arguments);
+    for (argument = 0; argument < 5; ++argument)
+        ok = ok && arguments[argument] == 0;
+    mir.insns[6].immediate = 3;
+    ok = ok && !mir_machine_five_call_arguments(&mir.insns[7], arguments);
+    if (!ok) {
+        fprintf(stderr, "FAIL five-argument call recovery contract\n");
+        ++failures;
+    }
+}
+
 static void diamond(void)
 {
     setup(11, 4, 4);
@@ -300,6 +516,11 @@ int main(void)
     verify_diamond_edge_liveness();
     verify_call_argument_liveness();
     verify_mir_stream_io();
+    verify_ast_kind_names();
+    verify_simple_mir_feature_queries();
+    verify_parameter_emitters();
+    verify_member_metadata_and_address();
+    verify_five_call_arguments();
     for (mutation = 0; mutation < 5; ++mutation) {
         setup(5, 1, 1);
         mir.next_call_id = 1;
