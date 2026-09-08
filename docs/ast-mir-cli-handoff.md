@@ -28,6 +28,7 @@ of thousands of raw branch records still need investigation.
 
 - Repository: <https://github.com/davidly/dcc>.
 - Continuation branch: `test/ast-mir-correctness`.
+- Continuation PR: <https://github.com/davidly/dcc/pull/194>.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
@@ -38,9 +39,8 @@ of thousands of raw branch records still need investigation.
 - Main CI run `34193712407` passed for the merge commit. The two handoff-only
   commits also passed all four jobs in run `34193879724` before being carried
   onto the continuation branch.
-- The continuation implementation and this updated handoff still require
-  publication and exact-head CI. Do not treat the older run IDs as validation
-  for the new head.
+- The continuation branch is published. PR #194's exact-head CI is pending;
+  do not treat the older run IDs as validation for the new head.
 
 The previous machine named the repository remote `upstream`; a fresh clone
 normally calls it `origin`. Inspect remotes and adapt commands below.
