@@ -8908,6 +8908,7 @@ static int mir_promote_objects(void)
             aliases[insn->dst] = mir_resolve_alias(aliases, reaching);
         insn->opcode = MIR_NOP;
         insn->dst = -1;
+        mir_invalidate_use_cache();
     }
     if (!inserted_phi) {
         for (i = 0; i < mir.count; ++i) {
@@ -8937,6 +8938,7 @@ static int mir_promote_objects(void)
             aliases[insn->dst] = mir_resolve_alias(aliases, reaching);
             insn->opcode = MIR_NOP;
             insn->dst = -1;
+            mir_invalidate_use_cache();
             ++promoted;
         }
     }
@@ -8955,6 +8957,7 @@ static int mir_promote_objects(void)
     free(next_state);
     free(out_state);
     free(in_state);
+    mir_invalidate_use_cache();
     /* Negative encoding asks the caller to rerun dataflow after the inserted
      * phi: -(N+1) preserves how many ordinary loads were already folded. */
     return inserted_phi ? -(promoted + 1) : promoted;

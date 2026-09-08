@@ -2,6 +2,7 @@
 #include "../../src/dcc/dcc.c"
 #undef main
 #include "dcc_mir_internal.h"
+#include <limits.h>
 
 static int failures;
 
@@ -111,9 +112,82 @@ static void promotion_loop(int initialized)
     mir.insns[11].src1 = 2;
 }
 
+static void verify_diamond_mutations(void)
+{
+    int instruction;
+    int field;
+    int mutation_count = 0;
+
+    for (instruction = 0; instruction < 11; ++instruction) {
+        for (field = 0; field < 6; ++field) {
+            int *operand;
+            int original;
+            char name[96];
+            diamond();
+            switch (field) {
+            case 0: operand = &mir.insns[instruction].src1; break;
+            case 1: operand = &mir.insns[instruction].src2; break;
+            case 2: operand = &mir.insns[instruction].dst; break;
+            case 3: operand = &mir.insns[instruction].label; break;
+            case 4: operand = &mir.insns[instruction].phi_pred1; break;
+            default: operand = &mir.insns[instruction].phi_pred2; break;
+            }
+            if (*operand < 0)
+                continue;
+            original = *operand;
+            *operand = 1000000;
+            sprintf(name, "diamond invalid field %d at instruction %d", field, instruction);
+            expect_verification(name, 0);
+            *operand = original;
+            sprintf(name, "diamond repaired field %d at instruction %d", field, instruction);
+            expect_verification(name, 1);
+            ++mutation_count;
+        }
+    }
+    if (mutation_count != 16) {
+        fprintf(stderr, "FAIL diamond mutation inventory: %d\n", mutation_count);
+        ++failures;
+    }
+    printf("MIR diamond mutations=%d\n", mutation_count);
+}
+
 int main(void)
 {
     struct Sym *callee;
+    int mutation;
+    setup(3, 1, 1);
+    mir.count = 0;
+    if (!mir_verify_dominance()) {
+        fprintf(stderr, "FAIL empty dominance graph\n");
+        ++failures;
+    }
+    mir.count = -1;
+    if (mir_verify_dominance()) {
+        fprintf(stderr, "FAIL negative dominance graph\n");
+        ++failures;
+    }
+    mir.count = INT_MAX;
+    if (mir_verify_dominance()) {
+        fprintf(stderr, "FAIL oversized dominance graph\n");
+        ++failures;
+    }
+    verify_diamond_mutations();
+    for (mutation = 0; mutation < 5; ++mutation) {
+        setup(5, 1, 1);
+        mir.next_call_id = 1;
+        mir.insns[2].opcode = MIR_ARG;
+        mir.insns[2].src1 = 0;
+        mir.insns[3].opcode = MIR_CALL;
+        expect_verification("call mutation control", 1);
+        switch (mutation) {
+        case 0: mir.insns[3].secondary_offset = -1; break;
+        case 1: mir.insns[3].secondary_offset = 1; break;
+        case 2: mir.insns[2].secondary_offset = -1; break;
+        case 3: mir.insns[2].secondary_offset = 1; break;
+        default: mir.insns[2].immediate = -1; break;
+        }
+        expect_verification("invalid call/argument identity", 0);
+    }
     setup(3, 1, 1);
     expect_verification("constant return", 1);
     setup(3, 1, 1);

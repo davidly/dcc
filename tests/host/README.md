@@ -161,6 +161,61 @@ stack configurations and peephole modes remain within checked baselines.
 
 ## Generated Differential Matrix
 
+The seeded `fuzz` case complements the fixed `qualgen` matrix:
+
+```sh
+pwsh scripts/run-mir-clobber-tests.ps1 -Cases fuzz
+pwsh scripts/run-mir-clobber-tests.ps1 -Cases fuzz -FuzzSeeds 23117
+pwsh scripts/new-mir-fuzz-source.ps1 -OutputPath build/replay.c -Seed 23117 -Programs 1
+pwsh scripts/test-mir-fuzz-source.ps1
+pwsh scripts/run-mir-compiler-mutations.ps1
+```
+
+Three default seeds generate 12 functions each, mixing six arithmetic steps,
+8/16-bit memory, aliased and non-aliased indirect writes/calls, live values across
+calls, zero-to-three-iteration loops, and conditional joins. Eight boundary
+inputs per function produce 96 assertions per seed. Host arithmetic explicitly
+masks target 16-bit results; divisors are nonzero, right shifts are 0..7, indices
+stay inside four elements, and all wrapping arithmetic is unsigned. This is a
+bounded grammar-based fuzzer, not unrestricted C generation or an exhaustive
+type/control-flow matrix.
+
+The ordinary twelve build configurations yield 3,456 reference comparisons.
+Two forced generic candidates for `fuzz0`, in both stack and peephole modes,
+add 2,304 checks of the full programs (only `fuzz0` is forced). Result-corruption
+controls must fail all 96 assertions and return failure in each of four release
+configurations per seed; those controls test oracle sensitivity, not compiler
+mutation coverage. Source and build artifacts are retained under
+`build/mir-clobber-failure-*` on failure. Case selection accepts comma-separated
+names and rejects unknown names rather than silently running no tests.
+
+`DCC_MIR_CACHE_VERIFY=1` is enabled for the seeded suite. Seed 23117 exposed
+promotion clearing definition IDs while subsequent promotion queries used a
+stale definition cache. Promotion now invalidates that cache after definition
+removal and after alias rewrites. The generator's first program is a replayable
+regression; source-debugging was unavailable on the development macOS host, so
+a temporary native stack probe identified the owning pass and was removed.
+
+The host verifier additionally mutates all 16 populated definition/operand/label
+fields of a valid diamond, requires rejection, restores each field, and requires
+acceptance. Five call/argument identity mutations have positive controls.
+Empty, negative, and oversized dominance graph contracts are tested directly.
+The compiler-mutation runner builds isolated copies with dominance or argument
+ABI checks disabled, or promotion cache invalidations removed. It first requires
+unmutated host tests and a one-function seed-23117 compilation to pass. Verifier
+mutants must produce explicit host-test assertion failures; the cache mutant
+must produce the specific `mir_definition` cache mismatch. Build errors, crashes,
+and survivors are not counted as kills. Logs and JSON results are retained under
+`build/mir-compiler-mutations`. These three controls do not establish a general
+compiler mutation score.
+
+The `structv`, `stringv`, `floatv`, `bitfield`, and `callid` near-match cases now
+require explicit rejection of their named schedule and generic selection for
+the named function. An unrelated exact schedule elsewhere in the program can
+no longer satisfy the assertion. Their expected output includes deliberate
+source-level failures where appropriate; this verifies that selection preserves
+the changed semantics instead of replaying a recognized successful result.
+
 `qualgen` generates a deterministic C program in the runner's temporary build
 directory and compares target results with a host-computed reference table.
 It covers 576 combinations: two element widths (8/16 bits), six expression

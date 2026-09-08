@@ -172,7 +172,63 @@ python3 scripts/ast-function-coverage.py
 python3 -m unittest discover -s scripts/tests -p 'test_ast_function_coverage.py'
 ```
 
-## Historical unfiltered report
+## September 8 Correctness Follow-up
+
+The assertion-backed follow-up adds seeded differential programs, strict
+near-match rejection checks, invalid-IR mutation sweeps, and isolated compiler
+mutation controls. It found and fixed a real definition-cache invalidation bug
+inside object promotion. The same source denominator is retained; three
+invalidation calls add three executable lines.
+
+| Metric | Before | After |
+| --- | ---: | ---: |
+| Lines | 167,478 / 190,462 (87.93%) | 167,485 / 190,465 (87.93%) |
+| Branch outcomes | 85,685 / 145,239 (59.00%) | 85,714 / 145,239 (59.02%) |
+| Functions | 4,057 / 4,383 (92.56%) | 4,057 / 4,383 (92.56%) |
+
+`mir_verify_dominance` itself reaches 214/214 executable lines, 168/168 regions,
+and 125/126 branch outcomes. The remaining true outcome of `incoming == 0`
+is reviewed in `scripts/ast-coverage-reviews.json`: evaluation reaches it only
+for a reachable non-entry PHI block, which necessarily has a reachable incoming
+edge. The entry-PHI error is tested separately. This defensive guard remains in
+both source and coverage totals; it is not deleted or excluded for a percentage.
+
+`ast-mir-gaps.json` records uncovered branch outcomes with exact source, function,
+line/column, and true/false identity. Review annotations require an unchanged
+source-expression anchor and evidence. The ledger includes 59,341 distinct raw
+LLVM branch records, of which 59,340 remain unreviewed, plus 326 unexecuted
+functions. Raw branch records are not interchangeable with LLVM's native
+function-summary branch denominator (which also accounts for folded/expanded
+coverage); the headline continues to use native metrics.
+
+The 115 previously classified legacy-only functions were checked against the
+new workload: none executed. Mixed initializer/inline functions remain included
+in full, including their guarded legacy branches. The optional shadow modules
+remain outside the production-owner report for architectural reasons, not for
+low execution counts. No new exclusion was introduced.
+
+Both strict full+extended release gates passed (481 applications, 24 documented
+skips per configuration), with zero checked performance regressions and no
+baseline edits. The full coverage/MIR workflow, sanitizer host tests, generator
+replay checks, three compiler-mutation controls, script tests, and debugger-host
+tests passed locally. New cross-platform CI steps are configured but have not
+been run remotely for this uncommitted follow-up.
+
+### Remaining Completion Gates
+
+- Review the remaining 59,340 raw uncovered outcomes rather than labeling them
+   unreachable by default; add supported-input or malformed-IR assertions as needed.
+- Cover the 326 unexecuted included functions or justify their classification.
+- Extend near-match/generic equivalence beyond the five enforced schedule families.
+- Extend the seeded grammar beyond bounded unsigned arithmetic and current memory/call forms.
+- Add compiler mutants beyond the two verifier controls and promotion-cache
+   regression, and investigate survivors.
+
+This follow-up completes neither exhaustive source coverage nor the complete
+exclusion audit. It supplies reproducible tests and an explicit backlog so those
+requirements cannot silently disappear behind a rounded percentage.
+
+## Historical Unfiltered Report
 
 The first full run on 2026-08-28 produced:
 

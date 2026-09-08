@@ -2,10 +2,12 @@
 param(
     [int]$RunTimeout = 30,
     [string]$Emulator = "ntvcm",
-    [string[]]$Cases = @()
+    [string[]]$Cases = @(),
+    [int[]]$FuzzSeeds = @(23117, 1, 65535)
 )
 
 $ErrorActionPreference = "Stop"
+$Cases = @($Cases -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
 $dccmake = Join-Path $repoRoot "dccmake"
 $dccCommand = if ($env:DCC) { $env:DCC } else { Join-Path $repoRoot "dcc" }
@@ -14,6 +16,7 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "dcc-mir-clobber-tests-" + [guid]::NewGuid())
 $environmentNames = @(
     "DCC_MIR_COST_REPORT",
+    "DCC_MIR_CACHE_VERIFY",
     "DCC_MIR_MACHINE_REPORT",
     "DCC_MIR_REPORT",
     "DCC_MIR_REQUIRE_COMPLETE",
@@ -80,6 +83,7 @@ function Assert-RunCase(
     [string]$ExactTemplate = "",
     [string]$ExactFunction = "",
     [bool]$RequireExact = $false,
+    [bool]$RequireRejected = $false,
     [string[]]$AssemblyPatterns = @(),
     [bool]$OddUpperRuntime = $false,
     [string]$DebugMode = ""
@@ -148,6 +152,10 @@ __ctu:
         throw "$Name build did not create $assemblyPath ($configuration)"
     }
     $assembly = Get-Content -LiteralPath $assemblyPath -Raw
+    if ($Name.StartsWith("fuzzforced-") -and $build.Output -notmatch
+        'MIR selection function=fuzz0 selector=spilled-scalar-cfg') {
+        throw "$Name did not use the required generic emitter:`n$($build.Output)"
+    }
     if ($Name.StartsWith("minimax-") -and $build.Output -notmatch
         'MIR selection function=MinMax selector=spilled-scalar-cfg') {
         throw "$Name did not use the required generic emitter:`n$($build.Output)"
@@ -164,8 +172,11 @@ __ctu:
         $selectionPattern =
             "MIR selection function=$([regex]::Escape($ExactFunction)) " +
             "selector=scheduled-machine-cfg"
-        $selected = $assembly.Contains(";@dcc.mir exact-kernel") -or
-            ($ExactFunction -and $build.Output -match $selectionPattern)
+        $selected = if ($ExactFunction) { $build.Output -match $selectionPattern }
+            else { $assembly.Contains(";@dcc.mir exact-kernel") }
+        if ($RequireRejected -and (-not $rejected -or $selected)) {
+            throw "$Name did not reject '$ExactTemplate' for '$ExactFunction' into generic code:`n$($build.Output)"
+        }
         if ($RequireExact -and -not $selected) {
             throw "$Name did not select required exact template " +
                 "'$ExactTemplate' ($configuration):`n$($build.Output)"
@@ -397,6 +408,7 @@ $caseDefinitions = @(
         Exit = 0
         ExactTemplate = "struct-init-reports"
         ExactFunction = "main"
+        RequireRejected = $true
     },
     [pscustomobject]@{
         Name = "stringv"
@@ -406,6 +418,7 @@ $caseDefinitions = @(
         Exit = 0
         ExactTemplate = "string-init-reports"
         ExactFunction = "main"
+        RequireRejected = $true
     },
     [pscustomobject]@{
         Name = "floatv"
@@ -418,6 +431,7 @@ $caseDefinitions = @(
         Exit = 1
         ExactTemplate = "float-init-checks"
         ExactFunction = "main"
+        RequireRejected = $true
     },
     [pscustomobject]@{
         Name = "bitfield"
@@ -427,6 +441,7 @@ $caseDefinitions = @(
         Exit = 0
         ExactTemplate = "bitfield-init-checks"
         ExactFunction = "main"
+        RequireRejected = $true
     },
     [pscustomobject]@{
         Name = "callid"
@@ -438,15 +453,37 @@ $caseDefinitions = @(
         Exit = 1
         ExactTemplate = "value-literal-checks"
         ExactFunction = "check_value_literals"
+        RequireRejected = $true
     }
 )
 
 try {
+    $knownCases = @($caseDefinitions.Name) + @("fuzz", "minimax", "vlaend", "vlaok")
+    foreach ($requested in $Cases) {
+        if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
+    }
     New-Item -ItemType Directory -Path $tempRoot | Out-Null
     Set-ProcessEnvironment "DCC_MIR_REQUIRE_COMPLETE" "1"
     Set-ProcessEnvironment "DCC_MIR_REQUIRE_EMIT" "1"
     Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" "1"
     Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" "1"
+
+    if ($Cases.Count -eq 0 -or "fuzz" -in $Cases) {
+        Set-ProcessEnvironment "DCC_MIR_CACHE_VERIFY" "1"
+        foreach ($seed in $FuzzSeeds) {
+            $fuzzSource = Join-Path $tempRoot "fz$seed.c"
+            & (Join-Path $PSScriptRoot "new-mir-fuzz-source.ps1") -OutputPath $fuzzSource -Seed $seed
+            $caseDefinitions += [pscustomobject]@{
+                Name = "fuzz-$seed"; Sources = @($fuzzSource); Defines = @()
+                Expected = @("MIR fuzz seed=$seed checks=96 failures=0"); Exit = 0
+                DebugModes = @("true", "lines")
+            }
+            $caseDefinitions += [pscustomobject]@{
+                Name = "fuzz-mutant-$seed"; Sources = @($fuzzSource); Defines = @("FUZZ_MUTATE=1")
+                Expected = @("MIR fuzz seed=$seed checks=96 failures=96"); Exit = 1
+            }
+        }
+    }
 
     if ($Cases.Count -eq 0 -or "qualgen" -in $Cases) {
         $seeds = @(0, 1, 127, 255, 256, 32767, 32768, 65535)
@@ -627,7 +664,8 @@ try {
     }
 
     foreach ($case in $caseDefinitions) {
-        if ($Cases.Count -gt 0 -and $case.Name -notin $Cases) {
+        if ($Cases.Count -gt 0 -and $case.Name -notin $Cases -and
+            -not ($case.Name.StartsWith("fuzz-") -and "fuzz" -in $Cases)) {
             continue
         }
         foreach ($stackCheck in @($true, $false)) {
@@ -638,6 +676,7 @@ try {
                     -Peep $peep -ExactTemplate $case.ExactTemplate `
                     -ExactFunction $case.ExactFunction `
                     -RequireExact ([bool]$case.RequireExact) `
+                    -RequireRejected ([bool]$case.RequireRejected) `
                     -AssemblyPatterns $case.AssemblyPatterns `
                     -OddUpperRuntime ([bool]$case.OddUpperRuntime)
                 foreach ($debugMode in $case.DebugModes) {
@@ -650,6 +689,27 @@ try {
         }
     }
 
+    if ($Cases.Count -eq 0 -or "fuzz" -in $Cases) {
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" "fuzz0"
+        try {
+            foreach ($candidate in @("spilled-baseline", "spilled-all")) {
+                Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $candidate
+                foreach ($seed in $FuzzSeeds) {
+                    foreach ($stackCheck in @($true, $false)) {
+                        foreach ($peep in @($true, $false)) {
+                            Assert-RunCase -Name "fuzzforced-$seed-$candidate" `
+                                -Sources @(Join-Path $tempRoot "fz$seed.c") -Defines @() `
+                                -Expected @("MIR fuzz seed=$seed checks=96 failures=0") `
+                                -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep
+                        }
+                    }
+                }
+            }
+        } finally {
+            Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $savedEnvironment["DCC_MIR_SELECT_FUNCTION"]
+            Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
+        }
+    }
     if ($Cases.Count -eq 0 -or "minimax" -in $Cases) {
         Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" "MinMax"
         try {
@@ -706,6 +766,13 @@ try {
     }
     Write-Host "MIR emission-clobber regressions passed" `
         -ForegroundColor Green
+} catch {
+    $failureRoot = Join-Path $repoRoot ("build/mir-clobber-failure-" + [guid]::NewGuid())
+    if (Test-Path -LiteralPath $tempRoot) {
+        Copy-Item -LiteralPath $tempRoot -Destination $failureRoot -Recurse
+        Write-Host "Failure source and build artifacts retained: $failureRoot"
+    }
+    throw
 } finally {
     foreach ($name in $environmentNames) {
         Set-ProcessEnvironment $name $savedEnvironment[$name]

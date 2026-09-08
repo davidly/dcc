@@ -70,5 +70,36 @@ class FunctionCoverageTests(unittest.TestCase):
             coverage.summarize_native(text + text, {"active"})
 
 
+    def test_gap_ledger_keeps_uncovered_outcomes_and_scope(self):
+        source = str(coverage.ROOT / "src/dcc/dcc_mir_verify.c")
+        active = {"name": "active", "count": 1, "filenames": [source],
+                  "branches": [[10, 2, 10, 9, 0, 3, 0, 0, 4]]}
+        old = dict(active, name="legacy", count=0)
+        report = {"data": [{"functions": [active, old]}]}
+        result = coverage.coverage_gaps(report, {"active"})
+        self.assertEqual(result["unexecuted_functions"], [])
+        self.assertEqual(len(result["uncovered_branch_outcomes"]), 1)
+        self.assertEqual(result["uncovered_branch_outcomes"][0]["outcome"], "true")
+        self.assertEqual(result["uncovered_branch_outcomes"][0]["review"], "unreviewed")
+        report["data"].append({"functions": [dict(active, branches=[[10, 2, 10, 9, 1, 0, 0, 0, 4]])]})
+        self.assertEqual(coverage.coverage_gaps(report, {"active"})["uncovered_branch_outcomes"], [])
+
+    def test_reviews_preserve_denominator_and_require_evidence(self):
+        review = {"source": "src/dcc/dcc_mir_verify.c", "function": "mir_verify_dominance",
+                  "expression": "incoming == 0", "outcome": "true",
+                  "classification": "defensive-unreachable", "evidence": "reachable non-entry predecessor"}
+        source = (coverage.ROOT / review["source"]).read_text().splitlines()
+        line = next(index + 1 for index, text in enumerate(source) if review["expression"] in text)
+        gap = {"source": review["source"], "function": review["function"], "line": line,
+               "column": source[line - 1].index(review["expression"]) + 1,
+               "outcome": "true", "review": "unreviewed"}
+        gaps = {"uncovered_branch_outcomes": [gap]}
+        coverage.annotate_reviews(gaps, [review])
+        self.assertEqual(len(gaps["uncovered_branch_outcomes"]), 1)
+        self.assertEqual(gap["review"], "defensive-unreachable")
+        with self.assertRaisesRegex(ValueError, "stale or unsupported"):
+            coverage.annotate_reviews(gaps, [dict(review, expression="missing expression")])
+
+
 if __name__ == "__main__":
     unittest.main()
