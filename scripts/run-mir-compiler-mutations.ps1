@@ -84,3 +84,4 @@ try {
     [Environment]::SetEnvironmentVariable("DCC_MIR_CACHE_VERIFY", $savedCacheVerify, "Process")
     Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
 }
+exit 0
