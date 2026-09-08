@@ -32,7 +32,7 @@ thousands of raw branch records still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `323ea8e0` (`test: restore exact MIR runner coverage`).
+  `470d6389` (`feat: complete lazy wide MIR parameters`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -498,6 +498,13 @@ The remaining function list consists of 23 intentionally disabled,
 under-proven struct-value helpers and nine stale/dead historical helpers.
 They remain in the denominator; no schedule, guard, or classification was
 removed to raise the percentage.
+
+Local validation for `470d6389` passed the full clobber suite, sanitizer
+compiler probes, nine clean-built mutants, 82 Python tests, both strict
+506-app release gates, and stack/no-stack censuses retaining all 3,039
+generated functions. Seven apps changed candidate metrics as expected from
+lazy-wide admission; all passed runtime and performance checks. The commit is
+pushed without waiting for GitHub Actions.
 
 ## Useful Repository Assets
 
