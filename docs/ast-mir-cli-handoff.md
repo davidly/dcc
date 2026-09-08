@@ -32,7 +32,7 @@ thousands of raw branch records still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `05043bef` (`test: cover generic MIR emitter invariants`).
+  `323ea8e0` (`test: restore exact MIR runner coverage`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -477,6 +477,9 @@ lowering removes only the five instructions after the proven `noreturn`
 An added-call near match rejects exact selection. Both strict release gates,
 sanitizer probes, nine compiler mutants, and stack/no-stack censuses pass with
 no production selector regressions.
+
+The implementation commit is pushed without waiting for GitHub Actions, per
+the user's local-validation workflow.
 
 ## Useful Repository Assets
 
