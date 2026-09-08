@@ -286,10 +286,19 @@ output equivalence. Coverage is now 4,103/4,384 functions,
 152,004/170,483 regions. The raw ledger has 58,603 uncovered outcomes, one
 reviewed and 58,602 unreviewed, plus 281 unexecuted included functions.
 
-- Review the remaining 58,602 unreviewed raw uncovered outcomes rather than
+Candidate-state default assertions then cover 40 homed/spilled feature-query
+functions and ensure no state leaks between attempts. Valid transformation
+fixtures exercise direct PHI-return forwarding and both block/region common
+address elimination, including source-value rewrites and post-transform
+verification. Coverage reaches 4,152/4,384 functions, 168,691/190,636 lines,
+86,139/144,936 native branch outcomes, and 152,238/170,483 regions. The raw
+ledger has 58,491 uncovered outcomes, one reviewed and 58,490 unreviewed, plus
+232 unexecuted included functions.
+
+- Review the remaining 58,490 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
-- Cover the 281 unexecuted included functions or justify their classification.
+- Cover the 232 unexecuted included functions or justify their classification.
 - Extend near-match/generic equivalence beyond the six enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
   callbacks, and current memory/call forms.

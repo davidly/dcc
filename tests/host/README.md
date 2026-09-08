@@ -32,6 +32,18 @@ seeks, and null close behavior. These are candidate-isolation primitives, so
 their tests assert exact bytes and cursor state rather than merely executing
 the helpers.
 
+Small verified MIRs also assert cross-module query defaults and reversible
+state scopes: affine constants, PHI/candidate counters, CSE/value-numbering
+no-ops, lazy/rematerialized allocation state, strict PHI fallthrough, and
+address-rematerialization probes. Separate fixtures verify exact parameter
+load text (HL, DE, wide, and IY prologue), named-member type/layout resolution,
+isolated static-global field addresses, and five-argument call recovery.
+Candidate-state assertions cover every public homed/spilled feature flag at a
+clean function boundary. Positive transform controls forward a PHI-return join
+onto its two predecessor exits and eliminate duplicate address expressions in
+both block and region passes; each test asserts rewritten value identities and
+reruns MIR verification.
+
 `dcc_mir_verify.c` constructs an independent CFG and immediate-dominator tree
 using reverse postorder. Its storage is linear in the MIR size. Verification
 runs after object promotion and semantic transformations, before allocation

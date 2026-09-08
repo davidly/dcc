@@ -298,6 +298,15 @@ output equivalence. Coverage is now 4,103/4,384 functions,
 152,004/170,483 regions. The raw ledger has 58,603 uncovered outcomes, one
 reviewed and 58,602 unreviewed, plus 281 unexecuted included functions.
 
+Candidate-state default assertions then cover 40 homed/spilled feature-query
+functions and ensure no state leaks between attempts. Valid transformation
+fixtures exercise direct PHI-return forwarding and both block/region common
+address elimination, including source-value rewrites and post-transform
+verification. Coverage reaches 4,152/4,384 functions, 168,691/190,636 lines,
+86,139/144,936 native branch outcomes, and 152,238/170,483 regions. The raw
+ledger has 58,491 uncovered outcomes, one reviewed and 58,490 unreviewed, plus
+232 unexecuted included functions.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |

@@ -388,6 +388,156 @@ static void verify_five_call_arguments(void)
     }
 }
 
+static void verify_spilled_feature_defaults(void)
+{
+    int ok = 1;
+
+    setup(3, 1, 1);
+    ok = ok && !mir_spilled_cfg_has_divmod_pair();
+    ok = ok && !mir_spilled_cfg_divmod_has_dead_result();
+    ok = ok && !mir_spilled_cfg_has_wide_mulmod_fusion();
+    ok = ok && !mir_spilled_cfg_depends_on_dead_store_forwarding();
+    ok = ok && !mir_spilled_cfg_depends_on_direct_byte_param();
+    ok = ok && !mir_spilled_cfg_depends_on_constant_index_absolute();
+    ok = ok && !mir_spilled_cfg_depends_on_constant_absolute();
+    ok = ok && !mir_spilled_cfg_depends_on_dynamic_index_base_forwarding();
+    ok = ok && !mir_spilled_cfg_depends_on_wide_constant_rematerialization();
+    ok = ok && !mir_spilled_cfg_depends_on_indirect_incdec();
+    ok = ok && !mir_spilled_cfg_depends_on_pointer_difference_shift();
+    ok = ok && !mir_spilled_cfg_depends_on_wide_call_constant_comparison();
+    ok = ok && !mir_spilled_cfg_depends_on_local_constant_byte_store();
+    ok = ok &&
+        !mir_spilled_cfg_depends_only_on_unsigned_wide_constant_relational();
+    ok = ok && !mir_spilled_cfg_depends_on_unary_not_branch_fusion();
+    ok = ok && !mir_spilled_cfg_depends_on_planned_stack_handoff();
+    ok = ok && !mir_spilled_cfg_depends_on_planned_index_base_handoff();
+    ok = ok && !mir_spilled_cfg_depends_on_stable_pointer_local_home();
+    ok = ok && !mir_spilled_cfg_depends_on_stable_pointer_local_slot();
+    ok = ok && !mir_spilled_cfg_depends_on_rhs_stack_forwarding();
+    ok = ok && !mir_spilled_cfg_depends_on_binary_load_pair_forwarding();
+    ok = ok && !mir_spilled_cfg_depends_on_dense_byte_switch();
+    ok = ok && !mir_spilled_cfg_dense_byte_switch_case_count();
+    ok = ok && !mir_spilled_cfg_dense_byte_switch_uses_direct_condition();
+    ok = ok &&
+        !mir_spilled_cfg_dense_byte_switch_uses_postincrement_index();
+    ok = ok && !mir_spilled_cfg_inline_postincrement_uses();
+    ok = ok && !mir_spilled_cfg_inline_indexed_stack_store_uses();
+    ok = ok && !mir_spilled_cfg_inline_simple_indexed_store_uses();
+    ok = ok && !mir_spilled_cfg_small_selfstore_add_uses();
+    ok = ok && !mir_spilled_cfg_uses_exact_semantic_kernel();
+    ok = ok &&
+        !mir_spilled_cfg_depends_on_indirect_store_value_forwarding();
+    ok = ok && !mir_spilled_cfg_indirect_store_value_forwarding_uses();
+    ok = ok && !mir_spilled_cfg_depends_on_branch_condition_forwarding();
+    ok = ok && !mir_spilled_cfg_branch_condition_forwarding_uses();
+    ok = ok &&
+        !mir_spilled_cfg_depends_on_indirect_store_address_forwarding();
+    ok = ok && !mir_spilled_cfg_depends_on_promoted_local_slot_reuse();
+    ok = ok && !mir_spilled_cfg_depends_on_wide_store_forwarding();
+    ok = ok && !mir_spilled_cfg_indirect_store_address_forwarding_uses();
+    ok = ok && !mir_wide_binary_rhs_forwarding_use_count();
+    ok = ok && !mir_homed_cfg_depends_on_unary_not_branch();
+    ok = ok && !mir_homed_cfg_was_frameless();
+    if (!ok) {
+        fprintf(stderr, "FAIL MIR candidate feature state leaked between attempts\n");
+        ++failures;
+    }
+}
+
+static void verify_immediate_phi_return_forwarding(void)
+{
+    setup(11, 4, 4);
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 2;
+    mir.insns[3].opcode = MIR_BRANCH_FALSE;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].label = 2;
+    mir.insns[4].opcode = MIR_LABEL;
+    mir.insns[4].label = 1;
+    mir.insns[5].opcode = MIR_CONST;
+    mir.insns[5].dst = 1;
+    mir.insns[6].opcode = MIR_JUMP;
+    mir.insns[6].label = 3;
+    mir.insns[7].opcode = MIR_LABEL;
+    mir.insns[7].label = 2;
+    mir.insns[8].opcode = MIR_LABEL;
+    mir.insns[8].label = 3;
+    mir.insns[9].opcode = MIR_PHI;
+    mir.insns[9].dst = 3;
+    mir.insns[9].src1 = 1;
+    mir.insns[9].src2 = 2;
+    mir.insns[9].phi_pred1 = 1;
+    mir.insns[9].phi_pred2 = 2;
+    mir.insns[10].src1 = 3;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL immediate PHI return control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    mir_reset_phi_return_forwarding_count();
+    mir_forward_immediate_phi_returns();
+    if (mir_phi_return_forwarding_count_value() != 1 ||
+        mir.insns[6].opcode != MIR_RETURN ||
+        mir.insns[6].src1 != 1 ||
+        mir.insns[8].opcode != MIR_RETURN ||
+        mir.insns[8].src1 != 2 ||
+        mir.insns[9].opcode != MIR_LABEL ||
+        !mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL immediate PHI return forwarding\n");
+        ++failures;
+    }
+    clear_liveness();
+}
+
+static void verify_common_expression_elimination(void)
+{
+    int ok = 1;
+
+    setup(5, 3, 1);
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].type = TYPE_INT | TYPE_PTR;
+    strcpy(mir.insns[1].name, "verify_address");
+    mir.insns[2].opcode = MIR_ADDRESS;
+    mir.insns[2].dst = 1;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    strcpy(mir.insns[2].name, "verify_address");
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].immediate = '+';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[4].src1 = 2;
+    ok = ok && mir_eliminate_common_block_expressions() == 1;
+    ok = ok && mir_common_block_expression_elimination_count() == 1;
+    ok = ok && mir.insns[2].opcode == MIR_NOP;
+    ok = ok && mir.insns[3].src1 == 0 && mir.insns[3].src2 == 0;
+
+    setup(5, 3, 1);
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].type = TYPE_INT | TYPE_PTR;
+    strcpy(mir.insns[1].name, "verify_address");
+    mir.insns[2].opcode = MIR_ADDRESS;
+    mir.insns[2].dst = 1;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    strcpy(mir.insns[2].name, "verify_address");
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].immediate = '+';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[4].src1 = 2;
+    ok = ok && mir_eliminate_common_region_expressions() == 1;
+    ok = ok && mir.insns[2].opcode == MIR_NOP;
+    ok = ok && mir.insns[3].src1 == 0 && mir.insns[3].src2 == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL common expression elimination contracts\n");
+        ++failures;
+    }
+}
+
 static void diamond(void)
 {
     setup(11, 4, 4);
@@ -521,6 +671,9 @@ int main(void)
     verify_parameter_emitters();
     verify_member_metadata_and_address();
     verify_five_call_arguments();
+    verify_spilled_feature_defaults();
+    verify_immediate_phi_return_forwarding();
+    verify_common_expression_elimination();
     for (mutation = 0; mutation < 5; ++mutation) {
         setup(5, 1, 1);
         mir.next_call_id = 1;
