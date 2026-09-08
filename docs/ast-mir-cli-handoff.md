@@ -32,7 +32,7 @@ thousands of raw branch records still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `edfa976b` (`fix: harden MIR coverage invariants`).
+  `05043bef` (`test: cover generic MIR emitter invariants`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -456,6 +456,12 @@ positive preflight control. The two lazy-wide helpers are contradictory with
 the one/two-byte lazy eligibility invariant, and the residual historical
 spilled helpers remain in the denominator rather than being revived solely for
 coverage.
+
+Local validation for `05043bef` passed canonical/CMake builds, full MIR
+clobber and candidate-matrix controls, nine clean-built mutants, 82 Python
+tests, ASan/UBSan verification, both strict 506-app release gates, debugger
+tests, and stack/no-stack censuses with all 3,039 functions retained and zero
+production selector changes. It is pushed without waiting for GitHub Actions.
 
 ## Useful Repository Assets
 
