@@ -32,7 +32,7 @@ thousands of raw branch records still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `d0a9ed82` (`fix: strengthen MIR callback and fallback invariants`).
+  `edfa976b` (`fix: harden MIR coverage invariants`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -424,6 +424,17 @@ reviewed and 56,131 unreviewed, plus 55 unexecuted included functions. The
 function percentage is 98.75%; its decrease from the provisional 99.27%
 measurement is the honest consequence of disabling 23 under-proven
 struct-value helpers. The broader objective remains incomplete.
+
+Local validation for `edfa976b` passed canonical and independent CMake builds,
+the full clobber/lifetime/required-emission suites, 81 pointer mutations, all
+nine clean-built compiler mutants, 82 Python tests, ASan/UBSan verification,
+10 debugger-host tests plus two line-debug tests, runtime/module audits, and
+both strict 506-app full+extended release gates with zero failures or
+performance regressions. Stack and no-stack selector censuses retained all
+3,039 generated functions; only the intended `tlimits` selection changed from
+the parent checkpoint. A fresh LLVM 18 coverage run produced the totals above.
+The commit is pushed per the user's local-validation workflow without waiting
+for GitHub Actions.
 
 ## Useful Repository Assets
 
