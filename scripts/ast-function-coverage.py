@@ -138,6 +138,56 @@ def summarize_native(text, selected):
     return {"functions": functions, "totals": totals}
 
 
+def coverage_gaps(report, selected):
+    outcomes = {}
+    unexecuted = set()
+    for data in report["data"]:
+        for function in data["functions"]:
+            if function["name"] not in selected:
+                continue
+            if function["count"] == 0:
+                unexecuted.add(function["name"])
+            for branch in function["branches"]:
+                source = Path(function["filenames"][branch[6]]).resolve()
+                if not source.is_relative_to(ROOT):
+                    raise ValueError("branch source outside repository: " + str(source))
+                relative = source.relative_to(ROOT).as_posix()
+                for outcome, count in (("true", branch[4]), ("false", branch[5])):
+                    key = (relative, function["name"], *branch[:4], outcome)
+                    outcomes[key] = max(outcomes.get(key, 0), count)
+    gaps = []
+    for key, count in sorted(outcomes.items()):
+        if count:
+            continue
+        source, function, line, column, end_line, end_column, outcome = key
+        gaps.append(dict(source=source, function=function, line=line, column=column,
+                         end_line=end_line, end_column=end_column, outcome=outcome,
+                         review="unreviewed"))
+    return {"unexecuted_functions": sorted(unexecuted), "uncovered_branch_outcomes": gaps}
+
+
+def annotate_reviews(gaps, reviews):
+    used = set()
+    for review in reviews:
+        source = ROOT / review["source"]
+        lines = source.read_text(encoding="utf-8").splitlines()
+        matches = [(index + 1, text.index(review["expression"]) + 1)
+                   for index, text in enumerate(lines) if review["expression"] in text]
+        if len(matches) != 1 or not review.get("evidence"):
+            raise ValueError("stale or unsupported coverage review: " + review["function"])
+        line, column = matches[0]
+        key = (review["source"], review["function"], line, column, review["outcome"])
+        if key in used:
+            raise ValueError("duplicate coverage review")
+        used.add(key)
+        for gap in gaps["uncovered_branch_outcomes"]:
+            if (gap["source"], gap["function"].split(":")[-1], gap["line"],
+                    gap["column"], gap["outcome"]) == key:
+                gap["review"] = review["classification"]
+                gap["evidence"] = review["evidence"]
+    return gaps
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clang", default="clang")
@@ -147,6 +197,7 @@ def main():
     parser.add_argument("--allowlist", type=Path)
     parser.add_argument("--native-report", type=Path)
     parser.add_argument("--summary", type=Path)
+    parser.add_argument("--gaps", type=Path)
     args = parser.parse_args()
     found = inventory(args.clang)
     if args.inventory:
@@ -172,6 +223,13 @@ def main():
                 executed = {function["name"] for data in report["data"] for function in data["functions"]
                             if function["name"] in selected and function["count"] > 0}
                 summary["totals"]["functions"] = {"count": len(selected), "covered": len(executed)}
+                if args.gaps:
+                    gaps = coverage_gaps(report, set(selected))
+                    reviews = json.loads((ROOT / "scripts/ast-coverage-reviews.json").read_text())
+                    annotate_reviews(gaps, reviews)
+                    args.gaps.write_text(json.dumps(gaps, indent=2) + "\n", encoding="utf-8")
+                    unreviewed = sum(gap["review"] == "unreviewed" for gap in gaps["uncovered_branch_outcomes"])
+                    print(f"Unreviewed branch outcomes: {unreviewed}")
                 args.summary.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
                 for metric, counts in summary["totals"].items():
                     total, covered = counts["count"], counts["covered"]

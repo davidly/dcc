@@ -161,6 +161,85 @@ stack configurations and peephole modes remain within checked baselines.
 
 ## Generated Differential Matrix
 
+The seeded `fuzz` case complements the fixed `qualgen` matrix:
+
+```sh
+pwsh scripts/run-mir-clobber-tests.ps1 -Cases fuzz
+pwsh scripts/run-mir-clobber-tests.ps1 -Cases fuzz -FuzzSeeds 23117
+pwsh scripts/new-mir-fuzz-source.ps1 -OutputPath build/replay.c -Seed 23117 -Programs 1
+pwsh scripts/test-mir-fuzz-source.ps1
+pwsh scripts/run-mir-compiler-mutations.ps1
+```
+
+Three default seeds generate 12 functions each, mixing six arithmetic steps,
+8/16-bit memory, aliased and non-aliased indirect writes/calls, live values across
+calls, zero-to-three-iteration loops, and conditional joins. Eight boundary
+inputs per function produce 96 assertions per seed. Host arithmetic explicitly
+masks target 16-bit results; divisors are nonzero, right shifts are 0..7, indices
+stay inside four elements, and all wrapping arithmetic is unsigned. This is a
+bounded grammar-based fuzzer, not unrestricted C generation or an exhaustive
+type/control-flow matrix.
+
+The ordinary twelve build configurations yield 3,456 reference comparisons.
+Two forced generic candidates for `fuzz0`, in both stack and peephole modes,
+add 2,304 checks of the full programs (only `fuzz0` is forced). Result-corruption
+controls must fail all 96 assertions and return failure in each of four release
+configurations per seed; those controls test oracle sensitivity, not compiler
+mutation coverage. Source and build artifacts are retained under
+`build/mir-clobber-failure-*` on failure. Case selection accepts comma-separated
+names and rejects unknown names rather than silently running no tests.
+
+`DCC_MIR_CACHE_VERIFY=1` is enabled for the seeded suite. Seed 23117 exposed
+promotion clearing definition IDs while subsequent promotion queries used a
+stale definition cache. Promotion now invalidates that cache after definition
+removal and after alias rewrites. The generator's first program is a replayable
+regression; source-debugging was unavailable on the development macOS host, so
+a temporary native stack probe identified the owning pass and was removed.
+
+The host verifier additionally mutates all 16 populated definition/operand/label
+fields of a valid diamond, requires rejection, restores each field, and requires
+acceptance. Five call/argument identity mutations have positive controls.
+Empty, negative, and oversized dominance graph contracts are tested directly.
+The compiler-mutation runner builds isolated copies with dominance, argument
+ABI, or call-arity checks disabled, or promotion cache invalidations removed. It first requires
+unmutated host tests and a one-function seed-23117 compilation to pass. Verifier
+mutants must produce explicit host-test assertion failures; the cache mutant
+must produce the specific `mir_definition` cache mismatch. Build errors, crashes,
+and survivors are not counted as kills. Every mutant uses a clean rebuild, so
+rapid source rewrites cannot reuse a preceding mutant's objects due to timestamp
+resolution. Verifier kills must contain the mutation-specific assertion failure.
+Logs and JSON results are retained under
+`build/mir-compiler-mutations`. These four controls do not establish a general
+compiler mutation score.
+
+### Call Arity Invariants
+
+Each call's argument positions must form a contiguous zero-based set; textual
+order may differ. Known nonvariadic prototypes require exactly their declared
+parameter count. Variadic prototypes require the fixed prefix and permit extras.
+Unprototyped calls have no parameter-count restriction but still require valid
+argument positions. Existing duplicate/late-argument and dominance checks remain
+independent and required.
+
+Arity lookup covers named global functions and indirect calls whose callee is a
+named `MIR_LOAD` or `MIR_PARAM`, matching the existing argument-ABI lookup. The
+declared-symbol table retains the variadic flag as well as the parameter count
+and types. Unresolved callee values are not assigned a guessed prototype; calls
+through casts, fields, PHIs, or returned function pointers need explicit MIR
+signature transport before the verifier can enforce their full prototype arity.
+
+Host tests cover missing/excess arguments, holes, extreme argument positions,
+zero-argument prototypes, unprototyped calls, reversed argument-record order,
+and fixed/variadic local and global callbacks. A compiler mutant disabling
+prototype-count enforcement must fail the missing-argument test specifically.
+
+The `structv`, `stringv`, `floatv`, `bitfield`, and `callid` near-match cases now
+require explicit rejection of their named schedule and generic selection for
+the named function. An unrelated exact schedule elsewhere in the program can
+no longer satisfy the assertion. Their expected output includes deliberate
+source-level failures where appropriate; this verifies that selection preserves
+the changed semantics instead of replaying a recognized successful result.
+
 `qualgen` generates a deterministic C program in the runner's temporary build
 directory and compares target results with a host-computed reference table.
 It covers 576 combinations: two element widths (8/16 bits), six expression

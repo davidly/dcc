@@ -1,0 +1,10 @@
+[
+  {
+    "source": "src/dcc/dcc_mir_verify.c",
+    "function": "mir_verify_dominance",
+    "expression": "incoming == 0",
+    "outcome": "true",
+    "classification": "defensive-unreachable",
+    "evidence": "Only reachable instructions are checked. Short-circuit evaluation reaches this condition only when the PHI physical block start is not entry zero. A reachable non-entry block has a reachable incoming CFG edge, counted by the immediately preceding predecessor loop. The entry-PHI error remains tested through start == 0. Retain this guard and its outcome in coverage totals."
+  }
+]

@@ -110,6 +110,13 @@ jobs:
           python3 -m unittest discover -s scripts/tests -p 'test_ast_function_coverage.py'
           python3 scripts/ast-function-coverage.py
 
+      - name: Test MIR generator and compiler mutations
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          ./scripts/test-mir-fuzz-source.ps1
+          ./scripts/run-mir-compiler-mutations.ps1
+
       - name: Run debugger host and debug metadata tests
         if: runner.os == 'Linux'
         run: |

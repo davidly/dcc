@@ -2,6 +2,7 @@
 #include "../../src/dcc/dcc.c"
 #undef main
 #include "dcc_mir_internal.h"
+#include <limits.h>
 
 static int failures;
 
@@ -111,9 +112,82 @@ static void promotion_loop(int initialized)
     mir.insns[11].src1 = 2;
 }
 
+static void verify_diamond_mutations(void)
+{
+    int instruction;
+    int field;
+    int mutation_count = 0;
+
+    for (instruction = 0; instruction < 11; ++instruction) {
+        for (field = 0; field < 6; ++field) {
+            int *operand;
+            int original;
+            char name[96];
+            diamond();
+            switch (field) {
+            case 0: operand = &mir.insns[instruction].src1; break;
+            case 1: operand = &mir.insns[instruction].src2; break;
+            case 2: operand = &mir.insns[instruction].dst; break;
+            case 3: operand = &mir.insns[instruction].label; break;
+            case 4: operand = &mir.insns[instruction].phi_pred1; break;
+            default: operand = &mir.insns[instruction].phi_pred2; break;
+            }
+            if (*operand < 0)
+                continue;
+            original = *operand;
+            *operand = 1000000;
+            sprintf(name, "diamond invalid field %d at instruction %d", field, instruction);
+            expect_verification(name, 0);
+            *operand = original;
+            sprintf(name, "diamond repaired field %d at instruction %d", field, instruction);
+            expect_verification(name, 1);
+            ++mutation_count;
+        }
+    }
+    if (mutation_count != 16) {
+        fprintf(stderr, "FAIL diamond mutation inventory: %d\n", mutation_count);
+        ++failures;
+    }
+    printf("MIR diamond mutations=%d\n", mutation_count);
+}
+
 int main(void)
 {
     struct Sym *callee;
+    int mutation;
+    setup(3, 1, 1);
+    mir.count = 0;
+    if (!mir_verify_dominance()) {
+        fprintf(stderr, "FAIL empty dominance graph\n");
+        ++failures;
+    }
+    mir.count = -1;
+    if (mir_verify_dominance()) {
+        fprintf(stderr, "FAIL negative dominance graph\n");
+        ++failures;
+    }
+    mir.count = INT_MAX;
+    if (mir_verify_dominance()) {
+        fprintf(stderr, "FAIL oversized dominance graph\n");
+        ++failures;
+    }
+    verify_diamond_mutations();
+    for (mutation = 0; mutation < 5; ++mutation) {
+        setup(5, 1, 1);
+        mir.next_call_id = 1;
+        mir.insns[2].opcode = MIR_ARG;
+        mir.insns[2].src1 = 0;
+        mir.insns[3].opcode = MIR_CALL;
+        expect_verification("call mutation control", 1);
+        switch (mutation) {
+        case 0: mir.insns[3].secondary_offset = -1; break;
+        case 1: mir.insns[3].secondary_offset = 1; break;
+        case 2: mir.insns[2].secondary_offset = -1; break;
+        case 3: mir.insns[2].secondary_offset = 1; break;
+        default: mir.insns[2].immediate = -1; break;
+        }
+        expect_verification("invalid call/argument identity", 0);
+    }
     setup(3, 1, 1);
     expect_verification("constant return", 1);
     setup(3, 1, 1);
@@ -341,6 +415,47 @@ int main(void)
     expect_verification("incorrect prototype argument type", 0);
     mir.insns[2].type = TYPE_LONG;
     expect_verification("argument ABI widening", 1);
+    mir.insns[2].opcode = MIR_NOP;
+    mir.insns[2].src1 = -1;
+    expect_verification("known prototype requires its argument", 0);
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].immediate = 1;
+    expect_verification("known prototype rejects excess argument position", 0);
+    callee->proto_variadic = 1;
+    expect_verification("variadic call cannot omit fixed argument", 0);
+    mir.insns[2].immediate = 0;
+    expect_verification("variadic call with fixed argument only", 1);
+    setup(6, 1, 1);
+    mir.next_call_id = 1;
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_LONG;
+    mir.insns[3].opcode = MIR_ARG;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].immediate = 1;
+    mir.insns[4].opcode = MIR_CALL;
+    strcpy(mir.insns[4].name, "wide_target");
+    expect_verification("variadic call with extra argument", 1);
+    mir.insns[3].immediate = 2;
+    expect_verification("variadic argument positions must be contiguous", 0);
+    mir.insns[3].immediate = 1;
+    callee->proto_variadic = 0;
+    expect_verification("nonvariadic call rejects extra argument", 0);
+    callee->has_proto = 0;
+    expect_verification("unprototyped call permits extra arguments", 1);
+    mir.insns[2].immediate = 1;
+    mir.insns[3].immediate = 0;
+    expect_verification("argument records may be in reverse order", 1);
+    mir.insns[2].immediate = 1000000;
+    expect_verification("unprototyped argument positions cannot be sparse", 0);
+    callee->has_proto = 1;
+    callee->proto_nargs = 0;
+    setup(4, 1, 1);
+    mir.next_call_id = 1;
+    mir.insns[2].opcode = MIR_CALL;
+    strcpy(mir.insns[2].name, "wide_target");
+    expect_verification("void parameter list accepts no arguments", 1);
     callee = add_global("callback", TYPE_INT | TYPE_PTR, SC_GLOBAL);
     callee->has_proto = 1;
     callee->is_funcptr = 1;
@@ -360,6 +475,48 @@ int main(void)
     expect_verification("incorrect indirect argument type", 0);
     mir.insns[3].type = TYPE_LONG;
     expect_verification("indirect argument ABI widening", 1);
+    mir.insns[3].opcode = MIR_NOP;
+    mir.insns[3].src1 = -1;
+    expect_verification("indirect prototype requires its argument", 0);
+    {
+        struct Sym local_callback;
+        memset(&local_callback, 0, sizeof(local_callback));
+        strcpy(local_callback.name, "local_callback");
+        local_callback.type = TYPE_INT | TYPE_PTR;
+        local_callback.storage = SC_PARAM;
+        local_callback.offset = 4;
+        local_callback.is_funcptr = 1;
+        local_callback.has_proto = 1;
+        local_callback.proto_nargs = 1;
+        local_callback.proto_variadic = 1;
+        local_callback.proto_types[0] = TYPE_LONG;
+        setup(7, 2, 1);
+        mir_note_declared_symbol(&local_callback);
+        mir.next_call_id = 1;
+        mir.insns[2].opcode = MIR_PARAM;
+        mir.insns[2].dst = 1;
+        mir.insns[2].type = local_callback.type;
+        strcpy(mir.insns[2].name, local_callback.name);
+        mir.insns[3].opcode = MIR_ARG;
+        mir.insns[3].src1 = 0;
+        mir.insns[3].type = TYPE_LONG;
+        mir.insns[4].opcode = MIR_ARG;
+        mir.insns[4].src1 = 0;
+        mir.insns[4].immediate = 1;
+        mir.insns[5].opcode = MIR_CALL;
+        mir.insns[5].src1 = 1;
+        strcpy(mir.insns[5].name, "<indirect>");
+        expect_verification("local variadic callback retains fixed prefix", 1);
+        mir.insns[3].immediate = 2;
+        expect_verification("local variadic callback rejects missing fixed prefix", 0);
+        mir.insns[3].immediate = 0;
+        local_callback.proto_variadic = 0;
+        mir_note_declared_symbol(&local_callback);
+        expect_verification("local fixed callback rejects extra argument", 0);
+        mir.insns[4].opcode = MIR_NOP;
+        mir.insns[4].src1 = -1;
+        expect_verification("local fixed callback accepts exact arity", 1);
+    }
     printf("MIR verifier failures=%d\n", failures);
     return failures != 0;
 }
