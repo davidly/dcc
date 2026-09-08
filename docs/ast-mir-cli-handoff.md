@@ -344,6 +344,20 @@ Coverage is now 4,209/4,386 functions, 170,425/190,793 lines,
 ledger has 58,117 uncovered outcomes, one reviewed and 58,116 unreviewed, plus
 177 unexecuted included functions. The broader objective remains incomplete.
 
+`tbitfld.main`'s bitfield report schedule was four removed NOPs stale. A
+bounded logical-view adapter reinserts only those no-op positions while
+matching, invalidates definition caches around the temporary view, and restores
+the physical MIR before emission. Exact and changed-aggregate-argument controls
+pass in stack/no-stack, peep/nopeep, full-debug, and line-debug modes. Censuses
+show only `tbitfld.main`, `tptrcnd.main`, and `tunion2.main` changed and no
+regressions. `tbitfld` improves peep/nopeep cycles by 4.74%/5.62% and sizes by
+28.95%/33.73%.
+
+Coverage reaches 4,233/4,388 functions, 171,053/190,839 lines,
+86,931/145,026 native branch outcomes, and 153,728/170,590 regions. The raw
+ledger has 57,801 uncovered outcomes, one reviewed and 57,800 unreviewed, plus
+155 unexecuted included functions. The broader objective remains incomplete.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |

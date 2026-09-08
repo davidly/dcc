@@ -4948,7 +4948,7 @@ static void mir_emit_alias_mix_schedule(
     mir_stream_puts("\tret\n", out);
 }
 
-static int mir_match_bitfield_report_sequence(
+static int mir_match_bitfield_report_sequence_logical(
     struct MirBitfieldReportSequence *plan)
 {
     static const int expected_opcodes[432] = {
@@ -5293,6 +5293,59 @@ static int mir_match_bitfield_report_sequence(
             "bitfield-report-sequence", "completion");
     plan->string_ids[11] = (int)mir.insns[427].immediate;
     return 1;
+}
+
+static void mir_init_bitfield_logical_nop(struct MirInsn *insn)
+{
+    memset(insn, 0, sizeof(*insn));
+    insn->opcode = MIR_NOP;
+    insn->src1 = -1;
+    insn->src2 = -1;
+    insn->dst = -1;
+    insn->object = -1;
+    insn->label = -1;
+    insn->phi_pred1 = -1;
+    insn->phi_pred2 = -1;
+}
+
+static int mir_match_bitfield_report_sequence(
+    struct MirBitfieldReportSequence *plan)
+{
+    struct MirInsn *physical_insns;
+    struct MirInsn *logical_insns;
+    int physical_count;
+    int matched;
+
+    if (mir.count == 432)
+        return mir_match_bitfield_report_sequence_logical(plan);
+    if (mir.count != 428)
+        return mir_machine_reject(
+            "bitfield-report-sequence", "shape");
+    logical_insns = (struct MirInsn *)malloc(
+        432 * sizeof(*logical_insns));
+    if (logical_insns == NULL)
+        fatal("out of memory adapting bitfield report MIR");
+    memcpy(logical_insns, mir.insns, 67 * sizeof(*logical_insns));
+    mir_init_bitfield_logical_nop(&logical_insns[67]);
+    mir_init_bitfield_logical_nop(&logical_insns[68]);
+    memcpy(&logical_insns[69], &mir.insns[67],
+           302 * sizeof(*logical_insns));
+    mir_init_bitfield_logical_nop(&logical_insns[371]);
+    mir_init_bitfield_logical_nop(&logical_insns[372]);
+    memcpy(&logical_insns[373], &mir.insns[369],
+           59 * sizeof(*logical_insns));
+
+    physical_insns = mir.insns;
+    physical_count = mir.count;
+    mir.insns = logical_insns;
+    mir.count = 432;
+    mir_invalidate_use_cache();
+    matched = mir_match_bitfield_report_sequence_logical(plan);
+    mir.insns = physical_insns;
+    mir.count = physical_count;
+    mir_invalidate_use_cache();
+    free(logical_insns);
+    return matched;
 }
 
 static void mir_emit_bitfield_report_sequence(

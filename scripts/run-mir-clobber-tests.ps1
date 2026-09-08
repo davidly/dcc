@@ -559,6 +559,31 @@ $caseDefinitions = @(
         RequireRejected = $true
     },
     [pscustomobject]@{
+        Name = "bitreport"
+        Sources = @(Join-Path $repoRoot "tests/tbitfld.c")
+        Defines = @()
+        Expected = @(
+            "return 6 31 255 1000 1292", "tbitfield completed"
+        )
+        Exit = 0
+        ExactTemplate = "bitfield-report-sequence"
+        ExactFunction = "main"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "bitreportv"
+        Sources = @(Join-Path $repoRoot "tests/tbitfld.c")
+        Defines = @("MIR_CLOBBER_MAKE_D=1001")
+        Expected = @(
+            "return 6 31 255 1001 1293", "tbitfield completed"
+        )
+        Exit = 0
+        ExactTemplate = "bitfield-report-sequence"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
         Name = "structv"
         Sources = @(Join-Path $repoRoot "tests/tstructi.c")
         Defines = @("MIR_CLOBBER_G_PAIR_A=30")

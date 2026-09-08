@@ -1,5 +1,9 @@
 #include <stdio.h>
 
+#ifndef MIR_CLOBBER_MAKE_D
+#define MIR_CLOBBER_MAKE_D 1000
+#endif
+
 struct Bits {
     unsigned a:3;
     unsigned b:5;
@@ -57,7 +61,7 @@ int main(void)
     printf("global %u %u %u %d %d\n", g.a, g.b, g.c, g.d, sum_bits(g));
     printf("local %u %u %u %d %d\n", l.a, l.b, l.c, l.d, sum_bits(l));
 
-    m = make_bits(6, 31, 255, 1000);
+    m = make_bits(6, 31, 255, MIR_CLOBBER_MAKE_D);
     printf("return %u %u %u %d %d\n", m.a, m.b, m.c, m.d, sum_bits(m));
 
     m.a = 2; m.b = 4; m.c = 8; m.d = 16;
