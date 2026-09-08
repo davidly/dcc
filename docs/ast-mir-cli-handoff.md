@@ -39,8 +39,13 @@ of thousands of raw branch records still need investigation.
 - Main CI run `34193712407` passed for the merge commit. The two handoff-only
   commits also passed all four jobs in run `34193879724` before being carried
   onto the continuation branch.
-- The continuation branch is published. PR #194's exact-head CI is pending;
-  do not treat the older run IDs as validation for the new head.
+- All eight push/PR checks passed for continuation head
+  `411c1e91e824b64c063d6ebd337a9a105ce47813`: Linux, macOS, Windows, and
+  the no-PowerShell build in runs `34201821020` and `34201817489`.
+- PR #194 was clean and mergeable at that head. The user subsequently directed
+  future increments to be fully verified locally, pushed, and not held waiting
+  for GitHub Actions. This CI-evidence-only handoff update is therefore pushed
+  without awaiting its workflow; PR #194 remains open and no merge is claimed.
 
 The previous machine named the repository remote `upstream`; a fresh clone
 normally calls it `origin`. Inspect remotes and adapt commands below.
