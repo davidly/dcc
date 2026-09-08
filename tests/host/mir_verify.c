@@ -541,6 +541,7 @@ static void verify_spilled_feature_defaults(void)
     ok = ok && !mir_spilled_cfg_depends_on_binary_load_pair_forwarding();
     ok = ok && !mir_spilled_cfg_depends_on_dense_byte_switch();
     ok = ok && !mir_spilled_cfg_dense_byte_switch_case_count();
+    ok = ok && mir_spilled_cfg_dense_byte_switch_width() == 1;
     ok = ok && !mir_spilled_cfg_dense_byte_switch_uses_direct_condition();
     ok = ok &&
         !mir_spilled_cfg_dense_byte_switch_uses_postincrement_index();
@@ -566,6 +567,40 @@ static void verify_spilled_feature_defaults(void)
         fprintf(stderr, "FAIL MIR candidate feature state leaked between attempts\n");
         ++failures;
     }
+}
+
+static void verify_spilled_preflight_rejection(void)
+{
+    MirStream *stream;
+
+    setup(3, 1, 1);
+    stream = mir_stream_open();
+    if (stream == NULL) {
+        fprintf(stderr, "FAIL spilled preflight stream allocation\n");
+        ++failures;
+        return;
+    }
+    if (!mir_try_emit_spilled_scalar_cfg(stream)) {
+        fprintf(stderr, "FAIL spilled preflight valid control\n");
+        ++failures;
+    }
+    mir_stream_close(stream);
+    clear_liveness();
+
+    setup(3, 1, 1);
+    stream = mir_stream_open();
+    if (stream == NULL) {
+        fprintf(stderr, "FAIL spilled preflight rejection stream allocation\n");
+        ++failures;
+        return;
+    }
+    mir.local_bytes = 30001;
+    if (mir_try_emit_spilled_scalar_cfg(stream)) {
+        fprintf(stderr, "FAIL spilled preflight oversized frame rejection\n");
+        ++failures;
+    }
+    mir_stream_close(stream);
+    clear_liveness();
 }
 
 static void verify_immediate_phi_return_forwarding(void)
@@ -874,6 +909,7 @@ int main(void)
     verify_member_metadata_and_address();
     verify_five_call_arguments();
     verify_spilled_feature_defaults();
+    verify_spilled_preflight_rejection();
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
     verify_scalar_dag_emission();

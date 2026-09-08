@@ -416,10 +416,39 @@ unreviewed, plus 55 unexecuted included functions. The lower function
 percentage than the provisional 99.27% report is intentional evidence that
 unsafe exact-emitter execution was removed, not a denominator change.
 
-- Review the remaining 56,131 unreviewed raw uncovered outcomes rather than
+The next generic-emitter checkpoint adds target-executed forced candidates for
+two constant/dynamic inline byte-array stores and a regional adjacent-byte call.
+The paired-byte near match inserts a field gap, must not contain the specialized
+marker, and executes through a named generic selector in stack/no-stack and
+peep/nopeep modes. Host controls add a successful spilled preflight followed by
+an oversized-frame rejection and cover the dense-switch width query. The
+wide-narrow multiply cache is verified on both `tlongopt` and the canonical
+`tm1mu.mulmod` shape.
+
+Review of that cache control found it rebuilt the cache before comparing,
+making the diagnostic unable to detect a missed invalidation. It now compares
+the preserved answer with the uncached proof whenever the generation is
+unchanged, and rebuilds only for a new generation.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,344 / 4,393 | 98.88% |
+| Lines | 175,275 / 190,997 | 91.77% |
+| Native branch outcomes | 88,806 / 145,094 | 61.21% |
+| Regions | 157,261 / 170,670 | 92.14% |
+
+The raw ledger now has 56,019 uncovered outcomes, one reviewed and 56,018
+unreviewed, plus 49 unexecuted functions. The two lazy-wide helpers are
+structurally unreachable because lazy allocation admits only one- or two-byte
+parameters while those helpers require four bytes. The remaining spilled
+emitters are stale historical exact/inline shapes or a branch made dead by the
+allocation optimization documented in its source; they remain in the
+denominator.
+
+- Review the remaining 56,018 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
-- Cover the 55 unexecuted included functions or justify their classification.
+- Cover the 49 unexecuted included functions or justify their classification.
 - Extend near-match/generic equivalence beyond the six enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
   callbacks, and current memory/call forms.

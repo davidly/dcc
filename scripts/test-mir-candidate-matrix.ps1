@@ -13,7 +13,8 @@ $variables = @(
     "DCC_MIR_CANDIDATE_MATRIX",
     "DCC_MIR_SPILLED_POLICY",
     "DCC_MIR_REQUIRE_COMPLETE",
-    "DCC_MIR_REQUIRE_EMIT"
+    "DCC_MIR_REQUIRE_EMIT",
+    "DCC_MIR_WIDEN_CACHE_VERIFY"
 )
 
 try {
@@ -35,7 +36,11 @@ try {
         @{ Name = "ptrarr"; Source = "tptrarr.c"; Function = "main" },
         @{
             Name = "widen"; Source = "tlongopt.c"
-            Function = "test_widen_mul_edges"
+            Function = "test_widen_mul_edges"; WidenCacheVerify = $true
+        },
+        @{
+            Name = "mulmod"; Source = "tm1mu.c"
+            Function = "mulmod"; WidenCacheVerify = $true
         },
         @{ Name = "ldiv"; Source = "tstdlib.c"; Function = "check_ldiv" }
     )
@@ -47,6 +52,10 @@ try {
         $control = Join-Path $workspace "$($probe.Name)-control.MAC"
         $diagnostic = Join-Path $workspace "$($probe.Name)-matrix.MAC"
         $source = Join-Path $repoRoot "tests/$($probe.Source)"
+        [Environment]::SetEnvironmentVariable(
+            "DCC_MIR_WIDEN_CACHE_VERIFY",
+            $(if ($probe.WidenCacheVerify) { "1" } else { $null }),
+            "Process")
         [Environment]::SetEnvironmentVariable(
             "DCC_MIR_CANDIDATE_MATRIX", $null, "Process")
         [Environment]::SetEnvironmentVariable(

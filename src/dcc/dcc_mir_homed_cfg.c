@@ -1453,6 +1453,7 @@ static int mir_emit_homed_paired_byte_call(
     upper_index = 1 - lower_index;
     if (!mir_emit_home_to_hl(out, pair.base))
         return 0;
+    mir_stream_puts(";@dcc.mir paired-byte-call\n", out);
     if (pair.offsets[lower_index] != 0)
         mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n",
                 pair.offsets[lower_index]);

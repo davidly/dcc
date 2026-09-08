@@ -436,6 +436,27 @@ the parent checkpoint. A fresh LLVM 18 coverage run produced the totals above.
 The commit is pushed per the user's local-validation workflow without waiting
 for GitHub Actions.
 
+The following generic-emitter increment raises coverage to 4,344/4,393
+functions (98.88%), 175,275/190,997 lines (91.77%),
+88,806/145,094 native branch outcomes (61.21%), and 157,261/170,670 regions
+(92.14%). The raw ledger has 56,018 unreviewed outcomes and 49 unexecuted
+functions.
+
+New target controls force and execute constant/dynamic inline byte stores plus
+an adjacent-byte regional call in all stack/peephole modes. A field-gap near
+match proves generic fallback and absence of the paired marker. Direct host
+controls cover dense-switch width state and both accepted/rejected spilled
+preflight paths. Candidate-matrix probes verify the wide-narrow cache against
+both `tlongopt` and `tm1mu.mulmod`.
+
+Review found that wide-narrow cache verification overwrote the cached set
+before comparison; it now compares preserved state before rebuilding. Review
+also found and fixed selector inheritance in the paired near match and added a
+positive preflight control. The two lazy-wide helpers are contradictory with
+the one/two-byte lazy eligibility invariant, and the residual historical
+spilled helpers remain in the denominator rather than being revived solely for
+coverage.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |

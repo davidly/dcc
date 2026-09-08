@@ -25359,10 +25359,20 @@ static int mir_value_is_wide_narrow_multiply_widen(int value)
     unsigned generation = mir_use_cache_generation_id();
     int result;
 
-    if (cache_valid && generation == cached_generation &&
-        !mir_wide_narrow_multiply_widen_verify_enabled()) {
-        return (value >= 0 && value < cached_set_capacity)
+    if (cache_valid && generation == cached_generation) {
+        result = (value >= 0 && value < cached_set_capacity)
             ? cached_set[value] : 0;
+        if (mir_wide_narrow_multiply_widen_verify_enabled() &&
+            result !=
+                mir_value_is_wide_narrow_multiply_widen_uncached(value)) {
+            fprintf(stderr,
+                "; MIR CACHE MISMATCH mir_value_is_wide_narrow_multiply_widen "
+                "function=%s value=%d cached=%d uncached=%d\n",
+                mir.name, value, result,
+                mir_value_is_wide_narrow_multiply_widen_uncached(value));
+            fatal("MIR use-cache mismatch");
+        }
+        return result;
     }
 
     if (mir.next_value > cached_set_capacity) {
@@ -25392,16 +25402,6 @@ static int mir_value_is_wide_narrow_multiply_widen(int value)
 
     result = (value >= 0 && value < cached_set_capacity)
         ? cached_set[value] : 0;
-
-    if (cache_valid && generation == cached_generation &&
-        result != mir_value_is_wide_narrow_multiply_widen_uncached(value)) {
-        fprintf(stderr,
-            "; MIR CACHE MISMATCH mir_value_is_wide_narrow_multiply_widen "
-            "function=%s value=%d cached=%d uncached=%d\n",
-            mir.name, value, result,
-            mir_value_is_wide_narrow_multiply_widen_uncached(value));
-        fatal("MIR use-cache mismatch");
-    }
 
     cached_generation = generation;
     cache_valid = 1;

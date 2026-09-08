@@ -2715,10 +2715,13 @@ static int mir_cost_regional_candidate_is_diagnostic_validated(void)
         return 1;
     return mir.sink_purpose == EMIT_SINK_DEFERRED &&
            (mir.return_type & 15) == TYPE_INT &&
-           mir.count == 31 && mir.next_value == 20 &&
-           mir_cfg_block_count() == 2 && mir_call_count() == 1 &&
-           mir.local_bytes == 5 && !mir_has_cfg_backedge() &&
-           !mir_has_wide_values() && !mir_has_member_address();
+           ((mir.count == 31 && mir.next_value == 20 &&
+             mir_cfg_block_count() == 2 && mir_call_count() == 1 &&
+             mir.local_bytes == 5 && !mir_has_member_address()) ||
+            (mir.count == 20 && mir.next_value == 14 &&
+             mir_cfg_block_count() == 1 && mir_call_count() == 1 &&
+             mir.local_bytes == 4 && mir_has_member_address())) &&
+           !mir_has_cfg_backedge() && !mir_has_wide_values();
 }
 
 static int mir_cost_candidate_is_selectable(

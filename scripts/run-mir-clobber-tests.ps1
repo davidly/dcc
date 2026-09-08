@@ -111,6 +111,7 @@ function Assert-RunCase(
     [string]$RequiredSelector = "",
     [string[]]$RunArguments = @(),
     [string[]]$AssemblyPatterns = @(),
+    [string[]]$ForbiddenAssemblyPatterns = @(),
     [bool]$OddUpperRuntime = $false,
     [string]$DebugMode = ""
 ) {
@@ -233,6 +234,12 @@ __ctu:
     foreach ($pattern in $AssemblyPatterns) {
         if ($assembly -notmatch $pattern) {
             throw "$Name assembly did not match '$pattern' " +
+                "($configuration)"
+        }
+    }
+    foreach ($pattern in $ForbiddenAssemblyPatterns) {
+        if ($assembly -match $pattern) {
+            throw "$Name assembly unexpectedly matched '$pattern' " +
                 "($configuration)"
         }
     }
@@ -927,7 +934,8 @@ try {
         throw "MIR exact-rejection selection evidence controls failed"
     }
     $knownCases = @($caseDefinitions.Name) + @(
-        "fuzz", "lazywide", "minimax", "oldloops", "vlaend", "vlaok")
+        "fuzz", "inlines", "lazywide", "minimax", "oldloops", "pairedbytes",
+        "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
     }
@@ -1260,6 +1268,65 @@ try {
             Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" `
                 $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
         }
+    }
+    if ($Cases.Count -eq 0 -or "inlines" -in $Cases) {
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" "main"
+        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "spilled-all"
+        try {
+            foreach ($stackCheck in @($true, $false)) {
+                foreach ($peep in @($true, $false)) {
+                    Assert-RunCase -Name "inlines" `
+                        -Sources @(Join-Path $fixtureRoot "inlines.c") `
+                        -Defines @() -Expected @("inline stores passed") `
+                        -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
+                        -RequiredSelectorFunction "main" `
+                        -RequiredSelector "spilled-scalar-cfg" `
+                        -AssemblyPatterns @(";@dcc.mir inline-simple-store")
+                }
+            }
+        } finally {
+            Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" `
+                $savedEnvironment["DCC_MIR_SELECT_FUNCTION"]
+            Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" `
+                $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
+        }
+    }
+    if ($Cases.Count -eq 0 -or "pairedbytes" -in $Cases) {
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" "read_pair"
+        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "regional"
+        try {
+            foreach ($stackCheck in @($true, $false)) {
+                foreach ($peep in @($true, $false)) {
+                    Assert-RunCase -Name "pairedbytes" `
+                        -Sources @(Join-Path $fixtureRoot "pairbyte.c") `
+                        -Defines @() -Expected @("paired bytes passed") `
+                        -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
+                        -RequiredSelectorFunction "read_pair" `
+                        -RequiredSelector "regional-homed-scalar-cfg" `
+                        -AssemblyPatterns @(";@dcc.mir paired-byte-call")
+                }
+            }
+        } finally {
+            Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" `
+                $null
+            Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" `
+                $null
+        }
+        foreach ($stackCheck in @($true, $false)) {
+            foreach ($peep in @($true, $false)) {
+                Assert-RunCase -Name "pairedbytes-near" `
+                    -Sources @(Join-Path $fixtureRoot "pairbyte.c") `
+                    -Defines @("MIR_CLOBBER_PAIRED_GAP=1") `
+                    -Expected @("paired bytes passed") -ExpectedExit 0 `
+                    -StackCheck $stackCheck -Peep $peep `
+                    -RequiredGenericFunction "read_pair" `
+                    -ForbiddenAssemblyPatterns @(";@dcc.mir paired-byte-call")
+            }
+        }
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" `
+            $savedEnvironment["DCC_MIR_SELECT_FUNCTION"]
+        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" `
+            $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
     }
     if ($Cases.Count -eq 0 -or "vlaend" -in $Cases) {
         foreach ($peep in @($true, $false)) {
