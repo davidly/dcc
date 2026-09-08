@@ -6,6 +6,14 @@
 
 static int failures;
 
+static void clear_liveness(void)
+{
+    free(mir.live_in);
+    free(mir.live_out);
+    mir.live_in = NULL;
+    mir.live_out = NULL;
+}
+
 static void setup(int count, int values, int labels)
 {
     int instruction;
@@ -41,10 +49,58 @@ static void expect_verification(const char *name, int valid)
         fprintf(stderr, "FAIL %s\n", name);
         ++failures;
     }
-    free(mir.live_in);
-    free(mir.live_out);
-    mir.live_in = NULL;
-    mir.live_out = NULL;
+    clear_liveness();
+}
+
+static void diamond(void);
+
+static void verify_diamond_edge_liveness(void)
+{
+    size_t left;
+    size_t right;
+
+    diamond();
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL diamond edge liveness verification\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    left = (size_t)5 * mir.next_value;
+    right = (size_t)7 * mir.next_value;
+    if (!mir.live_out[left + 1] || mir.live_out[left + 2] ||
+        mir.live_out[right + 1] || !mir.live_out[right + 2]) {
+        fprintf(stderr, "FAIL PHI values must be live only on their own edges\n");
+        ++failures;
+    }
+    clear_liveness();
+}
+
+static void verify_call_argument_liveness(void)
+{
+    size_t call;
+
+    setup(6, 3, 1);
+    mir.next_call_id = 1;
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[3].opcode = MIR_CALL;
+    mir.insns[3].dst = 1;
+    mir.insns[4].opcode = MIR_CONST;
+    mir.insns[4].dst = 2;
+    mir.insns[5].src1 = 2;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL call argument liveness verification\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    call = (size_t)3 * mir.next_value;
+    if (!mir.live_in[call] || mir.live_out[call]) {
+        fprintf(stderr, "FAIL argument must remain live through its matching call\n");
+        ++failures;
+    }
+    clear_liveness();
 }
 
 static void diamond(void)
@@ -172,6 +228,8 @@ int main(void)
         ++failures;
     }
     verify_diamond_mutations();
+    verify_diamond_edge_liveness();
+    verify_call_argument_liveness();
     for (mutation = 0; mutation < 5; ++mutation) {
         setup(5, 1, 1);
         mir.next_call_id = 1;
@@ -388,6 +446,16 @@ int main(void)
     mir.insns[2].opcode = MIR_CALL;
     mir.insns[3].opcode = MIR_CALL;
     expect_verification("duplicate call identity", 0);
+    setup(4, 1, 1);
+    mir.next_call_id = 1;
+    mir.insns[2].opcode = MIR_CALL;
+    strcpy(mir.insns[2].name, "<indirect>");
+    expect_verification("indirect call requires a callee value", 0);
+    setup(4, 1, 1);
+    mir.next_call_id = 1;
+    mir.insns[2].opcode = MIR_CALL_AGGREGATE;
+    strcpy(mir.insns[2].name, "<indirect>");
+    expect_verification("aggregate indirect call requires a callee value", 0);
     setup(6, 1, 1);
     mir.next_call_id = 1;
     mir.insns[2].opcode = MIR_ARG;
@@ -516,6 +584,35 @@ int main(void)
         mir.insns[4].opcode = MIR_NOP;
         mir.insns[4].src1 = -1;
         expect_verification("local fixed callback accepts exact arity", 1);
+    }
+    {
+        struct Sym local_callback;
+        callee = add_global("shadow_callback", TYPE_INT | TYPE_PTR, SC_GLOBAL);
+        callee->has_proto = 1;
+        callee->is_funcptr = 1;
+        callee->proto_nargs = 2;
+        callee->proto_types[0] = TYPE_LONG;
+        callee->proto_types[1] = TYPE_LONG;
+        memset(&local_callback, 0, sizeof(local_callback));
+        strcpy(local_callback.name, callee->name);
+        local_callback.type = TYPE_INT | TYPE_PTR;
+        local_callback.storage = SC_PARAM;
+        local_callback.offset = 4;
+        local_callback.is_funcptr = 1;
+        setup(6, 2, 1);
+        mir_note_declared_symbol(&local_callback);
+        mir.next_call_id = 1;
+        mir.insns[2].opcode = MIR_PARAM;
+        mir.insns[2].dst = 1;
+        mir.insns[2].type = local_callback.type;
+        strcpy(mir.insns[2].name, local_callback.name);
+        mir.insns[3].opcode = MIR_ARG;
+        mir.insns[3].src1 = 0;
+        mir.insns[4].opcode = MIR_CALL;
+        mir.insns[4].src1 = 1;
+        strcpy(mir.insns[4].name, "<indirect>");
+        expect_verification(
+            "unprototyped local callback ignores same-named global prototype", 1);
     }
     printf("MIR verifier failures=%d\n", failures);
     return failures != 0;

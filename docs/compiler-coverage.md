@@ -157,6 +157,15 @@ summing native metrics. It does not reconstruct executable lines from source
 text or coverage regions. Line totals are function-summed and should only be
 compared with subsequent reports using the same convention and classification.
 
+LLVM 18 can include the 115 mixed-module legacy functions in the native
+`-show-functions` report even though none appears in the generated name
+allowlist. The analyzer derives that exact exclusion set from the same raw
+coverage identities and versioned classification, ignores only those known
+legacy rows when summing native metrics, and still fails if any excluded
+function executed. Unexpected functions, duplicate rows, selected/excluded
+overlap, missing selected functions, and changed classifications remain hard
+errors. This is tool-output compatibility, not a denominator change.
+
 Measured on 2026-09-07 with Apple Clang 21 and the same compiler/workload as the
 module baseline (classification changes do not change compiler behavior):
 
@@ -232,13 +241,40 @@ own expected assertion failure. All four controls passed that stricter check;
 the earlier three-control measurements should not be treated as a broad mutation
 score. Remote CI has not run for these local changes.
 
-- Review the remaining 59,340 raw uncovered outcomes rather than labeling them
-   unreachable by default; add supported-input or malformed-IR assertions as needed.
+## September 8 CLI continuation
+
+The continuation from merged PR #193 was measured on Linux with Ubuntu Clang
+18.1.3. The isolated instrumented compiler and host verifier passed both main
+configurations, all applicable extended tests, clobber/lifetime/required-
+emission tests, and the host verifier. The function-scoped result was:
+
+| Metric | Covered / total | Percent |
+| --- | --- | --- |
+| Lines | 167,624 / 190,636 | 87.93% |
+| Native branch outcomes | 85,629 / 144,936 | 59.08% |
+| Functions | 4,058 / 4,384 | 92.56% |
+| Regions | 151,473 / 170,483 | 88.85% |
+
+The raw ledger has 59,001 uncovered branch outcomes: one retained reviewed
+defensive outcome and 59,000 unreviewed outcomes. It still lists 326
+unexecuted included functions. The new included function is the shared call-
+prototype resolver; the new target regression executes normally but is not
+part of the host compiler-function denominator.
+
+This run added no exclusions and did not change any existing performance
+baseline. The only new baseline row belongs to the new `tfpshad` workload.
+The totals remain far from 100%; they are a fresh checkpoint for prioritizing
+the next assertion-backed gap, not completion evidence.
+
+- Review the remaining 59,000 unreviewed raw uncovered outcomes rather than
+  labeling them unreachable by default; add supported-input or malformed-IR
+  assertions as needed.
 - Cover the 326 unexecuted included functions or justify their classification.
-- Extend near-match/generic equivalence beyond the five enforced schedule families.
-- Extend the seeded grammar beyond bounded unsigned arithmetic and current memory/call forms.
-- Add compiler mutants beyond the three verifier controls and promotion-cache
-   regression, and investigate survivors.
+- Extend near-match/generic equivalence beyond the six enforced schedule families.
+- Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
+  callbacks, and current memory/call forms.
+- Add compiler mutants beyond the seven verifier/liveness controls and
+  promotion-cache regression, and investigate survivors.
 
 This follow-up completes neither exhaustive source coverage nor the complete
 exclusion audit. It supplies reproducible tests and an explicit backlog so those

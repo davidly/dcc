@@ -11436,6 +11436,58 @@ int mir_probe_wide_colors_for_homed(
     return ok;
 }
 
+struct MirCallPrototype {
+    int has_proto;
+    int parameter_count;
+    int variadic;
+    const int *parameter_types;
+};
+
+static void mir_resolve_call_prototype(const struct MirInsn *call,
+                                       int call_instruction,
+                                       struct MirCallPrototype *prototype)
+{
+    const struct Sym *callee = NULL;
+
+    memset(prototype, 0, sizeof(*prototype));
+    if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
+        int definition;
+
+        for (definition = 0; definition < call_instruction; ++definition) {
+            const struct MirInsn *source = &mir.insns[definition];
+            int declared;
+
+            if (source->dst != call->src1 ||
+                (source->opcode != MIR_LOAD &&
+                 source->opcode != MIR_PARAM))
+                continue;
+            declared = mir_declared_index(source->name);
+            if (declared >= 0) {
+                if (mir.declared_has_proto[declared]) {
+                    prototype->has_proto = 1;
+                    prototype->parameter_count =
+                        mir.declared_proto_nargs[declared];
+                    prototype->variadic =
+                        mir.declared_proto_variadic[declared];
+                    prototype->parameter_types =
+                        mir.declared_proto_types[declared];
+                }
+                return;
+            }
+            callee = find_global(source->name);
+            break;
+        }
+    } else {
+        callee = find_global(call->name);
+    }
+    if (callee != NULL && callee->has_proto) {
+        prototype->has_proto = 1;
+        prototype->parameter_count = callee->proto_nargs;
+        prototype->variadic = callee->proto_variadic;
+        prototype->parameter_types = callee->proto_types;
+    }
+}
+
 static int mir_verify_structure(void)
 {
     unsigned char *labels;
@@ -11502,6 +11554,13 @@ static int mir_verify_structure(void)
                 calls[insn->secondary_offset] = 1;
             }
         }
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            !strcmp(insn->name, "<indirect>") && insn->src1 < 0) {
+            fprintf(stderr, "; MIR %s: instruction %d has no indirect callee\n",
+                    mir.name, instruction);
+            valid = 0;
+        }
         if (insn->opcode == MIR_LABEL) {
             if (insn->label < 0 || insn->label >= mir.next_label ||
                 labels[insn->label]) {
@@ -11561,40 +11620,18 @@ static int mir_verify_structure(void)
             }
             for (prior = instruction + 1; prior < mir.count; ++prior) {
                 const struct MirInsn *call = &mir.insns[prior];
-                const struct Sym *callee;
+                struct MirCallPrototype prototype;
                 int target_type = 0;
 
                 if ((call->opcode != MIR_CALL &&
                      call->opcode != MIR_CALL_AGGREGATE) ||
                     call->secondary_offset != insn->secondary_offset)
                     continue;
-                callee = find_global(call->name);
-                if (callee != NULL && callee->has_proto &&
-                    insn->immediate >= 0 && insn->immediate < callee->proto_nargs)
-                    target_type = callee->proto_types[insn->immediate];
-                else if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
-                    int definition;
-                    for (definition = 0; definition < prior; ++definition) {
-                        const struct MirInsn *source = &mir.insns[definition];
-                        int declared;
-                        if (source->dst != call->src1 ||
-                            (source->opcode != MIR_LOAD &&
-                             source->opcode != MIR_PARAM))
-                            continue;
-                        declared = mir_declared_index(source->name);
-                        callee = find_global(source->name);
-                        if (declared >= 0 && mir.declared_has_proto[declared] &&
-                            insn->immediate >= 0 &&
-                            insn->immediate < mir.declared_proto_nargs[declared])
-                            target_type = mir.declared_proto_types[declared]
-                                                                 [insn->immediate];
-                        else if (callee != NULL && callee->has_proto &&
-                                 insn->immediate >= 0 &&
-                                 insn->immediate < callee->proto_nargs)
-                            target_type = callee->proto_types[insn->immediate];
-                        break;
-                    }
-                }
+                mir_resolve_call_prototype(call, prior, &prototype);
+                if (prototype.has_proto && insn->immediate >= 0 &&
+                    insn->immediate < prototype.parameter_count)
+                    target_type =
+                        prototype.parameter_types[insn->immediate];
                 if (target_type != 0 && insn->type != target_type) {
                     fprintf(stderr,
                             "; MIR %s: instruction %d has incorrect argument ABI type\n",
@@ -11607,39 +11644,14 @@ static int mir_verify_structure(void)
     }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *call = &mir.insns[instruction];
-        const struct Sym *callee;
-        int has_proto = 0;
-        int parameter_count = 0;
-        int variadic = 0;
+        struct MirCallPrototype prototype;
         int argument_count = 0;
         long last_position = -1;
         int prior;
 
         if (call->opcode != MIR_CALL && call->opcode != MIR_CALL_AGGREGATE)
             continue;
-        callee = find_global(call->name);
-        if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
-            for (prior = 0; prior < instruction; ++prior) {
-                const struct MirInsn *source = &mir.insns[prior];
-                int declared;
-                if (source->dst != call->src1 ||
-                    (source->opcode != MIR_LOAD && source->opcode != MIR_PARAM))
-                    continue;
-                declared = mir_declared_index(source->name);
-                callee = find_global(source->name);
-                if (declared >= 0 && mir.declared_has_proto[declared]) {
-                    has_proto = 1;
-                    parameter_count = mir.declared_proto_nargs[declared];
-                    variadic = mir.declared_proto_variadic[declared];
-                }
-                break;
-            }
-        }
-        if (!has_proto && callee != NULL && callee->has_proto) {
-            has_proto = 1;
-            parameter_count = callee->proto_nargs;
-            variadic = callee->proto_variadic;
-        }
+        mir_resolve_call_prototype(call, instruction, &prototype);
         for (prior = 0; prior < instruction; ++prior) {
             const struct MirInsn *argument = &mir.insns[prior];
             if (argument->opcode != MIR_ARG ||
@@ -11650,8 +11662,10 @@ static int mir_verify_structure(void)
                 last_position = argument->immediate;
         }
         if (last_position != (long)argument_count - 1 ||
-            (has_proto && (argument_count < parameter_count ||
-                           (!variadic && argument_count != parameter_count)))) {
+            (prototype.has_proto &&
+             (argument_count < prototype.parameter_count ||
+              (!prototype.variadic &&
+               argument_count != prototype.parameter_count)))) {
             fprintf(stderr, "; MIR %s: instruction %d has incorrect argument arity\n",
                     mir.name, instruction);
             valid = 0;

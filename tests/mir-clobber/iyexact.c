@@ -18,7 +18,11 @@ int main(void)
 {
     int i;
     printf("GIY start\n");
+#ifdef MIR_CLOBBER_IY_START
+    for (i = MIR_CLOBBER_IY_START; sizes[i] != 0; i++)
+#else
     for (i = 0; sizes[i] != 0; i++)
+#endif
         run_test(sizes[i]);
     printf("GIY done\n");
     return 0;

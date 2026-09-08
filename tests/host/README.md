@@ -18,6 +18,12 @@ and known direct/indirect-call ABI types. They also reject non-dominating
 ordinary values, PHI-edge operands, and call arguments, while accepting valid
 backedges, unreachable predecessor paths, irreducible CFGs, and definitions
 that dominate their uses despite appearing later in the instruction array.
+The host fixture directly asserts that PHI operands are live only on their
+own incoming edges and that an argument stays live into, but not after, its
+matching call. Scalar and aggregate indirect calls must carry a callee value.
+An unprototyped local callback is authoritative even when a differently
+prototyped global has the same spelling; verification must not import the
+hidden global's ABI or arity.
 The harness includes the driver under a
 different entry-point name so it links the real compiler state and verifier.
 
@@ -54,6 +60,14 @@ pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases qualgen
 
 These fixtures run in release, full debug, and line-debug modes, with and
 without peephole optimization and stack checks.
+
+Exact-selector near matches additionally require three pieces of evidence for
+the intended function: a named template rejection, absence of an exact
+scheduled-machine selection, and a selected homed/hybrid/regional/spilled
+generic emitter. Harness controls reject unrelated-function or exact-selection
+markers. `iyexact` is the positive word-table schedule control; `iynear`
+changes only the loop's initial table index, must reject that schedule, and
+executes through generic generated code in all stack and peephole variants.
 
 `aliasmem` checks writes through identical and distinct pointers, conditional
 alias writes, mutating calls, and `memcpy`. Its MIR assertions require volatile

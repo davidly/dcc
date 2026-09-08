@@ -115,13 +115,32 @@ def select_functions(report, classified, active_sources):
     return sorted(selected)
 
 
-def summarize_native(text, selected):
+def excluded_functions(report, classified):
+    excluded = set()
+    for data in report["data"]:
+        for function in data["functions"]:
+            source = Path(function["filenames"][0]).resolve()
+            if not source.is_relative_to(ROOT):
+                continue
+            relative = source.relative_to(ROOT).as_posix()
+            name = function["name"].split(":")[-1]
+            if classified.get((relative, name)) == "legacy":
+                excluded.add(function["name"])
+    return excluded
+
+
+def summarize_native(text, selected, excluded=None):
+    excluded = excluded or set()
+    if selected & excluded:
+        raise ValueError("native selected and excluded functions overlap")
     functions = {}
     for line in text.splitlines():
         parts = line.split()
         if len(parts) != 10 or parts[0] == "TOTAL" or not parts[3].endswith("%"):
             continue
         name = parts[0]
+        if name in excluded:
+            continue
         if name not in selected or name in functions:
             raise ValueError("unexpected or duplicate native function: " + name)
         functions[name] = {}
@@ -218,8 +237,10 @@ def main():
             if args.native_report:
                 if not args.summary:
                     parser.error("--native-report requires --summary")
-                summary = summarize_native(args.native_report.read_text(), set(selected))
                 report = json.loads(args.coverage.read_text())
+                excluded = excluded_functions(report, classified)
+                summary = summarize_native(
+                    args.native_report.read_text(), set(selected), excluded)
                 executed = {function["name"] for data in report["data"] for function in data["functions"]
                             if function["name"] in selected and function["count"] > 0}
                 summary["totals"]["functions"] = {"count": len(selected), "covered": len(executed)}

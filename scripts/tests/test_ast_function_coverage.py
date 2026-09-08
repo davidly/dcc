@@ -62,12 +62,31 @@ class FunctionCoverageTests(unittest.TestCase):
         text = "active 10 2 80.00% 8 1 87.50% 4 2 50.00%\nTOTAL 10 2 80.00% 8 1 87.50% 4 2 50.00%\n"
         result = coverage.summarize_native(text, {"active"})
         self.assertEqual(result["totals"]["lines"], {"count": 8, "covered": 7})
+        excluded = "old 10 10 0.00% 8 8 0.00% 4 4 0.00%\n"
+        result = coverage.summarize_native(text + excluded, {"active"}, {"old"})
+        self.assertEqual(result["totals"]["lines"], {"count": 8, "covered": 7})
         with self.assertRaisesRegex(ValueError, "exact function selection"):
             coverage.summarize_native(text, {"active", "missing"})
         with self.assertRaisesRegex(ValueError, "unexpected or duplicate"):
             coverage.summarize_native(text, {"other"})
         with self.assertRaisesRegex(ValueError, "unexpected or duplicate"):
             coverage.summarize_native(text + text, {"active"})
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            coverage.summarize_native(text, {"active"}, {"active"})
+
+    def test_excluded_function_names_follow_coverage_identity(self):
+        report = {"data": [{"functions": [
+            {"name": "source.c:old", "count": 0,
+             "filenames": [str(coverage.ROOT / "source.c")]},
+            {"name": "source.c:active", "count": 1,
+             "filenames": [str(coverage.ROOT / "source.c")]},
+        ]}]}
+        classified = {
+            ("source.c", "old"): "legacy",
+            ("source.c", "active"): "production",
+        }
+        self.assertEqual(
+            coverage.excluded_functions(report, classified), {"source.c:old"})
 
 
     def test_gap_ledger_keeps_uncovered_outcomes_and_scope(self):

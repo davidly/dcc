@@ -72,6 +72,27 @@ function Invoke-WithTimeout(
     }
 }
 
+function Test-ExactRejectionIntoGeneric(
+    [string]$Output,
+    [string]$Template,
+    [string]$Function
+) {
+    $escapedFunction = [regex]::Escape($Function)
+    $rejectionPattern =
+        "MIR machine function=$escapedFunction " +
+        "template=$([regex]::Escape($Template)) reject="
+    $exactSelectionPattern =
+        "MIR selection function=$escapedFunction " +
+        "selector=scheduled-machine-cfg"
+    $genericSelectionPattern =
+        "MIR selection function=$escapedFunction " +
+        "selector=(?:homed-scalar-cfg|hybrid-homed-scalar-cfg|" +
+        "regional-homed-scalar-cfg|spilled-scalar-cfg) result=mir"
+    return $Output -match $rejectionPattern -and
+        $Output -notmatch $exactSelectionPattern -and
+        $Output -match $genericSelectionPattern
+}
+
 function Assert-RunCase(
     [string]$Name,
     [string[]]$Sources,
@@ -84,6 +105,7 @@ function Assert-RunCase(
     [string]$ExactFunction = "",
     [bool]$RequireExact = $false,
     [bool]$RequireRejected = $false,
+    [string]$RequiredGenericFunction = "",
     [string[]]$AssemblyPatterns = @(),
     [bool]$OddUpperRuntime = $false,
     [string]$DebugMode = ""
@@ -152,13 +174,14 @@ __ctu:
         throw "$Name build did not create $assemblyPath ($configuration)"
     }
     $assembly = Get-Content -LiteralPath $assemblyPath -Raw
-    if ($Name.StartsWith("fuzzforced-") -and $build.Output -notmatch
-        'MIR selection function=fuzz0 selector=spilled-scalar-cfg') {
-        throw "$Name did not use the required generic emitter:`n$($build.Output)"
-    }
-    if ($Name.StartsWith("minimax-") -and $build.Output -notmatch
-        'MIR selection function=MinMax selector=spilled-scalar-cfg') {
-        throw "$Name did not use the required generic emitter:`n$($build.Output)"
+    if ($RequiredGenericFunction) {
+        $requiredGenericPattern =
+            "MIR selection function=$([regex]::Escape($RequiredGenericFunction)) " +
+            "selector=spilled-scalar-cfg"
+        if ($build.Output -notmatch $requiredGenericPattern) {
+            throw "$Name did not use the required generic emitter for " +
+                "$RequiredGenericFunction`:`n$($build.Output)"
+        }
     }
     if ($ExactTemplate) {
         $templatePattern =
@@ -174,7 +197,9 @@ __ctu:
             "selector=scheduled-machine-cfg"
         $selected = if ($ExactFunction) { $build.Output -match $selectionPattern }
             else { $assembly.Contains(";@dcc.mir exact-kernel") }
-        if ($RequireRejected -and (-not $rejected -or $selected)) {
+        $rejectedIntoGeneric = $ExactFunction -and
+            (Test-ExactRejectionIntoGeneric $build.Output $ExactTemplate $ExactFunction)
+        if ($RequireRejected -and -not $rejectedIntoGeneric) {
             throw "$Name did not reject '$ExactTemplate' for '$ExactFunction' into generic code:`n$($build.Output)"
         }
         if ($RequireExact -and -not $selected) {
@@ -401,6 +426,19 @@ $caseDefinitions = @(
         AssemblyPatterns = @(";@dcc\.reg claim=iy")
     },
     [pscustomobject]@{
+        Name = "iynear"
+        Sources = @(Join-Path $fixtureRoot "iyexact.c")
+        Defines = @("MIR_CLOBBER_IY_START=1")
+        Expected = @(
+            "step 2 value 100", "step 3 value 309",
+            "step 4 value 0", "GIY done"
+        )
+        Exit = 0
+        ExactTemplate = "word-table-runner-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
         Name = "structv"
         Sources = @(Join-Path $repoRoot "tests/tstructi.c")
         Defines = @("MIR_CLOBBER_G_PAIR_A=30")
@@ -458,6 +496,18 @@ $caseDefinitions = @(
 )
 
 try {
+    $selectionControl =
+        "; MIR machine function=target template=shape reject=operand`n" +
+        "; MIR selection function=target selector=spilled-scalar-cfg result=mir"
+    if (-not (Test-ExactRejectionIntoGeneric $selectionControl "shape" "target") -or
+        (Test-ExactRejectionIntoGeneric (
+            $selectionControl -replace "function=target selector=spilled",
+                "function=other selector=spilled") "shape" "target") -or
+        (Test-ExactRejectionIntoGeneric (
+            $selectionControl -replace "selector=spilled-scalar-cfg",
+                "selector=scheduled-machine-cfg") "shape" "target")) {
+        throw "MIR exact-rejection selection evidence controls failed"
+    }
     $knownCases = @($caseDefinitions.Name) + @("fuzz", "minimax", "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
@@ -690,17 +740,26 @@ try {
     }
 
     if ($Cases.Count -eq 0 -or "fuzz" -in $Cases) {
-        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" "fuzz0"
+        $forcedFunctions = @($FuzzSeeds | ForEach-Object {
+            ($_ + ($_ -shr 8)) % 12
+        })
+        if (@($forcedFunctions | Where-Object { ($_ % 2) -eq 0 }).Count -eq 0 -or
+            @($forcedFunctions | Where-Object { ($_ % 2) -ne 0 }).Count -eq 0) {
+            throw "Forced fuzz functions must cover both 8-bit and 16-bit data"
+        }
         try {
-            foreach ($candidate in @("spilled-baseline", "spilled-all")) {
-                Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $candidate
-                foreach ($seed in $FuzzSeeds) {
+            foreach ($seed in $FuzzSeeds) {
+                $fuzzFunction = "fuzz$(($seed + ($seed -shr 8)) % 12)"
+                Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $fuzzFunction
+                foreach ($candidate in @("spilled-baseline", "spilled-all")) {
+                    Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $candidate
                     foreach ($stackCheck in @($true, $false)) {
                         foreach ($peep in @($true, $false)) {
                             Assert-RunCase -Name "fuzzforced-$seed-$candidate" `
                                 -Sources @(Join-Path $tempRoot "fz$seed.c") -Defines @() `
                                 -Expected @("MIR fuzz seed=$seed checks=96 failures=0") `
-                                -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep
+                                -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
+                                -RequiredGenericFunction $fuzzFunction
                         }
                     }
                 }
@@ -721,7 +780,8 @@ try {
                             Assert-RunCase -Name "minimax-$candidate" `
                                 -Sources @(Join-Path $repoRoot "tests/ttt.c") -Defines @() `
                                 -Expected @("6493 moves", "1 iterations") -ExpectedExit 0 `
-                                -StackCheck $stackCheck -Peep $peep -DebugMode $debugMode
+                                -StackCheck $stackCheck -Peep $peep -DebugMode $debugMode `
+                                -RequiredGenericFunction "MinMax"
                         }
                     }
                 }
