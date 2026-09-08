@@ -1,12 +1,3 @@
-/* tstdlib.c - stdlib.h regression coverage, including atoi()/atol() etc.
- * wraparound at dcc's Z80 target int/long widths.
- *
- * Host validation is skipped (tests/_test_overrides.json's "host": true):
- * the *wrap16* checks deliberately overflow a 16-bit `int`, matching dcc's
- * target where `int` is 2 bytes. A host's `int` is 4 bytes even under a
- * 32-bit (-m32) compile - unlike `long`, there's no host compiler mode
- * that reproduces a 16-bit `int`, so this can't be validated on any host.
- */
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -58,10 +49,8 @@ static void check_ldiv(const char *name, long numer, long denom,
         fail_long(name, result.quot, expected_quot);
     if (result.rem != expected_rem)
         fail_long(name, result.rem, expected_rem);
-#ifndef MIR_CLOBBER_LDIV_NO_IDENTITY
     if (result.quot * denom + result.rem != numer)
         fail_long(name, result.quot * denom + result.rem, numer);
-#endif
 }
 
 int main(void)
@@ -70,7 +59,6 @@ int main(void)
     check_int("abspos", abs(123), 123);
     check_int("absneg", abs(-123), 123);
     check_int("abswide", abs(-32767), 32767);
-
     check_long("labs0", labs(0L), 0L);
     check_long("labspos", labs(123456L), 123456L);
     check_long("labsneg", labs(-123456L), 123456L);
@@ -81,14 +69,12 @@ int main(void)
     check_div("divneg2", 7, -3, -2, 1);
     check_div("divneg3", -7, -3, 2, -1);
     check_div("divzero", 0, 5, 0, 0);
-
     check_ldiv("ldivpos", 200000L, 7L, 28571L, 3L);
     check_ldiv("ldivneg1", -200000L, 7L, -28571L, -3L);
     check_ldiv("ldivneg2", 200000L, -7L, -28571L, 3L);
     check_ldiv("ldivneg3", -200000L, -7L, 28571L, -3L);
     check_ldiv("ldivzero", 0L, 13L, 0L, 0L);
 
-    /* atoi: 16-bit decimal parse with sign, whitespace, and trailing junk */
     check_int("atoi0", atoi("0"), 0);
     check_int("atoipos", atoi("123"), 123);
     check_int("atoineg", atoi("-123"), -123);
@@ -99,14 +85,7 @@ int main(void)
     check_int("atoinodig", atoi("abc"), 0);
     check_int("atoiempty", atoi(""), 0);
     check_int("atoiwide", atoi("32767"), 32767);
-    check_int("atoimin", atoi("-32768"), -32767 - 1);
-    check_int("atoinegzero", atoi("  -0"), 0);
-    check_int("atoiwrap16", atoi("65536"), 0);          /* 2^16 wraps to 0 */
-    check_int("atoiwrap16p1", atoi("65537"), 1);        /* 2^16+1 wraps to 1 */
-    check_int("atoiwrapbig", atoi("99999"), -31073);    /* 99999 mod 2^16, signed */
-    check_int("atoiwraphuge", atoi("4294967296"), 0);   /* huge input, deterministic wrap */
 
-    /* atol: 32-bit decimal parse, same rules as atoi but full long range */
     check_long("atol0", atol("0"), 0L);
     check_long("atolpos", atol("123"), 123L);
     check_long("atolneg", atol("-123"), -123L);
@@ -122,14 +101,11 @@ int main(void)
     check_long("atolnearmin", atol("-2147483647"), -2147483647L);
     check_long("atolmin", atol("-2147483648"), -2147483647L - 1L);
     check_long("atolnegzero", atol("  -0"), 0L);
-    check_long("atolwrap32", atol("4294967296"), 0L);              /* 2^32 wraps to 0 */
-    check_long("atolwrap32p1", atol("4294967297"), 1L);            /* 2^32+1 wraps to 1 */
-    check_long("atolwrapbig", atol("9999999999"), 1410065407L);    /* 9999999999 mod 2^32, signed */
-    check_long("atolwraphuge", atol("99999999999999999999"), 1661992959L); /* deterministic wrap, not UB crash */
-
+#ifdef MIR_CLOBBER_FINAL_EXTRA
+    check_int("extra", 1, 1);
+#endif
     if (failures != 0)
         return 1;
-
     printf("tstdlib: all tests passed\n");
     return 0;
 }

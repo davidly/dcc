@@ -13992,6 +13992,7 @@ int mir_try_emit_aggregate_checks(MirStream *out)
         return 1;
     }
     if (mir_match_ptr_condition_main(&ptr_condition)) {
+        mir_machine_accept("pointer-condition-main");
         mir_emit_ptr_condition_main(out, &ptr_condition);
         return 1;
     }

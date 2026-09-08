@@ -369,6 +369,22 @@ Coverage reaches 4,236/4,388 functions, 171,124/190,839 lines,
 ledger has 57,774 uncovered outcomes, one reviewed and 57,773 unreviewed, plus
 152 unexecuted included functions. The broader objective remains incomplete.
 
+Two-NOP and seven-NOP logical adapters restore `tstdlib.check_ldiv` and
+`tclit.check_value_literals_extra`, with identity-removal and changed-pointer-
+literal generic fallback controls. Historical focused fixtures preserve the
+still-valid original final-call, argv traversal, and exec/execv workloads after
+their main regression apps expanded. Added-call variants must reject each
+named template and execute generically.
+
+Exact controls now require an explicit accepted-template diagnostic from the
+family dispatcher as well as final `scheduled-machine-cfg` selection. This
+closes the former loophole where a different exact template could satisfy
+`RequireExact`. Coverage reaches 4,262/4,392 functions,
+172,203/190,939 lines, 87,522/145,040 native branch outcomes, and
+154,845/170,612 regions. The raw ledger has 57,224 uncovered outcomes, one
+reviewed and 57,223 unreviewed, plus 130 unexecuted included functions. The
+broader objective remains incomplete.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |

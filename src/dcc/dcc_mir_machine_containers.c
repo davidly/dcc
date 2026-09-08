@@ -5959,7 +5959,7 @@ static int mir_match_single_signed_div_check(
     return 1;
 }
 
-static int mir_match_wide_div_result_check(
+static int mir_match_wide_div_result_check_logical(
     struct MirWideDivResultCheck *plan)
 {
     static const int expected_opcodes[73] = {
@@ -6158,6 +6158,55 @@ static int mir_match_wide_div_result_check(
     return 1;
 }
 
+static void mir_init_wide_div_logical_nop(struct MirInsn *insn)
+{
+    memset(insn, 0, sizeof(*insn));
+    insn->opcode = MIR_NOP;
+    insn->src1 = -1;
+    insn->src2 = -1;
+    insn->dst = -1;
+    insn->object = -1;
+    insn->label = -1;
+    insn->phi_pred1 = -1;
+    insn->phi_pred2 = -1;
+}
+
+static int mir_match_wide_div_result_check(
+    struct MirWideDivResultCheck *plan)
+{
+    struct MirInsn *physical_insns;
+    struct MirInsn *logical_insns;
+    int physical_count;
+    int matched;
+
+    if (mir.count == 73)
+        return mir_match_wide_div_result_check_logical(plan);
+    if (mir.count != 71)
+        return mir_machine_reject(
+            "wide-div-result-check", "shape");
+    logical_insns = (struct MirInsn *)malloc(
+        73 * sizeof(*logical_insns));
+    if (logical_insns == NULL)
+        fatal("out of memory adapting wide div-result MIR");
+    memcpy(logical_insns, mir.insns, 11 * sizeof(*logical_insns));
+    mir_init_wide_div_logical_nop(&logical_insns[11]);
+    mir_init_wide_div_logical_nop(&logical_insns[12]);
+    memcpy(&logical_insns[13], &mir.insns[11],
+           60 * sizeof(*logical_insns));
+
+    physical_insns = mir.insns;
+    physical_count = mir.count;
+    mir.insns = logical_insns;
+    mir.count = 73;
+    mir_invalidate_use_cache();
+    matched = mir_match_wide_div_result_check_logical(plan);
+    mir.insns = physical_insns;
+    mir.count = physical_count;
+    mir_invalidate_use_cache();
+    free(logical_insns);
+    return matched;
+}
+
 static int mir_match_final_call_check_schedule(
     struct MirFinalCallCheckSchedule *plan)
 {
@@ -6193,7 +6242,8 @@ static int mir_match_final_call_check_schedule(
         mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
         (mir.return_type & 15) != TYPE_INT ||
         type_size(mir.return_type) != 2)
-        return 0;
+        return mir_machine_reject(
+            "final-call-check-schedule", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction) {
         int opcode = mir.insns[instruction].opcode;
 
@@ -10775,12 +10825,14 @@ int mir_try_emit_container_kernels(MirStream *out)
     }
     if (mir_match_wide_div_result_check(
             &wide_div_result_check)) {
+        mir_machine_accept("wide-div-result-check");
         mir_emit_wide_div_result_check(
             out, &wide_div_result_check);
         return 1;
     }
     if (mir_match_final_call_check_schedule(
             &final_call_check_schedule)) {
+        mir_machine_accept("final-call-check-schedule");
         mir_emit_final_call_check_schedule(
             out, &final_call_check_schedule);
         return 1;

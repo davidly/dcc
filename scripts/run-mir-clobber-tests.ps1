@@ -197,12 +197,17 @@ __ctu:
             "selector=scheduled-machine-cfg"
         $selected = if ($ExactFunction) { $build.Output -match $selectionPattern }
             else { $assembly.Contains(";@dcc.mir exact-kernel") }
+        $acceptPattern =
+            "MIR machine function=$([regex]::Escape($ExactFunction)) " +
+            "template=$([regex]::Escape($ExactTemplate)) accept=emitted"
+        $acceptedTemplate = $ExactFunction -and
+            $build.Output -match $acceptPattern
         $rejectedIntoGeneric = $ExactFunction -and
             (Test-ExactRejectionIntoGeneric $build.Output $ExactTemplate $ExactFunction)
         if ($RequireRejected -and -not $rejectedIntoGeneric) {
             throw "$Name did not reject '$ExactTemplate' for '$ExactFunction' into generic code:`n$($build.Output)"
         }
-        if ($RequireExact -and -not $selected) {
+        if ($RequireExact -and (-not $selected -or -not $acceptedTemplate)) {
             throw "$Name did not select required exact template " +
                 "'$ExactTemplate' ($configuration):`n$($build.Output)"
         }
@@ -580,6 +585,117 @@ $caseDefinitions = @(
         )
         Exit = 0
         ExactTemplate = "bitfield-report-sequence"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "widediv"
+        Sources = @(Join-Path $repoRoot "tests/tstdlib.c")
+        Defines = @()
+        Expected = @("tstdlib: all tests passed")
+        Exit = 0
+        ExactTemplate = "wide-div-result-check"
+        ExactFunction = "check_ldiv"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "widedivv"
+        Sources = @(Join-Path $repoRoot "tests/tstdlib.c")
+        Defines = @("MIR_CLOBBER_LDIV_NO_IDENTITY=1")
+        Expected = @("tstdlib: all tests passed")
+        Exit = 0
+        ExactTemplate = "wide-div-result-check"
+        ExactFunction = "check_ldiv"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "extralit"
+        Sources = @(Join-Path $repoRoot "tests/tclit.c")
+        Defines = @()
+        Expected = @("test tclit completed with great success")
+        Exit = 0
+        ExactTemplate = "extra-literal-checks"
+        ExactFunction = "check_value_literals_extra"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "extralitv"
+        Sources = @(Join-Path $repoRoot "tests/tclit.c")
+        Defines = @("MIR_CLOBBER_POINTER_LITERAL=78")
+        Expected = @("test tclit completed with great success")
+        Exit = 0
+        ExactTemplate = "extra-literal-checks"
+        ExactFunction = "check_value_literals_extra"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "finalcal"
+        Sources = @(Join-Path $fixtureRoot "finalcal.c")
+        Defines = @()
+        Expected = @("tstdlib: all tests passed")
+        Exit = 0
+        ExactTemplate = "final-call-check-schedule"
+        ExactFunction = "main"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "finalcalv"
+        Sources = @(Join-Path $fixtureRoot "finalcal.c")
+        Defines = @("MIR_CLOBBER_FINAL_EXTRA=1")
+        Expected = @("tstdlib: all tests passed")
+        Exit = 0
+        ExactTemplate = "final-call-check-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "argvprnt"
+        Sources = @(Join-Path $fixtureRoot "argvprnt.c")
+        Defines = @()
+        Expected = @(
+            "argc: 1", "argv[ 0 ]: ''",
+            "targs completed with great success"
+        )
+        Exit = 0
+        ExactTemplate = "argv-print-schedule"
+        ExactFunction = "main"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "argvprnv"
+        Sources = @(Join-Path $fixtureRoot "argvprnt.c")
+        Defines = @("MIR_CLOBBER_ARGV_EXTRA=1")
+        Expected = @("argv extra", "targs completed with great success")
+        Exit = 0
+        ExactTemplate = "argv-print-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "execarg"
+        Sources = @(Join-Path $fixtureRoot "execarg.c")
+        Defines = @()
+        Expected = @(
+            "parent: exec missing file", "parent: execv missing file",
+            "parent: exec self as child", "child: tail=' XCHILD'",
+            "child: argc=2", "child: argv[1]='XCHILD'", "child: pass"
+        )
+        Exit = 0
+        ExactTemplate = "exec-argument-schedule"
+        ExactFunction = "main"
+        RequireExact = $true
+    },
+    [pscustomobject]@{
+        Name = "execargv"
+        Sources = @(Join-Path $fixtureRoot "execarg.c")
+        Defines = @("MIR_CLOBBER_EXEC_EXTRA=1")
+        Expected = @("parent: extra control", "child: pass")
+        Exit = 0
+        ExactTemplate = "exec-argument-schedule"
         ExactFunction = "main"
         RequireRejected = $true
     },

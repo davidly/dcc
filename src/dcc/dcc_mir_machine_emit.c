@@ -84,6 +84,14 @@ int mir_machine_reject(const char *template_name, const char *reason)
     return 0;
 }
 
+void mir_machine_accept(const char *template_name)
+{
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s template=%s accept=emitted\n",
+                mir.name, template_name);
+}
+
 int mir_machine_same_location(
     const struct MirInsn *left, const struct MirInsn *right)
 {

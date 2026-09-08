@@ -24,6 +24,7 @@ struct MirMachineForm;
 struct MirStateMember;
 
 int mir_machine_reject(const char *template_name, const char *reason);
+void mir_machine_accept(const char *template_name);
 int mir_machine_named_nonvolatile(const struct MirInsn *insn);
 /* Resolve a direct global/extern array and prove its element width, extent,
  * and nonvolatile access contract. */

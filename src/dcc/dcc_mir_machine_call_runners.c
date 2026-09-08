@@ -7333,7 +7333,8 @@ static int mir_match_exec_argument_schedule(
             mir.insns[2].type, 2, TYPE_CHAR) ||
         !mir_machine_named_nonvolatile(&mir.insns[1]) ||
         !mir_machine_named_nonvolatile(&mir.insns[2]))
-        return 0;
+        return mir_machine_reject(
+            "exec-argument-schedule", "shape");
     if (!mir_machine_constant_equals(mir.insns[4].dst, 2) ||
         mir.insns[5].src1 != mir.insns[1].dst ||
         mir.insns[5].src2 != mir.insns[4].dst ||
@@ -8731,7 +8732,8 @@ static int mir_match_argv_print_schedule(
         type_size(mir.insns[1].type) != 2 ||
         type_ptr_depth(mir.insns[2].type) != 2 ||
         type_size(mir.insns[2].type) != 2)
-        return 0;
+        return mir_machine_reject(
+            "argv-print-schedule", "shape");
     count_function = mir_memory_runner_call_function(7, 1, 1);
     item_function = mir_memory_runner_call_function(30, 1, 1);
     done_function = mir_memory_runner_call_function(40, 1, 1);
@@ -12904,6 +12906,7 @@ int mir_try_emit_call_runners(MirStream *out)
             return 1;
         }
         if (mir_match_exec_argument_schedule(&exec_arguments)) {
+            mir_machine_accept("exec-argument-schedule");
             mir_emit_exec_argument_schedule(out, &exec_arguments);
             return 1;
         }
@@ -12954,6 +12957,7 @@ int mir_try_emit_call_runners(MirStream *out)
             return 1;
         }
         if (mir_match_argv_print_schedule(&argv_print)) {
+            mir_machine_accept("argv-print-schedule");
             mir_emit_argv_print_schedule(out, &argv_print);
             return 1;
         }
@@ -12990,6 +12994,7 @@ int mir_try_emit_call_runners(MirStream *out)
             return 1;
         }
         if (mir_match_union_value_runner_schedule(&union_value)) {
+            mir_machine_accept("union-value-runner-schedule");
             mir_emit_union_value_runner_schedule(out, &union_value);
             return 1;
         }
@@ -13036,6 +13041,7 @@ int mir_try_emit_call_runners(MirStream *out)
         }
         if (mir_match_word_table_runner_schedule(
                 &table_runner_plan)) {
+            mir_machine_accept("word-table-runner-schedule");
             mir_emit_word_table_runner_schedule(
                 out, &table_runner_plan);
             return 1;

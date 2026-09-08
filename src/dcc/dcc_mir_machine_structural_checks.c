@@ -8261,7 +8261,7 @@ static void mir_emit_block_literal_checks(
     mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
-static int mir_match_extra_literal_checks(
+static int mir_match_extra_literal_checks_logical(
     struct MirExtraLiteralChecks *plan)
 {
     memset(plan, 0, sizeof(*plan));
@@ -8322,6 +8322,51 @@ static int mir_match_extra_literal_checks(
         plan->pair_function == NULL)
         return mir_machine_reject("extra-literal-checks", "functions");
     return 1;
+}
+
+static int mir_match_extra_literal_checks(
+    struct MirExtraLiteralChecks *plan)
+{
+    struct MirInsn *physical_insns;
+    struct MirInsn *logical_insns;
+    int physical_count;
+    int matched;
+
+    if (mir.count == 133)
+        return mir_match_extra_literal_checks_logical(plan);
+    if (mir.count != 126)
+        return mir_machine_reject(
+            "extra-literal-checks", "shape");
+    logical_insns = (struct MirInsn *)malloc(
+        133 * sizeof(*logical_insns));
+    if (logical_insns == NULL)
+        fatal("out of memory adapting extra literal MIR");
+    memcpy(logical_insns, mir.insns, 73 * sizeof(*logical_insns));
+    mir_init_bitfield_logical_nop(&logical_insns[73]);
+    mir_init_bitfield_logical_nop(&logical_insns[74]);
+    memcpy(&logical_insns[75], &mir.insns[73],
+           15 * sizeof(*logical_insns));
+    mir_init_bitfield_logical_nop(&logical_insns[90]);
+    mir_init_bitfield_logical_nop(&logical_insns[91]);
+    memcpy(&logical_insns[92], &mir.insns[88],
+           20 * sizeof(*logical_insns));
+    mir_init_bitfield_logical_nop(&logical_insns[112]);
+    mir_init_bitfield_logical_nop(&logical_insns[113]);
+    mir_init_bitfield_logical_nop(&logical_insns[114]);
+    memcpy(&logical_insns[115], &mir.insns[108],
+           18 * sizeof(*logical_insns));
+
+    physical_insns = mir.insns;
+    physical_count = mir.count;
+    mir.insns = logical_insns;
+    mir.count = 133;
+    mir_invalidate_use_cache();
+    matched = mir_match_extra_literal_checks_logical(plan);
+    mir.insns = physical_insns;
+    mir.count = physical_count;
+    mir_invalidate_use_cache();
+    free(logical_insns);
+    return matched;
 }
 
 static void mir_emit_extra_literal_checks(
@@ -9594,6 +9639,7 @@ int mir_try_emit_structural_checks(MirStream *out)
     }
     if (mir_match_bitfield_report_sequence(
             &bitfield_report_sequence)) {
+        mir_machine_accept("bitfield-report-sequence");
         mir_emit_bitfield_report_sequence(
             out, &bitfield_report_sequence);
         return 1;
@@ -9705,6 +9751,7 @@ int mir_try_emit_structural_checks(MirStream *out)
         return 1;
     }
     if (mir_match_extra_literal_checks(&extra_literal_checks)) {
+        mir_machine_accept("extra-literal-checks");
         mir_emit_extra_literal_checks(out, &extra_literal_checks);
         return 1;
     }
