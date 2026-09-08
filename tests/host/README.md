@@ -26,6 +26,11 @@ prototyped global has the same spelling; verification must not import the
 hidden global's ABI or arity.
 The harness includes the driver under a
 different entry-point name so it links the real compiler state and verifier.
+It also directly exercises MIR stream block I/O, cursor-relative/end seeks,
+short reads, copying, file transfer, hashing, zero-sized operations, invalid
+seeks, and null close behavior. These are candidate-isolation primitives, so
+their tests assert exact bytes and cursor state rather than merely executing
+the helpers.
 
 `dcc_mir_verify.c` constructs an independent CFG and immediate-dominator tree
 using reverse postorder. Its storage is linear in the MIR size. Verification

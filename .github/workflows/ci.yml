@@ -103,6 +103,10 @@ jobs:
         shell: pwsh
         run: ./scripts/run-mir-clobber-tests.ps1
 
+      - name: Run AST diagnostic dump test
+        shell: pwsh
+        run: ./scripts/test-ast-dump.ps1
+
       - name: Validate AST coverage classifications
         if: runner.os == 'Linux'
         run: |

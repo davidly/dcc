@@ -103,6 +103,75 @@ static void verify_call_argument_liveness(void)
     clear_liveness();
 }
 
+static void verify_mir_stream_io(void)
+{
+    static const char input[] = "abcdef";
+    char output[8];
+    MirStream *stream = mir_stream_open();
+    MirStream *copy = mir_stream_open();
+    MirStream *empty = mir_stream_open();
+    FILE *file = tmpfile();
+    unsigned long hash;
+
+    if (stream == NULL || copy == NULL || empty == NULL || file == NULL) {
+        fprintf(stderr, "FAIL MIR stream allocation\n");
+        ++failures;
+        mir_stream_close(stream);
+        mir_stream_close(copy);
+        mir_stream_close(empty);
+        if (file != NULL)
+            fclose(file);
+        return;
+    }
+    memset(output, 0, sizeof(output));
+    if (mir_stream_write(input, 0, 3, stream) != 0 ||
+        mir_stream_write(input, 2, 0, stream) != 0 ||
+        mir_stream_write(input, 2, 3, stream) != 3 ||
+        mir_stream_tell(stream) != 6 ||
+        mir_stream_seek(stream, -2, SEEK_END) != 0 ||
+        mir_stream_tell(stream) != 4 ||
+        mir_stream_seek(stream, -2, SEEK_CUR) != 0 ||
+        mir_stream_tell(stream) != 2 ||
+        mir_stream_seek(stream, 0, SEEK_SET) != 0 ||
+        mir_stream_read(output, 0, 4, stream) != 0 ||
+        mir_stream_read(output, 2, 0, stream) != 0 ||
+        mir_stream_read(output, 2, 2, stream) != 2 ||
+        mir_stream_read(output + 4, 2, 2, stream) != 1 ||
+        memcmp(output, input, 6) != 0 ||
+        mir_stream_read(output, 1, 1, stream) != 0 ||
+        mir_stream_seek(stream, -1, SEEK_SET) == 0 ||
+        mir_stream_seek(stream, 0, 12345) == 0) {
+        fprintf(stderr, "FAIL MIR stream block I/O contract\n");
+        ++failures;
+    }
+    mir_stream_rewind(stream);
+    mir_stream_puts("prefix:", copy);
+    mir_stream_copy(stream, copy);
+    mir_stream_rewind(copy);
+    memset(output, 0, sizeof(output));
+    if (mir_stream_read(output, 1, 7, copy) != 7 ||
+        memcmp(output, "prefix:", 7) != 0 ||
+        mir_stream_getc(copy) != 'a') {
+        fprintf(stderr, "FAIL MIR stream copy contract\n");
+        ++failures;
+    }
+    hash = mir_stream_copy_to_file(stream, file);
+    rewind(file);
+    memset(output, 0, sizeof(output));
+    if (hash == 2166136261UL ||
+        fread(output, 1, 6, file) != 6 ||
+        memcmp(output, input, 6) != 0 ||
+        mir_stream_copy_to_file(empty, file) != 2166136261UL) {
+        fprintf(stderr, "FAIL MIR stream file transfer contract\n");
+        ++failures;
+    }
+    fclose(file);
+    mir_stream_close(empty);
+    mir_stream_close(copy);
+    mir_stream_close(stream);
+    mir_stream_close(NULL);
+}
+
 static void diamond(void)
 {
     setup(11, 4, 4);
@@ -230,6 +299,7 @@ int main(void)
     verify_diamond_mutations();
     verify_diamond_edge_liveness();
     verify_call_argument_liveness();
+    verify_mir_stream_io();
     for (mutation = 0; mutation < 5; ++mutation) {
         setup(5, 1, 1);
         mir.next_call_id = 1;

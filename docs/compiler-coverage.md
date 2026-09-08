@@ -20,6 +20,10 @@ target builds and direct clobber assertions through `DCC`, builds the host
 verifier with the same Clang instrumentation, and combines both executables'
 coverage mappings. `%p-%m` profile names distinguish process IDs and binary
 signatures. Each run removes old raw profiles before collecting fresh ones.
+The main runner also passes `DCC` through to the diagnostics suite; do not
+replace that route with a hard-coded repository-root compiler or diagnostic
+AST rejection paths disappear from coverage. `test-ast-dump.ps1` separately
+exercises the opt-in AST diagnostic renderer with content assertions.
 
 ## Legacy-excluded AST/MIR report
 
@@ -265,6 +269,14 @@ This run added no exclusions and did not change any existing performance
 baseline. The only new baseline row belongs to the new `tfpshad` workload.
 The totals remain far from 100%; they are a fresh checkpoint for prioritizing
 the next assertion-backed gap, not completion evidence.
+
+Routing diagnostics through the instrumented compiler and adding direct AST
+dump plus MIR stream block-I/O tests raises the next checkpoint to 4,063/4,384
+functions, 167,810/190,636 lines, 85,813/144,936 native branch outcomes, and
+151,629/170,483 regions. Unexecuted functions fall from 326 to 321 and
+unreviewed raw outcomes from 59,000 to 58,816. Two permanent diagnostics cover
+the remaining do-while and generic-statement message cases. No source or
+function classification changed.
 
 - Review the remaining 59,000 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR

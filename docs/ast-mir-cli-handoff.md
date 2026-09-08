@@ -277,6 +277,19 @@ The only new performance row is the measured new `tfpshad` workload; existing
 baselines were not moved despite 21 reported improvements. The broader
 objective remains incomplete.
 
+The next coverage batch found that `runall.ps1` hard-coded the repository-root
+compiler for diagnostics, so coverage builds did not execute the diagnostic
+AST paths the coverage guide claimed. The runner now honors `DCC` for that
+subprocess, and `compiler-coverage.sh` runs an assertion-backed AST dump test.
+Direct MIR stream tests cover block read/write, short and zero-sized I/O,
+relative/end seeks, copy, hash/file transfer, and error controls. Two new
+diagnostic fixtures cover do-while and generic compound-statement rejection.
+
+With those tests, coverage is 4,063/4,384 functions, 167,810/190,636 lines,
+85,813/144,936 native branch outcomes, and 151,629/170,483 regions. The raw
+ledger has 58,817 uncovered outcomes, one reviewed and 58,816 unreviewed, plus
+321 unexecuted included functions. The work remains far from 100%.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |
