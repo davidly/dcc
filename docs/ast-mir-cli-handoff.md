@@ -27,16 +27,20 @@ of thousands of raw branch records still need investigation.
 ## Publication State
 
 - Repository: <https://github.com/davidly/dcc>.
-- Branch: `test/ast-mir-integrated`.
-- PR: <https://github.com/davidly/dcc/pull/193>.
-- Latest implementation: `38da675e9236e7791b748cae89bc6f203eac479a`.
-- All eight push/PR checks for that implementation passed: Linux, macOS,
-  Windows, and the no-PowerShell build in both event runs.
+- Continuation branch: `test/ast-mir-correctness`.
+- PR #193 was merged as
+  `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
+- Latest continuation implementation:
+  `d0a9ed82` (`fix: strengthen MIR callback and fallback invariants`).
+- All eight push/PR checks for the PR #193 implementation passed: Linux,
+  macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
-- This handoff is a subsequent documentation commit. Its publication triggers
-  new CI, so the implementation run IDs do not validate the newer PR head.
-- The user authorized push and merge. Merge only after all checks pass for the
-  actual current head, without bypasses or force-pushing.
+- Main CI run `34193712407` passed for the merge commit. The two handoff-only
+  commits also passed all four jobs in run `34193879724` before being carried
+  onto the continuation branch.
+- The continuation implementation and this updated handoff still require
+  publication and exact-head CI. Do not treat the older run IDs as validation
+  for the new head.
 
 The previous machine named the repository remote `upstream`; a fresh clone
 normally calls it `origin`. Inspect remotes and adapt commands below.
@@ -48,22 +52,22 @@ gh pr view 193 --repo davidly/dcc --json state,headRefOid,mergeCommit,statusChec
 gh pr checks 193 --repo davidly/dcc
 ```
 
-If open, finish the current head's CI first. Diagnose failures with
+PR #193 needs no further action. For a continuation PR, finish the current
+head's CI first. Diagnose failures with
 `gh run view RUN_ID --repo davidly/dcc --log-failed`; repair the actual problem,
 validate, commit, push, and wait again. Once all checks pass:
 
 ```sh
-gh pr checks 193 --repo davidly/dcc --watch --interval 30
-gh pr view 193 --repo davidly/dcc --json headRefOid
-gh pr merge 193 --repo davidly/dcc --merge --match-head-commit VALIDATED_HEAD_SHA
+gh pr checks PR --repo davidly/dcc --watch --interval 30
+gh pr view PR --repo davidly/dcc --json headRefOid
+gh pr merge PR --repo davidly/dcc --merge --match-head-commit VALIDATED_HEAD_SHA
 git fetch origin
 gh pr view 193 --repo davidly/dcc --json state,mergedAt,mergeCommit,url
 git diff --exit-code VALIDATED_HEAD_SHA origin/main
 ```
 
-Substitute the real remote and validated SHA. If main acquired unrelated work,
-investigate tree differences instead of resetting. If already merged, skip
-publication and start further work from current main. Coordinate ownership:
+Substitute the real PR, remote, and validated SHA. If main acquired unrelated
+work, investigate tree differences instead of resetting. Coordinate ownership:
 the old VS Code session and CLI must not both edit/publish the branch. No old
 terminal watcher needs to be migrated.
 
@@ -197,6 +201,77 @@ build errors, unrelated crashes, and survivors are not successful kills. Every
 mutant must be clean-built: rapid source rewrites previously reused stale objects
 and gave misleading results.
 
+## CLI Continuation Checkpoint
+
+The first main-based continuation reproduced two verifier defects before
+fixing them:
+
+- an unprototyped local callback could inherit a differently prototyped global
+  merely because both used the same spelling, causing valid target C to fail
+  MIR ABI/arity verification; and
+- malformed scalar or aggregate indirect-call MIR could omit its callee value.
+
+`mir_resolve_call_prototype` now treats a known local declaration as the
+authoritative identity even when it has no prototype. The shared resolver owns
+both ABI-type and arity queries so those checks cannot diverge. `tfpshad` is the
+permanent target reproducer and retains the differently prototyped global as a
+valid control. Host tests cover fixed, variadic, unprototyped, shadowed-global,
+and missing-callee cases.
+
+The host verifier now directly inspects retained liveness data: PHI inputs are
+live only on their matching incoming edges, and call arguments remain live
+into but not after their call. The clean-build mutation inventory is eight:
+dominance, argument ABI, call arity, indirect callee, callback identity, PHI
+edge liveness, call-argument liveness, and promotion-cache invalidation. All
+eight are killed only by their designated assertions or cache diagnostic.
+
+Exact-selector rejection tests now require the intended function to report the
+named rejection, not select an exact schedule, and select a named generic
+homed/hybrid/regional/spilled emitter. Harness negative controls reject
+unrelated-function and exact-selection evidence. `iyexact` remains a positive
+word-table schedule control; changing only its initial table index in `iynear`
+rejects that schedule and executes correctly through generic code.
+
+The target-aware generator chooses between compatible callbacks with different
+aliasing writes. Its PowerShell oracle independently models 8-bit and 16-bit
+stores, write-before-read alias effects, and 16-bit arithmetic. Forced generic
+checks rotate across functions of both widths instead of only `fuzz0`.
+Reproducibility, inventory, corrupted-oracle, peep/nopeep, stack/no-stack, and
+generic-candidate controls all pass.
+
+LLVM 18 exposed a coverage-tool compatibility defect: its native
+`-show-functions` report includes the 115 manifest-classified legacy functions
+despite the generated name allowlist. The analyzer now ignores only that exact
+classified exclusion set while retaining hard failures for executed legacy
+functions, unexpected/duplicate rows, missing selected functions, or overlap.
+No denominator or classification changed.
+
+Local validation for `d0a9ed82` passed:
+
+- canonical and independent CMake builds;
+- both strict full+extended gates: 506 apps, 482 passed and 24 documented
+  skips per configuration, zero failures, zero checked performance regressions;
+- full MIR clobber, lifetime, required-emission, and eight-mutant suites;
+- ASan/UBSan host verifier plus focused real-source compiler probes;
+- 82 repository script tests;
+- 10 debugger-host tests and two line-debug tests; and
+- fresh Linux Clang 18.1.3 coverage collection.
+
+The fresh function-scoped coverage result is:
+
+| Metric | Covered / total | Percent |
+| --- | --- | --- |
+| Lines | 167,624 / 190,636 | 87.93% |
+| Native branch outcomes | 85,629 / 144,936 | 59.08% |
+| Functions | 4,058 / 4,384 | 92.56% |
+| Regions | 151,473 / 170,483 | 88.85% |
+
+The raw ledger has 59,001 uncovered outcomes, one reviewed and 59,000
+unreviewed, plus 326 unexecuted included functions. No exclusion was added.
+The only new performance row is the measured new `tfpshad` workload; existing
+baselines were not moved despite 21 reported improvements. The broader
+objective remains incomplete.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |
@@ -303,8 +378,9 @@ sanitizer verifier, 81 script tests, and 10 debugger-host tests passed. All four
 clean-built mutants were killed. These are historical results, not substitutes
 for validation after edits or on a different toolchain.
 
-Last aggregate coverage was measured after the fuzz/cache checkpoint, BEFORE
-the call-arity follow-up:
+The historical aggregate below was measured after the fuzz/cache checkpoint,
+before the call-arity and CLI continuation follow-ups. Use the newer CLI
+checkpoint above for current totals:
 
 | Metric | Covered / total | Percent |
 | --- | --- | --- |
