@@ -3976,6 +3976,7 @@ void mir_note_declared_symbol(struct Sym *symbol)
          type_ptr_depth(symbol->type) > 0);
     mir.declared_has_proto[i] = symbol->has_proto;
     mir.declared_proto_nargs[i] = symbol->proto_nargs;
+    mir.declared_proto_variadic[i] = symbol->proto_variadic;
     memcpy(mir.declared_proto_types[i], symbol->proto_types,
            sizeof(mir.declared_proto_types[i]));
 }
@@ -11602,6 +11603,58 @@ static int mir_verify_structure(void)
                 }
                 break;
             }
+        }
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *call = &mir.insns[instruction];
+        const struct Sym *callee;
+        int has_proto = 0;
+        int parameter_count = 0;
+        int variadic = 0;
+        int argument_count = 0;
+        long last_position = -1;
+        int prior;
+
+        if (call->opcode != MIR_CALL && call->opcode != MIR_CALL_AGGREGATE)
+            continue;
+        callee = find_global(call->name);
+        if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
+            for (prior = 0; prior < instruction; ++prior) {
+                const struct MirInsn *source = &mir.insns[prior];
+                int declared;
+                if (source->dst != call->src1 ||
+                    (source->opcode != MIR_LOAD && source->opcode != MIR_PARAM))
+                    continue;
+                declared = mir_declared_index(source->name);
+                callee = find_global(source->name);
+                if (declared >= 0 && mir.declared_has_proto[declared]) {
+                    has_proto = 1;
+                    parameter_count = mir.declared_proto_nargs[declared];
+                    variadic = mir.declared_proto_variadic[declared];
+                }
+                break;
+            }
+        }
+        if (!has_proto && callee != NULL && callee->has_proto) {
+            has_proto = 1;
+            parameter_count = callee->proto_nargs;
+            variadic = callee->proto_variadic;
+        }
+        for (prior = 0; prior < instruction; ++prior) {
+            const struct MirInsn *argument = &mir.insns[prior];
+            if (argument->opcode != MIR_ARG ||
+                argument->secondary_offset != call->secondary_offset)
+                continue;
+            ++argument_count;
+            if (argument->immediate > last_position)
+                last_position = argument->immediate;
+        }
+        if (last_position != (long)argument_count - 1 ||
+            (has_proto && (argument_count < parameter_count ||
+                           (!variadic && argument_count != parameter_count)))) {
+            fprintf(stderr, "; MIR %s: instruction %d has incorrect argument arity\n",
+                    mir.name, instruction);
+            valid = 0;
         }
     }
     free(calls);

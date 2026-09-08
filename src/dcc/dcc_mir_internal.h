@@ -299,6 +299,7 @@ struct MirFunction {
     int declared_funcptr_return_types[MAX_LOCALS];
     int declared_has_proto[MAX_LOCALS];
     int declared_proto_nargs[MAX_LOCALS];
+    int declared_proto_variadic[MAX_LOCALS];
     int declared_proto_types[MAX_LOCALS][MAX_PROTO_PARAMS];
     int declared_count;
     char alias_source_names[MAX_LOCALS][64];

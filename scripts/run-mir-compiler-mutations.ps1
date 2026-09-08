@@ -8,8 +8,9 @@ $output = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDirectory))
 $results = [System.Collections.Generic.List[object]]::new()
 $savedCacheVerify = [Environment]::GetEnvironmentVariable("DCC_MIR_CACHE_VERIFY", "Process")
 $mutants = @(
-    @{ Name = "dominance"; Before = 'errors != 0 || !mir_verify_dominance()'; After = 'errors != 0 || 0' },
-    @{ Name = "argument-abi"; Before = 'target_type != 0 && insn->type != target_type'; After = '0 && target_type != 0 && insn->type != target_type' },
+    @{ Name = "dominance"; Before = 'errors != 0 || !mir_verify_dominance()'; After = 'errors != 0 || 0'; ExpectedFailure = 'FAIL branch value cannot escape join' },
+    @{ Name = "argument-abi"; Before = 'target_type != 0 && insn->type != target_type'; After = '0 && target_type != 0 && insn->type != target_type'; ExpectedFailure = 'FAIL incorrect prototype argument type' },
+    @{ Name = "call-arity"; Before = 'has_proto && (argument_count < parameter_count ||'; After = '0 && (argument_count < parameter_count ||'; ExpectedFailure = 'FAIL known prototype requires its argument' },
     @{ Name = "promotion-cache"; CompileProbe = $true }
 )
 try {
@@ -40,7 +41,7 @@ try {
             $text = $text.Substring(0, $start) + $body.Replace('mir_invalidate_use_cache();', '(void)0;') + $text.Substring($end)
         }
         [System.IO.File]::WriteAllText($sourcePath, $text)
-        & cmake --build "$workspace/cmake" --target mir-verify-test dcc --config Debug --parallel *> "$output/$($mutant.Name)-build.log"
+        & cmake --build "$workspace/cmake" --target mir-verify-test dcc --config Debug --clean-first --parallel *> "$output/$($mutant.Name)-build.log"
         if ($LASTEXITCODE -ne 0) { throw "Invalid mutant (build failure): $($mutant.Name)" }
         if ($mutant.CompileProbe -or $mutant.Name -eq "baseline") {
             $compiler = @("$workspace/bin/dcc", "$workspace/bin/Debug/dcc.exe", "$workspace/bin/dcc.exe") |
@@ -65,7 +66,7 @@ try {
         if ($mutant.Name -eq "baseline") {
             if ($exitCode -ne 0) { throw "Unmutated verifier tests failed" }
             $outcome = "passed"
-        } elseif ($exitCode -ne 0 -and $log -match 'FAIL ' -and $log -match 'MIR verifier failures=[1-9]') {
+        } elseif ($exitCode -ne 0 -and $log.Contains($mutant.ExpectedFailure) -and $log -match 'MIR verifier failures=[1-9]') {
             $outcome = "killed"
         } elseif ($exitCode -eq 0) {
             $outcome = "survived"
@@ -78,7 +79,7 @@ try {
     if (@($results | Where-Object { $_.outcome -in @("survived", "invalid") }).Count -gt 0) {
         throw "Compiler mutation checks failed: $output/results.json"
     }
-    Write-Host "Compiler mutation controls: baseline passed, 3 mutants killed"
+    Write-Host "Compiler mutation controls: baseline passed, $($mutants.Count) mutants killed"
 } finally {
     [Environment]::SetEnvironmentVariable("DCC_MIR_CACHE_VERIFY", $savedCacheVerify, "Process")
     Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue

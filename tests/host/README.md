@@ -200,14 +200,38 @@ The host verifier additionally mutates all 16 populated definition/operand/label
 fields of a valid diamond, requires rejection, restores each field, and requires
 acceptance. Five call/argument identity mutations have positive controls.
 Empty, negative, and oversized dominance graph contracts are tested directly.
-The compiler-mutation runner builds isolated copies with dominance or argument
-ABI checks disabled, or promotion cache invalidations removed. It first requires
+The compiler-mutation runner builds isolated copies with dominance, argument
+ABI, or call-arity checks disabled, or promotion cache invalidations removed. It first requires
 unmutated host tests and a one-function seed-23117 compilation to pass. Verifier
 mutants must produce explicit host-test assertion failures; the cache mutant
 must produce the specific `mir_definition` cache mismatch. Build errors, crashes,
-and survivors are not counted as kills. Logs and JSON results are retained under
-`build/mir-compiler-mutations`. These three controls do not establish a general
+and survivors are not counted as kills. Every mutant uses a clean rebuild, so
+rapid source rewrites cannot reuse a preceding mutant's objects due to timestamp
+resolution. Verifier kills must contain the mutation-specific assertion failure.
+Logs and JSON results are retained under
+`build/mir-compiler-mutations`. These four controls do not establish a general
 compiler mutation score.
+
+### Call Arity Invariants
+
+Each call's argument positions must form a contiguous zero-based set; textual
+order may differ. Known nonvariadic prototypes require exactly their declared
+parameter count. Variadic prototypes require the fixed prefix and permit extras.
+Unprototyped calls have no parameter-count restriction but still require valid
+argument positions. Existing duplicate/late-argument and dominance checks remain
+independent and required.
+
+Arity lookup covers named global functions and indirect calls whose callee is a
+named `MIR_LOAD` or `MIR_PARAM`, matching the existing argument-ABI lookup. The
+declared-symbol table retains the variadic flag as well as the parameter count
+and types. Unresolved callee values are not assigned a guessed prototype; calls
+through casts, fields, PHIs, or returned function pointers need explicit MIR
+signature transport before the verifier can enforce their full prototype arity.
+
+Host tests cover missing/excess arguments, holes, extreme argument positions,
+zero-argument prototypes, unprototyped calls, reversed argument-record order,
+and fixed/variadic local and global callbacks. A compiler mutant disabling
+prototype-count enforcement must fail the missing-argument test specifically.
 
 The `structv`, `stringv`, `floatv`, `bitfield`, and `callid` near-match cases now
 require explicit rejection of their named schedule and generic selection for

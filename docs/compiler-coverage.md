@@ -216,12 +216,28 @@ been run remotely for this uncommitted follow-up.
 
 ### Remaining Completion Gates
 
+The next local checkpoint adds call-level arity verification with fixed,
+variadic, and unprototyped controls. Six malformed-call cases were accepted
+before the change; all are now rejected. Local callback metadata now retains
+the variadic flag. This is verifier-only validation, not a change to valid
+call emission. Both strict release gates passed with zero checked performance
+regressions, as did sanitizer host tests, the complete MIR suites, 81 script
+tests, and all 10 debugger-host tests. The aggregate coverage figures above
+predate this follow-up and have not been remeasured for the new verifier code.
+
+Compiler mutation testing now includes call arity, for four controls total.
+The added mutation exposed timestamp-dependent object reuse in the incremental
+mutation builds. Each mutation now forces a clean rebuild and must produce its
+own expected assertion failure. All four controls passed that stricter check;
+the earlier three-control measurements should not be treated as a broad mutation
+score. Remote CI has not run for these local changes.
+
 - Review the remaining 59,340 raw uncovered outcomes rather than labeling them
    unreachable by default; add supported-input or malformed-IR assertions as needed.
 - Cover the 326 unexecuted included functions or justify their classification.
 - Extend near-match/generic equivalence beyond the five enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic and current memory/call forms.
-- Add compiler mutants beyond the two verifier controls and promotion-cache
+- Add compiler mutants beyond the three verifier controls and promotion-cache
    regression, and investigate survivors.
 
 This follow-up completes neither exhaustive source coverage nor the complete
