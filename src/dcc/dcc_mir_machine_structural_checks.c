@@ -8580,10 +8580,10 @@ static void mir_emit_hall_init(MirStream *out, const struct MirHallInit *p)
 static int mir_match_value_literal_checks(struct MirValueLiteralChecks *plan)
 {
     static const int calls[13] =
-        { 50,60,70,80,93,115,127,139,151,163,175,183,191 };
+        { 48,58,68,78,91,113,125,137,149,161,173,181,189 };
     int i;
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 192 || mir_cfg_block_count() != 1 || mir.has_vla ||
+    if (mir.count != 190 || mir_cfg_block_count() != 1 || mir.has_vla ||
         (mir.return_type & 15) != TYPE_VOID)
         return mir_machine_reject("value-literal-checks", "shape");
     for (i = 0; i < 13; ++i) {
@@ -8603,18 +8603,18 @@ static int mir_match_value_literal_checks(struct MirValueLiteralChecks *plan)
             return mir_machine_reject("value-literal-checks", "string");
         plan->string_ids[i] = (int)string->immediate;
     }
-    plan->integer_function = find_global(mir.insns[50].name);
-    plan->pair_function = find_global(mir.insns[60].name);
-    plan->long_function = find_global(mir.insns[139].name);
-    plan->float_function = find_global(mir.insns[151].name);
+    plan->integer_function = find_global(mir.insns[48].name);
+    plan->pair_function = find_global(mir.insns[58].name);
+    plan->long_function = find_global(mir.insns[137].name);
+    plan->float_function = find_global(mir.insns[149].name);
     if (plan->integer_function == NULL || plan->pair_function == NULL ||
         plan->long_function == NULL || plan->float_function == NULL ||
-        strcmp(mir.insns[60].name, mir.insns[70].name) ||
-        strcmp(mir.insns[60].name, mir.insns[80].name))
+        strcmp(mir.insns[58].name, mir.insns[68].name) ||
+        strcmp(mir.insns[58].name, mir.insns[78].name))
         return mir_machine_reject("value-literal-checks", "functions");
     return mir_machine_exact_payload_fingerprint(
         "value-literal-checks",
-        0xabe2710c91b27248ULL, 0xe20a8b3dedd4800aULL);
+        0x0850394bad5ab6f2ULL, 0xe7106b2c52b92840ULL);
 }
 
 static void mir_emit_value_literal_checks(MirStream *out,

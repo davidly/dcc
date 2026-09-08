@@ -346,10 +346,21 @@ Coverage reaches 4,233/4,388 functions, 171,053/190,839 lines,
 ledger has 57,801 uncovered outcomes, one reviewed and 57,800 unreviewed, plus
 155 unexecuted included functions.
 
-- Review the remaining 57,800 unreviewed raw uncovered outcomes rather than
+`tclit.check_value_literals` was two removed instructions stale. Updating its
+fixed call indices and complete semantic payload fingerprint restores the
+exact value-literal schedule; the existing corrupted-call-ID control still
+rejects it and executes generic code. It improves peep/nopeep cycles by
+11.70%/12.15% and sizes by 7.35%/10.00%.
+
+Coverage reaches 4,236/4,388 functions, 171,124/190,839 lines,
+86,958/145,026 native branch outcomes, and 153,774/170,590 regions. The raw
+ledger has 57,774 uncovered outcomes, one reviewed and 57,773 unreviewed, plus
+152 unexecuted included functions.
+
+- Review the remaining 57,773 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
-- Cover the 155 unexecuted included functions or justify their classification.
+- Cover the 152 unexecuted included functions or justify their classification.
 - Extend near-match/generic equivalence beyond the six enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
   callbacks, and current memory/call forms.
