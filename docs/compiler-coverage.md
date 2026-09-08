@@ -445,10 +445,32 @@ emitters are stale historical exact/inline shapes or a branch made dead by the
 allocation optimization documented in its source; they remain in the
 denominator.
 
-- Review the remaining 56,018 unreviewed raw uncovered outcomes rather than
+The next exact-runner checkpoint restores two fully asserted semantic families.
+A focused 6502 byte-math fixture exercises compare, decimal arithmetic,
+OR/AND/XOR, ADC/SBC, and all negative/zero/carry effects; swapping the compare
+arguments must reject the named template and execute generically. The abort
+file runner accepts current lowering's 264-instruction form in addition to the
+historical 269-instruction form. The only omitted instructions are the
+post-`abort()` print and return that the compiler now removes after proving the
+callee is `noreturn`; all pre-abort call, string, type, CFG, and observable
+file/ctype behavior remains under the existing matcher proof. An added-call
+variant rejects the exact template.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,358 / 4,393 | 99.20% |
+| Lines | 176,268 / 191,011 | 92.28% |
+| Native branch outcomes | 89,330 / 145,104 | 61.56% |
+| Regions | 158,359 / 170,682 | 92.78% |
+
+The raw ledger has 55,505 uncovered outcomes, one reviewed and 55,504
+unreviewed, plus 35 unexecuted functions. Exact/near target controls, sanitizer
+probes, both strict release gates, and stack/no-stack censuses pass.
+
+- Review the remaining 55,504 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
-- Cover the 49 unexecuted included functions or justify their classification.
+- Cover the 35 unexecuted included functions or justify their classification.
 - Extend near-match/generic equivalence beyond the six enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
   callbacks, and current memory/call forms.

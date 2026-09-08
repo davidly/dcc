@@ -1580,12 +1580,14 @@ static int mir_match_abort_file_runner(
     int memory_storage;
     int memory_offset;
     int instruction;
+    int string_count;
     int first;
     int second;
     int item;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 269 || mir_cfg_block_count() != 27 ||
+    if ((mir.count != 264 && mir.count != 269) ||
+        mir_cfg_block_count() != 27 ||
         mir.has_vla || mir.local_bytes != 12 ||
         mir.aggregate_temp_bytes != 0 ||
         !mir_abort_runner_word_type(mir.return_type))
@@ -1730,13 +1732,17 @@ static int mir_match_abort_file_runner(
             263, plan->abort_function, 38))
         return mir_machine_reject(
             "abort-file-runner", "abort-call");
-    arguments[0] = 264;
-    if (!mir_abort_runner_call(
-            266, plan->print_function, 39, 1, arguments))
-        return mir_machine_reject(
-            "abort-file-runner", "post-abort-print");
+    if (mir.count == 269) {
+        arguments[0] = 264;
+        if (!mir_abort_runner_call(
+                266, plan->print_function, 39, 1, arguments))
+            return mir_machine_reject(
+                "abort-file-runner", "post-abort-print");
+    }
 
-    for (item = 0; item < MIR_ABORT_STRING_COUNT; ++item) {
+    string_count = mir.count == 269
+        ? MIR_ABORT_STRING_COUNT : MIR_ABORT_RETURNED;
+    for (item = 0; item < string_count; ++item) {
         const struct MirInsn *string =
             &mir.insns[string_instructions[item]];
 
@@ -1750,6 +1756,11 @@ static int mir_match_abort_file_runner(
                 return mir_machine_reject(
                     "abort-file-runner", "string-alias");
     }
+    if (mir.count == 269)
+        plan->strings[MIR_ABORT_RETURNED] =
+            (int)mir.insns[string_instructions[MIR_ABORT_RETURNED]].immediate;
+    else
+        plan->strings[MIR_ABORT_RETURNED] = -1;
     if (mir.insns[18].immediate !=
             plan->strings[MIR_ABORT_OLD_NAME] ||
         mir.insns[71].immediate !=
@@ -1919,8 +1930,9 @@ static int mir_match_abort_file_runner(
         !mir_machine_constant_equals(mir.insns[66].dst, 0) ||
         !mir_machine_constant_equals(mir.insns[256].dst, 1) ||
         mir.insns[257].src1 != mir.insns[256].dst ||
-        !mir_machine_constant_equals(mir.insns[267].dst, 1) ||
-        mir.insns[268].src1 != mir.insns[267].dst)
+        (mir.count == 269 &&
+         (!mir_machine_constant_equals(mir.insns[267].dst, 1) ||
+          mir.insns[268].src1 != mir.insns[267].dst)))
         return mir_machine_reject(
             "abort-file-runner", "return");
     return 1;
@@ -8814,8 +8826,6 @@ static void mir_emit_abort_file_runner(
     mir_abort_runner_print(
         out, plan, plan->strings[MIR_ABORT_SUCCESS]);
     mir_machine_emit_symbol_call(out, plan->abort_function);
-    mir_abort_runner_print(
-        out, plan, plan->strings[MIR_ABORT_RETURNED]);
     mir_stream_printf(out,
             "\tld hl,1\nL%d:\n"
             "\tld sp,ix\n\tpop ix\n\tret\n",
@@ -12795,6 +12805,7 @@ int mir_try_emit_validation_runners(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_abort_file_runner(&abort_plan)) {
+            mir_machine_accept("abort-file-runner");
             mir_emit_abort_file_runner(out, &abort_plan);
             return 1;
         }

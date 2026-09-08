@@ -731,6 +731,46 @@ $caseDefinitions = @(
         DebugModes = @("true", "lines")
     },
     [pscustomobject]@{
+        Name = "bytemath"
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @()
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireExact = $true
+    },
+    [pscustomobject]@{
+        Name = "bytemathv"
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @("MIR_CLOBBER_BYTE_MATH_SWAP=1")
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "abortfil"
+        Sources = @(Join-Path $fixtureRoot "abortfil.c")
+        Defines = @()
+        Expected = @("abort file ok")
+        Exit = 0
+        ExactTemplate = "abort-file-runner"
+        ExactFunction = "main"
+        RequireExact = $true
+    },
+    [pscustomobject]@{
+        Name = "abortfilv"
+        Sources = @(Join-Path $fixtureRoot "abortfil.c")
+        Defines = @("MIR_CLOBBER_ABORT_EXTRA=1")
+        Expected = @("abort extra control", "abort file ok")
+        Exit = 0
+        ExactTemplate = "abort-file-runner"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
         Name = "limitsv"
         Sources = @(Join-Path $fixtureRoot "limitsv.c")
         Defines = @()

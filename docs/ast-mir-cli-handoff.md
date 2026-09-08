@@ -463,6 +463,21 @@ tests, ASan/UBSan verification, both strict 506-app release gates, debugger
 tests, and stack/no-stack censuses with all 3,039 functions retained and zero
 production selector changes. It is pushed without waiting for GitHub Actions.
 
+The next exact-runner increment raises coverage to 4,358/4,393 functions
+(99.20%), 176,268/191,011 lines (92.28%), 89,330/145,104 branch outcomes
+(61.56%), and 158,359/170,682 regions (92.78%). Thirty-five functions and
+55,504 unreviewed outcomes remain.
+
+The byte-math fixture covers all three helper functions with arithmetic,
+logical, compare, decimal, and flag assertions; a compare-argument swap proves
+generic fallback. The abort-file runner covers ten functions and accepts both
+the historical 269-instruction MIR and current 264-instruction MIR. Current
+lowering removes only the five instructions after the proven `noreturn`
+`abort()` call, and the emitter now omits that unreachable print/return too.
+An added-call near match rejects exact selection. Both strict release gates,
+sanitizer probes, nine compiler mutants, and stack/no-stack censuses pass with
+no production selector regressions.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |

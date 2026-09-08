@@ -6288,17 +6288,19 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 220 || mir_cfg_block_count() != 26 ||
         (mir.return_type & 15) != TYPE_VOID || mir.has_vla)
-        return 0;
+        return mir_machine_reject("byte-math-flags", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
         if (insn->opcode != expected_opcodes[instruction])
-            return 0;
+            return mir_machine_reject(
+                "byte-math-flags", "opcode-sequence");
         if ((insn->opcode == MIR_LOAD_INDIRECT ||
              insn->opcode == MIR_STORE_INDIRECT) &&
             (insn->memory_size != 1 || insn->bit_width != 0 ||
              (insn->memory_flags & (1 | 8)) != 0))
-            return 0;
+            return mir_machine_reject(
+                "byte-math-flags", "memory-access");
     }
     for (edge = 0;
          edge < (int)(sizeof(edge_pairs) / sizeof(edge_pairs[0]));
@@ -7584,6 +7586,7 @@ int mir_try_emit_float_recursion_kernels(MirStream *out)
         return 1;
     }
     if (mir_match_byte_math_flags(&byte_math_flags)) {
+        mir_machine_accept("byte-math-flags");
         mir_emit_byte_math_flags(out, &byte_math_flags);
         return 1;
     }
