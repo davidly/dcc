@@ -9619,13 +9619,13 @@ static int mir_lazy_parameter_eligible(const struct MirInsn *parameter)
     if (parameter->opcode != MIR_PARAM || parameter->dst < 0 ||
         parameter->object < 0 || parameter->object >= mir.object_count ||
         mir.has_vla || type_ptr_depth(parameter->type) != 0 ||
-        type_size(parameter->type) < 1 || type_size(parameter->type) > 2 ||
+        type_size(parameter->type) < 1 || type_size(parameter->type) > 4 ||
         type_is_struct_object(parameter->type) ||
         mir_lazy_parameter_semantic_use_count(parameter->dst) != 1)
         return 0;
     object = &mir.objects[parameter->object];
     if (object->storage != SC_PARAM || type_ptr_depth(object->type) != 0 ||
-        type_size(object->type) < 1 || type_size(object->type) > 2 ||
+        type_size(object->type) < 1 || type_size(object->type) > 4 ||
         type_is_struct_object(object->type))
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction)

@@ -883,6 +883,66 @@ $caseDefinitions = @(
         RequireRejected = $true
     },
     [pscustomobject]@{
+        Name = "fatfor"
+        Sources = @(Join-Path $fixtureRoot "fatfor.c")
+        Defines = @()
+        Expected = @("forint:boom near pc=1 'LINE'")
+        Exit = 1
+        ExactTemplate = "fortran-fatal-schedule"
+        ExactFunction = "die"
+        RequireExact = $true
+    },
+    [pscustomobject]@{
+        Name = "fatforv"
+        Sources = @(Join-Path $fixtureRoot "fatfor.c")
+        Defines = @("MIR_CLOBBER_FORTRAN_TEMP=1")
+        Expected = @("forint:boom near pc=1 'LINE'")
+        Exit = 1
+        ExactTemplate = "fortran-fatal-schedule"
+        ExactFunction = "die"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "fatfore"
+        Sources = @(Join-Path $fixtureRoot "fatfor.c")
+        Defines = @("MIR_CLOBBER_FORTRAN_EXIT=1")
+        Expected = @("forint:boom near pc=1 'LINE'")
+        Exit = 2
+        ExactTemplate = "fortran-fatal-schedule"
+        ExactFunction = "die"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "fatfors"
+        Sources = @(Join-Path $fixtureRoot "fatfor.c")
+        Defines = @("MIR_CLOBBER_FORTRAN_STDOUT=1")
+        Expected = @("forint:boom near pc=1 'LINE'")
+        Exit = 1
+        ExactTemplate = "fortran-fatal-schedule"
+        ExactFunction = "die"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "fatforr"
+        Sources = @(Join-Path $fixtureRoot "fatfor.c")
+        Defines = @("MIR_CLOBBER_FORTRAN_REVERSE=1")
+        Expected = @("forint:boom near pc=-1 'LINE'")
+        Exit = 1
+        ExactTemplate = "fortran-fatal-schedule"
+        ExactFunction = "die"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "fatforg"
+        Sources = @(Join-Path $fixtureRoot "fatfor.c")
+        Defines = @("MIR_CLOBBER_FORTRAN_RANGE=1")
+        Expected = @("forint:boom near pc=1 'LINE'")
+        Exit = 1
+        ExactTemplate = "fortran-fatal-schedule"
+        ExactFunction = "die"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
         Name = "intel"
         Sources = @(Join-Path $fixtureRoot "intel.c")
         Defines = @()
@@ -1288,18 +1348,19 @@ try {
         }
     }
     if ($Cases.Count -eq 0 -or "lazywide" -in $Cases) {
-        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" "co_add"
-        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "homed-lazy"
         try {
-            foreach ($stackCheck in @($true, $false)) {
-                foreach ($peep in @($true, $false)) {
-                    Assert-RunCase -Name "lazywide" `
-                        -Sources @(Join-Path $repoRoot "tests/tlongopt.c") `
-                        -Defines @() `
-                        -Expected @("tlongopt passed with great success") `
-                        -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
-                        -RequiredSelectorFunction "co_add" `
-                        -RequiredSelector "homed-scalar-cfg"
+            foreach ($function in @("passthru", "callit")) {
+                Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $function
+                Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "homed-lazy"
+                foreach ($stackCheck in @($true, $false)) {
+                    foreach ($peep in @($true, $false)) {
+                        Assert-RunCase -Name "lazywide-$function" `
+                            -Sources @(Join-Path $fixtureRoot "lzywide.c") `
+                            -Defines @() -Expected @("lazy wide passed") `
+                            -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
+                            -RequiredSelectorFunction $function `
+                            -RequiredSelector "homed-scalar-cfg"
+                    }
                 }
             }
         } finally {

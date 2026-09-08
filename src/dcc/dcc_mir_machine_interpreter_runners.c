@@ -6773,7 +6773,8 @@ static int mir_match_fortran_fatal_schedule(
         (mir.return_type & 15) != TYPE_VOID ||
         !mir_machine_parameter_value_offset(
             mir.insns[1].dst, &plan->message_stack_offset))
-        return 0;
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "shape");
     plan->statements = mir_pascal_scan_symbol(9, 2, 0);
     plan->program_counter = mir_pascal_scan_symbol(11, 2, 0);
     plan->statement_count = mir_pascal_scan_symbol(52, 2, 0);
@@ -6790,8 +6791,176 @@ static int mir_match_fortran_fatal_schedule(
         plan->text_offset < 0 ||
         plan->text_offset + 1 >= plan->statement_stride ||
         plan->format_string_id < 0 ||
-        plan->empty_string_id < 0)
-        return 0;
+        plan->empty_string_id < 0 ||
+        mir.insns[2].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 2) ||
+        mir.insns[4].opcode != MIR_ARG ||
+        mir.insns[4].immediate != 0 ||
+        mir.insns[4].src1 != mir.insns[2].dst ||
+        mir.insns[5].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[6].opcode != MIR_ARG ||
+        mir.insns[6].immediate != 1 ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[7].opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[7]) ||
+        mir.insns[8].opcode != MIR_ARG ||
+        mir.insns[8].immediate != 2 ||
+        mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[9].opcode != MIR_LOAD ||
+        find_global(mir.insns[9].name) != plan->statements ||
+        mir.insns[10].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[16].label ||
+        mir.insns[11].opcode != MIR_LOAD ||
+        find_global(mir.insns[11].name) !=
+            plan->program_counter ||
+        mir.insns[12].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[16].label ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        mir.insns[15].opcode != MIR_JUMP ||
+        mir.insns[15].label != mir.insns[18].label ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 0) ||
+        mir.insns[19].opcode != MIR_PHI ||
+        mir.insns[19].src1 != mir.insns[14].dst ||
+        mir.insns[19].src2 != mir.insns[17].dst ||
+        mir.insns[19].phi_pred1 != mir.insns[13].label ||
+        mir.insns[19].phi_pred2 != mir.insns[16].label ||
+        mir.insns[20].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        mir.insns[20].label != mir.insns[29].label ||
+        mir.insns[21].opcode != MIR_LOAD ||
+        find_global(mir.insns[21].name) !=
+            plan->program_counter ||
+        mir.insns[22].opcode != MIR_LOAD ||
+        find_global(mir.insns[22].name) != plan->statements ||
+        mir.insns[23].opcode != MIR_BINARY ||
+        mir.insns[23].immediate != '-' ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[24].opcode != MIR_CONST ||
+        mir.insns[25].opcode != MIR_BINARY ||
+        mir.insns[25].immediate != '/' ||
+        mir.insns[25].src1 != mir.insns[23].dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[28].opcode != MIR_JUMP ||
+        mir.insns[28].label != mir.insns[33].label ||
+        !mir_machine_constant_equals(mir.insns[31].dst, 65535) ||
+        mir.insns[34].opcode != MIR_PHI ||
+        mir.insns[34].src1 != mir.insns[25].dst ||
+        mir.insns[34].src2 != mir.insns[31].dst ||
+        mir.insns[34].phi_pred1 != mir.insns[27].label ||
+        mir.insns[34].phi_pred2 != mir.insns[32].label ||
+        mir.insns[35].opcode != MIR_ARG ||
+        mir.insns[35].immediate != 3 ||
+        mir.insns[35].src1 != mir.insns[34].dst ||
+        mir.insns[36].opcode != MIR_LOAD ||
+        find_global(mir.insns[36].name) != plan->statements ||
+        mir.insns[37].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[37].label != mir.insns[45].label ||
+        mir.insns[38].opcode != MIR_LOAD ||
+        find_global(mir.insns[38].name) !=
+            plan->program_counter ||
+        mir.insns[39].opcode != MIR_LOAD ||
+        find_global(mir.insns[39].name) != plan->statements ||
+        mir.insns[40].opcode != MIR_BINARY ||
+        mir.insns[40].immediate != TOK_GE ||
+        mir.insns[40].src1 != mir.insns[38].dst ||
+        mir.insns[40].src2 != mir.insns[39].dst ||
+        mir.insns[41].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        mir.insns[41].label != mir.insns[45].label ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 1) ||
+        mir.insns[44].opcode != MIR_JUMP ||
+        mir.insns[44].label != mir.insns[47].label ||
+        !mir_machine_constant_equals(mir.insns[46].dst, 0) ||
+        mir.insns[48].opcode != MIR_PHI ||
+        mir.insns[48].src1 != mir.insns[43].dst ||
+        mir.insns[48].src2 != mir.insns[46].dst ||
+        mir.insns[48].phi_pred1 != mir.insns[42].label ||
+        mir.insns[48].phi_pred2 != mir.insns[45].label ||
+        mir.insns[49].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[49].src1 != mir.insns[48].dst ||
+        mir.insns[49].label != mir.insns[61].label ||
+        mir.insns[50].opcode != MIR_LOAD ||
+        find_global(mir.insns[50].name) !=
+            plan->program_counter ||
+        mir.insns[51].opcode != MIR_LOAD ||
+        find_global(mir.insns[51].name) != plan->statements ||
+        mir.insns[52].opcode != MIR_LOAD ||
+        find_global(mir.insns[52].name) !=
+            plan->statement_count ||
+        mir.insns[53].opcode != MIR_CONST ||
+        mir.insns[53].immediate !=
+            plan->statement_stride ||
+        mir.insns[54].opcode != MIR_BINARY ||
+        mir.insns[54].immediate != '*' ||
+        mir.insns[54].src1 != mir.insns[52].dst ||
+        mir.insns[54].src2 != mir.insns[53].dst ||
+        mir.insns[55].opcode != MIR_BINARY ||
+        mir.insns[55].immediate != '+' ||
+        mir.insns[55].src1 != mir.insns[51].dst ||
+        mir.insns[55].src2 != mir.insns[54].dst ||
+        mir.insns[56].opcode != MIR_BINARY ||
+        mir.insns[56].immediate != '<' ||
+        mir.insns[56].src1 != mir.insns[50].dst ||
+        mir.insns[56].src2 != mir.insns[55].dst ||
+        mir.insns[57].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[57].src1 != mir.insns[56].dst ||
+        mir.insns[57].label != mir.insns[61].label ||
+        !mir_machine_constant_equals(mir.insns[59].dst, 1) ||
+        mir.insns[60].opcode != MIR_JUMP ||
+        mir.insns[60].label != mir.insns[63].label ||
+        !mir_machine_constant_equals(mir.insns[62].dst, 0) ||
+        mir.insns[64].opcode != MIR_PHI ||
+        mir.insns[64].src1 != mir.insns[59].dst ||
+        mir.insns[64].src2 != mir.insns[62].dst ||
+        mir.insns[64].phi_pred1 != mir.insns[58].label ||
+        mir.insns[64].phi_pred2 != mir.insns[61].label ||
+        mir.insns[65].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[65].src1 != mir.insns[64].dst ||
+        mir.insns[65].label != mir.insns[71].label ||
+        mir.insns[66].opcode != MIR_LOAD ||
+        find_global(mir.insns[66].name) !=
+            plan->program_counter ||
+        mir.insns[67].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[67].src1 != mir.insns[66].dst ||
+        mir.insns[67].immediate != plan->text_offset ||
+        mir.insns[68].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[68].src1 != mir.insns[67].dst ||
+        mir.insns[70].opcode != MIR_JUMP ||
+        mir.insns[70].label != mir.insns[74].label ||
+        mir.insns[75].opcode != MIR_PHI ||
+        mir.insns[75].src1 != mir.insns[68].dst ||
+        mir.insns[75].src2 != mir.insns[72].dst ||
+        mir.insns[75].phi_pred1 != mir.insns[69].label ||
+        mir.insns[75].phi_pred2 != mir.insns[73].label ||
+        mir.insns[76].opcode != MIR_ARG ||
+        mir.insns[76].immediate != 4 ||
+        mir.insns[76].src1 != mir.insns[75].dst ||
+        mir.insns[77].opcode != MIR_CALL ||
+        mir.insns[4].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[6].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[8].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[35].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[76].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[78].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[78].dst, 1) ||
+        mir.insns[79].opcode != MIR_ARG ||
+        mir.insns[79].immediate != 0 ||
+        mir.insns[79].src1 != mir.insns[78].dst ||
+        mir.insns[80].opcode != MIR_CALL ||
+        mir.insns[79].secondary_offset !=
+            mir.insns[80].secondary_offset)
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "semantics");
     snprintf(
         plan->print_name, sizeof(plan->print_name), "%s",
         mir.insns[77].base_name[0] != 0
@@ -7433,6 +7602,7 @@ int mir_try_emit_interpreter_runners(MirStream *out)
         }
         if (mir_match_fortran_fatal_schedule(
                 &fortran_fatal_plan)) {
+            mir_machine_accept("fortran-fatal-schedule");
             mir_emit_fortran_fatal_schedule(
                 out, &fortran_fatal_plan);
             return 1;

@@ -481,6 +481,24 @@ no production selector regressions.
 The implementation commit is pushed without waiting for GitHub Actions, per
 the user's local-validation workflow.
 
+The lazy-wide/Fortran increment raises coverage to 4,361/4,393 functions
+(99.27%), 176,575/191,181 lines (92.36%), 89,526/145,410 branch outcomes
+(61.57%), and 158,725/170,990 regions (92.83%). Thirty-two functions and
+55,614 unreviewed outcomes remain.
+
+Lazy allocation now admits nonaggregate four-byte parameters; forced target
+controls cover 32-bit return and call-argument paths. Seven production apps
+adopt the candidate with no census or performance regression. The Fortran
+fatal matcher now proves its complete print/range/index/exit dataflow after
+review found same-shape false acceptances for exit status, output stream,
+pointer subtraction order, and comparison operators. Six exact/current/mutated
+source forms exercise the accepted template and generic rejections.
+
+The remaining function list consists of 23 intentionally disabled,
+under-proven struct-value helpers and nine stale/dead historical helpers.
+They remain in the denominator; no schedule, guard, or classification was
+removed to raise the percentage.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |

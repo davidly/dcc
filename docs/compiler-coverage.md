@@ -467,10 +467,38 @@ The raw ledger has 55,505 uncovered outcomes, one reviewed and 55,504
 unreviewed, plus 35 unexecuted functions. Exact/near target controls, sanitizer
 probes, both strict release gates, and stack/no-stack censuses pass.
 
-- Review the remaining 55,504 unreviewed raw uncovered outcomes rather than
+The next checkpoint completes the existing lazy-wide implementation by
+admitting nonaggregate four-byte parameters to the lazy allocation plan.
+Target controls separately force a 32-bit parameter return and a 32-bit call
+argument in stack/no-stack and peep/nopeep modes. Seven production apps adopt
+the completed candidate, with no census removal or checked performance
+regression.
+
+The historical Fortran fatal schedule is covered by its ternary source form,
+while the current qualifier-safe temporary spelling must execute generically.
+Review-driven same-shape mutations also change `exit(1)` to `exit(2)`, stderr
+to stdout, pointer subtraction order, and the lower range comparison. The
+matcher now proves every emitted print argument, stream, global identity,
+subtraction/division operand, range-bound computation, CFG/PHI relation, text
+selection, and exit argument before accepting.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,361 / 4,393 | 99.27% |
+| Lines | 176,575 / 191,181 | 92.36% |
+| Native branch outcomes | 89,526 / 145,410 | 61.57% |
+| Regions | 158,725 / 170,990 | 92.83% |
+
+The raw ledger has 55,615 uncovered outcomes, one reviewed and 55,614
+unreviewed, plus 32 unexecuted functions. Twenty-three are the intentionally
+disabled struct-value exact schedule whose incomplete argument proof previously
+accepted a known miscompile. The other nine are stale historical emitters or a
+documented dead defensive path; all remain in the denominator.
+
+- Review the remaining 55,614 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
-- Cover the 35 unexecuted included functions or justify their classification.
+- Cover the 32 unexecuted included functions or justify their classification.
 - Extend near-match/generic equivalence beyond the six enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
   callbacks, and current memory/call forms.
