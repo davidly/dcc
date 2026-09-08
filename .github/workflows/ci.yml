@@ -122,6 +122,7 @@ jobs:
         run: |
           ./scripts/test-mir-fuzz-source.ps1
           ./scripts/run-mir-compiler-mutations.ps1
+          ./scripts/test-mir-pointer-condition-mutations.ps1
 
       - name: Run debugger host and debug metadata tests
         if: runner.os == 'Linux'

@@ -295,10 +295,47 @@ verification. Coverage reaches 4,152/4,384 functions, 168,691/190,636 lines,
 ledger has 58,491 uncovered outcomes, one reviewed and 58,490 unreviewed, plus
 232 unexecuted included functions.
 
-- Review the remaining 58,490 unreviewed raw uncovered outcomes rather than
+An evidence-backed exact-schedule review then restored
+`tptrcnd.main`'s pointer-condition schedule. Current lowering adds one explicit
+byte-to-int promotion at logical instruction 581; the matcher now proves that
+conversion and maps later fixed indices through it. Enabling the previously
+dormant emitter exposed two duplicate-success-label defects in chained
+word/long loop conditions. Separate body labels fix the assembler-invalid
+output. The exact and one-constant near-match controls pass in both stack and
+peephole modes, and stack/no-stack censuses show only `tptrcnd.main` changed:
+35,074 fewer assembly-text bytes and 3,538 fewer instructions, with no
+regressions. Checked execution improves peep cycles by 32.39% and nopeep cycles
+by 34.19%, without moving the existing baseline.
+
+The restored schedule executes 44 previously unexecuted included helpers.
+Coverage reaches 4,197/4,385 functions, 170,069/190,675 lines,
+86,483/144,952 native branch outcomes, and 152,851/170,503 regions. The raw
+ledger has 58,175 uncovered outcomes, one reviewed and 58,174 unreviewed, plus
+188 unexecuted included functions.
+
+The pointer proof is additionally mutation-checked by changing every one of
+the 81 active numeric comparison literals in `tptrcnd.main`; every variant
+must compile, explicitly reject `pointer-condition-main`, and select a generic
+emitter. This found 55 hardcoded semantic constants omitted by the original
+matcher, all now part of the exact proof.
+
+`tunion2.main`'s union-value schedule was two removed NOPs stale. Its logical
+index adapter restores selection, while exact/near-match tests prove the
+fourth local-name byte, aggregate make destination, `b = a` copy identities,
+pointer-copy arguments, all six sum operands, and every field base used by the
+two `b` reports. Stack/no-stack censuses show only `tptrcnd.main` and
+`tunion2.main` changed. `tunion2` improves peep/nopeep cycles by 0.55%/0.49%
+and sizes by 4.00%/3.92%, with no baseline changes.
+
+Coverage is now 4,209/4,386 functions, 170,425/190,793 lines,
+86,609/145,020 native branch outcomes, and 153,085/170,580 regions. The raw
+ledger has 58,117 uncovered outcomes, one reviewed and 58,116 unreviewed, plus
+177 unexecuted included functions.
+
+- Review the remaining 58,116 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
-- Cover the 232 unexecuted included functions or justify their classification.
+- Cover the 177 unexecuted included functions or justify their classification.
 - Extend near-match/generic equivalence beyond the six enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
   callbacks, and current memory/call forms.

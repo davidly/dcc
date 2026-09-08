@@ -6497,6 +6497,7 @@ static void mir_ptr_emit_while_loops(
     int loop;
     int done;
     int next;
+    int body;
 
     mir_ptr_store_word_slot(out, MIR_PTR_I, 0);
     mir_ptr_store_word_slot(out, MIR_PTR_SUM, 0);
@@ -6504,6 +6505,10 @@ static void mir_ptr_emit_while_loops(
     loop = new_label();
     done = new_label();
     next = new_label();
+    /* The second long comparison falls through to the loop body, not to the
+     * earlier word comparison's continuation label. Keep those labels
+     * distinct or the exact schedule defines one assembler symbol twice. */
+    body = new_label();
     mir_stream_printf(out, "L%d:\n\tld a,(ix-1)\n\tor a\n"
                  "\tjp nz,L%d\n\tld a,(ix-2)\n\tcp 4\n"
                  "\tjp nc,L%d\n",
@@ -6531,8 +6536,8 @@ static void mir_ptr_emit_while_loops(
                  "\tld a,(hl)\n\tcp 198\n\tjp c,L%d\n"
                  "\tjp nz,L%d\n\tdec hl\n\tld a,(hl)\n\tcp 192\n"
                  "\tjp c,L%d\n",
-            done, done, next, done, next, done, next, done);
-    mir_stream_printf(out, "L%d:\n", next);
+            done, done, body, done, body, done, body, done);
+    mir_stream_printf(out, "L%d:\n", body);
     mir_ptr_add_slot(out, MIR_PTR_SUM, MIR_PTR_I);
     mir_ptr_increment_slot(out, MIR_PTR_I);
     mir_ptr_guard(
@@ -6736,12 +6741,15 @@ static void mir_ptr_emit_for_loops(
     int loop;
     int done;
     int next;
+    int body;
 
     mir_ptr_store_word_slot(out, MIR_PTR_SUM, 0);
     mir_ptr_store_word_slot(out, MIR_PTR_I, 0);
     loop = new_label();
     done = new_label();
     next = new_label();
+    /* As above, the long comparison needs its own successful body label. */
+    body = new_label();
     mir_stream_printf(out, "L%d:\n\tld a,(ix-1)\n\tor a\n"
                  "\tjp nz,L%d\n\tld a,(ix-2)\n\tcp 4\n"
                  "\tjp nc,L%d\n",
@@ -6765,7 +6773,7 @@ static void mir_ptr_emit_for_loops(
                  "\tld a,(hl)\n\tcp 39\n\tjp c,L%d\n"
                  "\tjp nz,L%d\n\tdec hl\n\tld a,(hl)\n\tcp 202\n"
                  "\tjp nc,L%d\nL%d:\n",
-            next, next, done, next, done, next, done, done, next);
+            body, body, done, body, done, body, done, done, body);
     mir_ptr_add_slot(out, MIR_PTR_SUM, MIR_PTR_I);
     mir_ptr_increment_slot(out, MIR_PTR_I);
     mir_stream_printf(out, "\tjp L%d\nL%d:\n", loop, done);
@@ -6970,13 +6978,23 @@ static void mir_emit_ptr_condition_main(
           out);
 }
 
+static const struct MirInsn *mir_ptr_condition_instruction(int instruction)
+{
+    /* Integer promotion now leaves one explicit byte-to-int conversion in
+     * this otherwise stable schedule. Matcher tables retain their logical
+     * source indices; translate only positions after that proven conversion. */
+    if (instruction >= 581)
+        ++instruction;
+    return &mir.insns[instruction];
+}
+
 static int mir_ptr_condition_string(int instruction, int *string_out)
 {
     const struct MirInsn *insn;
 
     if (instruction < 0 || instruction >= mir.count)
         return 0;
-    insn = &mir.insns[instruction];
+    insn = mir_ptr_condition_instruction(instruction);
     if (insn->opcode != MIR_STRING_ADDRESS ||
         insn->immediate < 0)
         return 0;
@@ -6987,7 +7005,9 @@ static int mir_ptr_condition_string(int instruction, int *string_out)
 static int mir_ptr_condition_call(
     int instruction, struct Sym **function_out)
 {
-    return mir_aggregate_direct_function(instruction, function_out);
+    return mir_aggregate_direct_function(
+        (int)(mir_ptr_condition_instruction(instruction) - mir.insns),
+        function_out);
 }
 
 static int mir_match_ptr_condition_main(
@@ -7022,17 +7042,35 @@ static int mir_match_ptr_condition_main(
         {127, 7000}, {134, 80}, {142, 800000},
         {197, 3143}, {225, 4101}, {253, 1032},
         {282, 2312}, {310, 3123}, {340, 2041},
-        {366, 4121}, {392, 3212}, {412, 5005},
+        {366, 4121}, {392, 3212}, {412, 5005}, {436, 7005},
+        {465, 119}, {494, 54}, {523, 13}, {551, 39},
+        {580, 109}, {610, 121}, {637, 60}, {664, 123},
+        {683, 75}, {704, 85}, {734, 3000163}, {762, 4000103},
+        {790, 1000052}, {819, 2000412}, {847, 3000143},
+        {877, 2000061}, {903, 4000123}, {929, 3000312},
+        {949, 600005}, {973, 800005}, {999, 3133},
+        {1014, 3000153}, {1045, 98}, {1062, 0},
+        {1095, 3000041}, {1116, 5005}, {1123, 75},
+        {1141, 600005}, {1173, 7005}, {1182, 85},
+        {1204, 800005}, {1244, 1040}, {1276, 16},
+        {1309, 1000060}, {1338, 3143}, {1368, 0},
+        {1395, 4000123},
         {1413, 41}, {1431, 4}, {1446, 3000},
-        {1469, 3000000}, {1512, 4}, {1519, 6},
-        {1537, 3}, {1631, 10}, {1649, 3}, {1656, 272},
-        {1717, 10}, {1735, 2}, {1766, 10},
-        {1819, 4}, {1826, 6}, {1876, 10},
+        {1469, 3000000}, {1494, 10}, {1512, 4}, {1519, 6},
+        {1537, 3}, {1558, 0}, {1588, 0},
+        {1631, 10}, {1649, 3}, {1656, 272}, {1671, 2},
+        {1693, 3143}, {1717, 10}, {1735, 2}, {1766, 10},
+        {1779, 4}, {1802, 0}, {1819, 4}, {1826, 6},
+        {1876, 10}, {1889, 3}, {1913, 0},
         {1930, 3}, {1937, 362}, {1952, 4},
         {1961, 5000}, {1978, 600010}, {2006, 4},
         {2013, 6}, {2028, 3}, {2044, 3100},
         {2086, 3}, {2093, 9093}, {2108, 3},
         {2126, 0}, {2169, 3}, {2176, 264},
+        {2194, 3143}, {2212, 3000163}, {2232, 0},
+        {2267, 69}, {2286, 4032}, {2306, 4000052},
+        {2338, 2000412}, {2354, 39}, {2383, 2312},
+        {2398, 2000113},
         {2441, 1}, {2448, 0}
     };
     struct Sym *function;
@@ -7049,15 +7087,25 @@ static int mir_match_ptr_condition_main(
     size_t item;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 2450 || mir_cfg_block_count() != 246 ||
+    if (mir.count != 2451 || mir_cfg_block_count() != 246 ||
         mir.local_bytes != 762 || mir.has_vla ||
         (mir.return_type & 15) != TYPE_INT ||
-        strlen(mir_ptr_condition_opcodes) != (size_t)mir.count)
+        strlen(mir_ptr_condition_opcodes) + 1 != (size_t)mir.count)
         return mir_machine_reject(
             "pointer-condition-main", "shape");
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    if (mir.insns[581].opcode != MIR_UNARY ||
+        mir.insns[581].immediate != 0 ||
+        mir.insns[581].src1 != mir.insns[579].dst ||
+        mir.insns[582].opcode != MIR_BINARY ||
+        mir.insns[582].src1 != mir.insns[581].dst)
+        return mir_machine_reject(
+            "pointer-condition-main", "byte-promotion");
+    for (instruction = 0;
+         instruction < (int)strlen(mir_ptr_condition_opcodes);
+         ++instruction) {
+        int physical = instruction >= 581 ? instruction + 1 : instruction;
         char actual = mir_ptr_condition_opcode_char(
-            mir.insns[instruction].opcode);
+            mir.insns[physical].opcode);
 
         if (actual == mir_ptr_condition_opcodes[instruction])
             continue;
@@ -7081,6 +7129,8 @@ static int mir_match_ptr_condition_main(
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
+        if (instruction == 581)
+            continue;
         if (insn->opcode == MIR_BINARY) {
             if (binary_cursor >= strlen(mir_ptr_binary_operations) ||
                 mir_ptr_binary_operation_char(
@@ -7133,8 +7183,9 @@ static int mir_match_ptr_condition_main(
                 sizeof(expected_constants[0]);
          ++item)
         if (!mir_machine_constant_equals(
-                 mir.insns[expected_constants[item].instruction].dst,
-                 expected_constants[item].value))
+                  mir_ptr_condition_instruction(
+                      expected_constants[item].instruction)->dst,
+                  expected_constants[item].value))
             return mir_machine_reject(
                 "pointer-condition-main", "constants");
 
@@ -7150,9 +7201,11 @@ static int mir_match_ptr_condition_main(
             "pointer-condition-main", "print");
     for (item = 0; item < 3; ++item) {
         int call = item == 0 ? 3 : item == 1 ? 2440 : 2447;
+        const struct MirInsn *call_insn =
+            mir_ptr_condition_instruction(call);
         const char *call_name =
-            mir.insns[call].base_name[0] != 0
-                ? mir.insns[call].base_name
+            call_insn->base_name[0] != 0
+                ? call_insn->base_name
                 : asm_name_for(sym_asm_name(plan->print_function));
 
         if (strlen(call_name) >= sizeof(plan->print_names[item]))
@@ -7177,7 +7230,7 @@ static int mir_match_ptr_condition_main(
 
         if (!mir_ptr_condition_call(fail_calls[item], &function) ||
             !mir_machine_single_call_argument(
-                &mir.insns[fail_calls[item]], &argument))
+                mir_ptr_condition_instruction(fail_calls[item]), &argument))
             return mir_machine_reject(
                 "pointer-condition-main", "fail-call");
         if (item == 0)
@@ -7198,7 +7251,7 @@ static int mir_match_ptr_condition_main(
 
         if (!mir_ptr_condition_call(check_calls[item], &function) ||
             !mir_machine_three_call_arguments(
-                &mir.insns[check_calls[item]], arguments))
+                mir_ptr_condition_instruction(check_calls[item]), arguments))
             return mir_machine_reject(
                 "pointer-condition-main", "check-call");
         if (item == 0)
@@ -7240,28 +7293,34 @@ static int mir_match_ptr_condition_main(
             "pointer-condition-main", "loop-pickers");
 
     if (!mir_machine_global_address_offset(
-            mir.insns[4].dst, &plan->globals[0], &global_offset, 0) ||
+            mir_ptr_condition_instruction(4)->dst,
+            &plan->globals[0], &global_offset, 0) ||
         global_offset != 0 ||
         !mir_machine_global_address_offset(
-            mir.insns[32].dst, &plan->globals[1], &global_offset, 0) ||
+            mir_ptr_condition_instruction(32)->dst,
+            &plan->globals[1], &global_offset, 0) ||
         global_offset != 0 ||
         !mir_machine_global_address_offset(
-            mir.insns[46].dst, &plan->globals[2], &global_offset, 0) ||
+            mir_ptr_condition_instruction(46)->dst,
+            &plan->globals[2], &global_offset, 0) ||
         global_offset != 0 ||
         !mir_machine_global_address_offset(
-            mir.insns[101].dst, &plan->globals[3], &global_offset, 0) ||
+            mir_ptr_condition_instruction(101)->dst,
+            &plan->globals[3], &global_offset, 0) ||
         global_offset != 0 ||
         !mir_machine_global_address_offset(
-            mir.insns[108].dst, &plan->globals[4], &global_offset, 0) ||
+            mir_ptr_condition_instruction(108)->dst,
+            &plan->globals[4], &global_offset, 0) ||
         global_offset != 0 ||
         !mir_machine_global_address_offset(
-            mir.insns[116].dst, &plan->globals[5], &global_offset, 0) ||
+            mir_ptr_condition_instruction(116)->dst,
+            &plan->globals[5], &global_offset, 0) ||
         global_offset != 0 ||
         !mir_scalar_memory_location(
-            &mir.insns[2434], &type, &storage, &offset) ||
+            mir_ptr_condition_instruction(2434), &type, &storage, &offset) ||
         storage != SC_GLOBAL || type != TYPE_INT ||
         (plan->globals[6] = find_global(
-             mir.insns[2434].name)) == NULL)
+             mir_ptr_condition_instruction(2434)->name)) == NULL)
         return mir_machine_reject(
             "pointer-condition-main", "globals");
     for (item = 0; item < 7; ++item) {
@@ -7299,14 +7358,19 @@ static int mir_match_ptr_condition_main(
         !strcmp(mir.insns[62].name, mir.insns[76].name) ||
         mir.insns[94].object < 0 ||
         mir.insns[181].object < 0 ||
-        mir.insns[1421].object < 0 ||
-        mir.insns[1424].object < 0 ||
+        mir_ptr_condition_instruction(1421)->object < 0 ||
+        mir_ptr_condition_instruction(1424)->object < 0 ||
         mir.insns[94].object == mir.insns[181].object ||
-        mir.insns[94].object == mir.insns[1421].object ||
-        mir.insns[94].object == mir.insns[1424].object ||
-        mir.insns[181].object == mir.insns[1421].object ||
-        mir.insns[181].object == mir.insns[1424].object ||
-        mir.insns[1421].object == mir.insns[1424].object)
+        mir.insns[94].object ==
+            mir_ptr_condition_instruction(1421)->object ||
+        mir.insns[94].object ==
+            mir_ptr_condition_instruction(1424)->object ||
+        mir.insns[181].object ==
+            mir_ptr_condition_instruction(1421)->object ||
+        mir.insns[181].object ==
+            mir_ptr_condition_instruction(1424)->object ||
+        mir_ptr_condition_instruction(1421)->object ==
+            mir_ptr_condition_instruction(1424)->object)
         return mir_machine_reject(
             "pointer-condition-main", "local-aliases");
     if (mir.insns[38].opcode != MIR_STORE_INDIRECT ||
@@ -7349,10 +7413,12 @@ static int mir_match_ptr_condition_main(
         mir.insns[386].immediate != 113 ||
         mir.insns[388].immediate != 6 ||
         mir.insns[390].immediate != 2 ||
-        mir.insns[2442].opcode != MIR_RETURN ||
-        mir.insns[2442].src1 != mir.insns[2441].dst ||
-        mir.insns[2449].opcode != MIR_RETURN ||
-        mir.insns[2449].src1 != mir.insns[2448].dst)
+        mir_ptr_condition_instruction(2442)->opcode != MIR_RETURN ||
+        mir_ptr_condition_instruction(2442)->src1 !=
+            mir_ptr_condition_instruction(2441)->dst ||
+        mir_ptr_condition_instruction(2449)->opcode != MIR_RETURN ||
+        mir_ptr_condition_instruction(2449)->src1 !=
+            mir_ptr_condition_instruction(2448)->dst)
         return mir_machine_reject(
             "pointer-condition-main", "aggregate-layout");
     return 1;

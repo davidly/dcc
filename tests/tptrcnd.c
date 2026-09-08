@@ -10,6 +10,13 @@
 
 #include <stdio.h>
 
+#ifndef MIR_CLOBBER_IF_COUNT
+#define MIR_CLOBBER_IF_COUNT 41
+#endif
+#ifndef MIR_CLOBBER_IF_I010
+#define MIR_CLOBBER_IF_I010 7005
+#endif
+
 struct Leaf {
     int v;
     int a[4];
@@ -211,7 +218,10 @@ int main()
     if (pickl(&lw[1].n[1], 2)->v == 4121) count++; else fail("if_i007");
     if (*(&((&lw[0])->n[0].m[1][2])) == 3212) count++; else fail("if_i008");
     if (*(gi + 5) == 5005) count++; else fail("if_i009");
-    if (*((li + 2) + 3) == 7005) count++; else fail("if_i010");
+    if (*((li + 2) + 3) == MIR_CLOBBER_IF_I010)
+        count++;
+    else
+        fail("if_i010");
     if ((*lwpp[0])->n[1].leaf[2].ca[3] == 119) count++; else fail("if_c001");
     if ((*(lwpp[1]))->pn[1].leaf[0].cv == 54) count++; else fail("if_c002");
     if ((*(*gwpp[0])).n[0].pl->ca[2] == 13) count++; else fail("if_c003");
@@ -244,7 +254,7 @@ int main()
     if (pickn(pickw(gwp, 1), 0)->leaf[2].ca[1] < 0) fail("iff_c001"); else count++;
     if (pickl(&lw[1].n[1], 2)->lv != 4000123L) fail("iff_l001"); else count++;
 
-    check_int("if_count", count, 41);
+    check_int("if_count", count, MIR_CLOBBER_IF_COUNT);
 
     i = 0;
     sum = 0;

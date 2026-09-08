@@ -439,6 +439,126 @@ $caseDefinitions = @(
         RequireRejected = $true
     },
     [pscustomobject]@{
+        Name = "ptrcond"
+        Sources = @(Join-Path $repoRoot "tests/tptrcnd.c")
+        Defines = @()
+        Expected = @("tptrcnd start", "PASS")
+        Exit = 0
+        ExactTemplate = "pointer-condition-main"
+        ExactFunction = "main"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "ptrcondv"
+        Sources = @(Join-Path $repoRoot "tests/tptrcnd.c")
+        Defines = @("MIR_CLOBBER_IF_COUNT=42")
+        Expected = @(
+            "FAIL if_count got 41 expected 42", "FAILED 1"
+        )
+        Exit = 1
+        ExactTemplate = "pointer-condition-main"
+        ExactFunction = "main"
+        RequireRejected = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "ptrcondc"
+        Sources = @(Join-Path $repoRoot "tests/tptrcnd.c")
+        Defines = @("MIR_CLOBBER_IF_I010=7006")
+        Expected = @(
+            "FAIL if_i010", "FAIL if_count got 40 expected 41", "FAILED 2"
+        )
+        Exit = 1
+        ExactTemplate = "pointer-condition-main"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "unionval"
+        Sources = @(Join-Path $repoRoot "tests/tunion2.c")
+        Defines = @()
+        Expected = @(
+            "return/assign 7 5000 11 5018", "tunion completed"
+        )
+        Exit = 0
+        ExactTemplate = "union-value-runner-schedule"
+        ExactFunction = "main"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "unionvalv"
+        Sources = @(Join-Path $repoRoot "tests/tunion2.c")
+        Defines = @("MIR_CLOBBER_MAKE_B=5001")
+        Expected = @(
+            "return/assign 7 5001 11 5019", "tunion completed"
+        )
+        Exit = 0
+        ExactTemplate = "union-value-runner-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "unionname"
+        Sources = @(Join-Path $repoRoot "tests/tunion2.c")
+        Defines = @("MIR_CLOBBER_LOCAL_NAME_W=1")
+        Expected = @("local name 120 121 122", "tunion completed")
+        Exit = 0
+        ExactTemplate = "union-value-runner-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "uniondest"
+        Sources = @(Join-Path $repoRoot "tests/tunion2.c")
+        Defines = @("MIR_CLOBBER_COPY_TO_A=1")
+        Expected = @(
+            "ptr copy 7 5000 11 5018", "tunion completed"
+        )
+        Exit = 0
+        ExactTemplate = "union-value-runner-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "unioncopy"
+        Sources = @(Join-Path $repoRoot "tests/tunion2.c")
+        Defines = @("MIR_CLOBBER_ASSIGN_LOCAL=1")
+        Expected = @(
+            "return/assign 6 4000 10 4016", "tunion completed"
+        )
+        Exit = 0
+        ExactTemplate = "union-value-runner-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "unionsum"
+        Sources = @(Join-Path $repoRoot "tests/tunion2.c")
+        Defines = @("MIR_CLOBBER_FINAL_SUM_A=1")
+        Expected = @(
+            "ptr copy 5 3000 9 5018", "tunion completed"
+        )
+        Exit = 0
+        ExactTemplate = "union-value-runner-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "unionfield"
+        Sources = @(Join-Path $repoRoot "tests/tunion2.c")
+        Defines = @("MIR_CLOBBER_FINAL_B_FROM_A=1")
+        Expected = @(
+            "ptr copy 5 5000 9 3014", "tunion completed"
+        )
+        Exit = 0
+        ExactTemplate = "union-value-runner-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
         Name = "structv"
         Sources = @(Join-Path $repoRoot "tests/tstructi.c")
         Defines = @("MIR_CLOBBER_G_PAIR_A=30")

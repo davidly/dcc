@@ -9772,13 +9772,20 @@ static void mir_emit_qualifier_runner_schedule(
     mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static const struct MirInsn *mir_union_value_instruction(int instruction)
+{
+    if (instruction >= 146)
+        instruction -= 2;
+    return &mir.insns[instruction];
+}
+
 static int mir_union_value_global(
     int instruction, struct Sym **root_out)
 {
     long offset;
 
     return mir_machine_global_address_offset(
-               mir.insns[instruction].dst,
+               mir_union_value_instruction(instruction)->dst,
                root_out, &offset, 0) &&
            *root_out != NULL && offset == 0 &&
            !(*root_out)->is_volatile &&
@@ -9797,9 +9804,22 @@ static int mir_match_union_value_runner_schedule(
     static const int sum_calls[6] = {
         44, 78, 84, 106, 168, 198
     };
+    static const int sum_arguments[6] = {
+        42, 76, 82, 104, 166, 196
+    };
+    static const int copied_value_addresses[] = {
+        146, 151, 156, 161, 166, 171, 181, 186, 191, 196
+    };
+    static const int local_union_addresses[] = {
+        89, 94, 99, 104
+    };
+    static const int local_name_addresses[] = {
+        111, 117, 123, 129
+    };
     static const int constants[][2] = {
         {3, 6}, {5, 4000}, {7, 10},
         {17, 120}, {19, 121}, {21, 122},
+        {23, 0},
         {51, 0}, {57, 1}, {63, 2},
         {75, 0}, {81, 1},
         {113, 0}, {119, 1}, {125, 2},
@@ -9807,10 +9827,14 @@ static int mir_match_union_value_runner_schedule(
         {175, 1}, {204, 0}
     };
     struct Sym *root;
+    int copy_arguments[2];
+    int aggregate_type;
+    int aggregate_storage;
+    int aggregate_offset;
     int item;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 206 || mir.next_value != 146 ||
+    if (mir.count != 204 || mir.next_value != 145 ||
         mir_cfg_block_count() != 1 || mir.local_bytes != 28 ||
         mir.aggregate_temp_bytes != 0 || mir.has_vla ||
         mir_call_runner_has_volatile_memory() ||
@@ -9821,7 +9845,7 @@ static int mir_match_union_value_runner_schedule(
          item < (int)(sizeof(constants) / sizeof(constants[0]));
          ++item)
         if (!mir_machine_constant_equals(
-                mir.insns[constants[item][0]].dst,
+                 mir_union_value_instruction(constants[item][0])->dst,
                 constants[item][1]))
             return mir_machine_reject(
                 "union-value-runner-schedule", "constants");
@@ -9840,9 +9864,19 @@ static int mir_match_union_value_runner_schedule(
     for (item = 0; item < 6; ++item) {
         struct Sym *function =
             mir_memory_runner_call_function(
-                sum_calls[item], 0, 1);
+                (int)(mir_union_value_instruction(sum_calls[item]) -
+                      mir.insns), 0, 1);
+        int argument;
 
         if (function == NULL ||
+            !mir_machine_single_call_argument(
+                mir_union_value_instruction(sum_calls[item]), &argument) ||
+            argument != mir_union_value_instruction(
+                sum_arguments[item])->dst ||
+            (item >= 4 &&
+             strcmp(mir_union_value_instruction(
+                        sum_arguments[item])->name,
+                    mir_union_value_instruction(146)->name) != 0) ||
             type_size(function->proto_types[0]) != 8 ||
             type_size(function->type) != 4)
             return mir_machine_reject(
@@ -9853,22 +9887,54 @@ static int mir_match_union_value_runner_schedule(
             return mir_machine_reject(
                 "union-value-runner-schedule", "mixed-sum");
     }
-    if (mir.insns[143].opcode != MIR_CALL_AGGREGATE ||
-        mir.insns[143].memory_size != 8 ||
+    if (mir_union_value_instruction(143)->opcode != MIR_CALL_AGGREGATE ||
+        mir_union_value_instruction(143)->memory_size != 8 ||
         (plan->make_function =
-             find_global(mir.insns[143].name)) == NULL ||
+             find_global(mir_union_value_instruction(143)->name)) == NULL ||
         plan->make_function->storage != SC_FUNC ||
         plan->make_function->is_funcptr ||
         !plan->make_function->has_proto ||
         plan->make_function->proto_nargs != 3 ||
-        mir_memory_runner_call_function(178, 0, 2) == NULL ||
+        mir_union_value_instruction(146)->opcode != MIR_ADDRESS ||
+        mir_union_value_instruction(147)->opcode != MIR_ADDRESS ||
+        mir_union_value_instruction(148)->opcode != MIR_COPY_AGGREGATE ||
+        mir_union_value_instruction(148)->memory_size != 8 ||
+        mir_union_value_instruction(148)->src1 !=
+            mir_union_value_instruction(146)->dst ||
+        mir_union_value_instruction(148)->src2 !=
+            mir_union_value_instruction(147)->dst ||
+        strcmp(mir_union_value_instruction(146)->name,
+               mir_union_value_instruction(181)->name) != 0 ||
+        strcmp(mir_union_value_instruction(146)->name,
+               mir_union_value_instruction(147)->name) == 0 ||
+        !mir_scalar_memory_location(
+            mir_union_value_instruction(147),
+            &aggregate_type, &aggregate_storage, &aggregate_offset) ||
+        aggregate_storage != SC_LOCAL ||
+        type_size(aggregate_type) != 8 ||
+        mir_union_value_instruction(143)->immediate != aggregate_offset ||
+        mir_memory_runner_call_function(
+            (int)(mir_union_value_instruction(178) - mir.insns), 0, 2) ==
+            NULL ||
         (plan->copy_function =
-             find_global(mir.insns[178].name)) == NULL)
+             find_global(mir_union_value_instruction(178)->name)) == NULL ||
+        !mir_machine_two_call_arguments(
+            mir_union_value_instruction(178), copy_arguments) ||
+        copy_arguments[0] != mir_union_value_instruction(171)->dst ||
+        copy_arguments[1] != mir_union_value_instruction(176)->dst ||
+        mir_union_value_instruction(171)->opcode != MIR_ADDRESS ||
+        mir_union_value_instruction(176)->opcode != MIR_INDEX_ADDRESS ||
+        mir_union_value_instruction(176)->src1 !=
+            mir_union_value_instruction(174)->dst ||
+        mir_union_value_instruction(176)->src2 !=
+            mir_union_value_instruction(175)->dst ||
+        strcmp(mir_union_value_instruction(171)->name,
+               mir_union_value_instruction(181)->name) != 0)
         return mir_machine_reject(
             "union-value-runner-schedule", "aggregate-calls");
     for (item = 0; item < 8; ++item) {
         const struct MirInsn *call =
-            &mir.insns[print_calls[item]];
+            mir_union_value_instruction(print_calls[item]);
         struct Sym *function = find_global(call->name);
 
         if (call->opcode != MIR_CALL || call->src1 >= 0 ||
@@ -9877,7 +9943,8 @@ static int mir_match_union_value_runner_schedule(
             function->is_funcptr || !function->has_proto ||
             !function->proto_variadic ||
             function->proto_nargs != 1 ||
-            mir.insns[string_instructions[item]].opcode !=
+            mir_union_value_instruction(
+                string_instructions[item])->opcode !=
                 MIR_STRING_ADDRESS)
             return mir_machine_reject(
                 "union-value-runner-schedule", "prints");
@@ -9887,24 +9954,59 @@ static int mir_match_union_value_runner_schedule(
             return mir_machine_reject(
                 "union-value-runner-schedule", "mixed-prints");
         plan->strings[item] =
-            (int)mir.insns[string_instructions[item]].immediate;
+            (int)mir_union_value_instruction(
+                string_instructions[item])->immediate;
         snprintf(plan->print_names[item],
                  sizeof(plan->print_names[item]), "%s",
-                 mir.insns[print_calls[item]].base_name);
+                 mir_union_value_instruction(
+                     print_calls[item])->base_name);
         if (plan->print_names[item][0] == 0)
             return 0;
     }
-    if (mir.insns[29].immediate != 0 ||
-        mir.insns[34].immediate != 1 ||
-        mir.insns[39].immediate != 3 ||
-        mir.insns[153].immediate != 0 ||
-        mir.insns[158].immediate != 1 ||
-        mir.insns[163].immediate != 3 ||
-        mir.insns[183].immediate != 0 ||
-        mir.insns[188].immediate != 1 ||
-        mir.insns[193].immediate != 3)
+    if (mir_union_value_instruction(29)->immediate != 0 ||
+        mir_union_value_instruction(34)->immediate != 1 ||
+        mir_union_value_instruction(39)->immediate != 3 ||
+        mir_union_value_instruction(153)->immediate != 0 ||
+        mir_union_value_instruction(158)->immediate != 1 ||
+        mir_union_value_instruction(163)->immediate != 3 ||
+        mir_union_value_instruction(183)->immediate != 0 ||
+        mir_union_value_instruction(188)->immediate != 1 ||
+        mir_union_value_instruction(193)->immediate != 3)
         return mir_machine_reject(
             "union-value-runner-schedule", "member-layout");
+    for (item = 0;
+         item < (int)(sizeof(copied_value_addresses) /
+                      sizeof(copied_value_addresses[0]));
+         ++item)
+        if (mir_union_value_instruction(
+                copied_value_addresses[item])->opcode != MIR_ADDRESS ||
+            strcmp(mir_union_value_instruction(
+                       copied_value_addresses[item])->name,
+                   mir_union_value_instruction(146)->name) != 0)
+            return mir_machine_reject(
+                "union-value-runner-schedule", "copied-value-identity");
+    for (item = 0;
+         item < (int)(sizeof(local_union_addresses) /
+                      sizeof(local_union_addresses[0]));
+         ++item)
+        if (mir_union_value_instruction(
+                local_union_addresses[item])->opcode != MIR_ADDRESS ||
+            strcmp(mir_union_value_instruction(
+                       local_union_addresses[item])->name,
+                   mir_union_value_instruction(89)->name) != 0)
+            return mir_machine_reject(
+                "union-value-runner-schedule", "local-union-identity");
+    for (item = 0;
+         item < (int)(sizeof(local_name_addresses) /
+                      sizeof(local_name_addresses[0]));
+         ++item)
+        if (mir_union_value_instruction(
+                local_name_addresses[item])->opcode != MIR_ADDRESS ||
+            strcmp(mir_union_value_instruction(
+                       local_name_addresses[item])->name,
+                   mir_union_value_instruction(111)->name) != 0)
+            return mir_machine_reject(
+                "union-value-runner-schedule", "local-name-identity");
     root = NULL;
     return mir_union_value_global(32, &root) &&
            root == plan->global_union &&
