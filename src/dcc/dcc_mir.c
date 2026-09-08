@@ -6574,15 +6574,17 @@ static void mir_insert_phi_forward_return_before(int index,
             mir_insert_instruction_before(
                 index, consumer->opcode);
         struct MirInsn *ret;
+        int consumer_value;
 
         if (consumer_insn == NULL)
             fatal("cannot insert MIR phi-forward consumer");
         mir_init_phi_forward_consumer(consumer_insn, source_value, phi_value,
                                       consumer);
+        consumer_value = consumer_insn->dst;
         ret = mir_insert_instruction_before(index + 1, MIR_RETURN);
         if (ret == NULL)
             fatal("cannot insert MIR phi-forward return");
-        mir_init_phi_forward_return(ret, consumer_insn->dst, terminal_type);
+        mir_init_phi_forward_return(ret, consumer_value, terminal_type);
     } else {
         struct MirInsn *ret = mir_insert_instruction_before(index, MIR_RETURN);
 
@@ -6604,6 +6606,7 @@ static int mir_forward_single_phi_return_join(int successor)
     int explicit_predecessor;
     int source0;
     int source1;
+    int phi_value;
     struct MirInsn consumer_copy;
     const struct MirInsn *consumer_template = NULL;
     int terminal_type;
@@ -6643,6 +6646,7 @@ static int mir_forward_single_phi_return_join(int successor)
     source1 = mir_phi_forward_source_for_predecessor(phi, label_predecessor);
     if (source0 < 0 || source1 < 0)
         return 0;
+    phi_value = phi->dst;
     terminal_type = mir.insns[terminal_instruction].type;
     if (consumer_instruction >= 0) {
         consumer_copy = mir.insns[consumer_instruction];
@@ -6652,19 +6656,21 @@ static int mir_forward_single_phi_return_join(int successor)
     if (consumer_instruction >= 0)
         mir_make_nop(&mir.insns[consumer_instruction]);
     mir_make_nop(&mir.insns[terminal_instruction]);
-    mir_insert_phi_forward_return_before(successor, source1, phi->dst,
+    mir_insert_phi_forward_return_before(successor, source1, phi_value,
                                          consumer_template, terminal_type);
     if (consumer_template != NULL) {
         struct MirInsn *explicit_consumer = &mir.insns[explicit_predecessor];
         struct MirInsn *ret;
+        int consumer_value;
 
-        mir_init_phi_forward_consumer(explicit_consumer, source0, phi->dst,
+        mir_init_phi_forward_consumer(explicit_consumer, source0, phi_value,
                                       consumer_template);
+        consumer_value = explicit_consumer->dst;
         ret = mir_insert_instruction_before(explicit_predecessor + 1,
                                             MIR_RETURN);
         if (ret == NULL)
             fatal("cannot insert MIR phi-forward return");
-        mir_init_phi_forward_return(ret, explicit_consumer->dst,
+        mir_init_phi_forward_return(ret, consumer_value,
                                     terminal_type);
     } else {
         mir_init_phi_forward_return(&mir.insns[explicit_predecessor], source0,

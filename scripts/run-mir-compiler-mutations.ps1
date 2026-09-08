@@ -15,6 +15,7 @@ $mutants = @(
     @{ Name = "callback-identity"; Before = 'if (declared >= 0) {'; After = 'if (0 && declared >= 0) {'; ExpectedFailure = 'FAIL unprototyped local callback ignores same-named global prototype' },
     @{ Name = "phi-edge-liveness"; Before = 'value == phi->src1'; After = 'value == phi->src2'; ExpectedFailure = 'FAIL PHI values must be live only on their own edges' },
     @{ Name = "call-argument-liveness"; Before = 'insn_is_call && mir_call_uses_value(insn, value)'; After = '0 && insn_is_call && mir_call_uses_value(insn, value)'; ExpectedFailure = 'FAIL argument must remain live through its matching call' },
+    @{ Name = "phi-consumer-value"; Before = 'phi_value = phi->dst;'; After = 'phi_value = -1;'; ExpectedFailure = 'FAIL immediate PHI consumer forwarding' },
     @{ Name = "promotion-cache"; CompileProbe = $true }
 )
 try {

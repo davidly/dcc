@@ -12018,7 +12018,8 @@ static int mir_match_intel_hex_load_schedule(
         mir.has_vla || !mir_has_cfg_backedge() ||
         type_ptr_depth(mir.return_type) != 0 ||
         (mir.return_type & 15) != TYPE_BOOL)
-        return 0;
+        return mir_machine_reject(
+            "intel-hex-load-schedule", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
             expected_opcodes[instruction])
@@ -13058,6 +13059,7 @@ int mir_try_emit_call_runners(MirStream *out)
         }
         if (mir_match_intel_hex_load_schedule(
                 &intel_hex_plan)) {
+            mir_machine_accept("intel-hex-load-schedule");
             mir_emit_intel_hex_load_schedule(
                 out, &intel_hex_plan);
             return 1;

@@ -3310,11 +3310,12 @@ static int mir_match_errno_exercise_schedule(
     memset(plan, 0, sizeof(*plan));
     if (mir.sink_purpose != EMIT_SINK_FINAL ||
         mir.count != 665 || mir.next_value != 403 ||
-        mir_cfg_block_count() != 50 || mir.local_bytes != 67 ||
+        mir_cfg_block_count() != 50 || mir.local_bytes != 63 ||
         mir.aggregate_temp_bytes != 0 || mir.has_vla ||
         !mir_has_cfg_backedge() ||
         !mir_memory_runner_word_type(mir.return_type, 0))
-        return 0;
+        return mir_machine_reject(
+            "errno-exercise-schedule", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode == MIR_CALL)
             ++calls;
@@ -3485,8 +3486,11 @@ static int mir_match_errno_exercise_schedule(
         !mir_machine_constant_equals(mir.insns[50].dst, 2) ||
         !mir_machine_constant_equals(mir.insns[71].dst, 99) ||
         !mir_machine_constant_equals(mir.insns[76].dst, 4) ||
+        !mir_machine_constant_equals(mir.insns[92].dst, 99) ||
         !mir_machine_constant_equals(mir.insns[97].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[113].dst, 99) ||
         !mir_machine_constant_equals(mir.insns[122].dst, 9) ||
+        !mir_machine_constant_equals(mir.insns[128].dst, 99) ||
         !mir_machine_constant_equals(mir.insns[153].dst, 578) ||
         !mir_machine_constant_equals(mir.insns[164].dst, 3) ||
         !mir_machine_constant_equals(mir.insns[174].dst, 99) ||
@@ -11516,6 +11520,7 @@ int mir_try_emit_runtime_runners(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_errno_exercise_schedule(&errno_exercise)) {
+            mir_machine_accept("errno-exercise-schedule");
             mir_emit_errno_exercise_schedule(out, &errno_exercise);
             return 1;
         }

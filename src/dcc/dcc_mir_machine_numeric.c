@@ -2148,7 +2148,8 @@ static int mir_match_widen_edge_runner_schedule(
     if (mir.count != 341 || mir_cfg_block_count() != 9 ||
         mir.local_bytes != 14 || mir.aggregate_temp_bytes != 0 ||
         mir.has_vla || type_size(mir.return_type) != 0)
-        return 0;
+        return mir_machine_reject(
+            "widen-edge-runner-schedule", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode == MIR_CALL)
             ++call_count;
@@ -14137,6 +14138,7 @@ int mir_try_emit_numeric_kernels(MirStream *out, int phase)
         }
         if (mir_match_widen_edge_runner_schedule(
                 &widen_edge_plan)) {
+            mir_machine_accept("widen-edge-runner-schedule");
             mir_emit_widen_edge_runner_schedule(
                 out, &widen_edge_plan);
             return 1;

@@ -21,8 +21,8 @@ cross-platform. That work is merged. The subsequent, broader request is to:
 - Extend target-aware differential generation and compiler mutation tests.
 - Review uncovered/excluded code with evidence, without manipulating totals.
 
-The broader request is NOT complete. Hundreds of included functions and tens
-of thousands of raw branch records still need investigation.
+The broader request is NOT complete. Dozens of included functions and tens of
+thousands of raw branch records still need investigation.
 
 ## Publication State
 
@@ -225,10 +225,11 @@ and missing-callee cases.
 
 The host verifier now directly inspects retained liveness data: PHI inputs are
 live only on their matching incoming edges, and call arguments remain live
-into but not after their call. The clean-build mutation inventory is eight:
+into but not after their call. The clean-build mutation inventory is nine:
 dominance, argument ABI, call arity, indirect callee, callback identity, PHI
-edge liveness, call-argument liveness, and promotion-cache invalidation. All
-eight are killed only by their designated assertions or cache diagnostic.
+edge liveness, call-argument liveness, PHI-consumer forwarding, and promotion-
+cache invalidation. All nine are killed only by their designated assertions or
+cache diagnostic.
 
 Exact-selector rejection tests now require the intended function to report the
 named rejection, not select an exact schedule, and select a named generic
@@ -256,7 +257,7 @@ Local validation for `d0a9ed82` passed:
 - canonical and independent CMake builds;
 - both strict full+extended gates: 506 apps, 482 passed and 24 documented
   skips per configuration, zero failures, zero checked performance regressions;
-- full MIR clobber, lifetime, required-emission, and eight-mutant suites;
+- full MIR clobber, lifetime, required-emission, and nine-mutant suites;
 - ASan/UBSan host verifier plus focused real-source compiler probes;
 - 82 repository script tests;
 - 10 debugger-host tests and two line-debug tests; and
@@ -385,6 +386,45 @@ closes the former loophole where a different exact template could satisfy
 reviewed and 57,223 unreviewed, plus 130 unexecuted included functions. The
 broader objective remains incomplete.
 
+Coverage profiles now use LLVM's `%8m` online merge pool. Two independent full
+runs produced byte-identical function summaries and gap ledgers; the former
+`%p-%m` names could overwrite an earlier process when the OS reused a short-
+lived compiler PID, making totals scheduling-dependent.
+
+Historical focused fixtures execute the still-valid endgame boundary and errno
+families with small runtime workloads. `tlimits.main`'s width schedule now
+accepts a directly lowered unsigned-word addition as an explicitly proven
+alternative to the old long-plus-cast shape. The diagnostic specialized
+selector path now tries its narrow loop/comparison probes before universal
+homed/spilled emitters; production ordering is unchanged. Five target loop
+fixtures validate countdown, accumulation, unsigned division, repeated
+invariant addition, and comparison selectors in all stack/peephole modes.
+
+Mutation review found two exact-match false acceptances before publication.
+Changing the errno fixture's `close(99)` to `close(98)` still emitted the
+hardcoded 99; the matcher now proves the three previously omitted bad-descriptor
+constants and the near match executes generically. More seriously, changing a
+struct-value call from `proto_sum_pair(y)` to `proto_sum_pair(x)` retained the
+exact schedule and its hardcoded `y` argument. The attempted 602-to-623
+struct-value logical adapter was removed rather than adding another partial
+proof. Current lowering therefore uses generic MIR for that historical shape
+until every aggregate and scalar call argument is proven.
+
+Making the immediate-PHI-consumer host test reachable exposed two transform
+defects: the pass read `phi->dst` after clearing the PHI, and retained
+instruction pointers across insertion/reallocation. The pass now captures the
+PHI and consumer values before either mutation. The permanent test verifies
+both predecessor consumer/return pairs and post-transform MIR validity; a ninth
+clean-build mutant proves the assertion kills the original failure.
+
+The corrected deterministic report is 4,338/4,393 functions,
+175,101/190,992 lines, 88,685/145,086 native branch outcomes, and
+157,056/170,662 regions. The raw ledger has 56,132 uncovered outcomes, one
+reviewed and 56,131 unreviewed, plus 55 unexecuted included functions. The
+function percentage is 98.75%; its decrease from the provisional 99.27%
+measurement is the honest consequence of disabling 23 under-proven
+struct-value helpers. The broader objective remains incomplete.
+
 ## Useful Repository Assets
 
 | Asset | Purpose |
@@ -395,7 +435,7 @@ broader objective remains incomplete.
 | [Generator tests](../scripts/test-mir-fuzz-source.ps1) | Reproducibility and test inventory. |
 | [Clobber runner](../scripts/run-mir-clobber-tests.ps1) | Debug/stack/peep/generic matrices and rejection controls. |
 | [Clobber sources](../tests/mir-clobber) | Small permanent semantic regressions. |
-| [Mutation runner](../scripts/run-mir-compiler-mutations.ps1) | Isolated baseline and four compiler mutants. |
+| [Mutation runner](../scripts/run-mir-compiler-mutations.ps1) | Isolated baseline and nine compiler mutants. |
 | [Coverage workflow](../scripts/compiler-coverage.sh) | Instrumented compiler plus host verifier. |
 | [Coverage guide](compiler-coverage.md) | Measurements, accounting, exclusions, remaining gates. |
 | [Module manifest](../scripts/ast-mir-coverage.tsv) | Architectural module classification. |

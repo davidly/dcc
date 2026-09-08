@@ -1,0 +1,195 @@
+#include <stdio.h>
+#include <errno.h>
+
+extern int open(const char *path, int flags);
+extern int close(int fd);
+extern int read(int fd, void *buf, unsigned int count);
+extern int write(int fd, const void *buf, unsigned int count);
+extern long lseek(int fd, long offset, int whence);
+extern int unlink(const char *path);
+extern char *strerror(int errnum);
+
+#define O_RDONLY 0
+#define O_RDWR 2
+#define O_CREAT 0x0040
+#define O_TRUNC 0x0200
+#define SEEK_SET 0
+
+static int fails;
+static const char *tmpnames[9] = {
+    "TE0.TMP", "TE1.TMP", "TE2.TMP", "TE3.TMP", "TE4.TMP",
+    "TE5.TMP", "TE6.TMP", "TE7.TMP", "TE8.TMP"
+};
+
+static void expect_errno(const char *name, int rv, int want)
+{
+    if (rv == -1 && errno == want)
+        printf("PASS %s errno=%d %s\n", name, errno, strerror(errno));
+    else {
+        printf("FAIL %s rv=%d errno=%d expected rv=-1 errno=%d\n",
+               name, rv, errno, want);
+        fails++;
+    }
+}
+
+static void expect_long_errno(const char *name, long rv, int want)
+{
+    if (rv == -1L && errno == want)
+        printf("PASS %s errno=%d %s\n", name, errno, strerror(errno));
+    else {
+        printf("FAIL %s rv=%ld errno=%d expected rv=-1 errno=%d\n",
+               name, rv, errno, want);
+        fails++;
+    }
+}
+
+static void expect_ok_fd(const char *name, int fd)
+{
+    if (fd >= 3)
+        printf("PASS %s fd=%d\n", name, fd);
+    else {
+        printf("FAIL %s fd=%d errno=%d\n", name, fd, errno);
+        fails++;
+    }
+}
+
+int main(void)
+{
+    int fd;
+    int fds[8];
+    int fdover;
+    int i;
+    int allok;
+    char buf[4];
+    char c;
+    int result;
+    long long_result;
+
+    fails = 0;
+    c = 'X';
+    errno = 0;
+    for (i = 0; i < 9; i++)
+        unlink(tmpnames[i]);
+    unlink("NOFILE.X");
+    errno = 0;
+    fd = open("NOFILE.X", O_RDONLY);
+    expect_errno("open missing", fd, ENOENT);
+    errno = 0;
+    result = unlink("NOFILE.X");
+    expect_errno("unlink missing", result, ENOENT);
+    errno = 0;
+    result = read(99, buf, sizeof(buf));
+    expect_errno("read bad fd", result, EBADF);
+    errno = 0;
+    result = write(99, &c, 1);
+    expect_errno("write bad fd", result, EBADF);
+    errno = 0;
+#ifdef MIR_CLOBBER_ERRNO_CLOSE_VALUE
+    result = close(98);
+#else
+    result = close(99);
+#endif
+    expect_errno("close bad fd", result, EBADF);
+    errno = 0;
+    long_result = lseek(99, 0L, SEEK_SET);
+    expect_long_errno("lseek bad fd", long_result, EBADF);
+
+    errno = 0;
+    fd = open("TE0.TMP", O_CREAT | O_TRUNC | O_RDWR);
+    expect_ok_fd("open create", fd);
+    if (fd >= 3) {
+        errno = 0;
+        long_result = lseek(fd, 0L, 99);
+        expect_long_errno("lseek bad whence", long_result, EINVAL);
+        close(fd);
+    }
+
+    errno = 0;
+    allok = 1;
+    for (i = 0; i < 8; i++) {
+        fds[i] = open(tmpnames[i], O_CREAT | O_TRUNC | O_RDWR);
+        if (fds[i] < 3)
+            allok = 0;
+    }
+    errno = 0;
+    fdover = open(tmpnames[8], O_CREAT | O_TRUNC | O_RDWR);
+    if (allok) {
+        expect_errno("open too many", fdover, EMFILE);
+    } else {
+        printf("FAIL setup open slots errno=%d\n", errno);
+        fails++;
+        if (fdover >= 3)
+            close(fdover);
+    }
+    for (i = 0; i < 8; i++)
+        if (fds[i] >= 3)
+            close(fds[i]);
+    for (i = 0; i < 9; i++)
+        unlink(tmpnames[i]);
+
+    errno = 0;
+    long_result = ftell((FILE *)99);
+    expect_long_errno("ftell bad fd", long_result, EBADF);
+    {
+        char fgbuf[8];
+        char *fgr;
+        fgbuf[0] = 'Z';
+        errno = 0;
+        fgr = fgets(fgbuf, sizeof(fgbuf), (FILE *)99);
+        if (fgr == NULL && errno == EBADF && fgbuf[0] == 'Z') {
+            printf("PASS fgets bad fd errno=%d %s\n",
+                   errno, strerror(errno));
+        } else {
+            printf("FAIL fgets bad fd rv=%d errno=%d buf0=%d\n",
+                   (int)(fgr != NULL), errno, (int)fgbuf[0]);
+            fails++;
+        }
+    }
+    errno = 0;
+    result = setvbuf(stdout, NULL, 99, 0);
+    if (result != 0 && errno == EINVAL) {
+        printf("PASS setvbuf bad mode errno=%d %s\n",
+               errno, strerror(errno));
+    } else {
+        printf("FAIL setvbuf bad mode rv=%d errno=%d\n", result, errno);
+        fails++;
+    }
+    {
+        FILE *files[4];
+        FILE *overflow;
+        int j;
+        int tempok = 1;
+        errno = 0;
+        for (j = 0; j < 4; j++) {
+            files[j] = tmpfile();
+            if (files[j] == NULL)
+                tempok = 0;
+        }
+        errno = 0;
+        overflow = tmpfile();
+        if (tempok) {
+            if (overflow == NULL && errno == EMFILE) {
+                printf("PASS tmpfile too many errno=%d %s\n",
+                       errno, strerror(errno));
+            } else {
+                printf("FAIL tmpfile too many rv=%d errno=%d\n",
+                       (int)(overflow != NULL), errno);
+                fails++;
+            }
+        } else {
+            printf("FAIL setup tmpfile slots errno=%d\n", errno);
+            fails++;
+            if (overflow != NULL)
+                fclose(overflow);
+        }
+    }
+#ifdef MIR_CLOBBER_ERRNO_EXTRA
+    printf("errno extra control\n");
+#endif
+    if (fails) {
+        printf("terrno failed: %d\n", fails);
+        return 1;
+    }
+    printf("terrno passed\n");
+    return 0;
+}

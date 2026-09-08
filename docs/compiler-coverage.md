@@ -18,8 +18,10 @@ The generated text and HTML reports are kept under
 The normal repository-root compiler is not replaced. The workflow routes
 target builds and direct clobber assertions through `DCC`, builds the host
 verifier with the same Clang instrumentation, and combines both executables'
-coverage mappings. `%p-%m` profile names distinguish process IDs and binary
-signatures. Each run removes old raw profiles before collecting fresh ones.
+coverage mappings. LLVM's `%8m` online merge pool keeps repeated short-lived
+compiler processes from overwriting profiles when the host reuses a PID, while
+the binary signature keeps compiler and verifier data distinct. Each run
+removes old raw profiles before collecting fresh ones.
 The main runner also passes `DCC` through to the diagnostics suite; do not
 replace that route with a hard-coded repository-root compiler or diagnostic
 AST rejection paths disappear from coverage. `test-ast-dump.ps1` separately
@@ -372,10 +374,52 @@ closes the former loophole where a different exact template could satisfy
 154,845/170,612 regions. The raw ledger has 57,224 uncovered outcomes, one
 reviewed and 57,223 unreviewed, plus 130 unexecuted included functions.
 
-- Review the remaining 57,223 unreviewed raw uncovered outcomes rather than
+Coverage profiles now use LLVM's `%8m` online merge pool. Two independent full
+runs produced byte-identical function summaries and gap ledgers; the former
+`%p-%m` names could overwrite an earlier process when the OS reused a short-
+lived compiler PID, making totals scheduling-dependent.
+
+Historical focused fixtures execute the still-valid endgame boundary and errno
+families with small runtime workloads. `tlimits.main`'s width schedule now
+accepts a directly lowered unsigned-word addition as an explicitly proven
+alternative to the old long-plus-cast shape. The diagnostic specialized
+selector path now tries its narrow loop/comparison probes before universal
+homed/spilled emitters; production ordering is unchanged. Five target loop
+fixtures validate countdown, accumulation, unsigned division, repeated
+invariant addition, and comparison selectors in all stack/peephole modes.
+
+Mutation review found that the attempted struct-value logical adapter accepted
+`proto_sum_pair(x)` where the exact emitter hardcoded `proto_sum_pair(y)`.
+That adapter and its provisional coverage were removed rather than extending
+an incomplete proof. The historical matcher remains in the denominator but
+current lowering selects generic MIR for the 602-instruction shape. A separate
+errno near match found that `close(98)` still emitted the schedule's hardcoded
+99; its matcher now proves every corresponding bad-descriptor constant.
+
+A newly reachable PHI-consumer forwarding test also exposed two real transform
+defects: the pass read the PHI destination after clearing that instruction and
+retained instruction pointers across insertion/reallocation. Capturing the
+value IDs before mutation fixes both paths, and a ninth clean-build compiler
+mutant is killed by the permanent post-transform assertions.
+
+The corrected deterministic checkpoint is:
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,338 / 4,393 | 98.75% |
+| Lines | 175,101 / 190,992 | 91.68% |
+| Native branch outcomes | 88,685 / 145,086 | 61.13% |
+| Regions | 157,056 / 170,662 | 92.03% |
+
+The raw ledger has 56,132 uncovered outcomes, one reviewed and 56,131
+unreviewed, plus 55 unexecuted included functions. The lower function
+percentage than the provisional 99.27% report is intentional evidence that
+unsafe exact-emitter execution was removed, not a denominator change.
+
+- Review the remaining 56,131 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
-- Cover the 130 unexecuted included functions or justify their classification.
+- Cover the 55 unexecuted included functions or justify their classification.
 - Extend near-match/generic equivalence beyond the six enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
   callbacks, and current memory/call forms.

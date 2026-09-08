@@ -3423,27 +3423,26 @@ static int mir_try_emit_z80(MirStream *out)
     int two_parameter_operation = 0;
     int i;
 
+    /* This path is selected only by DCC_MIR_EMIT_FUNCTION. Exercise the
+     * narrow structural diagnostics before the universal generated emitters;
+     * putting homed/spilled first made every later probe unreachable. */
+    if ((mir.return_type & 15) == TYPE_INT) {
+        if (mir_try_selector(out, mir_try_emit_accumulator_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_unsigned_division_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_repeated_invariant_add_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_countdown_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_comparison_branch))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_scalar_dag))
+            return 1;
+    }
     if (mir_try_selector(out, mir_try_emit_homed_scalar_cfg))
         return 1;
     if (mir_try_selector(out, mir_try_emit_spilled_scalar_cfg))
-        return 1;
-
-    /* The current selectors implement only the ordinary 16-bit HL result
-     * convention. Other return ABIs remain with the existing backend. */
-    if ((mir.return_type & 15) != TYPE_INT)
-        return 0;
-
-    if (mir_try_selector(out, mir_try_emit_accumulator_loop))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_unsigned_division_loop))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_repeated_invariant_add_loop))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_countdown_loop))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_comparison_branch))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_scalar_dag))
         return 1;
 
     for (i = 0; i < mir.count; ++i) {

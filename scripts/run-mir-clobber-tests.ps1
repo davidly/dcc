@@ -17,6 +17,7 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
 $environmentNames = @(
     "DCC_MIR_COST_REPORT",
     "DCC_MIR_CACHE_VERIFY",
+    "DCC_MIR_EMIT_FUNCTION",
     "DCC_MIR_MACHINE_REPORT",
     "DCC_MIR_REPORT",
     "DCC_MIR_REQUIRE_COMPLETE",
@@ -106,6 +107,9 @@ function Assert-RunCase(
     [bool]$RequireExact = $false,
     [bool]$RequireRejected = $false,
     [string]$RequiredGenericFunction = "",
+    [string]$RequiredSelectorFunction = "",
+    [string]$RequiredSelector = "",
+    [string[]]$RunArguments = @(),
     [string[]]$AssemblyPatterns = @(),
     [bool]$OddUpperRuntime = $false,
     [string]$DebugMode = ""
@@ -183,6 +187,15 @@ __ctu:
                 "$RequiredGenericFunction`:`n$($build.Output)"
         }
     }
+    if ($RequiredSelectorFunction) {
+        $requiredSelectorPattern =
+            "MIR selection function=$([regex]::Escape($RequiredSelectorFunction)) " +
+            "selector=$([regex]::Escape($RequiredSelector)) result=mir"
+        if ($build.Output -notmatch $requiredSelectorPattern) {
+            throw "$Name did not use selector '$RequiredSelector' for " +
+                "$RequiredSelectorFunction`:`n$($build.Output)"
+        }
+    }
     if ($ExactTemplate) {
         $templatePattern =
             "template=$([regex]::Escape($ExactTemplate)) reject="
@@ -223,8 +236,8 @@ __ctu:
                 "($configuration)"
         }
     }
-    $run = Invoke-WithTimeout $emulator @(
-        "-p", "-s:0", "$outputBase.COM"
+    $run = Invoke-WithTimeout $emulator (
+        @("-p", "-s:0", "$outputBase.COM") + $RunArguments
     ) $buildDir $RunTimeout
     if ($run.TimedOut) {
         throw "$Name timed out ($configuration)"
@@ -700,6 +713,150 @@ $caseDefinitions = @(
         RequireRejected = $true
     },
     [pscustomobject]@{
+        Name = "limits"
+        Sources = @(Join-Path $repoRoot "tests/tlimits.c")
+        Defines = @()
+        Expected = @("Results: 3/3 tests passed.")
+        Exit = 0
+        ExactTemplate = "endgame-width-runner"
+        ExactFunction = "main"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "limitsv"
+        Sources = @(Join-Path $fixtureRoot "limitsv.c")
+        Defines = @()
+        Expected = @(
+            "limits extra control", "Results: 3/3 tests passed."
+        )
+        Exit = 0
+        ExactTemplate = "endgame-width-runner"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "boundary"
+        Sources = @(Join-Path $fixtureRoot "boundary.c")
+        Defines = @()
+        Args = @("3")
+        Expected = @(
+            "tbig: validating 4 records", "sequential verify: 4 ok, 0 bad",
+            "tbig completed with great success"
+        )
+        Exit = 0
+        ExactTemplate = "endgame-boundary-runner"
+        ExactFunction = "main"
+        RequireExact = $true
+    },
+    [pscustomobject]@{
+        Name = "boundaryv"
+        Sources = @(Join-Path $fixtureRoot "boundary.c")
+        Defines = @("MIR_CLOBBER_BOUNDARY_EXTRA=1")
+        Args = @("3")
+        Expected = @(
+            "boundary extra control", "tbig completed with great success"
+        )
+        Exit = 0
+        ExactTemplate = "endgame-boundary-runner"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "widen"
+        Sources = @(Join-Path $fixtureRoot "widen.c")
+        Defines = @()
+        Expected = @("widen failures=0")
+        Exit = 0
+        ExactTemplate = "widen-edge-runner-schedule"
+        ExactFunction = "test_widen_mul_edges"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "widensv"
+        Sources = @(Join-Path $fixtureRoot "widen.c")
+        Defines = @("MIR_CLOBBER_WIDEN_EXTRA=1")
+        Expected = @("widen failures=0")
+        Exit = 0
+        ExactTemplate = "widen-edge-runner-schedule"
+        ExactFunction = "test_widen_mul_edges"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "errnoex"
+        Sources = @(Join-Path $fixtureRoot "errnoex.c")
+        Defines = @()
+        Expected = @("terrno passed")
+        Exit = 0
+        ExactTemplate = "errno-exercise-schedule"
+        ExactFunction = "main"
+        RequireExact = $true
+    },
+    [pscustomobject]@{
+        Name = "errnoexv"
+        Sources = @(Join-Path $fixtureRoot "errnoex.c")
+        Defines = @("MIR_CLOBBER_ERRNO_EXTRA=1")
+        Expected = @("errno extra control", "terrno passed")
+        Exit = 0
+        ExactTemplate = "errno-exercise-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "errnoexc"
+        Sources = @(Join-Path $fixtureRoot "errnoex.c")
+        Defines = @("MIR_CLOBBER_ERRNO_CLOSE_VALUE=1")
+        Expected = @("terrno passed")
+        Exit = 0
+        ExactTemplate = "errno-exercise-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "fatal"
+        Sources = @(Join-Path $fixtureRoot "fatal.c")
+        Defines = @()
+        Expected = @("adaint:0: boom near ''")
+        Exit = 1
+        StackModes = @($false)
+        ExactTemplate = "no-stack-fatal-report"
+        ExactFunction = "die"
+        RequireExact = $true
+    },
+    [pscustomobject]@{
+        Name = "fatalv"
+        Sources = @(Join-Path $fixtureRoot "fatal.c")
+        Defines = @("MIR_CLOBBER_FATAL_EXTRA=1")
+        Expected = @("fatal extra control", "adaint:0: boom near ''")
+        Exit = 1
+        StackModes = @($false)
+        ExactTemplate = "no-stack-fatal-report"
+        ExactFunction = "die"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "intel"
+        Sources = @(Join-Path $fixtureRoot "intel.c")
+        Defines = @()
+        Expected = @("intel=1,2,3,4")
+        Exit = 0
+        ExactTemplate = "intel-hex-load-schedule"
+        ExactFunction = "load_intel"
+        RequireExact = $true
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "intelv"
+        Sources = @(Join-Path $fixtureRoot "intel.c")
+        Defines = @("MIR_CLOBBER_INTEL_EXTRA=1")
+        Expected = @("intel extra control", "intel=1,2,3,4")
+        Exit = 0
+        ExactTemplate = "intel-hex-load-schedule"
+        ExactFunction = "load_intel"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
         Name = "structv"
         Sources = @(Join-Path $repoRoot "tests/tstructi.c")
         Defines = @("MIR_CLOBBER_G_PAIR_A=30")
@@ -769,7 +926,8 @@ try {
                 "selector=scheduled-machine-cfg") "shape" "target")) {
         throw "MIR exact-rejection selection evidence controls failed"
     }
-    $knownCases = @($caseDefinitions.Name) + @("fuzz", "minimax", "vlaend", "vlaok")
+    $knownCases = @($caseDefinitions.Name) + @(
+        "fuzz", "lazywide", "minimax", "oldloops", "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
     }
@@ -979,7 +1137,13 @@ try {
             -not ($case.Name.StartsWith("fuzz-") -and "fuzz" -in $Cases)) {
             continue
         }
-        foreach ($stackCheck in @($true, $false)) {
+        $stackModes = if ($case.PSObject.Properties.Name -contains
+            "StackModes") {
+            @($case.StackModes)
+        } else {
+            @($true, $false)
+        }
+        foreach ($stackCheck in $stackModes) {
             foreach ($peep in @($true, $false)) {
                 Assert-RunCase -Name $case.Name -Sources $case.Sources `
                     -Defines $case.Defines -Expected $case.Expected `
@@ -988,13 +1152,15 @@ try {
                     -ExactFunction $case.ExactFunction `
                     -RequireExact ([bool]$case.RequireExact) `
                     -RequireRejected ([bool]$case.RequireRejected) `
+                    -RunArguments $case.Args `
                     -AssemblyPatterns $case.AssemblyPatterns `
                     -OddUpperRuntime ([bool]$case.OddUpperRuntime)
                 foreach ($debugMode in $case.DebugModes) {
                     Assert-RunCase -Name $case.Name -Sources $case.Sources `
                         -Defines $case.Defines -Expected $case.Expected `
                         -ExpectedExit $case.Exit -StackCheck $stackCheck `
-                        -Peep $peep -DebugMode $debugMode
+                        -Peep $peep -DebugMode $debugMode `
+                        -RunArguments $case.Args
                 }
             }
         }
@@ -1050,6 +1216,49 @@ try {
         } finally {
             Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $savedEnvironment["DCC_MIR_SELECT_FUNCTION"]
             Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
+        }
+    }
+    if ($Cases.Count -eq 0 -or "oldloops" -in $Cases) {
+        try {
+            foreach ($function in @(
+                "countdown", "accumulate", "divide7", "repeated", "compare")) {
+                Set-ProcessEnvironment "DCC_MIR_EMIT_FUNCTION" $function
+                foreach ($stackCheck in @($true, $false)) {
+                    foreach ($peep in @($true, $false)) {
+                        Assert-RunCase -Name "oldloop-$function" `
+                            -Sources @(Join-Path $fixtureRoot "oldloops.c") `
+                            -Defines @() -Expected @("0 15 7 30 11 22") `
+                            -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
+                            -RequiredSelectorFunction $function `
+                            -RequiredSelector "specialized"
+                    }
+                }
+            }
+        } finally {
+            Set-ProcessEnvironment "DCC_MIR_EMIT_FUNCTION" `
+                $savedEnvironment["DCC_MIR_EMIT_FUNCTION"]
+        }
+    }
+    if ($Cases.Count -eq 0 -or "lazywide" -in $Cases) {
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" "co_add"
+        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "homed-lazy"
+        try {
+            foreach ($stackCheck in @($true, $false)) {
+                foreach ($peep in @($true, $false)) {
+                    Assert-RunCase -Name "lazywide" `
+                        -Sources @(Join-Path $repoRoot "tests/tlongopt.c") `
+                        -Defines @() `
+                        -Expected @("tlongopt passed with great success") `
+                        -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
+                        -RequiredSelectorFunction "co_add" `
+                        -RequiredSelector "homed-scalar-cfg"
+                }
+            }
+        } finally {
+            Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" `
+                $savedEnvironment["DCC_MIR_SELECT_FUNCTION"]
+            Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" `
+                $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
         }
     }
     if ($Cases.Count -eq 0 -or "vlaend" -in $Cases) {

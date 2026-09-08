@@ -43,6 +43,11 @@ clean function boundary. Positive transform controls forward a PHI-return join
 onto its two predecessor exits and eliminate duplicate address expressions in
 both block and region passes; each test asserts rewritten value identities and
 reruns MIR verification.
+Additional controls cover PHI-return forwarding through a scalar consumer,
+isolated static-global field value numbering, block CSE of field loads, and
+the scalar-DAG output contract. The consumer case verifies that both inserted
+consumers use their predecessor's value and that each inserted return uses the
+new consumer result after instruction storage grows.
 
 `dcc_mir_verify.c` constructs an independent CFG and immediate-dominator tree
 using reverse postorder. Its storage is linear in the MIR size. Verification
@@ -232,16 +237,17 @@ fields of a valid diamond, requires rejection, restores each field, and requires
 acceptance. Five call/argument identity mutations have positive controls.
 Empty, negative, and oversized dominance graph contracts are tested directly.
 The compiler-mutation runner builds isolated copies with dominance, argument
-ABI, or call-arity checks disabled, or promotion cache invalidations removed. It first requires
-unmutated host tests and a one-function seed-23117 compilation to pass. Verifier
-mutants must produce explicit host-test assertion failures; the cache mutant
-must produce the specific `mir_definition` cache mismatch. Build errors, crashes,
-and survivors are not counted as kills. Every mutant uses a clean rebuild, so
-rapid source rewrites cannot reuse a preceding mutant's objects due to timestamp
-resolution. Verifier kills must contain the mutation-specific assertion failure.
-Logs and JSON results are retained under
-`build/mir-compiler-mutations`. These four controls do not establish a general
-compiler mutation score.
+ABI, call-arity, indirect-callee, callback-identity, PHI-edge-liveness,
+call-argument-liveness, or PHI-consumer-value checks disabled, or promotion
+cache invalidations removed. It first requires unmutated host tests and a one-
+function seed-23117 compilation to pass. Verifier mutants must produce explicit
+host-test assertion failures; the cache mutant must produce the specific
+`mir_definition` cache mismatch. Build errors, crashes, and survivors are not
+counted as kills. Every mutant uses a clean rebuild, so rapid source rewrites
+cannot reuse a preceding mutant's objects due to timestamp resolution. Verifier
+kills must contain the mutation-specific assertion failure. Logs and JSON
+results are retained under `build/mir-compiler-mutations`. These nine controls
+do not establish a general compiler mutation score.
 
 ### Call Arity Invariants
 

@@ -78,6 +78,59 @@ static void verify_diamond_edge_liveness(void)
     clear_liveness();
 }
 
+static void verify_immediate_phi_consumer_forwarding(void)
+{
+    setup(12, 5, 4);
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 2;
+    mir.insns[3].opcode = MIR_BRANCH_FALSE;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].label = 2;
+    mir.insns[4].opcode = MIR_LABEL;
+    mir.insns[4].label = 1;
+    mir.insns[5].opcode = MIR_CONST;
+    mir.insns[5].dst = 1;
+    mir.insns[6].opcode = MIR_JUMP;
+    mir.insns[6].label = 3;
+    mir.insns[7].opcode = MIR_LABEL;
+    mir.insns[7].label = 2;
+    mir.insns[8].opcode = MIR_LABEL;
+    mir.insns[8].label = 3;
+    mir.insns[9].opcode = MIR_PHI;
+    mir.insns[9].dst = 3;
+    mir.insns[9].src1 = 1;
+    mir.insns[9].src2 = 2;
+    mir.insns[9].phi_pred1 = 1;
+    mir.insns[9].phi_pred2 = 2;
+    mir.insns[10].opcode = MIR_UNARY;
+    mir.insns[10].dst = 4;
+    mir.insns[10].src1 = 3;
+    mir.insns[10].immediate = '-';
+    mir.insns[11].src1 = 4;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL immediate PHI consumer control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    mir_reset_phi_return_forwarding_count();
+    mir_forward_immediate_phi_returns();
+    if (mir_phi_return_forwarding_count_value() != 1 ||
+        mir.insns[6].opcode != MIR_UNARY ||
+        mir.insns[6].src1 != 1 ||
+        mir.insns[7].opcode != MIR_RETURN ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[9].opcode != MIR_UNARY ||
+        mir.insns[9].src1 != 2 ||
+        mir.insns[10].opcode != MIR_RETURN ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        !mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL immediate PHI consumer forwarding\n");
+        ++failures;
+    }
+    clear_liveness();
+}
+
 static void verify_call_argument_liveness(void)
 {
     size_t call;
@@ -360,6 +413,77 @@ static void verify_member_metadata_and_address(void)
         fprintf(stderr, "FAIL member metadata and isolated address contract\n");
         ++failures;
     }
+
+    setup(7, 5, 1);
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].type = type_add_ptr(global->type);
+    strcpy(mir.insns[1].name, global->name);
+    mir.insns[2].opcode = MIR_MEMBER_ADDRESS;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    mir.insns[2].immediate = field->offset;
+    strcpy(mir.insns[2].name, field->name);
+    mir.insns[3].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 1;
+    mir.insns[3].memory_size = 2;
+    mir.insns[4].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[4].dst = 3;
+    mir.insns[4].src1 = 1;
+    mir.insns[4].memory_size = 2;
+    mir.insns[5].opcode = MIR_BINARY;
+    mir.insns[5].dst = 4;
+    mir.insns[5].src1 = 2;
+    mir.insns[5].src2 = 3;
+    mir.insns[5].immediate = '+';
+    mir.insns[5].secondary_offset = TYPE_INT;
+    mir.insns[6].src1 = 4;
+    if (!mir_verify_and_dump() ||
+        mir_value_number_global_field_loads() != 1 ||
+        mir_global_field_value_numbering_count() != 1 ||
+        mir.insns[4].opcode != MIR_NOP ||
+        mir.insns[5].src1 != 2 || mir.insns[5].src2 != 2 ||
+        !mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL isolated global field value numbering\n");
+        ++failures;
+    }
+    clear_liveness();
+
+    setup(7, 5, 1);
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].type = type_add_ptr(global->type);
+    strcpy(mir.insns[1].name, global->name);
+    mir.insns[2].opcode = MIR_MEMBER_ADDRESS;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    mir.insns[2].immediate = field->offset;
+    strcpy(mir.insns[2].name, field->name);
+    mir.insns[3].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 1;
+    mir.insns[3].memory_size = 2;
+    mir.insns[4].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[4].dst = 3;
+    mir.insns[4].src1 = 1;
+    mir.insns[4].memory_size = 2;
+    mir.insns[5].opcode = MIR_BINARY;
+    mir.insns[5].dst = 4;
+    mir.insns[5].src1 = 2;
+    mir.insns[5].src2 = 3;
+    mir.insns[5].immediate = '+';
+    mir.insns[5].secondary_offset = TYPE_INT;
+    mir.insns[6].src1 = 4;
+    if (!mir_verify_and_dump() ||
+        mir_eliminate_common_block_expressions() != 1 ||
+        mir.insns[4].opcode != MIR_NOP ||
+        mir.insns[5].src1 != 2 || mir.insns[5].src2 != 2 ||
+        !mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL isolated field block CSE\n");
+        ++failures;
+    }
+    clear_liveness();
 }
 
 static void verify_five_call_arguments(void)
@@ -492,6 +616,7 @@ static void verify_immediate_phi_return_forwarding(void)
 
 static void verify_common_expression_elimination(void)
 {
+    struct Sym *mutable_global;
     int ok = 1;
 
     setup(5, 3, 1);
@@ -532,10 +657,86 @@ static void verify_common_expression_elimination(void)
     ok = ok && mir_eliminate_common_region_expressions() == 1;
     ok = ok && mir.insns[2].opcode == MIR_NOP;
     ok = ok && mir.insns[3].src1 == 0 && mir.insns[3].src2 == 0;
+
+    mutable_global =
+        add_global("verify_mutable_global", TYPE_INT, SC_GLOBAL);
+    mutable_global->is_static = 0;
+    setup(7, 3, 2);
+    mir.object_count = 1;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    strcpy(mir.objects[0].name, mutable_global->name);
+    mir.objects[0].type = TYPE_INT;
+    mir.objects[0].storage = SC_GLOBAL;
+    mir.insns[1].opcode = MIR_JUMP;
+    mir.insns[1].dst = -1;
+    mir.insns[1].label = 1;
+    mir.insns[2].opcode = MIR_LABEL;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_LOAD;
+    mir.insns[3].dst = 0;
+    mir.insns[3].object = 0;
+    strcpy(mir.insns[3].name, mutable_global->name);
+    mir.insns[4].opcode = MIR_LOAD;
+    mir.insns[4].dst = 1;
+    mir.insns[4].object = 0;
+    strcpy(mir.insns[4].name, mutable_global->name);
+    mir.insns[5].opcode = MIR_BINARY;
+    mir.insns[5].dst = 2;
+    mir.insns[5].src1 = 0;
+    mir.insns[5].src2 = 1;
+    mir.insns[5].immediate = '+';
+    mir.insns[5].secondary_offset = TYPE_INT;
+    mir.insns[6].src1 = 2;
+    ok = ok && mir_verify_and_dump();
+    ok = ok && mir_eliminate_common_block_expressions() == 0;
+    ok = ok && mir.insns[3].opcode == MIR_LOAD;
+    ok = ok && mir.insns[4].opcode == MIR_LOAD;
     if (!ok) {
         fprintf(stderr, "FAIL common expression elimination contracts\n");
         ++failures;
     }
+    clear_liveness();
+}
+
+static void verify_scalar_dag_emission(void)
+{
+    MirStream *stream;
+    char output[256];
+    int saved_stack_check = opt_stack_check;
+
+    setup(3, 1, 1);
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL scalar DAG verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    stream = mir_stream_open();
+    if (stream == NULL) {
+        fprintf(stderr, "FAIL scalar DAG stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    opt_stack_check = 0;
+    memset(output, 0, sizeof(output));
+    if (!mir_try_emit_scalar_dag(stream)) {
+        fprintf(stderr, "FAIL scalar DAG constant-return emission\n");
+        ++failures;
+    } else {
+        mir_stream_rewind(stream);
+        (void)mir_stream_read(
+            output, 1, sizeof(output) - 1, stream);
+        if (strstr(output,
+                "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+                "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n") == NULL) {
+            fprintf(stderr, "FAIL scalar DAG output contract:\n%s", output);
+            ++failures;
+        }
+    }
+    opt_stack_check = saved_stack_check;
+    mir_stream_close(stream);
+    clear_liveness();
 }
 
 static void diamond(void)
@@ -664,6 +865,7 @@ int main(void)
     }
     verify_diamond_mutations();
     verify_diamond_edge_liveness();
+    verify_immediate_phi_consumer_forwarding();
     verify_call_argument_liveness();
     verify_mir_stream_io();
     verify_ast_kind_names();
@@ -674,6 +876,7 @@ int main(void)
     verify_spilled_feature_defaults();
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
+    verify_scalar_dag_emission();
     for (mutation = 0; mutation < 5; ++mutation) {
         setup(5, 1, 1);
         mir.next_call_id = 1;

@@ -56,7 +56,11 @@ mkdir -p "$raw_dir" "$report_dir"
 find "$raw_dir" -type f -name '*.profraw' -delete
 
 export DCC="$binary_dir/dcc"
-export LLVM_PROFILE_FILE="$raw_dir/dcc-%p-%m.profraw"
+# A long corpus can reuse short-lived compiler PIDs. `%p-%m` then overwrites
+# an earlier profile with the same PID/signature and makes totals depend on
+# process scheduling. LLVM's `%Nm` form merges concurrently into an N-file
+# signature-keyed pool instead.
+export LLVM_PROFILE_FILE="$raw_dir/dcc-%8m.profraw"
 
 cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full
