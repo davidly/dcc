@@ -54,6 +54,10 @@ without relying on parser filtering. Pointer-index controls include
 pointer-array elements, dereferenced pointer-to-array rows, computed pointer
 expressions, multidimensional pointer elements, and pointer-valued members,
 with nonzero-pointer and compound-assignment rejection cases.
+The spilled-emitter preflight matrix independently rejects oversized frames,
+invalid aggregate return/value widths, unsupported opcodes, unresolved memory,
+invalid indirect widths, malformed direct/indirect calls, and invalid
+`va_arg` offsets before code emission.
 
 `dcc_mir_verify.c` constructs an independent CFG and immediate-dominator tree
 using reverse postorder. Its storage is linear in the MIR size. Verification

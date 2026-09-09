@@ -921,38 +921,129 @@ static void verify_spilled_feature_defaults(void)
     }
 }
 
-static void verify_spilled_preflight_rejection(void)
+static int spilled_candidate_result(void)
 {
     MirStream *stream;
+    int result;
 
-    setup(3, 1, 1);
+    mir_invalidate_use_cache();
     stream = mir_stream_open();
     if (stream == NULL) {
         fprintf(stderr, "FAIL spilled preflight stream allocation\n");
         ++failures;
-        return;
+        clear_liveness();
+        return -1;
     }
-    if (!mir_try_emit_spilled_scalar_cfg(stream)) {
-        fprintf(stderr, "FAIL spilled preflight valid control\n");
-        ++failures;
-    }
+    result = mir_try_emit_spilled_scalar_cfg(stream);
     mir_stream_close(stream);
     clear_liveness();
+    return result;
+}
+
+static void expect_spilled_candidate(const char *name, int expected)
+{
+    int actual = spilled_candidate_result();
+
+    if (actual != expected) {
+        fprintf(stderr, "FAIL spilled preflight %s\n", name);
+        ++failures;
+    }
+}
+
+static void verify_spilled_preflight_rejection(void)
+{
+    int sid;
 
     setup(3, 1, 1);
-    stream = mir_stream_open();
-    if (stream == NULL) {
-        fprintf(stderr, "FAIL spilled preflight rejection stream allocation\n");
-        ++failures;
-        return;
-    }
+    expect_spilled_candidate("valid control", 1);
+
+    setup(3, 1, 1);
     mir.local_bytes = 30001;
-    if (mir_try_emit_spilled_scalar_cfg(stream)) {
-        fprintf(stderr, "FAIL spilled preflight oversized frame rejection\n");
-        ++failures;
-    }
-    mir_stream_close(stream);
-    clear_liveness();
+    expect_spilled_candidate("oversized frame rejection", 0);
+
+    sid = add_struct_def("verify_spilled_invalid_return");
+    struct_defs[sid - 1].size = 0;
+    setup(3, 1, 1);
+    mir.return_type = make_struct_type(sid);
+    expect_spilled_candidate("invalid return rejection", 0);
+
+    sid = add_struct_def("verify_spilled_wide_value");
+    struct_defs[sid - 1].size = 6;
+    setup(3, 1, 1);
+    mir.insns[1].type = make_struct_type(sid);
+    expect_spilled_candidate("wide value rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_OPAQUE;
+    expect_spilled_candidate("opcode rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_LOAD;
+    expect_spilled_candidate("memory location rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[1].src1 = 0;
+    mir.insns[1].memory_size = 3;
+    expect_spilled_candidate("indirect width rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_STORE_INDIRECT;
+    mir.insns[1].src1 = 0;
+    expect_spilled_candidate("missing indirect width rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[1].src1 = 0;
+    mir.insns[1].memory_size = 4;
+    mir.insns[1].bit_width = 1;
+    expect_spilled_candidate("bitfield indirect width rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_CALL;
+    mir.insns[1].dst = -1;
+    strcpy(mir.insns[1].name, "<indirect>");
+    mir.next_value = 0;
+    expect_spilled_candidate("call ABI rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_CALL;
+    mir.insns[1].dst = -1;
+    mir.insns[1].type = make_struct_type(sid);
+    strcpy(mir.insns[1].name, "verify_wide_call");
+    mir.next_value = 0;
+    expect_spilled_candidate("wide call ABI rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_CALL_AGGREGATE;
+    mir.insns[1].dst = -1;
+    strcpy(mir.insns[1].name, "<indirect>");
+    mir.next_value = 0;
+    expect_spilled_candidate("aggregate call ABI rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_CALL_AGGREGATE;
+    mir.insns[1].dst = -1;
+    strcpy(mir.insns[1].name, "verify_aggregate_call");
+    mir.next_value = 0;
+    expect_spilled_candidate("aggregate call size rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_VA_ARG;
+    mir.insns[1].immediate = -129;
+    mir.insns[1].secondary_offset = 2;
+    expect_spilled_candidate("negative va_arg offset rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_VA_ARG;
+    mir.insns[1].immediate = 128;
+    mir.insns[1].secondary_offset = 2;
+    expect_spilled_candidate("va_arg offset rejection", 0);
+
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_VA_ARG;
+    mir.insns[1].secondary_offset = 3;
+    expect_spilled_candidate("va_arg width rejection", 0);
 }
 
 static void verify_immediate_phi_return_forwarding(void)
