@@ -33,7 +33,7 @@ still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `67d55170` (`test: mutate ctype realloc matcher`).
+  `a1556f94` (`test: mutate prime search matcher`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -618,13 +618,13 @@ frozen performance gates pass.
 
 The resulting scoped report, after adding malformed-MIR spilled preflight,
 exact byte-math near-mutations, and reusable exact-matcher field mutation, is
-4,359/4,359 functions, 177,002/189,945 lines (93.19%),
-90,654/144,518 native branch outcomes (62.73%), and 159,030/169,867 regions
-(93.62%). The preflight matrix covers
+4,359/4,359 functions, 177,017/189,946 lines (93.19%),
+90,730/144,518 native branch outcomes (62.78%), and 159,039/169,867 regions
+(93.63%). The preflight matrix covers
 invalid return/value widths, unsupported opcodes, unresolved memory, indirect
 widths, direct/indirect call ABI failures, aggregate-call ABI failures, and
 invalid `va_arg` offsets. Exact-shape, selector-rejection, and backend-slot
-diagnostic modes are also covered. The raw ledger has 53,617 uncovered
+diagnostic modes are also covered. The raw ledger has 53,541 uncovered
 outcomes. The byte-math variants alter mask, comparison, complement, addend,
 overflow, and logical semantics; each rejects the named schedule and runs
 generically across 32 target configurations.
@@ -648,8 +648,9 @@ MinMax control adds 79 mutations across its move, board, call, and search
 proofs while preserving the one-iteration oracle. The Catalan driver adds 110
 restored-MIR mutations and preserves its 100-digit output with the canonical
 768-byte stack. The ctype/realloc schedule adds 32 mutations across allocation,
-copy, resizing, preservation, byte checks, free, and final-result proofs. The
-complete clobber manifest now contains 3,760 configurations.
+copy, resizing, preservation, byte checks, free, and final-result proofs. Prime
+search adds 71 mutations across ABI, initialization, normalization, loops, and
+reporting. The complete clobber manifest now contains 4,048 configurations.
 
 A second assignment review removes a preempted 2-D address branch, a
 pointer-array result path already handled for plain assignment, and a member
