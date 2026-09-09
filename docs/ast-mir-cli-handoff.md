@@ -33,7 +33,7 @@ still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `ea8ec737` (`test: mutate byte matcher SSA edges`).
+  `4848e7d0` (`test: mutate multidimensional matcher`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -618,13 +618,13 @@ frozen performance gates pass.
 
 The resulting scoped report, after adding malformed-MIR spilled preflight,
 exact byte-math near-mutations, and reusable exact-matcher field mutation, is
-4,359/4,359 functions, 176,885/189,940 lines (93.13%),
-90,196/144,518 native branch outcomes (62.41%), and 158,971/169,867 regions
+4,359/4,359 functions, 176,916/189,941 lines (93.14%),
+90,301/144,518 native branch outcomes (62.48%), and 158,987/169,867 regions
 (93.59%). The preflight matrix covers
 invalid return/value widths, unsupported opcodes, unresolved memory, indirect
 widths, direct/indirect call ABI failures, aggregate-call ABI failures, and
 invalid `va_arg` offsets. Exact-shape, selector-rejection, and backend-slot
-diagnostic modes are also covered. The raw ledger has 54,075 uncovered
+diagnostic modes are also covered. The raw ledger has 53,970 uncovered
 outcomes. The byte-math variants alter mask, comparison, complement, addend,
 overflow, and logical semantics; each rejects the named schedule and runs
 generically across 32 target configurations.
@@ -640,7 +640,9 @@ predicate while the original program runs generically. Both mutation helpers
 have exact line, branch, and region coverage. One hundred forty-four field
 mutations additionally cover byte-math parameter, mask, comparison, memory,
 call, decimal, arithmetic, carry, overflow, logical, negative, zero-flag, and
-SSA operand checks. The complete clobber manifest now contains 1,984
+SSA operand checks. A named multidimensional-array control plus 93 field
+mutations covers every rejection family while preserving exact/generic
+`t2darr` output. The complete clobber manifest now contains 2,360
 configurations.
 
 A second assignment review removes a preempted 2-D address branch, a
