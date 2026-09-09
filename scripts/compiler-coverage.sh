@@ -108,12 +108,18 @@ python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
     -instr-profile="$build_dir/dcc.profdata" \
     -name-allowlist="$report_dir/ast-mir-functions.txt" -show-functions \
     "$@" "$repo_root"/src/dcc/dcc_ast_gen*.c >"$report_dir/ast-mir-function-detail.txt"
+require_complete=
+if [ "${DCC_COVERAGE_REQUIRE_COMPLETE:-0}" = 1 ]; then
+    require_complete=--require-complete
+fi
 python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
     --coverage "$report_dir/ast-mir-coverage.json" \
     --allowlist "$report_dir/ast-mir-functions.txt" \
     --native-report "$report_dir/ast-mir-function-detail.txt" \
     --summary "$report_dir/ast-mir-function-coverage.json" \
-    --gaps "$report_dir/ast-mir-gaps.json" >"$report_dir/ast-mir-function-summary.txt"
+    --gaps "$report_dir/ast-mir-gaps.json" \
+    $require_complete \
+    >"$report_dir/ast-mir-function-summary.txt"
 "$llvm_cov" show "$binary_dir/dcc" \
     -object "$build_dir/cmake/mir-verify-test" \
     -instr-profile="$build_dir/dcc.profdata" \

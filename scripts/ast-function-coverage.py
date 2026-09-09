@@ -159,6 +159,7 @@ def summarize_native(text, selected, excluded=None):
 
 def coverage_gaps(report, selected):
     outcomes = {}
+    regions = {}
     unexecuted = set()
     for data in report["data"]:
         for function in data["functions"]:
@@ -174,6 +175,16 @@ def coverage_gaps(report, selected):
                 for outcome, count in (("true", branch[4]), ("false", branch[5])):
                     key = (relative, function["name"], *branch[:4], outcome)
                     outcomes[key] = max(outcomes.get(key, 0), count)
+            for region in function["regions"]:
+                if len(region) < 8 or region[7] != 0:
+                    continue
+                source = Path(function["filenames"][region[5]]).resolve()
+                if not source.is_relative_to(ROOT):
+                    raise ValueError(
+                        "region source outside repository: " + str(source))
+                relative = source.relative_to(ROOT).as_posix()
+                key = (relative, function["name"], *region[:4])
+                regions[key] = max(regions.get(key, 0), region[4])
     gaps = []
     for key, count in sorted(outcomes.items()):
         if count:
@@ -182,7 +193,16 @@ def coverage_gaps(report, selected):
         gaps.append(dict(source=source, function=function, line=line, column=column,
                          end_line=end_line, end_column=end_column, outcome=outcome,
                          review="unreviewed"))
-    return {"unexecuted_functions": sorted(unexecuted), "uncovered_branch_outcomes": gaps}
+    uncovered_regions = [
+        dict(source=key[0], function=key[1], line=key[2],
+             column=key[3], end_line=key[4], end_column=key[5])
+        for key, count in sorted(regions.items()) if count == 0
+    ]
+    return {
+        "unexecuted_functions": sorted(unexecuted),
+        "uncovered_regions": uncovered_regions,
+        "uncovered_branch_outcomes": gaps,
+    }
 
 
 def annotate_reviews(gaps, reviews):
@@ -207,6 +227,17 @@ def annotate_reviews(gaps, reviews):
     return gaps
 
 
+def require_complete(summary):
+    incomplete = [
+        f"{metric}={counts['covered']}/{counts['count']}"
+        for metric, counts in summary["totals"].items()
+        if counts["covered"] != counts["count"]
+    ]
+    if incomplete:
+        raise ValueError(
+            "AST/MIR coverage incomplete: " + ", ".join(incomplete))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--clang", default="clang")
@@ -217,6 +248,7 @@ def main():
     parser.add_argument("--native-report", type=Path)
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--gaps", type=Path)
+    parser.add_argument("--require-complete", action="store_true")
     args = parser.parse_args()
     found = inventory(args.clang)
     if args.inventory:
@@ -255,6 +287,8 @@ def main():
                 for metric, counts in summary["totals"].items():
                     total, covered = counts["count"], counts["covered"]
                     print(f"{metric}: {covered}/{total} ({100 * covered / total if total else 100:.2f}%)")
+                if args.require_complete:
+                    require_complete(summary)
             print(f"Selected {len(selected)} AST/MIR functions")
         print(f"Validated {len(classified)} mixed-AST function classifications")
 

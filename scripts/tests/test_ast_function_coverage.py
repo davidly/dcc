@@ -92,11 +92,14 @@ class FunctionCoverageTests(unittest.TestCase):
     def test_gap_ledger_keeps_uncovered_outcomes_and_scope(self):
         source = str(coverage.ROOT / "src/dcc/dcc_mir_verify.c")
         active = {"name": "active", "count": 1, "filenames": [source],
+                  "regions": [[10, 1, 10, 9, 0, 0, 0, 0]],
                   "branches": [[10, 2, 10, 9, 0, 3, 0, 0, 4]]}
         old = dict(active, name="legacy", count=0)
         report = {"data": [{"functions": [active, old]}]}
         result = coverage.coverage_gaps(report, {"active"})
         self.assertEqual(result["unexecuted_functions"], [])
+        self.assertEqual(len(result["uncovered_regions"]), 1)
+        self.assertEqual(result["uncovered_regions"][0]["line"], 10)
         self.assertEqual(len(result["uncovered_branch_outcomes"]), 1)
         self.assertEqual(result["uncovered_branch_outcomes"][0]["outcome"], "true")
         self.assertEqual(result["uncovered_branch_outcomes"][0]["review"], "unreviewed")
@@ -118,6 +121,21 @@ class FunctionCoverageTests(unittest.TestCase):
         self.assertEqual(gap["review"], "review-example")
         with self.assertRaisesRegex(ValueError, "stale or unsupported"):
             coverage.annotate_reviews(gaps, [dict(review, expression="missing expression")])
+
+    def test_require_complete_checks_every_metric(self):
+        complete = {"totals": {
+            "functions": {"covered": 2, "count": 2},
+            "lines": {"covered": 3, "count": 3},
+            "branches": {"covered": 4, "count": 4},
+            "regions": {"covered": 5, "count": 5},
+        }}
+        coverage.require_complete(complete)
+        incomplete = {"totals": dict(
+            complete["totals"],
+            branches={"covered": 3, "count": 4})}
+        with self.assertRaisesRegex(
+                ValueError, "branches=3/4"):
+            coverage.require_complete(incomplete)
 
 
 if __name__ == "__main__":

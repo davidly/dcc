@@ -549,6 +549,11 @@ pushed without waiting for GitHub Actions.
 | [Coverage analyzer](../scripts/ast-function-coverage.py) | Verified totals, raw gaps, anchored review evidence. |
 | [Review annotations](../scripts/ast-coverage-reviews.json) | Reviewed guard retained in totals. |
 | [Coverage tests](../scripts/tests/test_ast_function_coverage.py) | Scope, deduplication, classification, review checks. |
+
+For the final completion run, set `DCC_COVERAGE_REQUIRE_COMPLETE=1`; the
+analyzer then fails unless functions, lines, native branch outcomes, and
+regions each have `covered == total`. The gap JSON also records zero-count
+source-region anchors. Reviews remain dispositions, not covered outcomes.
 | [Peephole owner](../src/dccpeep/peep_pass_once.c) | Independent generic MinMax liveness fix. |
 | [Selector](../src/dcc/dcc_mir_select.c) | Candidate diagnostics and production selection. |
 | [Dominance verifier](../src/dcc/dcc_mir_verify.c) | Independent reachable-CFG verification. |

@@ -163,6 +163,8 @@ Artifacts:
 - `ast-mir-function-detail.txt`: native LLVM per-function line/region/branch metrics.
 - `ast-mir-function-coverage.json`: verified per-function metrics and summed totals.
 - `ast-mir-function-summary.txt`: readable headline totals.
+- `ast-mir-gaps.json`: unexecuted functions, zero-count source-region anchors,
+  and uncovered branch outcomes for the selected function set.
 
 LLVM file reports and JSON exports do not apply function-name filters. This
 workflow uses `llvm-cov report -show-functions` with an `[llvmcov]` allowlist,
@@ -194,6 +196,12 @@ module baseline (classification changes do not change compiler behavior):
 python3 scripts/ast-function-coverage.py
 python3 -m unittest discover -s scripts/tests -p 'test_ast_function_coverage.py'
 ```
+
+Set `DCC_COVERAGE_REQUIRE_COMPLETE=1` when invoking
+`scripts/compiler-coverage.sh` to require exact equality for functions, lines,
+native branch outcomes, and regions. The workflow writes its reports before
+failing so an incomplete run remains actionable. This gate does not treat
+review annotations as covered and does not round percentages.
 
 ## September 8 Correctness Follow-up
 
