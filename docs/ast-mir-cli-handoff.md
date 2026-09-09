@@ -33,7 +33,7 @@ still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `11d9cd1e` (`test: mutate attention matcher SSA edges`).
+  `dc0c59c5` (`test: complete attention matcher sweep`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -618,13 +618,13 @@ frozen performance gates pass.
 
 The resulting scoped report, after adding malformed-MIR spilled preflight,
 exact byte-math near-mutations, and reusable exact-matcher field mutation, is
-4,359/4,359 functions, 177,020/189,946 lines (93.19%),
-90,751/144,518 native branch outcomes (62.80%), and 159,042/169,867 regions
+4,359/4,359 functions, 177,027/189,946 lines (93.20%),
+90,863/144,518 native branch outcomes (62.87%), and 159,049/169,867 regions
 (93.63%). The preflight matrix covers
 invalid return/value widths, unsupported opcodes, unresolved memory, indirect
 widths, direct/indirect call ABI failures, aggregate-call ABI failures, and
 invalid `va_arg` offsets. Exact-shape, selector-rejection, and backend-slot
-diagnostic modes are also covered. The raw ledger has 53,520 uncovered
+diagnostic modes are also covered. The raw ledger has 53,408 uncovered
 outcomes. The byte-math variants alter mask, comparison, complement, addend,
 overflow, and logical semantics; each rejects the named schedule and runs
 generically across 32 target configurations.
@@ -650,9 +650,9 @@ restored-MIR mutations and preserves its 100-digit output with the canonical
 768-byte stack. The ctype/realloc schedule adds 32 mutations across allocation,
 copy, resizing, preservation, byte checks, free, and final-result proofs. Prime
 search adds 71 mutations across ABI, initialization, normalization, loops, and
-reporting. Twenty fixture-backed attention mutations preserve all 14 accuracy
-checks through spilled generic fallback. The complete clobber manifest now
-contains 4,128 configurations.
+reporting. One hundred thirty-two fixture-backed attention mutations preserve
+all 14 accuracy checks through spilled generic fallback. The complete clobber
+manifest now contains 4,576 configurations.
 
 A second assignment review removes a preempted 2-D address branch, a
 pointer-array result path already handled for plain assignment, and a member
