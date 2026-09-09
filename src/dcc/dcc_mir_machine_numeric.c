@@ -14293,6 +14293,7 @@ int mir_try_emit_numeric_kernels(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_narrowed_divmod_loop_schedule(&plan)) {
+            mir_machine_accept("narrowed-divmod-loop");
             mir_emit_narrowed_divmod_loop_schedule(out, &plan);
             return 1;
         }

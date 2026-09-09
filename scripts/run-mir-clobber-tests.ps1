@@ -374,6 +374,7 @@ function Assert-RequestedExecutionCounts {
     $specialCounts = @{
         fuzz = -1
         minimax = 28
+        ndivmut = 504
         oldloops = 20
         lazywide = 8
         inlines = 4
@@ -389,6 +390,7 @@ function Assert-RequestedExecutionCounts {
             $patterns = switch ($requested) {
                 "fuzz" { @("^fuzz-", "^fuzzforced-") }
                 "minimax" { @("^minimax-") }
+                "ndivmut" { @("^nd") }
                 "oldloops" { @("^oldloop-") }
                 "lazywide" { @("^lazywide-") }
                 "pairedbytes" { @("^pairedbytes\|", "^pairedbytes-near\|") }
@@ -1800,6 +1802,67 @@ foreach ($mutation in $multidimSweepMutations) {
     ++$multidimSweepIndex
 }
 
+$narrowedDivmodMutations = @(
+    "45:type:1", "48:type:1", "90:type:1", "43:immediate:999",
+    "43:type:1", "46:type:1", "45:src1:999", "48:src1:999",
+    "50:type:1", "51:immediate:999", "51:src1:999", "51:src2:999",
+    "51:type:1", "52:immediate:999", "52:src1:999", "52:type:1",
+    "53:src1:999", "57:src1:999", "57:src2:999", "57:type:1",
+    "60:immediate:999", "60:src1:999", "60:type:1", "61:immediate:999",
+    "61:src1:999", "61:src2:999", "62:src1:999", "67:immediate:999",
+    "65:src1:999", "65:src2:999", "65:immediate:999", "65:memory_size:3",
+    "68:src1:999", "68:src2:999", "68:memory_size:3", "71:type:1",
+    "72:immediate:999", "72:src1:999", "72:src2:999", "72:type:1",
+    "73:src1:999", "80:immediate:999", "86:immediate:999", "78:src1:999",
+    "78:src2:999", "78:immediate:999", "81:src1:999", "81:src2:999",
+    "81:memory_size:3", "84:src1:999", "84:src2:999", "84:immediate:999",
+    "87:src1:999", "87:src2:999", "87:memory_size:3", "90:src1:999",
+    "97:immediate:999", "92:src1:999", "92:src2:999", "94:src1:999",
+    "94:src2:999", "95:src1:999", "95:src2:999", "92:type:1",
+    "94:type:1", "95:type:1", "98:immediate:999", "98:src1:999",
+    "98:src2:999", "99:src1:999", "102:immediate:999", "102:src1:999",
+    "102:src2:999", "102:type:1", "103:src1:999", "104:immediate:999",
+    "104:src1:999", "104:type:1", "105:src1:999", "113:immediate:999",
+    "113:src1:999", "113:src2:999", "111:type:1", "112:type:1",
+    "113:type:1", "114:src1:999", "115:src1:999", "118:src1:999",
+    "118:src2:999", "118:immediate:999", "118:memory_size:3",
+    "121:immediate:999", "121:src1:999", "119:type:1", "121:type:1",
+    "122:immediate:999", "122:src1:999", "122:src2:999", "122:type:1",
+    "123:immediate:999", "123:src1:999", "123:type:1", "124:src1:999",
+    "124:src2:999", "124:memory_size:3", "125:type:1", "129:immediate:999",
+    "129:src1:999", "130:immediate:999", "130:src1:999", "130:src2:999",
+    "129:type:1", "130:type:1", "131:src1:999", "131:src2:999",
+    "131:immediate:999", "131:memory_size:3", "132:src1:999",
+    "132:memory_size:3", "132:type:1", "133:immediate:999", "133:src1:999",
+    "133:type:1", "134:immediate:999", "134:src1:999"
+)
+$caseDefinitions += [pscustomobject]@{
+    Name = "ndexact"
+    Sources = @(Join-Path $repoRoot "tests/tdmfuse.c")
+    Defines = @()
+    Expected = @("checks=66 failures=0", "RESULT: PASS")
+    Exit = 0
+    ExactTemplate = "narrowed-divmod-loop"
+    ExactFunction = "test_while_register_narrowed"
+    RequireExact = $true
+}
+$narrowedDivmodIndex = 0
+foreach ($mutation in $narrowedDivmodMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "nd$($narrowedDivmodIndex.ToString('000'))"
+        Sources = @(Join-Path $repoRoot "tests/tdmfuse.c")
+        Defines = @()
+        Expected = @("checks=66 failures=0", "RESULT: PASS")
+        Exit = 0
+        RequiredGenericFunction = "test_while_register_narrowed"
+        RequiredSelectorFunction = "test_while_register_narrowed"
+        RequiredSelector = "spilled-scalar-cfg"
+        MachineMutation = $mutation
+        MachineMutationFunction = "test_while_register_narrowed"
+    }
+    ++$narrowedDivmodIndex
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
@@ -1814,7 +1877,7 @@ try {
         throw "MIR exact-rejection selection evidence controls failed"
     }
     $knownCases = @($caseDefinitions.Name) + @(
-        "fuzz", "inlines", "lazywide", "minimax", "oldloops", "pairedbytes",
+        "fuzz", "inlines", "lazywide", "minimax", "ndivmut", "oldloops", "pairedbytes",
         "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
@@ -2055,7 +2118,8 @@ try {
 
     foreach ($case in $caseDefinitions) {
         if ($Cases.Count -gt 0 -and $case.Name -notin $Cases -and
-            -not ($case.Name.StartsWith("fuzz-") -and "fuzz" -in $Cases)) {
+            -not ($case.Name.StartsWith("fuzz-") -and "fuzz" -in $Cases) -and
+            -not ($case.Name.StartsWith("nd") -and "ndivmut" -in $Cases)) {
             continue
         }
         $stackModes = if ($case.PSObject.Properties.Name -contains

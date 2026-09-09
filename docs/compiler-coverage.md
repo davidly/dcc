@@ -658,7 +658,7 @@ One hundred forty-four byte-math field mutations exercise retained parameter,
 mask, comparison, memory, call, decimal, subtract, add, carry, overflow,
 logical, negative, zero-flag, and SSA operand checks. The original runtime
 program is restored before generic emission, so all 576 target configurations
-validate fallback output. The full clobber manifest contains 2,360 target
+validate fallback output. The full clobber manifest contains 2,864 target
 configurations.
 
 | Metric | Covered / total | Percent |
@@ -711,7 +711,23 @@ This adds 105 covered branch outcomes, 31 lines, and 16 regions while adding
 only one source line for acceptance diagnostics. The raw ledger now contains
 53,970 uncovered outcomes.
 
-- Review the remaining 53,970 unreviewed raw uncovered outcomes rather than
+The narrowed div/mod schedule now has a named accepted `tdmfuse` control plus
+125 restored-MIR field and SSA mutations. All 504 target configurations either
+select the exact schedule or require the spilled generic selector and preserve
+the 66-check runtime result.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,359 / 4,359 | 100.00% |
+| Lines | 176,927 / 189,942 | 93.15% |
+| Native branch outcomes | 90,428 / 144,518 | 62.57% |
+| Regions | 158,996 / 169,867 | 93.60% |
+
+This adds 127 covered branch outcomes, 11 lines, and nine regions while adding
+only one acceptance-diagnostic line. The raw ledger now contains 53,843
+uncovered outcomes.
+
+- Review the remaining 53,843 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,
