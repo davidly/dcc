@@ -654,11 +654,12 @@ and SSA operand predicates while executing the original program generically;
 five source-level reorderings provide independent controls. Both mutator
 functions have exact line, branch, and region coverage.
 
-Forty-one field mutations also exercise distinct byte-math parameter, mask,
-comparison, memory, call, decimal, subtract, add, carry, overflow, logical,
-negative, and zero-flag checks. The original runtime program is restored before
-generic emission, so all 164 target configurations validate fallback output.
-The full clobber manifest contains 1,572 target configurations.
+One hundred forty-four byte-math field mutations exercise retained parameter,
+mask, comparison, memory, call, decimal, subtract, add, carry, overflow,
+logical, negative, zero-flag, and SSA operand checks. The original runtime
+program is restored before generic emission, so all 576 target configurations
+validate fallback output. The full clobber manifest contains 1,984 target
+configurations.
 
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
@@ -683,16 +684,17 @@ functions.
 | --- | --- | ---: |
 | Functions | 4,359 / 4,359 | 100.00% |
 | Lines | 176,885 / 189,940 | 93.13% |
-| Native branch outcomes | 90,095 / 144,518 | 62.34% |
+| Native branch outcomes | 90,196 / 144,518 | 62.41% |
 | Regions | 158,971 / 169,867 | 93.59% |
 
 The second pruning reduces missing lines, branch outcomes, and regions by 27,
 33, and 39 respectively, with no target-output or performance change. The raw
 ledger now contains 54,384 uncovered outcomes. The expanded byte-math field
-matrix covers another 27 branch outcomes, and the per-condition log matrices
-reduce the remaining ledger by another 181. The raw ledger is now 54,176.
+matrix and SSA sweep cover another 128 branch outcomes, and the per-condition
+log matrices reduce the remaining ledger by another 181. The raw ledger is now
+54,075.
 
-- Review the remaining 54,176 unreviewed raw uncovered outcomes rather than
+- Review the remaining 54,075 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,

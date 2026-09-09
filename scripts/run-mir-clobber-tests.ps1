@@ -1668,6 +1668,51 @@ foreach ($mutationCase in $byteMathMutationCases) {
     }
 }
 
+$byteMathSsaMutations = @(
+    "5:src1:999", "6:src1:999", "6:src2:999", "7:src1:999",
+    "12:src1:999", "13:src1:999", "13:src2:999", "14:src1:999",
+    "28:src1:999", "31:src1:999", "32:src1:999", "32:src2:999",
+    "33:src1:999", "40:src1:999", "41:src1:999", "41:src2:999",
+    "42:src1:999", "49:src1:999", "49:src2:999", "53:src1:999",
+    "53:src2:999", "54:src1:999", "61:src1:999", "61:src2:999",
+    "62:src1:999", "73:src1:999", "74:src1:999", "74:src2:999",
+    "75:src1:999", "78:src1:999", "79:src1:999", "79:src2:999",
+    "80:src1:999", "84:src1:999", "89:src1:999", "90:src1:999",
+    "90:src2:999", "91:src1:999", "96:src1:999", "98:src1:999",
+    "99:src1:999", "99:src2:999", "103:src1:999", "104:src1:999",
+    "104:src2:999", "106:src1:999", "108:src1:999", "116:src1:999",
+    "116:src2:999", "118:src1:999", "118:src2:999", "119:src1:999",
+    "120:src2:999", "127:src1:999", "128:src1:999", "129:src1:999",
+    "129:src2:999", "131:src1:999", "131:src2:999", "132:src1:999",
+    "133:src1:999", "138:src1:999", "139:src1:999", "140:src1:999",
+    "140:src2:999", "142:src1:999", "142:src2:999", "143:src1:999",
+    "150:src1:999", "150:src2:999", "151:src2:999", "155:src2:999",
+    "161:src1:999", "162:src1:999", "162:src2:999", "163:src1:999",
+    "169:src1:999", "170:src1:999", "170:src2:999", "171:src1:999",
+    "172:src2:999", "177:src1:999", "178:src1:999", "178:src2:999",
+    "179:src1:999", "185:src1:999", "186:src1:999", "186:src2:999",
+    "187:src1:999", "188:src2:999", "195:src1:999", "196:src1:999",
+    "196:src2:999", "197:src1:999", "198:src2:999", "208:src1:999",
+    "209:src1:999", "209:src2:999", "210:src1:999", "211:src2:999",
+    "217:src1:999", "218:src1:999", "219:src2:999"
+)
+$byteSsaIndex = 0
+foreach ($mutation in $byteMathSsaMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "bs$($byteSsaIndex.ToString('000'))"
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @()
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireRejected = $true
+        MachineMutation = $mutation
+        MachineMutationFunction = "op_math"
+    }
+    ++$byteSsaIndex
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
