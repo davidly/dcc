@@ -499,6 +499,17 @@ under-proven struct-value helpers and nine stale/dead historical helpers.
 They remain in the denominator; no schedule, guard, or classification was
 removed to raise the percentage.
 
+The user subsequently authorized justified deletion. The unsafe struct-value
+schedule and six obsolete/superseded helper closures were removed, while
+forward-attention and global fixed-byte-walk emitters gained exact/generic
+target controls. The redundant `incoming == 0` PHI check was removed after
+preserving entry-PHI and all predecessor/dominance validation.
+
+Function coverage is now exact: 4,357/4,357 (100.00%). Lines are
+176,589/189,955 (92.96%), branches 89,591/144,652 (61.94%), and regions
+158,744/170,023 (93.37%). Therefore the overall coverage objective remains
+open despite complete function coverage.
+
 The user's later direction authorizes deleting code when deletion is
 technically correct and preserves baselines. The unsafe struct-value schedule
 has therefore been retired completely: it was still dispatchable, and its

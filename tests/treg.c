@@ -34,6 +34,31 @@ static void test_walk(void)
     chk(p == buf + 8, "walk end ptr");
 }
 
+#ifdef MIR_CLOBBER_GLOBAL_WALK
+#ifndef MIR_CLOBBER_WALK_MULTIPLIER
+#define MIR_CLOBBER_WALK_MULTIPLIER 3
+#endif
+static unsigned char global_walk_buffer[8];
+
+static void test_global_walk(void)
+{
+    register unsigned char *p;
+    int i;
+
+    for (i = 0; i < 8; i++)
+        global_walk_buffer[i] =
+            (unsigned char)(i * MIR_CLOBBER_WALK_MULTIPLIER);
+    p = global_walk_buffer;
+    for (i = 0; i < 8; i++) {
+        chk(*p == (unsigned char)(
+            i * MIR_CLOBBER_WALK_MULTIPLIER),
+            "global walk value");
+        p++;
+    }
+    chk(p == global_walk_buffer + 8, "global walk end ptr");
+}
+#endif
+
 /* 2. Byte scan with early exit — exercises conditional branch on deref */
 static void test_scan(void)
 {
@@ -219,6 +244,9 @@ static int sum_down(register int n)
 int main(void)
 {
     test_walk();
+#ifdef MIR_CLOBBER_GLOBAL_WALK
+    test_global_walk();
+#endif
     test_scan();
     test_call_spill();
     test_call_around();

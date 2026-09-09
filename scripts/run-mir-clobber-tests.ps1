@@ -115,6 +115,7 @@ function Assert-RunCase(
     [string]$RequiredSelector = "",
     [string]$RequiredCandidate = "",
     [string[]]$RunArguments = @(),
+    [string[]]$FixturePaths = @(),
     [string[]]$AssemblyPatterns = @(),
     [string[]]$ForbiddenAssemblyPatterns = @(),
     [bool]$OddUpperRuntime = $false,
@@ -268,6 +269,9 @@ __ctu:
             throw "$Name assembly unexpectedly matched '$pattern' " +
                 "($configuration)"
         }
+    }
+    foreach ($fixturePath in $FixturePaths) {
+        Copy-Item -LiteralPath $fixturePath -Destination $buildDir
     }
     $run = Invoke-WithTimeout $emulator (
         @("-p", "-s:0", "$outputBase.COM") + $RunArguments
@@ -860,6 +864,57 @@ $caseDefinitions = @(
         ExactFunction = "main"
         RequireExact = $true
         DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "attnold"
+        Sources = @(Join-Path $repoRoot "tests/attnc11.c")
+        Defines = @("MIR_CLOBBER_DISABLE_PROJECTION_CACHE=1")
+        Expected = @("accuracy  14/14")
+        Exit = 0
+        ExactTemplate = "fixed-forward-attention"
+        ExactFunction = "forward_attention"
+        RequireExact = $true
+        FixturePaths = @(
+            (Join-Path $repoRoot "tests/ATTN.WTS"),
+            (Join-Path $repoRoot "tests/ATTN.IN")
+        )
+    },
+    [pscustomobject]@{
+        Name = "attnnear"
+        Sources = @(Join-Path $repoRoot "tests/attnc11.c")
+        Defines = @()
+        Expected = @("accuracy  14/14")
+        Exit = 0
+        ExactTemplate = "fixed-forward-attention"
+        ExactFunction = "forward_attention"
+        RequireRejected = $true
+        FixturePaths = @(
+            (Join-Path $repoRoot "tests/ATTN.WTS"),
+            (Join-Path $repoRoot "tests/ATTN.IN")
+        )
+    },
+    [pscustomobject]@{
+        Name = "globwalk"
+        Sources = @(Join-Path $repoRoot "tests/treg.c")
+        Defines = @("MIR_CLOBBER_GLOBAL_WALK=1")
+        Expected = @("success")
+        Exit = 0
+        ExactTemplate = "fixed-byte-walk-checks"
+        ExactFunction = "test_global_walk"
+        RequireExact = $true
+    },
+    [pscustomobject]@{
+        Name = "globwalkv"
+        Sources = @(Join-Path $repoRoot "tests/treg.c")
+        Defines = @(
+            "MIR_CLOBBER_GLOBAL_WALK=1",
+            "MIR_CLOBBER_WALK_MULTIPLIER=4"
+        )
+        Expected = @("success")
+        Exit = 0
+        ExactTemplate = "fixed-byte-walk-checks"
+        ExactFunction = "test_global_walk"
+        RequireRejected = $true
     },
     [pscustomobject]@{
         Name = "bytemath"
@@ -1458,6 +1513,7 @@ try {
                     -RequiredSelector $case.RequiredSelector `
                     -RequiredCandidate $case.RequiredCandidate `
                     -RunArguments $case.Args `
+                    -FixturePaths $case.FixturePaths `
                     -AssemblyPatterns $case.AssemblyPatterns `
                     -OddUpperRuntime ([bool]$case.OddUpperRuntime)
                 foreach ($debugMode in $case.DebugModes) {
@@ -1468,7 +1524,8 @@ try {
                         -RequiredGenericFunction $case.RequiredGenericFunction `
                         -RequiredSelectorFunction $case.RequiredSelectorFunction `
                         -RequiredSelector $case.RequiredSelector `
-                        -RunArguments $case.Args
+                        -RunArguments $case.Args `
+                        -FixturePaths $case.FixturePaths
                 }
             }
         }

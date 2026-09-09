@@ -504,6 +504,32 @@ disabled struct-value exact schedule whose incomplete argument proof previously
 accepted a known miscompile. The other nine are stale historical emitters or a
 documented dead defensive path; all remain in the denominator.
 
+After deletion was explicitly authorized when technically correct, the
+remaining function gaps were resolved without adding exclusions:
+
+- the historical forward-attention path and file-scope fixed-byte walk now
+  have exact/generic target controls using real fixtures and source mutations;
+- obsolete fixed-time checks (which assumed `time()` always returned -1), a
+  preempted small-switch schedule, stale interpreter-only fusions, the stale
+  constant-buffer schedule, and an impossible post-slot-allocation narrow
+  forwarding branch were retired; and
+- unrelated neighboring named-zero and word-load optimizations were retained
+  and verified after deletion review caught an initially over-broad edit.
+
+All nine historical owner apps passed full peep/nopeep execution with zero
+checked regressions. Stack/no-stack selector censuses reported no changes.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,357 / 4,357 | 100.00% |
+| Lines | 176,589 / 189,955 | 92.96% |
+| Native branch outcomes | 89,591 / 144,652 | 61.94% |
+| Regions | 158,744 / 170,023 | 93.37% |
+
+Function coverage is complete. The broader objective is not: 13,366 lines,
+55,061 native branch outcomes, 11,279 regions, and 54,814 raw unreviewed
+outcomes remain.
+
 The struct-value schedule was subsequently retired rather than repaired. Its
 dispatcher was still active and its historical matcher did not prove ordered
 scalar/aggregate arguments; changing `proto_sum_pair(y)` to

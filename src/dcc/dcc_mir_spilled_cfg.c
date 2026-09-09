@@ -5212,20 +5212,6 @@ static int mir_slot_report_param_assigned_count;
  * gap safely. Found via tests/tc89core.c's main(): its `char msg[] =
  * "core"` initializer stored a wasted high byte for every one of its five
  * constant elements. */
-static int mir_forward_store_target_is_narrow(int forward_instruction)
-{
-    int memory_type;
-    int memory_storage;
-    int memory_offset;
-
-    if (forward_instruction < 0 || forward_instruction >= mir.count)
-        return 0;
-    return mir_scalar_memory_location(&mir.insns[forward_instruction],
-                                      &memory_type, &memory_storage,
-                                      &memory_offset) &&
-           type_size(memory_type) == 1;
-}
-
 static int mir_backend_slot_forwardable(int value, int units, int instruction)
 {
     int saved_index;
@@ -6965,24 +6951,9 @@ struct MirBdosString {
     int parameter_offset;
 };
 
-struct MirTimeChecks {
-    struct Sym *failures;
-    int format_string;
-    int message_string[10];
-};
-
 struct MirEnumFsm {
     struct Sym *transition;
     int input_sp_offset;
-};
-
-struct MirSmallWordSwitch {
-    int input_sp_offset;
-    int first_case;
-    int case_count;
-    int default_value;
-    int range_value;
-    int trailing_value;
 };
 
 struct MirFloatPointerChecks {
@@ -8557,31 +8528,6 @@ static int mir_match_bdos_string(struct MirBdosString *plan)
     return 1;
 }
 
-static int mir_match_time_checks(struct MirTimeChecks *plan)
-{
-    unsigned long long first;
-    unsigned long long second;
-    int message;
-
-    memset(plan, 0, sizeof(*plan));
-    if (mir.count != 335 || mir_cfg_block_count() != 41 ||
-        mir.has_vla || type_size(mir.return_type) != 0)
-        return 0;
-    mir_numeric_shape_hash(&first, &second);
-    if (first != 0x649d0f42a41390d2ULL ||
-        second != 0x0b09a859d43618e3ULL)
-        return 0;
-    plan->failures = find_global("fails");
-    if (plan->failures == NULL || !plan->failures->is_defined ||
-        plan->failures->is_volatile ||
-        type_size(plan->failures->type) != 2)
-        return 0;
-    plan->format_string = 1;
-    for (message = 0; message < 10; ++message)
-        plan->message_string[message] = 51 + message;
-    return 1;
-}
-
 static int mir_match_enum_fsm(struct MirEnumFsm *plan)
 {
     unsigned long long first;
@@ -8610,48 +8556,6 @@ static int mir_match_enum_fsm(struct MirEnumFsm *plan)
         plan->transition->is_volatile)
         return 0;
     plan->input_sp_offset = memory_offset - 2;
-    return 1;
-}
-
-static int mir_match_small_word_switch(struct MirSmallWordSwitch *plan)
-{
-    unsigned long long first;
-    unsigned long long second;
-    int memory_offset;
-    int memory_storage;
-    int memory_type;
-
-    memset(plan, 0, sizeof(*plan));
-    if (mir.count != 45 || mir_cfg_block_count() != 10 ||
-        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
-        type_size(mir.return_type) != 2 ||
-        !mir_scalar_memory_location(
-            &mir.insns[1], &memory_type, &memory_storage,
-            &memory_offset) ||
-        memory_storage != SC_PARAM || type_ptr_depth(memory_type) != 0 ||
-        type_size(memory_type) != 2)
-        return 0;
-    mir_numeric_shape_hash(&first, &second);
-    if (first != 0x1a67e63d86c993dfULL ||
-        second != 0x82ca76305ffe0540ULL ||
-        mir.insns[2].opcode != MIR_CONST ||
-        mir.insns[6].opcode != MIR_CONST ||
-        mir.insns[11].opcode != MIR_CONST ||
-        mir.insns[16].opcode != MIR_CONST ||
-        mir.insns[21].opcode != MIR_CONST ||
-        mir.insns[30].opcode != MIR_CONST ||
-        mir.insns[36].opcode != MIR_CONST ||
-        mir.insns[6].immediate != 1 ||
-        mir.insns[11].immediate != 2 ||
-        mir.insns[16].immediate != 3 ||
-        mir.insns[21].immediate != 4)
-        return 0;
-    plan->input_sp_offset = memory_offset - 2;
-    plan->first_case = (int)mir.insns[6].immediate;
-    plan->case_count = 3;
-    plan->default_value = (int)mir.insns[2].immediate;
-    plan->range_value = (int)mir.insns[30].immediate;
-    plan->trailing_value = (int)mir.insns[36].immediate;
     return 1;
 }
 
@@ -16545,11 +16449,9 @@ static void mir_emit_virtual_store(MirStream *out, int value)
     mir_forwarded_hl_value = -1;
     mir_forwarded_hl_instruction = -1;
     {
-    int forward_to_narrow_store = forward_to_store &&
-        mir_forward_store_target_is_narrow(forward_instruction);
     if (mir_virtual_iy_base && iy_offset >= -128 && iy_offset + 1 <= 127) {
         mir_stream_printf(out, "\tld (iy%+d),l\n", iy_offset);
-        if (!compact_byte_slot && !forward_to_narrow_store)
+        if (!compact_byte_slot)
             mir_stream_printf(out, "\tld (iy%+d),h\n", iy_offset + 1);
         if (forward_to_store) {
             mir_forwarded_hl_value = value;
@@ -16570,7 +16472,7 @@ static void mir_emit_virtual_store(MirStream *out, int value)
                     ? "\tld (ix%+d),l ;@dcc.mir byte-slot\n"
                     : "\tld (ix%+d),l\n",
                 offset);
-        if (!compact_byte_slot && !forward_to_narrow_store)
+        if (!compact_byte_slot)
             mir_stream_printf(out, "\tld (ix%+d),h\n", offset + 1);
         if (forward_to_store) {
             mir_forwarded_hl_value = value;
@@ -18043,92 +17945,6 @@ static void mir_emit_bdos_string(
             loop, done);
 }
 
-static void mir_emit_time_failure(
-    MirStream *out, const struct MirTimeChecks *plan,
-    int message, int success_label)
-{
-    const char *failures_name = asm_name_for(plan->failures->name);
-
-    mir_stream_printf(out,
-            "\tld hl,S%d\n\tpush hl\n"
-            "\tld hl,S%d\n\tpush hl\n",
-            plan->message_string[message],
-            plan->format_string);
-    mir_emit_runtime_call(out, "_printf");
-    mir_stream_printf(out,
-            "\tpop bc\n\tpop bc\n"
-            "\tld hl,(%s)\n\tinc hl\n\tld (%s),hl\n"
-            "L%d:\n",
-            failures_name, failures_name, success_label);
-}
-
-static void mir_emit_time_checks(
-    MirStream *out, const struct MirTimeChecks *plan)
-{
-    static const char *const null_pointer_call[4] = {
-        "_asctime", "_ctime", "_gmtime", "__ltim"
-    };
-    int check;
-    int success;
-
-    mir_emit_symbol_extrn(out, plan->failures);
-    mir_emit_runtime_call(out, "_clock");
-    mir_stream_puts("\tld a,l\n\tand h\n\tand e\n\tand d\n\tinc a\n", out);
-    success = new_label();
-    mir_stream_printf(out, "\tjp z, L%d\n", success);
-    mir_emit_time_failure(out, plan, 0, success);
-
-    mir_stream_puts("\tld hl,0\n\tpush hl\n", out);
-    mir_emit_runtime_call(out, "_time");
-    mir_stream_puts("\tpop bc\n\tld a,l\n\tand h\n\tand e\n\tand d\n\tinc a\n", out);
-    success = new_label();
-    mir_stream_printf(out, "\tjp z, L%d\n", success);
-    mir_emit_time_failure(out, plan, 1, success);
-
-    mir_stream_puts("\tpush ix\n\tpop hl\n\tld de,-4\n\tadd hl,de\n\tpush hl\n", out);
-    mir_emit_runtime_call(out, "_time");
-    mir_stream_puts("\tpop bc\n\tld a,l\n\tand h\n\tand e\n\tand d\n\tinc a\n", out);
-    success = new_label();
-    mir_stream_printf(out, "\tjp z, L%d\n", success);
-    mir_emit_time_failure(out, plan, 2, success);
-
-    mir_stream_puts("\tld hl,0\n\tpush hl\n", out);
-    mir_emit_runtime_call(out, "_mktime");
-    mir_stream_puts("\tpop bc\n\tld a,l\n\tand h\n\tand e\n\tand d\n\tinc a\n", out);
-    success = new_label();
-    mir_stream_printf(out, "\tjp z, L%d\n", success);
-    mir_emit_time_failure(out, plan, 3, success);
-
-    for (check = 0; check < 4; ++check) {
-        mir_stream_puts("\tld hl,0\n\tpush hl\n", out);
-        mir_emit_runtime_call(out, null_pointer_call[check]);
-        mir_stream_puts("\tpop bc\n\tld a,h\n\tor l\n", out);
-        success = new_label();
-        mir_stream_printf(out, "\tjp z, L%d\n", success);
-        mir_emit_time_failure(out, plan, 4 + check, success);
-    }
-
-    mir_stream_puts("\tld hl,0\n\tpush hl\n\tpush hl\n\tpush hl\n\tpush hl\n", out);
-    mir_emit_runtime_call(out, "_strftime");
-    mir_stream_puts("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
-          "\tld a,h\n\tor l\n", out);
-    success = new_label();
-    mir_stream_printf(out, "\tjp z, L%d\n", success);
-    mir_emit_time_failure(out, plan, 8, success);
-
-    mir_stream_puts("\tld hl,65535\n\tld de,65535\n"
-          "\tpush de\n\tpush hl\n\tpush de\n\tpush hl\n", out);
-    mir_emit_runtime_call(out, "_difftime");
-    mir_stream_puts("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
-          "\tpush de\n\tpush hl\n\tld hl,0\n\tld de,0\n", out);
-    mir_emit_runtime_call(out, "__feqf");
-    mir_stream_puts("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
-    success = new_label();
-    mir_stream_printf(out, "\tjp nz, L%d\n", success);
-    mir_emit_time_failure(out, plan, 9, success);
-    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
-}
-
 static void mir_emit_enum_fsm(
     MirStream *out, const struct MirEnumFsm *plan)
 {
@@ -18153,35 +17969,6 @@ static void mir_emit_enum_fsm(
             transition_name,
             loop,
             done);
-}
-
-static void mir_emit_small_word_switch(
-    MirStream *out, const struct MirSmallWordSwitch *plan)
-{
-    int default_label = new_label();
-    int range_label = new_label();
-
-    mir_stream_printf(out,
-            "\tld hl,%d\n\tadd hl,sp\n"
-            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
-            "\tld l,c\n\tld h,b\n",
-            plan->input_sp_offset);
-    if (plan->first_case == 1)
-        mir_stream_puts("\tdec hl\n", out);
-    else
-        mir_stream_printf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
-                plan->first_case);
-    mir_stream_printf(out,
-            "\tld a,h\n\tor a\n\tjp nz, L%d\n"
-            "\tld a,l\n\tcp %d\n\tjp c, L%d\n\tjp nz, L%d\n"
-            "\tld hl,%d\n\tret\n"
-            "L%d:\n\tld hl,%d\n\tret\n"
-            "L%d:\n\tld hl,%d\n\tret\n",
-            default_label,
-            plan->case_count, range_label, default_label,
-            plan->trailing_value,
-            range_label, plan->range_value,
-            default_label, plan->default_value);
 }
 
 static void mir_emit_float_identity_store(
@@ -28287,14 +28074,6 @@ static void mir_emit_inline_postincrement_store(
     mir_stream_printf(out, "\tjp L%d\n", labels[continuation_label]);
 }
 
-struct MirInlineWordLoadPush {
-    const struct MirInsn *base_load;
-    const struct MirInsn *index_load;
-    int call_instruction;
-    int continuation_instruction;
-    int continuation_label;
-};
-
 struct MirInlineTypedLoadPush {
     int input_member_value;
     int base_member_value;
@@ -28564,152 +28343,6 @@ static int mir_emit_inline_typed_load_push(
         out, labels, helper, -1, 1, shared_helper_label,
         plan->continuation_label);
     return 1;
-}
-
-static int mir_match_inline_word_load_push(
-    int instruction, const struct MirInlinePostincrementStore *helper,
-    struct MirInlineWordLoadPush *plan)
-{
-    const struct MirInsn *base1;
-    const struct MirInsn *index1;
-    const struct MirInsn *zero1;
-    const struct MirInsn *index_value1;
-    const struct MirInsn *address1;
-    const struct MirInsn *low;
-    const struct MirInsn *base2;
-    const struct MirInsn *index2;
-    const struct MirInsn *zero2;
-    const struct MirInsn *index_value2;
-    const struct MirInsn *one;
-    const struct MirInsn *index_plus_one;
-    const struct MirInsn *address2;
-    const struct MirInsn *high;
-    const struct MirInsn *eight;
-    const struct MirInsn *high_extend;
-    const struct MirInsn *shift;
-    const struct MirInsn *low_extend;
-    const struct MirInsn *combine;
-    const struct MirInsn *argument;
-    const struct MirInsn *call;
-    int argument_value;
-    int continuation_instruction;
-    int continuation_label;
-    int cursor = instruction;
-
-#define MIR_NEXT_WORD_PUSH_INSN(target) \
-    do { \
-        if (cursor < 0 || cursor >= mir.count) \
-            return 0; \
-        target = &mir.insns[cursor]; \
-        cursor = mir_low_byte_loop_next_effective(cursor); \
-    } while (0)
-
-    memset(plan, 0, sizeof(*plan));
-    MIR_NEXT_WORD_PUSH_INSN(base1);
-    MIR_NEXT_WORD_PUSH_INSN(index1);
-    MIR_NEXT_WORD_PUSH_INSN(zero1);
-    MIR_NEXT_WORD_PUSH_INSN(index_value1);
-    MIR_NEXT_WORD_PUSH_INSN(address1);
-    MIR_NEXT_WORD_PUSH_INSN(low);
-    MIR_NEXT_WORD_PUSH_INSN(base2);
-    MIR_NEXT_WORD_PUSH_INSN(index2);
-    MIR_NEXT_WORD_PUSH_INSN(zero2);
-    MIR_NEXT_WORD_PUSH_INSN(index_value2);
-    MIR_NEXT_WORD_PUSH_INSN(one);
-    MIR_NEXT_WORD_PUSH_INSN(index_plus_one);
-    MIR_NEXT_WORD_PUSH_INSN(address2);
-    MIR_NEXT_WORD_PUSH_INSN(high);
-    MIR_NEXT_WORD_PUSH_INSN(eight);
-    MIR_NEXT_WORD_PUSH_INSN(high_extend);
-    MIR_NEXT_WORD_PUSH_INSN(shift);
-    MIR_NEXT_WORD_PUSH_INSN(low_extend);
-    MIR_NEXT_WORD_PUSH_INSN(combine);
-    MIR_NEXT_WORD_PUSH_INSN(argument);
-    MIR_NEXT_WORD_PUSH_INSN(call);
-#undef MIR_NEXT_WORD_PUSH_INSN
-
-    if (base1->opcode != MIR_LOAD || base1->memory_flags != 0 ||
-        index1->opcode != MIR_LOAD || index1->memory_flags != 0 ||
-        !mir_byte_verify_location(base1, 2, NULL) ||
-        !mir_byte_verify_location(index1, 2, NULL) ||
-        zero1->opcode != MIR_CONST || zero1->immediate != 0 ||
-        index_value1->opcode != MIR_BINARY ||
-        index_value1->immediate != '+' ||
-        index_value1->src1 != index1->dst ||
-        index_value1->src2 != zero1->dst ||
-        address1->opcode != MIR_INDEX_ADDRESS ||
-        address1->src1 != base1->dst ||
-        address1->src2 != index_value1->dst ||
-        address1->immediate != 1 ||
-        low->opcode != MIR_LOAD_INDIRECT ||
-        low->src1 != address1->dst || low->memory_size != 1 ||
-        low->memory_flags != 0 ||
-        base2->opcode != MIR_LOAD || base2->memory_flags != 0 ||
-        !mir_same_scalar_memory_location(base1, base2) ||
-        index2->opcode != MIR_LOAD || index2->memory_flags != 0 ||
-        !mir_same_scalar_memory_location(index1, index2) ||
-        zero2->opcode != MIR_CONST || zero2->immediate != 0 ||
-        index_value2->opcode != MIR_BINARY ||
-        index_value2->immediate != '+' ||
-        index_value2->src1 != index2->dst ||
-        index_value2->src2 != zero2->dst ||
-        one->opcode != MIR_CONST || one->immediate != 1 ||
-        index_plus_one->opcode != MIR_BINARY ||
-        index_plus_one->immediate != '+' ||
-        index_plus_one->src1 != index_value2->dst ||
-        index_plus_one->src2 != one->dst ||
-        address2->opcode != MIR_INDEX_ADDRESS ||
-        address2->src1 != base2->dst ||
-        address2->src2 != index_plus_one->dst ||
-        address2->immediate != 1 ||
-        high->opcode != MIR_LOAD_INDIRECT ||
-        high->src1 != address2->dst || high->memory_size != 1 ||
-        high->memory_flags != 0 ||
-        eight->opcode != MIR_CONST || eight->immediate != 8 ||
-        high_extend->opcode != MIR_UNARY ||
-        high_extend->immediate != 0 ||
-        high_extend->src1 != high->dst ||
-        shift->opcode != MIR_BINARY ||
-        shift->immediate != TOK_SHL ||
-        shift->src1 != high_extend->dst ||
-        shift->src2 != eight->dst ||
-        low_extend->opcode != MIR_UNARY ||
-        low_extend->immediate != 0 ||
-        low_extend->src1 != low->dst ||
-        combine->opcode != MIR_BINARY ||
-        combine->immediate != '|' ||
-        combine->src1 != low_extend->dst ||
-        combine->src2 != shift->dst ||
-        argument->opcode != MIR_ARG ||
-        argument->src1 != combine->dst ||
-        call->opcode != MIR_CALL ||
-        !mir_call_uses_inline_postincrement_store(
-            helper, (int)(call - mir.insns), &argument_value,
-            &continuation_instruction, &continuation_label) ||
-        argument_value != combine->dst)
-        return 0;
-    plan->base_load = base1;
-    plan->index_load = index1;
-    plan->call_instruction = (int)(call - mir.insns);
-    plan->continuation_instruction = continuation_instruction;
-    plan->continuation_label = continuation_label;
-    return 1;
-}
-
-static void mir_emit_inline_word_load_push(
-    MirStream *out, const int *labels,
-    const struct MirInlinePostincrementStore *helper,
-    int shared_helper_label,
-    const struct MirInlineWordLoadPush *plan)
-{
-    mir_emit_named_word_load_to_hl(out, plan->base_load);
-    mir_stream_puts("\tpush hl\n", out);
-    mir_emit_named_word_load_to_hl(out, plan->index_load);
-    mir_stream_puts("\tpop de\n\tadd hl,de\n"
-          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
-    mir_emit_inline_postincrement_store(
-        out, labels, helper, -1, 1, shared_helper_label,
-        plan->continuation_label);
 }
 
 static int mir_narrow_store_preserves_hl(int instruction, int value)
@@ -29048,17 +28681,6 @@ static int mir_match_dense_byte_switch_condition_load(
     return 1;
 }
 
-struct MirDensePostincrementIndexSwitch {
-    struct MirDenseByteSwitch dispatch;
-    int skip_through;
-    int base_address_value;
-    int increment_instruction;
-    int increment_value;
-    int pc_offset;
-    int element_offset;
-    int stride;
-};
-
 struct MirNamedZeroBranch {
     int member_value;
     int branch_instruction;
@@ -29157,179 +28779,6 @@ static int mir_emit_named_zero_branch(
     return mir_emit_conditional_branch_with_phi_copies(
         out, labels, "nz", plan->branch_instruction,
         plan->target_instruction, plan->branch_label);
-}
-
-static int mir_match_dense_postincrement_index_switch(
-    int instruction, struct MirDensePostincrementIndexSwitch *plan)
-{
-    const struct MirInsn *base_address;
-    const struct MirInsn *base_member;
-    const struct MirInsn *base_load;
-    const struct MirInsn *pc_load;
-    const struct MirInsn *one;
-    const struct MirInsn *increment;
-    const struct MirInsn *pc_store;
-    const struct MirInsn *index;
-    const struct MirInsn *element_store;
-    const struct MirInsn *element_load;
-    const struct MirInsn *condition_member;
-    const struct MirInsn *condition_load;
-    int cursor;
-    int dense_match;
-    int element_location;
-    int element_same;
-    int pc_location;
-    int pc_same;
-    int pc_offset;
-    int element_offset;
-
-    memset(plan, 0, sizeof(*plan));
-    if (instruction < 0 || instruction >= mir.count)
-        return 0;
-    base_address = &mir.insns[instruction];
-    cursor = mir_low_byte_loop_next_effective(instruction);
-    if (cursor >= mir.count)
-        return 0;
-    base_member = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    base_load = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    pc_load = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    one = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    increment = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    pc_store = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    index = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    element_store = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    element_load = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    condition_member = &mir.insns[cursor];
-    cursor = mir_low_byte_loop_next_effective(cursor);
-    if (cursor >= mir.count)
-        return 0;
-    condition_load = &mir.insns[cursor];
-    pc_location = mir_byte_verify_location(
-        pc_load, 2, &pc_offset);
-    pc_same = mir_same_scalar_memory_location(
-        pc_load, pc_store);
-    element_location = mir_byte_verify_location(
-        element_store, 2, &element_offset);
-    element_same = mir_same_scalar_memory_location(
-        element_store, element_load);
-    dense_match = mir_match_dense_byte_switch(
-        cursor + 1, &plan->dispatch);
-    if (base_address->opcode != MIR_ADDRESS ||
-        base_member->opcode != MIR_MEMBER_ADDRESS ||
-        base_member->src1 != base_address->dst ||
-        base_member->memory_size != 2 ||
-        base_load->opcode != MIR_LOAD_INDIRECT ||
-        base_load->src1 != base_member->dst ||
-        type_size(base_load->type) != 2 ||
-        pc_load->opcode != MIR_LOAD ||
-        !pc_location ||
-        one->opcode != MIR_CONST || one->immediate != 1 ||
-        increment->opcode != MIR_BINARY ||
-        increment->immediate != '+' ||
-        increment->src1 != pc_load->dst ||
-        increment->src2 != one->dst ||
-        pc_store->opcode != MIR_STORE ||
-        pc_store->src1 != increment->dst ||
-        !pc_same ||
-        index->opcode != MIR_INDEX_ADDRESS ||
-        index->src1 != base_load->dst ||
-        index->src2 != pc_load->dst ||
-        index->immediate <= 0 ||
-        element_store->opcode != MIR_STORE ||
-        element_store->src1 != index->dst ||
-        !element_location ||
-        element_load->opcode != MIR_LOAD ||
-        !element_same ||
-        condition_member->opcode != MIR_MEMBER_ADDRESS ||
-        condition_member->src1 != element_load->dst ||
-        condition_member->immediate != 0 ||
-        condition_member->memory_size != 1 ||
-        condition_load->opcode != MIR_LOAD_INDIRECT ||
-        condition_load->src1 != condition_member->dst ||
-        condition_load->memory_size != 1 ||
-        !dense_match ||
-        plan->dispatch.condition != condition_load->dst ||
-        mir_value_use_count(base_address->dst) != 1 ||
-        mir_value_use_count(base_member->dst) != 1 ||
-        mir_value_use_count(base_load->dst) != 1 ||
-        mir_value_use_count(pc_load->dst) != 2 ||
-        mir_value_use_count(one->dst) != 1 ||
-        mir_value_use_count(index->dst) != 1 ||
-        mir_value_use_count(element_load->dst) != 1 ||
-        mir_value_use_count(condition_member->dst) != 1 ||
-        mir_value_use_count(condition_load->dst) !=
-            plan->dispatch.case_count)
-        return 0;
-    plan->dispatch.condition_in_hl = 1;
-    plan->dispatch.condition_in_a = 1;
-    plan->skip_through = plan->dispatch.end_instruction;
-    plan->base_address_value = base_member->dst;
-    plan->increment_instruction = (int)(increment - mir.insns);
-    plan->increment_value = increment->dst;
-    plan->pc_offset = pc_offset;
-    plan->element_offset = element_offset;
-    plan->stride = (int)index->immediate;
-    return 1;
-}
-
-static int mir_emit_dense_postincrement_index_switch(
-    MirStream *out, const int *labels,
-    const struct MirDensePostincrementIndexSwitch *plan)
-{
-    char operand[160];
-    int saved_instruction;
-
-    mir_stream_printf(out,
-            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
-            "\tpush hl\n\tinc hl\n",
-            plan->pc_offset, plan->pc_offset + 1);
-    mir_emit_frame_word_store(out, plan->pc_offset);
-    saved_instruction = mir_emit_instruction_index;
-    mir_emit_instruction_index = plan->increment_instruction;
-    mir_emit_virtual_store(out, plan->increment_value);
-    mir_emit_instruction_index = saved_instruction;
-    mir_stream_puts("\tpop hl\n", out);
-    if (plan->stride == 2)
-        mir_stream_puts("\tadd hl,hl\n", out);
-    else if (plan->stride > 2)
-        mir_emit_mul_hl_const(out, (unsigned long)plan->stride);
-    if (!mir_prepare_constant_absolute_operand(
-            out, plan->base_address_value,
-            operand, sizeof(operand)))
-        return 0;
-    mir_stream_printf(out, "\tld de,(%s)\n\tadd hl,de\n"
-                 "\tld (ix%+d),l\n\tld (ix%+d),h\n"
-                  "\tld a,(hl)\n",
-            operand, plan->element_offset, plan->element_offset + 1);
-    mir_emit_dense_byte_switch(out, labels, &plan->dispatch);
-    return 1;
 }
 
 static int mir_emit_named_word_load_to_hl(
@@ -32039,9 +31488,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     struct MirStructSort struct_sort;
     struct MirFixedWordSum fixed_word_sum;
     struct MirBdosString bdos_string;
-    struct MirTimeChecks time_checks;
     struct MirEnumFsm enum_fsm;
-    struct MirSmallWordSwitch small_word_switch;
     struct MirFloatPointerChecks float_pointer_checks;
     struct MirErrnoCheck errno_check;
     struct MirWideGcd wide_gcd;
@@ -32371,28 +31818,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         accepted = 1;
         goto done;
     }
-    if (mir_match_time_checks(&time_checks)) {
-        mir_stream_puts("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
-              "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
-        if (opt_stack_check)
-            mir_emit_runtime_call(out, "__stchk");
-        mir_emit_time_checks(out, &time_checks);
-        mir_spilled_cfg_used_exact_semantic_kernel = 1;
-        accepted = 1;
-        goto done;
-    }
     if (mir_match_enum_fsm(&enum_fsm)) {
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_enum_fsm(out, &enum_fsm);
-        mir_spilled_cfg_used_exact_semantic_kernel = 1;
-        accepted = 1;
-        goto done;
-    }
-    if (mir_match_small_word_switch(&small_word_switch)) {
-        if (opt_stack_check)
-            mir_emit_runtime_call(out, "__stchk");
-        mir_emit_small_word_switch(out, &small_word_switch);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
@@ -33086,9 +32515,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         int fused_end;
         int fused_result;
         struct MirDenseByteSwitch dense_switch;
-        struct MirDensePostincrementIndexSwitch dense_index_switch;
         struct MirInlineTypedLoadPush inline_typed_load_push;
-        struct MirInlineWordLoadPush inline_word_load_push;
         struct MirNamedZeroBranch named_zero_branch;
         struct MirWordLoadOrBranch word_or;
         struct MirFixedArrayInit fixed_array_init;
@@ -33115,46 +32542,6 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         mir_emit_prepacked_bool_arguments(out, i);
         if (i <= mir_prepacked_skip_through)
             continue;
-        if (insn->opcode == MIR_LOAD &&
-            mir_match_inline_word_load_push(
-                i, &inline_postincrement_helper,
-                &inline_word_load_push)) {
-            mir_emit_inline_word_load_push(
-                out, labels, &inline_postincrement_helper,
-                inline_postincrement_shared_label,
-                &inline_word_load_push);
-            ++mir_spilled_cfg_inline_postincrement_use_count;
-            i = inline_word_load_push.continuation_instruction;
-            continue;
-        }
-        if (insn->opcode == MIR_ADDRESS &&
-            mir_match_dense_postincrement_index_switch(
-                i, &dense_index_switch)) {
-            if (!mir_emit_dense_postincrement_index_switch(
-                    out, labels, &dense_index_switch))
-                goto done;
-            dense_switch = dense_index_switch.dispatch;
-            mir_spilled_cfg_used_dense_byte_switch = 1;
-            mir_spilled_cfg_dense_switch_case_count =
-                dense_switch.case_count;
-            mir_spilled_cfg_dense_switch_minimum =
-                dense_switch.minimum_case;
-            mir_spilled_cfg_dense_switch_maximum =
-                dense_switch.maximum_case;
-            mir_spilled_cfg_dense_switch_direct_condition = 1;
-            mir_spilled_cfg_dense_switch_postincrement_index = 1;
-            if (getenv("DCC_MIR_SWITCH_REPORT") != NULL)
-                fprintf(stderr,
-                        "; MIR dense-switch function=%s cases=%d "
-                        "minimum=%d maximum=%d start=%d end=%d "
-                        "direct-condition=1 postincrement-index=1\n",
-                        mir.name, dense_switch.case_count,
-                        dense_switch.minimum_case,
-                        dense_switch.maximum_case,
-                        i, dense_switch.end_instruction);
-            i = dense_index_switch.skip_through;
-            continue;
-        }
         if (insn->opcode == MIR_ADDRESS &&
             mir_match_word_load_or_branch(i, &word_or) &&
             mir_emit_word_load_or_branch(out, labels, &word_or)) {
