@@ -14263,6 +14263,7 @@ int mir_try_emit_numeric_kernels(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_catalan_driver_schedule(&catalan_plan)) {
+            mir_machine_accept("catalan-driver-schedule");
             mir_emit_catalan_driver_schedule(out, &catalan_plan);
             return 1;
         }

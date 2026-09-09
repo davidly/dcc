@@ -658,7 +658,7 @@ One hundred forty-four byte-math field mutations exercise retained parameter,
 mask, comparison, memory, call, decimal, subtract, add, carry, overflow,
 logical, negative, zero-flag, and SSA operand checks. The original runtime
 program is restored before generic emission, so all 576 target configurations
-validate fallback output. The full clobber manifest contains 3,184 target
+validate fallback output. The full clobber manifest contains 3,628 target
 configurations.
 
 | Metric | Covered / total | Percent |
@@ -743,7 +743,22 @@ This adds 83 covered branch outcomes, 33 lines, and 14 regions while adding
 only one acceptance-diagnostic line. The raw ledger now contains 53,760
 uncovered outcomes.
 
-- Review the remaining 53,760 unreviewed raw uncovered outcomes rather than
+The Catalan driver now has a named accepted control plus 110 restored-MIR
+field and SSA mutations. All 444 target configurations preserve the canonical
+100-digit output, using the documented 768-byte stack requirement.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,359 / 4,359 | 100.00% |
+| Lines | 176,985 / 189,944 | 93.18% |
+| Native branch outcomes | 90,622 / 144,518 | 62.71% |
+| Regions | 159,022 / 169,867 | 93.62% |
+
+This adds 111 covered branch outcomes, 25 lines, and 12 regions while adding
+only one acceptance-diagnostic line. The raw ledger now contains 53,649
+uncovered outcomes.
+
+- Review the remaining 53,649 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,

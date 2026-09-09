@@ -165,6 +165,7 @@ function Assert-RunCase(
     [string[]]$AssemblyPatterns = @(),
     [string[]]$ForbiddenAssemblyPatterns = @(),
     [bool]$OddUpperRuntime = $false,
+    [int]$StackBytes = 512,
     [string]$MachineMutation = "",
     [string]$MachineMutationFunction = "",
     [string]$DebugMode = ""
@@ -187,7 +188,7 @@ function Assert-RunCase(
         "dcc-build-dir=$buildDir",
         "dcc-peep=$([string]$Peep)",
         "dcc-stack-check=$([string]$StackCheck)",
-        "dcc-stack-bytes=512"
+        "dcc-stack-bytes=$StackBytes"
     )
     if ($DebugMode) {
         $arguments += "dcc-debug=$DebugMode"
@@ -372,6 +373,7 @@ function Assert-RequestedExecutionCounts {
         return
     }
     $specialCounts = @{
+        catalanmut = 444
         fuzz = -1
         minimax = 28
         minimaxmut = 320
@@ -389,6 +391,7 @@ function Assert-RequestedExecutionCounts {
         if ($specialCounts.ContainsKey($requested)) {
             $expected = $specialCounts[$requested]
             $patterns = switch ($requested) {
+                "catalanmut" { @("^catexact\|", "^ct") }
                 "fuzz" { @("^fuzz-", "^fuzzforced-") }
                 "minimax" { @("^minimax-") }
                 "minimaxmut" { @("^mmexact\|", "^mx") }
@@ -1917,6 +1920,66 @@ foreach ($mutation in $minimaxMutations) {
     ++$minimaxMutationIndex
 }
 
+$catalanMutations = @(
+    "11:type:1", "12:src1:999", "12:src2:999", "12:immediate:999",
+    "12:memory_size:3", "14:type:1", "15:src1:999", "15:src2:999",
+    "15:memory_size:3", "18:src1:999", "18:src2:999", "18:immediate:999",
+    "18:memory_size:3", "21:src1:999", "21:src2:999", "21:memory_size:3",
+    "29:src1:999", "31:src1:999", "31:src2:999", "36:immediate:999",
+    "36:src1:999", "37:src1:999", "39:type:1", "41:immediate:999",
+    "41:src1:999", "41:type:1", "42:immediate:999", "42:src1:999",
+    "42:src2:999", "43:src1:999", "158:type:1", "165:immediate:999",
+    "165:src1:999", "165:src2:999", "166:src1:999", "176:src1:999",
+    "178:src1:999", "178:src2:999", "183:immediate:999", "183:src1:999",
+    "184:src1:999", "188:immediate:999", "188:src1:999",
+    "189:immediate:999", "189:src1:999", "189:src2:999", "190:src1:999",
+    "312:immediate:999", "312:src1:999", "312:src2:999", "313:src1:999",
+    "320:src1:999", "320:src2:999", "320:immediate:999", "321:src1:999",
+    "321:memory_size:3", "321:type:1", "323:type:1", "333:src1:999",
+    "337:src1:999", "355:immediate:999", "355:src1:999", "355:src2:999",
+    "356:src1:999", "359:immediate:999", "359:src1:999", "359:src2:999",
+    "360:src1:999", "373:immediate:999", "373:src1:999", "373:src2:999",
+    "374:src1:999", "380:src1:999", "380:src2:999",
+    "382:immediate:999", "382:src1:999", "382:src2:999", "383:src1:999",
+    "386:immediate:999", "386:src1:999", "386:src2:999", "387:src1:999",
+    "399:src1:999", "399:src2:999", "399:immediate:999", "400:src1:999",
+    "400:memory_size:3", "402:immediate:999", "402:src1:999",
+    "402:src2:999", "405:immediate:999", "405:src1:999", "405:src2:999",
+    "406:immediate:999", "406:src1:999", "407:immediate:999",
+    "407:src1:999", "407:src2:999", "407:type:1", "412:immediate:999",
+    "412:src1:999", "412:src2:999", "414:src1:999",
+    "417:immediate:999", "417:src1:999", "417:src2:999", "418:src1:999",
+    "434:src1:999", "434:type:1", "436:src1:999"
+)
+$caseDefinitions += [pscustomobject]@{
+    Name = "catexact"
+    Sources = @(Join-Path $repoRoot "tests/catalan.c")
+    Defines = @()
+    Expected = @("0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062")
+    Exit = 0
+    StackBytes = 768
+    ExactTemplate = "catalan-driver-schedule"
+    ExactFunction = "main"
+    RequireExact = $true
+}
+$catalanMutationIndex = 0
+foreach ($mutation in $catalanMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "ct$($catalanMutationIndex.ToString('000'))"
+        Sources = @(Join-Path $repoRoot "tests/catalan.c")
+        Defines = @()
+        Expected = @("0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062")
+        Exit = 0
+        StackBytes = 768
+        RequiredGenericFunction = "main"
+        RequiredSelectorFunction = "main"
+        RequiredSelector = "spilled-scalar-cfg"
+        MachineMutation = $mutation
+        MachineMutationFunction = "main"
+    }
+    ++$catalanMutationIndex
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
@@ -1931,7 +1994,7 @@ try {
         throw "MIR exact-rejection selection evidence controls failed"
     }
     $knownCases = @($caseDefinitions.Name) + @(
-        "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes",
+        "catalanmut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes",
         "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
@@ -2172,6 +2235,8 @@ try {
 
     foreach ($case in $caseDefinitions) {
         if ($Cases.Count -gt 0 -and $case.Name -notin $Cases -and
+            -not (($case.Name -eq "catexact" -or $case.Name.StartsWith("ct")) -and
+                "catalanmut" -in $Cases) -and
             -not ($case.Name.StartsWith("fuzz-") -and "fuzz" -in $Cases) -and
             -not (($case.Name -eq "mmexact" -or $case.Name.StartsWith("mx")) -and
                 "minimaxmut" -in $Cases) -and
@@ -2201,6 +2266,9 @@ try {
                     -FixturePaths $case.FixturePaths `
                     -AssemblyPatterns $case.AssemblyPatterns `
                     -OddUpperRuntime ([bool]$case.OddUpperRuntime) `
+                    -StackBytes $(if ($case.StackBytes) {
+                        [int]$case.StackBytes
+                    } else { 512 }) `
                     -MachineMutation $case.MachineMutation `
                     -MachineMutationFunction $case.MachineMutationFunction
                 foreach ($debugMode in $case.DebugModes) {
