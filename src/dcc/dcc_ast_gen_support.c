@@ -374,6 +374,9 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                     return 0;
                 }
             }
+            /* The common lvalue query above already returns for every long
+             * and float element, so the shape-specific fallbacks below only
+             * need pointer and narrow-integer policies. */
             /* Deref-of-pointer-to-array subscript store `(*p)[i] = rhs` (p a
              * pointer-to-array local/param, e.g. `int (*p)[4]`).  Long and
              * float element stores are already accepted by the
@@ -391,13 +394,6 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                            ast_int_elem_assign_rhs_ok(n);
             }
             if (ast_index_symbol_nd_elem_type(n->a, &elem)) {
-                if (type_is_long(elem))
-                    return (n->op == '=' || (is_compound && expr_result_dead)) &&
-                           (ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b));
-                if (type_is_float(elem))
-                    return (n->op == '=' || n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
-                            n->op == TOK_MULEQ || n->op == TOK_DIVEQ) &&
-                           (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b));
                 if (n->op != '=' && !(is_compound && expr_result_dead))
                     return 0;
                 if (type_ptr_depth(elem) > 0)
@@ -409,13 +405,6 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                        ast_int_elem_assign_rhs_ok(n);
             }
             if (ast_index_pointer_expr_elem_type(n->a, &elem)) {
-                if (type_is_long(elem))
-                    return n->op == '=' &&
-                           (ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b));
-                if (type_is_float(elem))
-                    return (n->op == '=' || n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
-                            n->op == TOK_MULEQ || n->op == TOK_DIVEQ) &&
-                           (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b));
                 if (n->op != '=')
                     return 0;
                 if (type_ptr_depth(elem) > 0)
@@ -437,42 +426,10 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                 } else {
                     elem = 0;
                 }
-                if (type_is_long(elem))
-                    return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b);
-                if (type_is_float(elem))
-                    return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b);
                 if (type_ptr_depth(elem) > 0)
                     return type_size(elem) == 2 && ast_pointer_assign_rhs_supported(n->b);
             }
-            if (is_compound && ast_index_addressable_addr(n->a)) {
-                if (ast_index_2d_array_elem_type(n->a, &elem)) {
-                    /* elem set by helper */
-                } else if (n->a->a != NULL && n->a->a->kind == AST_IDENT) {
-                    base = find_sym(n->a->a->sval);
-                    if (base == NULL)
-                        return 0;
-                    decayed = base->is_array ? type_add_ptr(base->type) : base->type;
-                    elem = type_decay_ptr(decayed);
-                } else {
-                    elem = 0;
-                }
-                if (type_is_long(elem))
-                    return expr_result_dead &&
-                           (ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b));
-                if (type_is_float(elem))
-                    return (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
-                            n->op == TOK_MULEQ || n->op == TOK_DIVEQ) &&
-                           expr_result_dead &&
-                           (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b));
-            }
             if (ast_index_2d_array_elem_type(n->a, &elem)) {
-                if (type_is_long(elem))
-                    return n->op == '=' &&
-                           (ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b));
-                if (type_is_float(elem))
-                    return (n->op == '=' || n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
-                            n->op == TOK_MULEQ || n->op == TOK_DIVEQ) &&
-                           (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b));
                 if (n->op != '=')
                     return 0;
                 if (type_ptr_depth(elem) > 0)
@@ -488,12 +445,6 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                 return ast_pointer_assign_rhs_supported(n->b);
             }
             if (ast_index_member_pointer_elem_type(n->a, &elem)) {
-                if (type_is_long(elem))
-                    return n->op == '=' &&
-                           (ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b));
-                if (type_is_float(elem))
-                    return n->op == '=' &&
-                           (ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b));
                 if (type_ptr_depth(elem) > 0)
                     return n->op == '=' && type_size(elem) == 2 &&
                            ast_pointer_assign_rhs_supported(n->b);
@@ -527,12 +478,8 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                            ast_value_is_plain_int(n->b);
                 if (!ast_index_subscript_supported(n->a->b))
                     return 0;
-                if (type_is_float(elem))
-                    return ast_value_is_float_word(n->b) || ast_value_is_plain_int(n->b);
                 if (type_is_bool(elem))
                     return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b) || ast_value_is_float_word(n->b);
-                if (type_is_long(elem))
-                    return ast_value_is_long_word(n->b) || ast_value_is_plain_int(n->b);
                 if (type_ptr_depth(elem) > 0)
                     return type_size(elem) == 2 && ast_pointer_assign_rhs_supported(n->b);
                 if (!ast_is_plain_int_type(elem))

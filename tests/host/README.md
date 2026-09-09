@@ -50,7 +50,10 @@ consumers use their predecessor's value and that each inserted return uses the
 new consumer result after instruction storage grows.
 The AST support matrix also checks malformed assignment rejection plus
 identifier, long, float, pointer, array, and every compound-assignment operator
-without relying on parser filtering.
+without relying on parser filtering. Pointer-index controls include
+pointer-array elements, dereferenced pointer-to-array rows, computed pointer
+expressions, multidimensional pointer elements, and pointer-valued members,
+with nonzero-pointer and compound-assignment rejection cases.
 
 `dcc_mir_verify.c` constructs an independent CFG and immediate-dominator tree
 using reverse postorder. Its storage is linear in the MIR size. Verification

@@ -80,8 +80,13 @@ static void verify_ast_assignment_support(void)
     struct AstNode wide;
     struct AstNode real;
     struct AstNode invalid_lvalue;
+    struct AstNode unsupported_rhs;
     struct AstNode index;
+    struct AstNode inner_index;
     struct AstNode dereference;
+    struct AstNode address;
+    struct AstNode member;
+    struct AstNode owner;
     struct Sym *symbol;
     int saved_dead = expr_result_dead;
     int item;
@@ -92,8 +97,13 @@ static void verify_ast_assignment_support(void)
     memset(&wide, 0, sizeof(wide));
     memset(&real, 0, sizeof(real));
     memset(&invalid_lvalue, 0, sizeof(invalid_lvalue));
+    memset(&unsupported_rhs, 0, sizeof(unsupported_rhs));
     memset(&index, 0, sizeof(index));
+    memset(&inner_index, 0, sizeof(inner_index));
     memset(&dereference, 0, sizeof(dereference));
+    memset(&address, 0, sizeof(address));
+    memset(&member, 0, sizeof(member));
+    memset(&owner, 0, sizeof(owner));
     lhs.kind = AST_IDENT;
     integer.kind = AST_INT_LIT;
     integer.type = TYPE_INT;
@@ -135,6 +145,10 @@ static void verify_ast_assignment_support(void)
     lhs.sym = symbol;
     ok = ok && ast_assignment_probe(
         &assign, &lhs, &integer, '=');
+    unsupported_rhs.kind = AST_BREAK;
+    unsupported_rhs.type = TYPE_INT;
+    ok = ok && !ast_assignment_probe(
+        &assign, &lhs, &unsupported_rhs, '=');
     for (item = 0;
          item < (int)(sizeof(compound_ops) / sizeof(compound_ops[0]));
          ++item)
@@ -186,6 +200,204 @@ static void verify_ast_assignment_support(void)
     ok = ok && ast_assignment_probe(
         &assign, &lhs, &integer, '=');
     integer.ival = 3;
+    ok = ok && !ast_assignment_probe(
+        &assign, &lhs, &integer, '=');
+
+    symbol = add_global(
+        "verify_assignment_pointer_array", type_add_ptr(TYPE_INT), SC_GLOBAL);
+    symbol->is_array = 1;
+    symbol->dim_count = 1;
+    symbol->dims[0] = 2;
+    symbol->array_len = 2;
+    symbol->elem_size = 2;
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    index.kind = AST_INDEX;
+    index.a = &lhs;
+    index.b = &integer;
+    index.type = symbol->type;
+    integer.ival = 0;
+    ok = ok && ast_assignment_probe(
+        &assign, &index, &integer, '=') &&
+         !ast_assignment_probe(
+             &assign, &index, &integer, TOK_ADDEQ);
+    integer.ival = 3;
+    ok = ok && !ast_assignment_probe(
+        &assign, &index, &integer, '=');
+
+    symbol = add_global(
+        "verify_assignment_pointer_row", type_add_ptr(TYPE_INT), SC_GLOBAL);
+    symbol->dim_count = 1;
+    symbol->dims[0] = 4;
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    dereference.kind = AST_UNARY;
+    dereference.op = '*';
+    dereference.a = &lhs;
+    dereference.type = TYPE_INT;
+    index.a = &dereference;
+    index.type = TYPE_INT;
+    ok = ok && ast_assignment_probe(
+        &assign, &index, &integer, '=');
+
+    symbol = add_global(
+        "verify_assignment_pointer_pointer_row",
+        type_add_ptr(type_add_ptr(TYPE_INT)), SC_GLOBAL);
+    symbol->dim_count = 1;
+    symbol->dims[0] = 4;
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    dereference.a = &lhs;
+    dereference.type = type_add_ptr(TYPE_INT);
+    index.a = &dereference;
+    index.type = type_add_ptr(TYPE_INT);
+    integer.ival = 0;
+    ok = ok && ast_assignment_probe(
+        &assign, &index, &integer, '=') &&
+         !ast_assignment_probe(
+             &assign, &index, &integer, TOK_ADDEQ);
+    integer.ival = 3;
+    ok = ok && !ast_assignment_probe(
+        &assign, &index, &integer, '=');
+
+    symbol = add_global(
+        "verify_assignment_pointer_expr_base", TYPE_INT, SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    address.kind = AST_UNARY;
+    address.op = '&';
+    address.a = &lhs;
+    address.type = type_add_ptr(TYPE_INT);
+    index.a = &address;
+    index.type = TYPE_INT;
+    ok = ok && ast_assignment_probe(
+        &assign, &index, &integer, '=') &&
+         !ast_assignment_probe(
+             &assign, &index, &integer, TOK_ADDEQ);
+
+    symbol = add_global(
+        "verify_assignment_pointer_expr_pointer",
+        type_add_ptr(TYPE_INT), SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    address.a = &lhs;
+    address.type = type_add_ptr(symbol->type);
+    index.a = &address;
+    index.type = symbol->type;
+    integer.ival = 0;
+    ok = ok && ast_assignment_probe(
+        &assign, &index, &integer, '=') &&
+         !ast_assignment_probe(
+             &assign, &index, &integer, TOK_ADDEQ);
+    integer.ival = 3;
+    ok = ok && !ast_assignment_probe(
+        &assign, &index, &integer, '=');
+
+    symbol = add_global(
+        "verify_assignment_nd_pointer", type_add_ptr(TYPE_INT), SC_GLOBAL);
+    symbol->is_array = 1;
+    symbol->dim_count = 2;
+    symbol->dims[0] = 2;
+    symbol->dims[1] = 2;
+    symbol->array_len = 2;
+    symbol->elem_size = 4;
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    inner_index.kind = AST_INDEX;
+    inner_index.a = &lhs;
+    inner_index.b = &integer;
+    inner_index.type = symbol->type;
+    index.a = &inner_index;
+    index.type = symbol->type;
+    integer.ival = 0;
+    ok = ok && ast_assignment_probe(
+        &assign, &index, &integer, '=') &&
+         !ast_assignment_probe(
+             &assign, &index, &integer, TOK_ADDEQ);
+    integer.ival = 3;
+    ok = ok && !ast_assignment_probe(
+        &assign, &index, &integer, '=');
+
+    symbol = add_global(
+        "verify_assignment_nd_long", TYPE_LONG, SC_GLOBAL);
+    symbol->is_array = 1;
+    symbol->dim_count = 2;
+    symbol->dims[0] = 2;
+    symbol->dims[1] = 2;
+    symbol->array_len = 2;
+    symbol->elem_size = 8;
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    inner_index.a = &lhs;
+    inner_index.type = symbol->type;
+    index.type = symbol->type;
+    ok = ok && ast_assignment_probe(
+        &assign, &index, &wide, '=') &&
+         ast_assignment_probe(
+             &assign, &index, &integer, TOK_SHLEQ);
+
+    symbol = add_global(
+        "verify_assignment_nd_float", TYPE_FLOAT, SC_GLOBAL);
+    symbol->is_array = 1;
+    symbol->dim_count = 2;
+    symbol->dims[0] = 2;
+    symbol->dims[1] = 2;
+    symbol->array_len = 2;
+    symbol->elem_size = 8;
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    inner_index.a = &lhs;
+    inner_index.type = symbol->type;
+    index.type = symbol->type;
+    ok = ok && ast_assignment_probe(
+        &assign, &index, &real, '=') &&
+         ast_assignment_probe(
+             &assign, &index, &real, TOK_MULEQ);
+
+    if (nfield_defs < MAX_FIELDS) {
+        struct FieldDef *field;
+        int sid = add_struct_def("verify_assignment_record");
+
+        field = &field_defs[nfield_defs++];
+        memset(field, 0, sizeof(*field));
+        strcpy(field->name, "pointer");
+        field->parent_struct_id = sid;
+        field->type = type_add_ptr(TYPE_INT);
+        symbol = add_global(
+            "verify_assignment_record_value", make_struct_type(sid), SC_GLOBAL);
+        owner.kind = AST_IDENT;
+        owner.type = symbol->type;
+        owner.sval = symbol->name;
+        owner.sym = symbol;
+        member.kind = AST_MEMBER;
+        member.op = '.';
+        member.a = &owner;
+        member.sval = field->name;
+        member.type = field->type;
+        index.a = &member;
+        index.type = TYPE_INT;
+        ok = ok && ast_assignment_probe(
+            &assign, &index, &integer, '=');
+        field->type = type_add_ptr(field->type);
+        member.type = field->type;
+        index.type = type_decay_ptr(field->type);
+        integer.ival = 0;
+        ok = ok && ast_assignment_probe(
+            &assign, &index, &integer, '=') &&
+             !ast_assignment_probe(
+                 &assign, &index, &integer, TOK_ADDEQ);
+        integer.ival = 3;
+    } else {
+        ok = 0;
+    }
 
     expr_result_dead = saved_dead;
     if (!ok) {

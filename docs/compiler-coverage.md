@@ -605,7 +605,28 @@ function debug censuses, sanitizer and debugger checks, nine compiler mutants,
 and the frozen 482-app no-stack comparison pass with zero cycle/size
 regressions.
 
-- Review the remaining 54,641 unreviewed raw uncovered outcomes rather than
+A follow-up review proved that six shape-specific long/float assignment blocks
+were structurally preempted by `ast_index_lvalue_elem_type`, which invokes the
+same helpers and returns for every long or float element before those blocks.
+The duplicate branches and one now-inert address computation are removed.
+Direct host controls preserve long/float multidimensional acceptance and add
+positive and negative pointer-array, dereferenced pointer-to-array, computed
+pointer-expression, multidimensional-pointer, and member-pointer assertions.
+Release and stack censuses remain byte-identical across all 3,039 functions.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,357 / 4,357 | 100.00% |
+| Lines | 176,740 / 189,902 | 93.07% |
+| Native branch outcomes | 89,770 / 144,500 | 62.12% |
+| Regions | 158,865 / 169,853 | 93.53% |
+
+This removes 55 lines, 154 branch outcomes, and 173 regions from retained
+source while adding four covered branch outcomes. Missing lines, branches, and
+regions fall by 49, 158, and 153 respectively; the raw uncovered ledger falls
+to 54,483 outcomes.
+
+- Review the remaining 54,483 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,
