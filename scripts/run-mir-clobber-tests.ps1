@@ -373,6 +373,7 @@ function Assert-RequestedExecutionCounts {
         return
     }
     $specialCounts = @{
+        attentionmut = 80
         catalanmut = 444
         ctypemut = 132
         primemut = 288
@@ -393,6 +394,7 @@ function Assert-RequestedExecutionCounts {
         if ($specialCounts.ContainsKey($requested)) {
             $expected = $specialCounts[$requested]
             $patterns = switch ($requested) {
+                "attentionmut" { @("^ax") }
                 "catalanmut" { @("^catexact\|", "^ct") }
                 "ctypemut" { @("^crexact\|", "^cr") }
                 "primemut" { @("^prexact\|", "^pr") }
@@ -2072,6 +2074,34 @@ foreach ($mutation in $primeMutations) {
     ++$primeMutationIndex
 }
 
+$attentionMutations = @(
+    "4:src1:999", "4:src2:999", "4:immediate:999", "4:memory_size:3",
+    "6:src1:999", "13:src1:999", "13:src2:999", "13:immediate:999",
+    "13:memory_size:3", "15:src1:999", "18:src1:999", "23:immediate:999",
+    "23:src1:999", "24:immediate:999", "24:src1:999", "24:src2:999",
+    "25:src1:999", "30:src1:999", "30:src2:999", "30:immediate:999"
+)
+$attentionMutationIndex = 0
+foreach ($mutation in $attentionMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "ax$($attentionMutationIndex.ToString('000'))"
+        Sources = @(Join-Path $repoRoot "tests/attnc11.c")
+        Defines = @("MIR_CLOBBER_DISABLE_PROJECTION_CACHE=1")
+        Expected = @("accuracy  14/14")
+        Exit = 0
+        RequiredGenericFunction = "forward_attention"
+        RequiredSelectorFunction = "forward_attention"
+        RequiredSelector = "spilled-scalar-cfg"
+        MachineMutation = $mutation
+        MachineMutationFunction = "forward_attention"
+        FixturePaths = @(
+            (Join-Path $repoRoot "tests/ATTN.WTS"),
+            (Join-Path $repoRoot "tests/ATTN.IN")
+        )
+    }
+    ++$attentionMutationIndex
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
@@ -2086,7 +2116,7 @@ try {
         throw "MIR exact-rejection selection evidence controls failed"
     }
     $knownCases = @($caseDefinitions.Name) + @(
-        "catalanmut", "ctypemut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes", "primemut",
+        "attentionmut", "catalanmut", "ctypemut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes", "primemut",
         "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
@@ -2327,6 +2357,7 @@ try {
 
     foreach ($case in $caseDefinitions) {
         if ($Cases.Count -gt 0 -and $case.Name -notin $Cases -and
+            -not ($case.Name.StartsWith("ax") -and "attentionmut" -in $Cases) -and
             -not (($case.Name -eq "catexact" -or $case.Name.StartsWith("ct")) -and
                 "catalanmut" -in $Cases) -and
             -not (($case.Name -eq "crexact" -or $case.Name.StartsWith("cr")) -and

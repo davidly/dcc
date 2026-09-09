@@ -658,7 +658,7 @@ One hundred forty-four byte-math field mutations exercise retained parameter,
 mask, comparison, memory, call, decimal, subtract, add, carry, overflow,
 logical, negative, zero-flag, and SSA operand checks. The original runtime
 program is restored before generic emission, so all 576 target configurations
-validate fallback output. The full clobber manifest contains 4,048 target
+validate fallback output. The full clobber manifest contains 4,128 target
 configurations.
 
 | Metric | Covered / total | Percent |
@@ -790,7 +790,21 @@ This adds 76 covered branch outcomes, 15 lines, and nine regions while adding
 only one acceptance-diagnostic line. The raw ledger now contains 53,541
 uncovered outcomes.
 
-- Review the remaining 53,541 unreviewed raw uncovered outcomes rather than
+Twenty fixture-backed historical attention mutations now exercise additional
+index, width, and SSA checks while requiring the spilled generic fallback and
+preserving all 14 accuracy checks in both stack modes.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,359 / 4,359 | 100.00% |
+| Lines | 177,020 / 189,946 | 93.19% |
+| Native branch outcomes | 90,751 / 144,518 | 62.80% |
+| Regions | 159,042 / 169,867 | 93.63% |
+
+This test-only batch adds 21 branch outcomes and three lines/regions. The raw
+ledger now contains 53,520 uncovered outcomes.
+
+- Review the remaining 53,520 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,
