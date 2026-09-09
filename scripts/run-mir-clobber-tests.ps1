@@ -957,6 +957,66 @@ $caseDefinitions = @(
         RequireRejected = $true
     },
     [pscustomobject]@{
+        Name = "bytemask"
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @("MIR_CLOBBER_BYTE_MATH_MASK=1")
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "byteop"
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @("MIR_CLOBBER_BYTE_MATH_OPCODE=1")
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "bytecomp"
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @("MIR_CLOBBER_BYTE_MATH_COMPLEMENT=1")
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "byteadd"
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @("MIR_CLOBBER_BYTE_MATH_ADD_ORDER=1")
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "byteovf"
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @("MIR_CLOBBER_BYTE_MATH_OVERFLOW_ORDER=1")
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "bytelogic"
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @("MIR_CLOBBER_BYTE_MATH_LOGIC_ORDER=1")
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
         Name = "abortfil"
         Sources = @(Join-Path $fixtureRoot "abortfil.c")
         Defines = @()

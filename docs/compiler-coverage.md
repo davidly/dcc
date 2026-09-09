@@ -617,9 +617,9 @@ Release and stack censuses remain byte-identical across all 3,039 functions.
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
 | Functions | 4,357 / 4,357 | 100.00% |
-| Lines | 176,752 / 189,902 | 93.08% |
-| Native branch outcomes | 89,796 / 144,500 | 62.14% |
-| Regions | 158,875 / 169,853 | 93.54% |
+| Lines | 176,756 / 189,902 | 93.08% |
+| Native branch outcomes | 89,800 / 144,500 | 62.15% |
+| Regions | 158,879 / 169,853 | 93.54% |
 
 This removes 55 lines, 154 branch outcomes, and 173 regions from retained
 source. The direct pointer controls and a malformed-MIR preflight matrix add
@@ -629,7 +629,15 @@ aggregate-call ABI failures, and invalid `va_arg` offsets. Missing lines,
 branches, and regions fall by 61, 184, and 163 respectively; the raw uncovered
 ledger falls to 54,457 outcomes.
 
-- Review the remaining 54,457 unreviewed raw uncovered outcomes rather than
+Six byte-math near-mutations independently alter the opcode mask, comparison
+opcode, subtraction complement, addend order, overflow operand order, and
+logical branch order. Each preserves its asserted target behavior, rejects the
+named `byte-math-flags` schedule, and executes through generic MIR in
+stack/no-stack and peep/nopeep modes. The expanded clobber manifest contains
+640 configurations and covers four additional matcher outcomes, reducing the
+raw ledger to 54,453.
+
+- Review the remaining 54,453 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,

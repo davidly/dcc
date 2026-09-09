@@ -57,8 +57,16 @@ static void op_math(op, rhs) uint8_t op; uint8_t rhs;
     uint16_t res16;
     uint8_t result;
 
+#ifdef MIR_CLOBBER_BYTE_MATH_MASK
+    op &= 0xf0;
+#else
     op &= 0xe0;
+#endif
+#ifdef MIR_CLOBBER_BYTE_MATH_OPCODE
+    if (0xa0 == op) {
+#else
     if (0xc0 == op) {
+#endif
 #ifdef MIR_CLOBBER_BYTE_MATH_SWAP
         op_cmp(rhs, cpu.a);
 #else
@@ -71,21 +79,42 @@ static void op_math(op, rhs) uint8_t op; uint8_t rhs;
         return;
     }
     if (0xe0 == op) {
+#ifdef MIR_CLOBBER_BYTE_MATH_COMPLEMENT
+        rhs = 511 - rhs;
+#else
         rhs = 255 - rhs;
+#endif
         op = 0x60;
     }
     if (0x60 == op) {
+#ifdef MIR_CLOBBER_BYTE_MATH_ADD_ORDER
+        res16 = (uint16_t)rhs + (uint16_t)cpu.a +
+                (uint16_t)cpu.fCarry;
+#else
         res16 = (uint16_t)cpu.a + (uint16_t)rhs +
                 (uint16_t)cpu.fCarry;
+#endif
         result = (uint8_t)res16;
         cpu.fCarry = (0 != (res16 & 0xff00));
+#ifdef MIR_CLOBBER_BYTE_MATH_OVERFLOW_ORDER
+        cpu.fOverflow = (!((rhs ^ cpu.a) & 0x80)) &&
+                        ((result ^ cpu.a) & 0x80);
+#else
         cpu.fOverflow = (!((cpu.a ^ rhs) & 0x80)) &&
                         ((cpu.a ^ result) & 0x80);
+#endif
         cpu.a = result;
+#ifdef MIR_CLOBBER_BYTE_MATH_LOGIC_ORDER
+    } else if (0x20 == op)
+        cpu.a &= rhs;
+    else if (0 == op)
+        cpu.a |= rhs;
+#else
     } else if (0 == op)
         cpu.a |= rhs;
     else if (0x20 == op)
         cpu.a &= rhs;
+#endif
     else
         cpu.a ^= rhs;
     set_nz(cpu.a);
@@ -122,7 +151,11 @@ int main(void)
     failures += check("sbc", 2, 0, 0, 1);
 
     cpu.a = 7; cpu.fCarry = false;
+#ifdef MIR_CLOBBER_BYTE_MATH_OPCODE
+    op_math(0xa0, 5);
+#else
     op_math(0xc0, 5);
+#endif
 #ifdef MIR_CLOBBER_BYTE_MATH_SWAP
     failures += check("cmp", 7, 1, 0, 0);
 #else
