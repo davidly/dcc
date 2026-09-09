@@ -1565,6 +1565,51 @@ foreach ($mutationCase in $logSeriesMutationCases) {
     }
 }
 
+$logSeriesSsaMutations = @(
+    "5:src1:999", "5:src2:999", "16:src1:999", "16:src2:999",
+    "17:src1:999", "20:src1:999", "20:src2:999", "23:src1:999",
+    "23:src2:999", "26:src1:999", "26:src2:999", "29:src1:999",
+    "29:src2:999", "34:src1:999", "34:src2:999", "35:src1:999",
+    "47:src1:999", "49:src1:999", "49:src2:999", "50:src1:999",
+    "50:src2:999", "61:src1:999", "61:src2:999", "62:src1:999",
+    "65:src1:999", "65:src2:999", "67:src1:999", "70:src1:999",
+    "70:src2:999", "73:src1:999", "73:src2:999", "75:src1:999",
+    "75:src2:999", "78:src1:999", "78:src2:999", "80:src1:999",
+    "85:src1:999", "85:src2:999", "86:src1:999", "96:src1:999",
+    "96:src2:999", "100:src1:999", "101:src1:999", "111:src1:999",
+    "112:src1:999", "112:src2:999", "114:src1:999", "114:src2:999",
+    "119:src1:999", "120:src1:999", "120:src2:999", "122:src1:999",
+    "122:src2:999", "123:src1:999", "123:src2:999", "128:src1:999",
+    "128:src2:999", "129:src1:999", "147:src1:999", "149:src1:999",
+    "149:src2:999", "164:src1:999", "164:src2:999", "165:src1:999",
+    "168:src1:999", "168:src2:999", "169:src1:999", "176:src1:999",
+    "176:src2:999", "177:src1:999", "183:src1:999", "183:src2:999",
+    "193:src1:999", "193:src2:999", "194:src1:999", "197:src1:999",
+    "197:src2:999", "198:src1:999", "205:src1:999", "205:src2:999",
+    "206:src1:999", "209:src1:999", "209:src2:999", "210:src1:999",
+    "212:src1:999", "212:src2:999", "215:src1:999", "215:src2:999",
+    "216:src1:999", "221:src1:999", "221:src2:999", "226:src1:999",
+    "226:src2:999", "228:src1:999", "231:src1:999", "231:src2:999",
+    "232:src1:999", "241:src1:999", "241:src2:999", "242:src1:999",
+    "249:src1:999"
+)
+$logSsaIndex = 0
+foreach ($mutation in $logSeriesSsaMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "ls$($logSsaIndex.ToString('000'))"
+        Sources = @(Join-Path $fixtureRoot "logserie.c")
+        Defines = @()
+        Expected = @("0.6931471805599453094172321214581765680755001343602552541206800094933936219696947156058633269964186875")
+        Exit = 0
+        ExactTemplate = "log-series-driver-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+        MachineMutation = $mutation
+        MachineMutationFunction = "main"
+    }
+    ++$logSsaIndex
+}
+
 $byteMathMutationCases = @(
     @{ Name = "bmparam"; Mutation = "1:type:1" },
     @{ Name = "bmparam2"; Mutation = "2:type:1" },

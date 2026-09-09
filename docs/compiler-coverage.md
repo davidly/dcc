@@ -648,17 +648,17 @@ def-use caches before generic fallback. Checked parsing rejects malformed,
 overflowing, out-of-range, or unknown mutations on both 32-bit-`long` and
 64-bit-`long` hosts. The clobber harness clears inherited mutation settings
 between cases and restores the caller environment only when the suite exits.
-Eighty-five `ln2` field mutations cover every named log-series rejection group,
-each array-identity/local-location condition, and 44 additional constant, type,
-and width predicates while executing the original program generically; five
-source-level reorderings provide independent controls. Both mutator functions
-have exact line, branch, and region coverage.
+One hundred eighty-six `ln2` field mutations cover every named log-series
+rejection group and its retained array/local identity, constant, type, width,
+and SSA operand predicates while executing the original program generically;
+five source-level reorderings provide independent controls. Both mutator
+functions have exact line, branch, and region coverage.
 
 Forty-one field mutations also exercise distinct byte-math parameter, mask,
 comparison, memory, call, decimal, subtract, add, carry, overflow, logical,
 negative, and zero-flag checks. The original runtime program is restored before
 generic emission, so all 164 target configurations validate fallback output.
-The full clobber manifest contains 1,168 target configurations.
+The full clobber manifest contains 1,572 target configurations.
 
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
@@ -682,17 +682,17 @@ functions.
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
 | Functions | 4,359 / 4,359 | 100.00% |
-| Lines | 176,877 / 189,935 | 93.13% |
-| Native branch outcomes | 89,979 / 144,510 | 62.26% |
-| Regions | 158,958 / 169,857 | 93.58% |
+| Lines | 176,885 / 189,940 | 93.13% |
+| Native branch outcomes | 90,095 / 144,518 | 62.34% |
+| Regions | 158,971 / 169,867 | 93.59% |
 
 The second pruning reduces missing lines, branch outcomes, and regions by 27,
 33, and 39 respectively, with no target-output or performance change. The raw
 ledger now contains 54,384 uncovered outcomes. The expanded byte-math field
 matrix covers another 27 branch outcomes, and the per-condition log matrices
-cover another 73. The raw ledger is now 54,284.
+reduce the remaining ledger by another 181. The raw ledger is now 54,176.
 
-- Review the remaining 54,284 unreviewed raw uncovered outcomes rather than
+- Review the remaining 54,176 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,

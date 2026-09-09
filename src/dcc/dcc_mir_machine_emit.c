@@ -639,7 +639,8 @@ static int mir_machine_apply_diagnostic_mutation(
     insn = &mir.insns[instruction];
     *saved = *insn;
     *instruction_out = instruction;
-    if ((!strcmp(field, "type") || !strcmp(field, "memory_size")) &&
+    if ((!strcmp(field, "type") || !strcmp(field, "memory_size") ||
+         !strcmp(field, "src1") || !strcmp(field, "src2")) &&
         (value < INT_MIN || value > INT_MAX))
         fatal("DCC_MIR_MACHINE_MUTATE integer field is out of range");
     if (!strcmp(field, "type"))
@@ -653,6 +654,10 @@ static int mir_machine_apply_diagnostic_mutation(
     }
     else if (!strcmp(field, "memory_size"))
         insn->memory_size = (int)value;
+    else if (!strcmp(field, "src1"))
+        insn->src1 = (int)value;
+    else if (!strcmp(field, "src2"))
+        insn->src2 = (int)value;
     else if (!strcmp(field, "identity") && value > 0 &&
              value <= UCHAR_MAX) {
         insn->object = -1;

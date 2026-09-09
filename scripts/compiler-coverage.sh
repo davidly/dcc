@@ -77,7 +77,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-ast-dump.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
-DCC_MIR_MACHINE_MUTATE= DCC_MIR_MACHINE_MUTATE_FUNCTION=main \
+env -u DCC_MIR_MACHINE_MUTATE DCC_MIR_MACHINE_MUTATE_FUNCTION=main \
     "$DCC" -c "$repo_root/tests/mir-clobber/logserie.c" \
     -o "$build_dir/no-machine-mutation.MAC"
 for debug_args in "-g" "-gline" "-g -fstack-check" "-gline -fstack-check"; do
