@@ -21,8 +21,9 @@ cross-platform. That work is merged. The subsequent, broader request is to:
 - Extend target-aware differential generation and compiler mutation tests.
 - Review uncovered/excluded code with evidence, without manipulating totals.
 
-The broader request is NOT complete. Dozens of included functions and tens of
-thousands of raw branch records still need investigation.
+The broader request is NOT complete. Function coverage is exact, but retained
+line, branch, and region gaps plus tens of thousands of raw branch records
+still need investigation.
 
 ## Publication State
 
@@ -32,7 +33,7 @@ thousands of raw branch records still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `470d6389` (`feat: complete lazy wide MIR parameters`).
+  `c5fb1236` (`test: expand retained MIR coverage`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -549,17 +550,69 @@ pushed without waiting for GitHub Actions.
 | [Coverage analyzer](../scripts/ast-function-coverage.py) | Verified totals, raw gaps, anchored review evidence. |
 | [Review annotations](../scripts/ast-coverage-reviews.json) | Reviewed guard retained in totals. |
 | [Coverage tests](../scripts/tests/test_ast_function_coverage.py) | Scope, deduplication, classification, review checks. |
-
-For the final completion run, set `DCC_COVERAGE_REQUIRE_COMPLETE=1`; the
-analyzer then fails unless functions, lines, native branch outcomes, and
-regions each have `covered == total`. The gap JSON also records zero-count
-source-region anchors. Reviews remain dispositions, not covered outcomes.
 | [Peephole owner](../src/dccpeep/peep_pass_once.c) | Independent generic MinMax liveness fix. |
 | [Selector](../src/dcc/dcc_mir_select.c) | Candidate diagnostics and production selection. |
 | [Dominance verifier](../src/dcc/dcc_mir_verify.c) | Independent reachable-CFG verification. |
 | [Runtime](../DCCRTL.MAC) | Helper and calling-convention evidence. |
 | [Test overrides](../tests/_test_overrides.json) | Args, stdin, fixtures, stack sizes, documented skips. |
 | [Performance baselines](../tests/perf_baselines.csv) | Checked performance, not a tuning knob. |
+
+For the final completion run, set `DCC_COVERAGE_REQUIRE_COMPLETE=1`; the
+analyzer then fails unless functions, lines, native branch outcomes, and
+regions each have `covered == total`. The gap JSON also records zero-count
+source-region anchors. Reviews remain dispositions, not covered outcomes.
+
+## September 9 Retained-Coverage Checkpoint
+
+Implementation commit `c5fb1236` adds a target assignment matrix and direct
+host AST support/rejection assertions. The target matrix covers long, float,
+plain integer, pointer, multidimensional array, pointer-to-array, and struct
+member assignments in stack/no-stack, peep/nopeep, full-debug, and line-debug
+modes.
+
+Adding full-corpus debug censuses found and reproduced a real generic-emitter
+defect in `tfmadd`: a float multiply fused into `__fmaf` was still classified
+as an independent wide helper handoff. Full debug initially rejected the
+overlapping stack plan. Suppressing only the emitted handoff then produced
+loads from unallocated frame slots and wrong target values. The final fix
+rejects fused multiplies in the shared helper-consumer proof, so backend-slot
+planning and emission use the same invariant. The permanent `fmadddbg` case
+checks runtime values in all 12 stack/peep/debug combinations.
+
+The coverage workflow now compiles all 482 runnable applications under `-g`
+and `-gline`, with and without stack checks. It also canonicalizes relative
+coverage build paths before setting `LLVM_PROFILE_FILE`. This prevents CTest
+from placing the host verifier profile under its working directory and
+silently omitting 93 host-only functions from the merged report.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,357 / 4,357 | 100.00% |
+| Lines | 176,746 / 189,957 | 93.05% |
+| Native branch outcomes | 89,766 / 144,654 | 62.06% |
+| Regions | 158,885 / 170,026 | 93.45% |
+
+Relative to the preceding exact-function report, this adds 156 covered lines,
+142 covered branch outcomes, and 120 covered regions. Remaining debt is 13,211
+lines, 54,888 native branch outcomes, 11,141 regions, and 54,641 raw unreviewed
+outcomes. The exact overall objective is therefore still open.
+
+Local validation passed:
+
+- 616 clobber configurations and all four 3,039-function debug censuses;
+- both strict 506-app full+extended release gates;
+- ASan/UBSan verifier and full-debug `tfmadd` compiler probe;
+- 10 debugger-host tests and both line-debug tests;
+- 83 Python tests and all nine compiler mutants; and
+- the frozen 482-app no-stack parent comparison with no cycle or size
+  regressions.
+
+The next increment should rank gaps only from selected functions in
+`ast-mir-function-coverage.json`. Do not rank raw LLVM rows for classified
+legacy helpers such as `gen_assign_ident_ast` or `gen_call_ast`. Continue with
+retained AST support gates, generic spilled-emitter rejection paths, exact
+matcher semantic near-mutations, and deterministic allocation/I/O failure
+injection. Do not retry the disproven broad AST index-fallback deletion.
 
 ## Validation Commands
 
