@@ -33,7 +33,7 @@ still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `c5fb1236` (`test: expand retained MIR coverage`).
+  `338657aa` (`test: close assignment support gaps`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -606,6 +606,21 @@ Local validation passed:
 - 83 Python tests and all nine compiler mutants; and
 - the frozen 482-app no-stack parent comparison with no cycle or size
   regressions.
+
+Follow-up commit `338657aa` proves and removes six repeated long/float
+assignment blocks that were structurally preempted by the common index-lvalue
+type gate. Direct host tests preserve long/float multidimensional behavior and
+cover pointer arrays, dereferenced pointer-to-array rows, computed pointer
+expressions, multidimensional pointer elements, and pointer-valued members,
+including rejection controls. Release and stack censuses are byte-identical
+for all 3,039 functions, and all strict, sanitizer, mutation, debugger, and
+frozen performance gates pass.
+
+The resulting scoped report is 4,357/4,357 functions, 176,740/189,902 lines
+(93.07%), 89,770/144,500 native branch outcomes (62.12%), and
+158,865/169,853 regions (93.53%). The raw ledger has 54,483 uncovered
+outcomes. Relative to the prior checkpoint, missing lines, branch outcomes,
+and regions fall by 49, 158, and 153.
 
 The next increment should rank gaps only from selected functions in
 `ast-mir-function-coverage.json`. Do not rank raw LLVM rows for classified
