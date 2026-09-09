@@ -33,7 +33,7 @@ still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `c0f88530` (`test: mutate narrowed divmod matcher`).
+  `700380f8` (`test: mutate recursive MinMax matcher`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -618,13 +618,13 @@ frozen performance gates pass.
 
 The resulting scoped report, after adding malformed-MIR spilled preflight,
 exact byte-math near-mutations, and reusable exact-matcher field mutation, is
-4,359/4,359 functions, 176,927/189,942 lines (93.15%),
-90,428/144,518 native branch outcomes (62.57%), and 158,996/169,867 regions
-(93.60%). The preflight matrix covers
+4,359/4,359 functions, 176,960/189,943 lines (93.16%),
+90,511/144,518 native branch outcomes (62.63%), and 159,010/169,867 regions
+(93.61%). The preflight matrix covers
 invalid return/value widths, unsupported opcodes, unresolved memory, indirect
 widths, direct/indirect call ABI failures, aggregate-call ABI failures, and
 invalid `va_arg` offsets. Exact-shape, selector-rejection, and backend-slot
-diagnostic modes are also covered. The raw ledger has 53,843 uncovered
+diagnostic modes are also covered. The raw ledger has 53,760 uncovered
 outcomes. The byte-math variants alter mask, comparison, complement, addend,
 overflow, and logical semantics; each rejects the named schedule and runs
 generically across 32 target configurations.
@@ -643,8 +643,10 @@ call, decimal, arithmetic, carry, overflow, logical, negative, zero-flag, and
 SSA operand checks. A named multidimensional-array control plus 93 field
 mutations covers every rejection family while preserving exact/generic
 `t2darr` output. The narrowed div/mod control adds 125 field/SSA mutations and
-preserves all 66 `tdmfuse` checks through generic selection. The complete
-clobber manifest now contains 2,864 configurations.
+preserves all 66 `tdmfuse` checks through generic selection. The recursive
+MinMax control adds 79 mutations across its move, board, call, and search
+proofs while preserving the one-iteration oracle. The complete clobber
+manifest now contains 3,184 configurations.
 
 A second assignment review removes a preempted 2-D address branch, a
 pointer-array result path already handled for plain assignment, and a member
