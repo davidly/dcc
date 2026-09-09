@@ -33,7 +33,7 @@ still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `d6e2df37` (`test: expand byte matcher mutations`).
+  `f021cb0b` (`test: cover spilled diagnostics`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -618,15 +618,16 @@ frozen performance gates pass.
 
 The resulting scoped report, after adding malformed-MIR spilled preflight
 controls and six exact byte-math near-mutations, is 4,357/4,357 functions,
-176,756/189,902 lines (93.08%), 89,800/144,500 native branch outcomes
-(62.15%), and 158,879/169,853 regions (93.54%). The preflight matrix covers
+176,779/189,902 lines (93.09%), 89,810/144,500 native branch outcomes
+(62.15%), and 158,891/169,853 regions (93.55%). The preflight matrix covers
 invalid return/value widths, unsupported opcodes, unresolved memory, indirect
 widths, direct/indirect call ABI failures, aggregate-call ABI failures, and
-invalid `va_arg` offsets. The raw ledger has 54,453 uncovered outcomes. The
-byte-math variants alter mask, comparison, complement, addend, overflow, and
-logical semantics; each rejects the named schedule and runs generically across
-32 target configurations. The complete clobber manifest now contains 640
-configurations.
+invalid `va_arg` offsets. Exact-shape, selector-rejection, and backend-slot
+diagnostic modes are also covered. The raw ledger has 54,443 uncovered
+outcomes. The byte-math variants alter mask, comparison, complement, addend,
+overflow, and logical semantics; each rejects the named schedule and runs
+generically across 32 target configurations. The complete clobber manifest now
+contains 640 configurations.
 
 The next increment should rank gaps only from selected functions in
 `ast-mir-function-coverage.json`. Do not rank raw LLVM rows for classified
