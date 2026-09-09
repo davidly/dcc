@@ -658,7 +658,7 @@ One hundred forty-four byte-math field mutations exercise retained parameter,
 mask, comparison, memory, call, decimal, subtract, add, carry, overflow,
 logical, negative, zero-flag, and SSA operand checks. The original runtime
 program is restored before generic emission, so all 576 target configurations
-validate fallback output. The full clobber manifest contains 1,984 target
+validate fallback output. The full clobber manifest contains 2,360 target
 configurations.
 
 | Metric | Covered / total | Percent |
@@ -694,7 +694,24 @@ matrix and SSA sweep cover another 128 branch outcomes, and the per-condition
 log matrices reduce the remaining ledger by another 181. The raw ledger is now
 54,075.
 
-- Review the remaining 54,075 unreviewed raw uncovered outcomes rather than
+The multidimensional-array schedule now has a named accepted control plus 93
+restored-MIR mutations spanning roots, layout, members, strides, check calls,
+byte/word loads, loops, initializers, aliasing, returns, and summary strings.
+All 376 target configurations execute the original `t2darr` program through
+the expected exact or generic selector.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,359 / 4,359 | 100.00% |
+| Lines | 176,916 / 189,941 | 93.14% |
+| Native branch outcomes | 90,301 / 144,518 | 62.48% |
+| Regions | 158,987 / 169,867 | 93.59% |
+
+This adds 105 covered branch outcomes, 31 lines, and 16 regions while adding
+only one source line for acceptance diagnostics. The raw ledger now contains
+53,970 uncovered outcomes.
+
+- Review the remaining 53,970 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,

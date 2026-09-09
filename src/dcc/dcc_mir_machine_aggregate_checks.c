@@ -14001,6 +14001,7 @@ int mir_try_emit_aggregate_checks(MirStream *out)
         return 1;
     }
     if (mir_match_multidim_array_runner(&multidim_array)) {
+        mir_machine_accept("multidim-array-runner");
         mir_emit_multidim_array_runner(out, &multidim_array);
         return 1;
     }

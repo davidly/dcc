@@ -1713,6 +1713,93 @@ foreach ($mutation in $byteMathSsaMutations) {
     ++$byteSsaIndex
 }
 
+$multidimMutationCases = @(
+    @{ Name = "mdroot"; Mutation = "1:identity:120" },
+    @{ Name = "mdlayout"; Mutation = "2:immediate:999" },
+    @{ Name = "mdmember"; Mutation = "11:immediate:999" },
+    @{ Name = "mdstride"; Mutation = "4:immediate:999" },
+    @{ Name = "mdcheck"; Mutation = "50:identity:120" },
+    @{ Name = "mdstring"; Mutation = "37:type:2" },
+    @{ Name = "mdbyte"; Mutation = "46:type:1" },
+    @{ Name = "mdword"; Mutation = "291:type:1" },
+    @{ Name = "mdaddr"; Mutation = "45:memory_size:2" },
+    @{ Name = "mdbloop"; Mutation = "100:immediate:0" },
+    @{ Name = "mdcloop"; Mutation = "393:immediate:0" },
+    @{ Name = "mdinit"; Mutation = "9:src2:999" },
+    @{ Name = "mdalias"; Mutation = "180:src1:999" },
+    @{ Name = "mdwalias"; Mutation = "348:src1:999" },
+    @{ Name = "mdreturn"; Mutation = "664:identity:120" },
+    @{ Name = "mdsummary"; Mutation = "666:immediate:-1" }
+)
+$caseDefinitions += [pscustomobject]@{
+    Name = "mdexact"
+    Sources = @(Join-Path $repoRoot "tests/t2darr.c")
+    Defines = @()
+    Expected = @("PASS multidim_array")
+    Exit = 0
+    ExactTemplate = "multidim-array-runner"
+    ExactFunction = "main"
+    RequireExact = $true
+}
+foreach ($mutationCase in $multidimMutationCases) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = $mutationCase.Name
+        Sources = @(Join-Path $repoRoot "tests/t2darr.c")
+        Defines = @()
+        Expected = @("PASS multidim_array")
+        Exit = 0
+        ExactTemplate = "multidim-array-runner"
+        ExactFunction = "main"
+        RequireRejected = $true
+        MachineMutation = $mutationCase.Mutation
+        MachineMutationFunction = "main"
+    }
+}
+
+$multidimSweepMutations = @(
+    "168:immediate:999", "172:immediate:999", "252:immediate:999",
+    "336:immediate:999", "340:immediate:999", "417:immediate:999",
+    "516:immediate:999", "520:immediate:999", "524:immediate:999",
+    "549:immediate:999", "552:immediate:999", "6:immediate:999",
+    "254:immediate:999", "256:immediate:999", "419:immediate:999",
+    "421:immediate:999", "423:immediate:999", "551:immediate:999",
+    "554:immediate:999", "556:immediate:999", "18:src2:999",
+    "27:src2:999", "36:src2:999", "258:src2:999", "266:src2:999",
+    "274:src2:999", "282:src2:999", "559:src2:999", "571:src2:999",
+    "583:src2:999", "595:src2:999", "170:src2:999",
+    "174:src2:999", "187:src2:999", "180:src2:999",
+    "184:src1:999", "184:src2:999", "209:src1:999",
+    "209:src2:999", "213:src1:999", "213:src2:999",
+    "223:src2:999", "227:src2:999", "231:src1:999",
+    "231:src2:999", "233:src1:999", "233:src2:999",
+    "236:src2:999", "338:src2:999", "342:src2:999",
+    "348:src2:999", "352:src1:999", "352:src2:999",
+    "354:src2:999", "375:src1:999", "375:src2:999",
+    "379:src1:999", "379:src2:999", "419:src1:999",
+    "419:src2:999", "421:src1:999", "421:src2:999",
+    "423:src1:999", "423:src2:999", "518:src2:999",
+    "522:src2:999", "526:src2:999", "534:src1:999",
+    "534:src2:999", "538:src1:999", "538:src2:999",
+    "542:src1:999", "542:src2:999", "666:type:1", "675:type:1",
+    "672:src1:999", "679:src1:999"
+)
+$multidimSweepIndex = 0
+foreach ($mutation in $multidimSweepMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "ms$($multidimSweepIndex.ToString('000'))"
+        Sources = @(Join-Path $repoRoot "tests/t2darr.c")
+        Defines = @()
+        Expected = @("PASS multidim_array")
+        Exit = 0
+        ExactTemplate = "multidim-array-runner"
+        ExactFunction = "main"
+        RequireRejected = $true
+        MachineMutation = $mutation
+        MachineMutationFunction = "main"
+    }
+    ++$multidimSweepIndex
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
