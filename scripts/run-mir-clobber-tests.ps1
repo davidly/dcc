@@ -1105,6 +1105,68 @@ $caseDefinitions = @(
         RequireRejected = $true
     },
     [pscustomobject]@{
+        Name = "stval"
+        Sources = @(Join-Path $repoRoot "tests/tstructv.c")
+        Defines = @()
+        Expected = @(
+            "assign/arg 3 1000 7 1010",
+            "ptr big 2 41 7084", "tstructval5 completed"
+        )
+        Exit = 0
+        RequiredGenericFunction = "main"
+        RequiredSelectorFunction = "main"
+        RequiredSelector = "spilled-scalar-cfg"
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "stvalsum"
+        Sources = @(Join-Path $repoRoot "tests/tstructv.c")
+        Defines = @("MIR_CLOBBER_STRUCT_SUM_X=1")
+        Expected = @(
+            "return 4 2000 8 1010", "tstructval5 completed"
+        )
+        Exit = 0
+        RequiredGenericFunction = "main"
+        RequiredSelectorFunction = "main"
+        RequiredSelector = "spilled-scalar-cfg"
+    },
+    [pscustomobject]@{
+        Name = "stvalsrc"
+        Sources = @(Join-Path $repoRoot "tests/tstructv.c")
+        Defines = @("MIR_CLOBBER_STRUCT_COPY_SOURCE=1")
+        Expected = @(
+            "assign/arg 3 1000 7 622", "tstructval5 completed"
+        )
+        Exit = 0
+        RequiredGenericFunction = "main"
+        RequiredSelectorFunction = "main"
+        RequiredSelector = "spilled-scalar-cfg"
+    },
+    [pscustomobject]@{
+        Name = "stvaldst"
+        Sources = @(Join-Path $repoRoot "tests/tstructv.c")
+        Defines = @("MIR_CLOBBER_STRUCT_COPY_DEST=1")
+        Expected = @(
+            "assign/arg 3 1000 7 0", "tstructval5 completed"
+        )
+        Exit = 0
+        RequiredGenericFunction = "main"
+        RequiredSelectorFunction = "main"
+        RequiredSelector = "spilled-scalar-cfg"
+    },
+    [pscustomobject]@{
+        Name = "stvalfirst"
+        Sources = @(Join-Path $repoRoot "tests/tstructv.c")
+        Defines = @("MIR_CLOBBER_STRUCT_FIRST_COPY=1")
+        Expected = @(
+            "assign/arg 8 600 14 622", "tstructval5 completed"
+        )
+        Exit = 0
+        RequiredGenericFunction = "main"
+        RequiredSelectorFunction = "main"
+        RequiredSelector = "spilled-scalar-cfg"
+    },
+    [pscustomobject]@{
         Name = "stringv"
         Sources = @(Join-Path $repoRoot "tests/tstri2.c")
         Defines = @("MIR_CLOBBER_G_NAME_V=1001")
@@ -1391,6 +1453,10 @@ try {
                     -ExactFunction $case.ExactFunction `
                     -RequireExact ([bool]$case.RequireExact) `
                     -RequireRejected ([bool]$case.RequireRejected) `
+                    -RequiredGenericFunction $case.RequiredGenericFunction `
+                    -RequiredSelectorFunction $case.RequiredSelectorFunction `
+                    -RequiredSelector $case.RequiredSelector `
+                    -RequiredCandidate $case.RequiredCandidate `
                     -RunArguments $case.Args `
                     -AssemblyPatterns $case.AssemblyPatterns `
                     -OddUpperRuntime ([bool]$case.OddUpperRuntime)
@@ -1399,6 +1465,9 @@ try {
                         -Defines $case.Defines -Expected $case.Expected `
                         -ExpectedExit $case.Exit -StackCheck $stackCheck `
                         -Peep $peep -DebugMode $debugMode `
+                        -RequiredGenericFunction $case.RequiredGenericFunction `
+                        -RequiredSelectorFunction $case.RequiredSelectorFunction `
+                        -RequiredSelector $case.RequiredSelector `
                         -RunArguments $case.Args
                 }
             }

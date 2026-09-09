@@ -499,6 +499,20 @@ under-proven struct-value helpers and nine stale/dead historical helpers.
 They remain in the denominator; no schedule, guard, or classification was
 removed to raise the percentage.
 
+The user's later direction authorizes deleting code when deletion is
+technically correct and preserves baselines. The unsafe struct-value schedule
+has therefore been retired completely: it was still dispatchable, and its
+historical matcher accepted a demonstrated swapped-argument miscompile. Five
+generic aggregate source variants execute through spilled MIR across 28 target
+configurations, including full/line debug. Parent/current assembly, selectors,
+and no-stack peep/nopeep cycles and linked sizes are identical for `tstructv`.
+
+Fresh coverage is 4,361/4,369 functions (99.82%),
+176,545/190,652 lines (92.60%), 89,536/145,238 branch outcomes (61.65%), and
+158,725/170,766 regions (92.95%). The source deletion removes 24 definitions,
+529 lines, 172 branch outcomes, and 224 regions; it is not an exclusion.
+Eight retained functions and 55,432 unreviewed raw outcomes remain.
+
 Local validation for `470d6389` passed the full clobber suite, sanitizer
 compiler probes, nine clean-built mutants, 82 Python tests, both strict
 506-app release gates, and stack/no-stack censuses retaining all 3,039

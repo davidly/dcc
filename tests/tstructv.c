@@ -152,13 +152,27 @@ int main(int argc, char **argv)
     x.a = 3;
     x.b = 1000;
     x.c = 7;
+#ifdef MIR_CLOBBER_STRUCT_FIRST_COPY
+    y = init_decl;
+#else
     y = x;
+#endif
+#ifdef MIR_CLOBBER_STRUCT_COPY_SOURCE
+    gpair = init_decl;
+#elif defined(MIR_CLOBBER_STRUCT_COPY_DEST)
+    x = y;
+#else
     gpair = y;
+#endif
     s = proto_sum_pair(gpair);
     printf("assign/arg %d %d %d %d\n", y.a, y.b, y.c, s);
 
     y = proto_make_pair(4, 2000, 8);
+#ifdef MIR_CLOBBER_STRUCT_SUM_X
+    s = proto_sum_pair(x);
+#else
     s = proto_sum_pair(y);
+#endif
     printf("return %d %d %d %d\n", y.a, y.b, y.c, s);
 
     printf("init-return %d %d %d %d\n", init_decl.a, init_decl.b, init_decl.c, proto_sum_pair(init_decl));

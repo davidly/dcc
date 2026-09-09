@@ -503,6 +503,31 @@ disabled struct-value exact schedule whose incomplete argument proof previously
 accepted a known miscompile. The other nine are stale historical emitters or a
 documented dead defensive path; all remain in the denominator.
 
+The struct-value schedule was subsequently retired rather than repaired. Its
+dispatcher was still active and its historical matcher did not prove ordered
+scalar/aggregate arguments; changing `proto_sum_pair(y)` to
+`proto_sum_pair(x)` had demonstrated a real false acceptance. The exclusive
+plan, matcher, emitter, and helper closure are removed. Generic spilled MIR
+remains byte-for-byte, selector-for-selector, and cycle/size identical for
+`tstructv` in both stack modes.
+
+Permanent generic target controls cover the original aggregate workload,
+swapped sum source, aggregate copy source/destination, first copy, peep/nopeep,
+stack/no-stack, full debug, and line debug. The clobber execution manifest now
+contains 576 unique target configurations.
+
+| Metric | Before | After |
+| --- | --- | --- |
+| Functions | 4,361 / 4,393 | 4,361 / 4,369 |
+| Lines | 176,575 / 191,181 | 176,545 / 190,652 |
+| Native branch outcomes | 89,526 / 145,410 | 89,536 / 145,238 |
+| Regions | 158,725 / 170,990 | 158,725 / 170,766 |
+
+This is an actual source deletion, not a coverage exclusion. It removes 24
+definitions, 529 lines, 172 branch outcomes, and 224 regions while preserving
+every executed function. Eight retained functions remain unexecuted. The raw
+ledger has 55,432 unreviewed outcomes.
+
 - Review the remaining 55,614 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
