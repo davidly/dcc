@@ -33,7 +33,7 @@ still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `6d9bc2a8` (`test: add exact MIR field mutations`).
+  `f23f4e8f` (`test: mutate byte matcher fields`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -618,13 +618,13 @@ frozen performance gates pass.
 
 The resulting scoped report, after adding malformed-MIR spilled preflight,
 exact byte-math near-mutations, and reusable exact-matcher field mutation, is
-4,359/4,359 functions, 176,874/189,969 lines (93.11%),
-89,869/144,548 native branch outcomes (62.17%), and 158,961/169,908 regions
+4,359/4,359 functions, 176,883/189,969 lines (93.11%),
+89,884/144,548 native branch outcomes (62.18%), and 158,969/169,908 regions
 (93.56%). The preflight matrix covers
 invalid return/value widths, unsupported opcodes, unresolved memory, indirect
 widths, direct/indirect call ABI failures, aggregate-call ABI failures, and
 invalid `va_arg` offsets. Exact-shape, selector-rejection, and backend-slot
-diagnostic modes are also covered. The raw ledger has 54,432 uncovered
+diagnostic modes are also covered. The raw ledger has 54,417 uncovered
 outcomes. The byte-math variants alter mask, comparison, complement, addend,
 overflow, and logical semantics; each rejects the named schedule and runs
 generically across 32 target configurations.
@@ -636,7 +636,10 @@ out-of-range, and unknown values consistently on Windows and POSIX hosts; the
 clobber suite clears inherited mutation state between cases. Thirteen mutations
 cover every named log-series rejection group while the original program runs
 generically. Both mutation helpers have exact line, branch, and region
-coverage. The complete clobber manifest now contains 716 configurations.
+coverage. Seventeen field mutations additionally cover byte-math parameter,
+mask, comparison, memory, call, decimal, arithmetic, carry, overflow, logical,
+negative, and zero-flag checks. The complete clobber manifest now contains 784
+configurations.
 
 The next increment should rank gaps only from selected functions in
 `ast-mir-function-coverage.json`. Do not rank raw LLVM rows for classified
