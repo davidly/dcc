@@ -374,6 +374,7 @@ function Assert-RequestedExecutionCounts {
     $specialCounts = @{
         fuzz = -1
         minimax = 28
+        minimaxmut = 320
         ndivmut = 504
         oldloops = 20
         lazywide = 8
@@ -390,6 +391,7 @@ function Assert-RequestedExecutionCounts {
             $patterns = switch ($requested) {
                 "fuzz" { @("^fuzz-", "^fuzzforced-") }
                 "minimax" { @("^minimax-") }
+                "minimaxmut" { @("^mmexact\|", "^mx") }
                 "ndivmut" { @("^nd") }
                 "oldloops" { @("^oldloop-") }
                 "lazywide" { @("^lazywide-") }
@@ -1863,6 +1865,58 @@ foreach ($mutation in $narrowedDivmodMutations) {
     ++$narrowedDivmodIndex
 }
 
+$minimaxMutations = @(
+    "5:type:1", "7:src1:999", "7:src2:999", "7:immediate:999",
+    "7:type:1", "6:type:1", "8:src1:999", "8:memory_size:3",
+    "10:immediate:999", "40:immediate:999", "32:immediate:999",
+    "36:immediate:999", "46:immediate:999", "58:immediate:999",
+    "61:immediate:999", "67:immediate:999", "70:immediate:999",
+    "90:immediate:999", "86:immediate:999", "16:src1:999",
+    "16:src2:999", "16:immediate:999", "16:memory_size:3",
+    "17:src1:999", "17:memory_size:3", "18:src1:999", "18:type:1",
+    "33:src1:999", "37:src1:999", "47:src1:999", "59:src1:999",
+    "62:src1:999", "68:src1:999", "71:src1:999", "76:src1:999",
+    "82:src1:999", "82:src2:999", "82:type:1", "248:src1:999",
+    "93:src1:999", "93:src2:999", "93:immediate:999",
+    "93:memory_size:3", "94:src1:999", "94:memory_size:3", "94:type:1",
+    "100:src1:999", "100:src2:999", "100:immediate:999",
+    "100:memory_size:3", "102:src1:999", "102:src2:999",
+    "102:memory_size:3", "120:src1:999", "120:src2:999",
+    "120:immediate:999", "120:memory_size:3", "123:src1:999",
+    "123:src2:999", "123:memory_size:3", "104:src1:999",
+    "106:src1:999", "112:src1:999", "114:src1:999", "115:type:1",
+    "117:src1:999", "143:src1:999", "143:src2:999", "147:src1:999",
+    "157:src1:999", "167:src1:999", "177:src1:999", "199:src1:999",
+    "199:src2:999", "203:src1:999", "213:src1:999", "223:src1:999",
+    "233:src1:999", "252:src1:999"
+)
+$caseDefinitions += [pscustomobject]@{
+    Name = "mmexact"
+    Sources = @(Join-Path $repoRoot "tests/ttt.c")
+    Defines = @()
+    Expected = @("6493 moves", "1 iterations")
+    Exit = 0
+    ExactTemplate = "recursive-byte-minimax-schedule"
+    ExactFunction = "MinMax"
+    RequireExact = $true
+}
+$minimaxMutationIndex = 0
+foreach ($mutation in $minimaxMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "mx$($minimaxMutationIndex.ToString('000'))"
+        Sources = @(Join-Path $repoRoot "tests/ttt.c")
+        Defines = @()
+        Expected = @("6493 moves", "1 iterations")
+        Exit = 0
+        ExactTemplate = "recursive-byte-minimax-schedule"
+        ExactFunction = "MinMax"
+        RequireRejected = $true
+        MachineMutation = $mutation
+        MachineMutationFunction = "MinMax"
+    }
+    ++$minimaxMutationIndex
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
@@ -1877,7 +1931,7 @@ try {
         throw "MIR exact-rejection selection evidence controls failed"
     }
     $knownCases = @($caseDefinitions.Name) + @(
-        "fuzz", "inlines", "lazywide", "minimax", "ndivmut", "oldloops", "pairedbytes",
+        "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes",
         "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
@@ -2119,6 +2173,8 @@ try {
     foreach ($case in $caseDefinitions) {
         if ($Cases.Count -gt 0 -and $case.Name -notin $Cases -and
             -not ($case.Name.StartsWith("fuzz-") -and "fuzz" -in $Cases) -and
+            -not (($case.Name -eq "mmexact" -or $case.Name.StartsWith("mx")) -and
+                "minimaxmut" -in $Cases) -and
             -not ($case.Name.StartsWith("nd") -and "ndivmut" -in $Cases)) {
             continue
         }

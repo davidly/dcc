@@ -14239,6 +14239,7 @@ int mir_try_emit_numeric_kernels(MirStream *out, int phase)
         }
         if (mir_match_recursive_byte_minimax_schedule(
                 &minimax_plan)) {
+            mir_machine_accept("recursive-byte-minimax-schedule");
             mir_emit_recursive_byte_minimax_schedule(
                 out, &minimax_plan);
             return 1;

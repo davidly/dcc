@@ -658,7 +658,7 @@ One hundred forty-four byte-math field mutations exercise retained parameter,
 mask, comparison, memory, call, decimal, subtract, add, carry, overflow,
 logical, negative, zero-flag, and SSA operand checks. The original runtime
 program is restored before generic emission, so all 576 target configurations
-validate fallback output. The full clobber manifest contains 2,864 target
+validate fallback output. The full clobber manifest contains 3,184 target
 configurations.
 
 | Metric | Covered / total | Percent |
@@ -727,7 +727,23 @@ This adds 127 covered branch outcomes, 11 lines, and nine regions while adding
 only one acceptance-diagnostic line. The raw ledger now contains 53,843
 uncovered outcomes.
 
-- Review the remaining 53,843 unreviewed raw uncovered outcomes rather than
+The recursive byte MinMax schedule now has a named accepted control plus 79
+restored-MIR mutations spanning move accounting, constants, winner dispatch,
+locals, loop state, board mutation, recursive calls, and maximizing/minimizing
+paths. All 320 target configurations preserve the one-iteration target oracle.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,359 / 4,359 | 100.00% |
+| Lines | 176,960 / 189,943 | 93.16% |
+| Native branch outcomes | 90,511 / 144,518 | 62.63% |
+| Regions | 159,010 / 169,867 | 93.61% |
+
+This adds 83 covered branch outcomes, 33 lines, and 14 regions while adding
+only one acceptance-diagnostic line. The raw ledger now contains 53,760
+uncovered outcomes.
+
+- Review the remaining 53,760 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,
