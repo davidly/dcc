@@ -9,7 +9,9 @@ separate Clang-instrumented compiler and exercise it with:
 - the dccpeep fixtures;
 - all applicable C89, C99, and C11 extended single-exec tests in both modes;
 - the MIR clobber suite, including qualifier and generated differential matrices;
-- the MIR lifetime and required-emission suites; and
+- the MIR lifetime and required-emission suites;
+- full-corpus `-g` and `-gline` compile censuses with and without stack checks;
+  and
 - instrumented host MIR verifier mutation tests.
 
 The clobber suite writes
@@ -30,6 +32,9 @@ coverage mappings. LLVM's `%8m` online merge pool keeps repeated short-lived
 compiler processes from overwriting profiles when the host reuses a PID, while
 the binary signature keeps compiler and verifier data distinct. Each run
 removes old raw profiles before collecting fresh ones.
+Relative `DCC_COVERAGE_BUILD_DIR` values are normalized against the repository
+root so CTest's build-directory working directory cannot redirect host-verifier
+profiles into a nested, unmerged path.
 The main runner also passes `DCC` through to the diagnostics suite; do not
 replace that route with a hard-coded repository-root compiler or diagnostic
 AST rejection paths disappear from coverage. `test-ast-dump.ps1` separately
@@ -538,6 +543,12 @@ Function coverage is complete. The broader objective is not: 13,366 lines,
 55,061 native branch outcomes, 11,279 regions, and 54,814 raw unreviewed
 outcomes remain.
 
+The retained-code campaign begins with a target assignment matrix covering
+long, float, plain-int, pointer, multidimensional, pointer-to-array, and struct
+member forms. A host AST matrix independently covers malformed operators and
+lvalues plus scalar, pointer, array, const, long, float, and every compound
+operator. These tests add branch evidence without changing compiler behavior.
+
 The struct-value schedule was subsequently retired rather than repaired. Its
 dispatcher was still active and its historical matcher did not prove ordered
 scalar/aggregate arguments; changing `proto_sum_pair(y)` to
@@ -563,10 +574,42 @@ definitions, 529 lines, 172 branch outcomes, and 224 regions while preserving
 every executed function. Eight retained functions remain unexecuted. The raw
 ledger has 55,432 unreviewed outcomes.
 
-- Review the remaining 55,614 unreviewed raw uncovered outcomes rather than
+The next retained-code checkpoint adds target-visible assignment coverage and
+direct host AST support/rejection assertions. Full-corpus debug censuses then
+found a real generic-emitter defect: a float multiply fused into `__fmaf` was
+still classified as an independent wide helper handoff. Full debug first
+rejected the resulting overlapping stack plan; suppressing only emission
+exposed stale, unallocated slot loads and wrong runtime values. The final fix
+rejects the fused multiply in the shared helper-consumer proof, keeping slot
+planning and emission consistent. A permanent 12-configuration target runtime
+matrix covers stack/no-stack, peep/nopeep, full debug, and line debug.
+
+The coverage workflow now compiles all 482 runnable apps in each debug/stack
+mode. It also normalizes a relative coverage build directory before exporting
+`LLVM_PROFILE_FILE`; otherwise CTest writes the host-verifier profile below its
+own working directory and silently drops host-only functions from the merged
+report.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,357 / 4,357 | 100.00% |
+| Lines | 176,746 / 189,957 | 93.05% |
+| Native branch outcomes | 89,766 / 144,654 | 62.06% |
+| Regions | 158,885 / 170,026 | 93.45% |
+
+Against the preceding exact-function checkpoint this adds 156 covered lines,
+142 covered branch outcomes, and 120 covered regions; the small denominator
+increase is the new fused-multiply guard. The clobber manifest contains 616
+executed configurations. Both strict 506-app release gates, all four 3,039
+function debug censuses, sanitizer and debugger checks, nine compiler mutants,
+and the frozen 482-app no-stack comparison pass with zero cycle/size
+regressions.
+
+- Review the remaining 54,641 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
-- Cover the 32 unexecuted included functions or justify their classification.
+- Preserve exact function coverage while closing the retained line, branch,
+  and region gaps.
 - Extend near-match/generic equivalence beyond the six enforced schedule families.
 - Extend the seeded grammar beyond bounded unsigned arithmetic, conditional
   callbacks, and current memory/call forms.

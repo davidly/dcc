@@ -480,6 +480,26 @@ $caseDefinitions = @(
         DebugModes = @("true", "lines")
     },
     [pscustomobject]@{
+        Name = "assigncv"
+        Sources = @(Join-Path $fixtureRoot "assigncv.c")
+        Defines = @()
+        Expected = @("assignment coverage failures=0")
+        Exit = 0
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "fmadddbg"
+        Sources = @(Join-Path $repoRoot "tests/tfmadd.c")
+        Defines = @()
+        Expected = @(
+            "10.000000", "36.000000", "-7.000000", "-17.000000",
+            "2.000000", "3.000000", "3.750000", "3.800000",
+            "10000000000.000000"
+        )
+        Exit = 0
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
         Name = "domloop"
         Sources = @(Join-Path $fixtureRoot "domloop.c")
         Defines = @()

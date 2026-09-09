@@ -48,6 +48,9 @@ isolated static-global field value numbering, block CSE of field loads, and
 the scalar-DAG output contract. The consumer case verifies that both inserted
 consumers use their predecessor's value and that each inserted return uses the
 new consumer result after instruction storage grows.
+The AST support matrix also checks malformed assignment rejection plus
+identifier, long, float, pointer, array, and every compound-assignment operator
+without relying on parser filtering.
 
 `dcc_mir_verify.c` constructs an independent CFG and immediate-dominator tree
 using reverse postorder. Its storage is linear in the MIR size. Verification

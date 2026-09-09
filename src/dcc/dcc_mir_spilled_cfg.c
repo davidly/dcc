@@ -63,6 +63,7 @@ struct MirConstantReturn {
 };
 static int mir_float_madd_match(int add_index, int *multiply_index,
                                 int *addend_value);
+static int mir_float_multiply_is_fused(int multiply_index);
 static int mir_unary_is_fusable_not_branch(int i);
 static int mir_forwarded_stack_target_instruction = -1;
 static int mir_register_iy_offset;
@@ -5340,6 +5341,8 @@ static int mir_wide_helper_lhs_consumer(int value, int instruction,
         break;
     }
     if (consumer_index >= mir.count)
+        return 0;
+    if (mir_float_multiply_is_fused(consumer_index))
         return 0;
     if (consumer_out != NULL)
         *consumer_out = consumer_index;

@@ -6,6 +6,10 @@ set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 build_dir=${DCC_COVERAGE_BUILD_DIR:-"$repo_root/build/compiler-coverage"}
+case "$build_dir" in
+    /*) ;;
+    *) build_dir="$repo_root/$build_dir" ;;
+esac
 binary_dir="$build_dir/bin"
 raw_dir="$build_dir/raw"
 report_dir="$build_dir/report"
@@ -73,6 +77,14 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-ast-dump.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
+for debug_args in "-g" "-gline" "-g -fstack-check" "-gline -fstack-check"; do
+    debug_name=$(printf '%s' "$debug_args" | tr ' -' '__')
+    DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
+        python3 "$repo_root/scripts/mir-migration-census.py" \
+        --compiler "$DCC" \
+        --output "$build_dir/debug-census-$debug_name.tsv" \
+        --extra-args="$debug_args"
+done
 ctest --test-dir "$build_dir/cmake" --output-on-failure
 
 set -- "$raw_dir"/*.profraw

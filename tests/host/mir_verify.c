@@ -54,6 +54,146 @@ static void expect_verification(const char *name, int valid)
     clear_liveness();
 }
 
+static int ast_assignment_probe(
+    struct AstNode *assign, struct AstNode *lhs,
+    struct AstNode *rhs, int op)
+{
+    memset(assign, 0, sizeof(*assign));
+    assign->kind = AST_ASSIGN;
+    assign->op = op;
+    assign->a = lhs;
+    assign->b = rhs;
+    assign->type = lhs->type;
+    ast_support_cache_begin();
+    return ast_gen_supported(assign);
+}
+
+static void verify_ast_assignment_support(void)
+{
+    static const int compound_ops[] = {
+        TOK_ADDEQ, TOK_SUBEQ, TOK_MULEQ, TOK_DIVEQ, TOK_MODEQ,
+        TOK_ANDEQ, TOK_OREQ, TOK_XOREQ, TOK_SHLEQ, TOK_SHREQ
+    };
+    struct AstNode assign;
+    struct AstNode lhs;
+    struct AstNode integer;
+    struct AstNode wide;
+    struct AstNode real;
+    struct AstNode invalid_lvalue;
+    struct AstNode index;
+    struct AstNode dereference;
+    struct Sym *symbol;
+    int saved_dead = expr_result_dead;
+    int item;
+    int ok = 1;
+
+    memset(&lhs, 0, sizeof(lhs));
+    memset(&integer, 0, sizeof(integer));
+    memset(&wide, 0, sizeof(wide));
+    memset(&real, 0, sizeof(real));
+    memset(&invalid_lvalue, 0, sizeof(invalid_lvalue));
+    memset(&index, 0, sizeof(index));
+    memset(&dereference, 0, sizeof(dereference));
+    lhs.kind = AST_IDENT;
+    integer.kind = AST_INT_LIT;
+    integer.type = TYPE_INT;
+    integer.ival = 3;
+    wide.kind = AST_INT_LIT;
+    wide.type = TYPE_LONG;
+    wide.ival = 5;
+    real.kind = AST_FLOAT_LIT;
+    real.type = TYPE_FLOAT;
+    expr_result_dead = 1;
+
+    lhs.type = TYPE_INT;
+    lhs.sval = "__missing_assignment_symbol";
+    ok = ok && !ast_assignment_probe(
+        &assign, &lhs, &integer, '=');
+    ok = ok && !ast_assignment_probe(
+        &assign, &lhs, &integer, '?');
+
+    invalid_lvalue.kind = AST_INT_LIT;
+    invalid_lvalue.type = TYPE_INT;
+    ok = ok && !ast_assignment_probe(
+        &assign, &invalid_lvalue, &integer, '=');
+    dereference.kind = AST_UNARY;
+    dereference.op = '*';
+    dereference.a = &invalid_lvalue;
+    dereference.type = TYPE_INT;
+    ok = ok && !ast_assignment_probe(
+        &assign, &dereference, &integer, '=');
+    index.kind = AST_INDEX;
+    index.a = &invalid_lvalue;
+    index.b = &integer;
+    index.type = TYPE_INT;
+    ok = ok && !ast_assignment_probe(
+        &assign, &index, &integer, '=');
+
+    symbol = add_global(
+        "verify_assignment_word", TYPE_INT, SC_GLOBAL);
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    ok = ok && ast_assignment_probe(
+        &assign, &lhs, &integer, '=');
+    for (item = 0;
+         item < (int)(sizeof(compound_ops) / sizeof(compound_ops[0]));
+         ++item)
+        ok = ok && ast_assignment_probe(
+            &assign, &lhs, &integer, compound_ops[item]);
+
+    symbol = add_global(
+        "verify_assignment_long", TYPE_LONG, SC_GLOBAL);
+    lhs.type = TYPE_LONG;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    ok = ok && ast_assignment_probe(&assign, &lhs, &wide, '=') &&
+         ast_assignment_probe(&assign, &lhs, &integer, '=') &&
+         ast_assignment_probe(&assign, &lhs, &real, '=') &&
+         ast_assignment_probe(&assign, &lhs, &wide, TOK_ADDEQ) &&
+         ast_assignment_probe(&assign, &lhs, &integer, TOK_SHLEQ);
+
+    symbol = add_global(
+        "verify_assignment_float", TYPE_FLOAT, SC_GLOBAL);
+    lhs.type = TYPE_FLOAT;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    ok = ok && ast_assignment_probe(&assign, &lhs, &real, '=') &&
+         ast_assignment_probe(&assign, &lhs, &integer, '=') &&
+         ast_assignment_probe(&assign, &lhs, &wide, '=') &&
+         ast_assignment_probe(&assign, &lhs, &real, TOK_MULEQ);
+
+    symbol = add_global(
+        "verify_assignment_array", TYPE_INT, SC_GLOBAL);
+    symbol->is_array = 1;
+    symbol->array_len = 2;
+    symbol->elem_size = 2;
+    lhs.type = TYPE_INT;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    ok = ok && !ast_assignment_probe(
+        &assign, &lhs, &integer, '=');
+    symbol->is_array = 0;
+    symbol->is_const_value = 1;
+    ok = ok && !ast_assignment_probe(
+        &assign, &lhs, &integer, '=');
+
+    symbol = add_global(
+        "verify_assignment_pointer", type_add_ptr(TYPE_INT), SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    integer.ival = 0;
+    ok = ok && ast_assignment_probe(
+        &assign, &lhs, &integer, '=');
+    integer.ival = 3;
+
+    expr_result_dead = saved_dead;
+    if (!ok) {
+        fprintf(stderr, "FAIL AST assignment support matrix\n");
+        ++failures;
+    }
+}
+
 static void diamond(void);
 
 static void verify_diamond_edge_liveness(void)
@@ -899,6 +1039,7 @@ int main(void)
         ++failures;
     }
     verify_diamond_mutations();
+    verify_ast_assignment_support();
     verify_diamond_edge_liveness();
     verify_immediate_phi_consumer_forwarding();
     verify_call_argument_liveness();
