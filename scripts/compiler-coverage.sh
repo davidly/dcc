@@ -66,7 +66,8 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full
 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -NoStackCheck
 "$pwsh_cmd" -NoProfile -File scripts/runall-extended.ps1 -C11 -Mode full
-"$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1
+"$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
+    -ExecutionManifest "$report_dir/mir-clobber-executions.json"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-lifetime-tests.ps1
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-require-emit.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-ast-dump.ps1 -Dcc "$DCC"

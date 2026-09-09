@@ -12,6 +12,14 @@ separate Clang-instrumented compiler and exercise it with:
 - the MIR lifetime and required-emission suites; and
 - instrumented host MIR verifier mutation tests.
 
+The clobber suite writes
+`build/compiler-coverage/report/mir-clobber-executions.json`. It rejects a
+full or focused run unless every expected stack/no-stack, peep/nopeep, and
+debug configuration actually completed. Forced-candidate controls also assert
+the selected candidate name from `DCC_MIR_COST_REPORT`, not only the shared
+selector class. This prevents an empty focused case or a different
+homed/spilled candidate from producing success-shaped coverage.
+
 The generated text and HTML reports are kept under
 `build/compiler-coverage/report/` and are intentionally not committed.
 

@@ -3,7 +3,8 @@ param(
     [int]$RunTimeout = 30,
     [string]$Emulator = "ntvcm",
     [string[]]$Cases = @(),
-    [int[]]$FuzzSeeds = @(23117, 1, 65535)
+    [int[]]$FuzzSeeds = @(23117, 1, 65535),
+    [string]$ExecutionManifest = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,6 +28,9 @@ $environmentNames = @(
     "DCC_MIR_SELECT_REPORT"
 )
 $savedEnvironment = @{}
+$executedConfigurations =
+    [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
 
 foreach ($name in $environmentNames) {
     $savedEnvironment[$name] =
@@ -109,6 +113,7 @@ function Assert-RunCase(
     [string]$RequiredGenericFunction = "",
     [string]$RequiredSelectorFunction = "",
     [string]$RequiredSelector = "",
+    [string]$RequiredCandidate = "",
     [string[]]$RunArguments = @(),
     [string[]]$AssemblyPatterns = @(),
     [string[]]$ForbiddenAssemblyPatterns = @(),
@@ -166,7 +171,17 @@ __ctu:
         $arguments += "dcc-define=$define"
     }
 
-    $build = Invoke-WithTimeout $dccmake $arguments $repoRoot 60
+    $savedCostReport =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_COST_REPORT", "Process")
+    if ($RequiredCandidate) {
+        Set-ProcessEnvironment "DCC_MIR_COST_REPORT" "1"
+    }
+    try {
+        $build = Invoke-WithTimeout $dccmake $arguments $repoRoot 60
+    } finally {
+        Set-ProcessEnvironment "DCC_MIR_COST_REPORT" $savedCostReport
+    }
     if ($build.TimedOut -or $build.ExitCode -ne 0) {
         throw "$Name failed to build ($configuration):`n$($build.Output)"
     }
@@ -194,6 +209,17 @@ __ctu:
             "selector=$([regex]::Escape($RequiredSelector)) result=mir"
         if ($build.Output -notmatch $requiredSelectorPattern) {
             throw "$Name did not use selector '$RequiredSelector' for " +
+                "$RequiredSelectorFunction`:`n$($build.Output)"
+        }
+    }
+    if ($RequiredCandidate) {
+        $requiredCandidatePattern =
+            "MIR cost-selected function=" +
+            "$([regex]::Escape($RequiredSelectorFunction)) " +
+            "candidate=$([regex]::Escape($RequiredCandidate)) " +
+            "selector=$([regex]::Escape($RequiredSelector)) "
+        if ($build.Output -notmatch $requiredCandidatePattern) {
+            throw "$Name did not select candidate '$RequiredCandidate' for " +
                 "$RequiredSelectorFunction`:`n$($build.Output)"
         }
     }
@@ -259,6 +285,101 @@ __ctu:
                 $run.Output
         }
     }
+    $executionKey = "$Name|$configuration"
+    if (-not $executedConfigurations.Add($executionKey)) {
+        throw "duplicate MIR clobber execution: $executionKey"
+    }
+}
+
+function Assert-RequestedExecutionCounts {
+    if ($Cases.Count -eq 0) {
+        $expectedTotal = 0
+        foreach ($definition in $caseDefinitions) {
+            $stackCount = if (
+                $definition.PSObject.Properties.Name -contains "StackModes"
+            ) { @($definition.StackModes).Count } else { 2 }
+            $debugCount = if (
+                $definition.PSObject.Properties.Name -contains "DebugModes"
+            ) { @($definition.DebugModes).Count } else { 0 }
+            $expectedTotal += $stackCount * 2 * (1 + $debugCount)
+        }
+        $expectedTotal += 8 * $FuzzSeeds.Count
+        $expectedTotal += 28 + 20 + 8 + 4 + 8 + 4 + 8
+        if ($executedConfigurations.Count -ne $expectedTotal) {
+            throw "full MIR clobber run executed " +
+                "$($executedConfigurations.Count) target configurations, " +
+                "expected $expectedTotal"
+        }
+        return
+    }
+    $specialCounts = @{
+        fuzz = -1
+        minimax = 28
+        oldloops = 20
+        lazywide = 8
+        inlines = 4
+        pairedbytes = 8
+        vlaend = 4
+        vlaok = 4
+    }
+    foreach ($requested in $Cases) {
+        $expected = 0
+        $patterns = @("^$([regex]::Escape($requested))\|")
+        if ($specialCounts.ContainsKey($requested)) {
+            $expected = $specialCounts[$requested]
+            $patterns = switch ($requested) {
+                "fuzz" { @("^fuzz-", "^fuzzforced-") }
+                "minimax" { @("^minimax-") }
+                "oldloops" { @("^oldloop-") }
+                "lazywide" { @("^lazywide-") }
+                "pairedbytes" { @("^pairedbytes\|", "^pairedbytes-near\|") }
+                "vlaend" { @("^vlaend\|", "^vlaok\|") }
+                "vlaok" { @("^vlaend\|", "^vlaok\|") }
+                default { @("^$([regex]::Escape($requested))\|") }
+            }
+            if ($requested -eq "fuzz") {
+                $expected = 8 * $FuzzSeeds.Count
+                foreach ($definition in @($caseDefinitions |
+                    Where-Object { $_.Name.StartsWith("fuzz-") })) {
+                    $stackCount = if (
+                        $definition.PSObject.Properties.Name -contains
+                            "StackModes"
+                    ) { @($definition.StackModes).Count } else { 2 }
+                    $debugCount = if (
+                        $definition.PSObject.Properties.Name -contains
+                            "DebugModes"
+                    ) { @($definition.DebugModes).Count } else { 0 }
+                    $expected += $stackCount * 2 * (1 + $debugCount)
+                }
+            }
+        } else {
+            $definition = $caseDefinitions |
+                Where-Object { $_.Name -eq $requested } |
+                Select-Object -First 1
+            if ($null -eq $definition) {
+                throw "no execution expectation for MIR clobber case: $requested"
+            }
+            $stackCount = if (
+                $definition.PSObject.Properties.Name -contains "StackModes"
+            ) { @($definition.StackModes).Count } else { 2 }
+            $debugCount = if (
+                $definition.PSObject.Properties.Name -contains "DebugModes"
+            ) { @($definition.DebugModes).Count } else { 0 }
+            $expected = $stackCount * 2 * (1 + $debugCount)
+            if ($requested -in @("regbyte", "arbiter")) {
+                $expected += 4
+                $patterns += "^$([regex]::Escape($requested))-forced\|"
+            }
+        }
+        $actual = @($executedConfigurations | Where-Object {
+            $key = $_
+            @($patterns | Where-Object { $key -match $_ }).Count -gt 0
+        }).Count
+        if ($actual -ne $expected) {
+            throw "MIR clobber case '$requested' executed $actual " +
+                "configurations, expected $expected"
+        }
+    }
 }
 
 function Assert-ForcedRegionalSafe(
@@ -305,6 +426,11 @@ function Assert-ForcedRegionalSafe(
             throw "$Name forced regional failed without an explicit " +
                 "validation rejection ($configuration):`n$($build.Output)"
         }
+        if (-not $executedConfigurations.Add(
+                "$Name-forced|$configuration")) {
+            throw "duplicate MIR forced-regional execution: " +
+                "$Name-forced|$configuration"
+        }
         return
     }
 
@@ -315,6 +441,11 @@ function Assert-ForcedRegionalSafe(
         -not $run.Output.Contains($Expected)) {
         throw "$Name forced regional emitted unsafe code " +
             "($configuration):`n$($run.Output)"
+    }
+    if (-not $executedConfigurations.Add(
+            "$Name-forced|$configuration")) {
+        throw "duplicate MIR forced-regional execution: " +
+            "$Name-forced|$configuration"
     }
 }
 
@@ -1294,7 +1425,10 @@ try {
                                 -Sources @(Join-Path $tempRoot "fz$seed.c") -Defines @() `
                                 -Expected @("MIR fuzz seed=$seed checks=96 failures=0") `
                                 -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
-                                -RequiredGenericFunction $fuzzFunction
+                                -RequiredGenericFunction $fuzzFunction `
+                                -RequiredSelectorFunction $fuzzFunction `
+                                -RequiredSelector "spilled-scalar-cfg" `
+                                -RequiredCandidate $candidate
                         }
                     }
                 }
@@ -1311,14 +1445,30 @@ try {
                 Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $candidate
                 foreach ($stackCheck in @($true, $false)) {
                     foreach ($peep in @($true, $false)) {
-                        foreach ($debugMode in @("", "true", "lines")) {
+                        foreach ($debugMode in @("", "lines")) {
                             Assert-RunCase -Name "minimax-$candidate" `
                                 -Sources @(Join-Path $repoRoot "tests/ttt.c") -Defines @() `
                                 -Expected @("6493 moves", "1 iterations") -ExpectedExit 0 `
                                 -StackCheck $stackCheck -Peep $peep -DebugMode $debugMode `
-                                -RequiredGenericFunction "MinMax"
+                                -RequiredGenericFunction "MinMax" `
+                                -RequiredSelectorFunction "MinMax" `
+                                -RequiredSelector "spilled-scalar-cfg" `
+                                -RequiredCandidate $candidate
                         }
                     }
+                }
+            }
+            Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $null
+            foreach ($stackCheck in @($true, $false)) {
+                foreach ($peep in @($true, $false)) {
+                    Assert-RunCase -Name "minimax-debug" `
+                        -Sources @(Join-Path $repoRoot "tests/ttt.c") `
+                        -Defines @() `
+                        -Expected @("6493 moves", "1 iterations") `
+                        -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
+                        -DebugMode "true" -RequiredGenericFunction "MinMax" `
+                        -RequiredSelectorFunction "MinMax" `
+                        -RequiredSelector "spilled-scalar-cfg"
                 }
             }
         } finally {
@@ -1359,7 +1509,8 @@ try {
                             -Defines @() -Expected @("lazy wide passed") `
                             -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
                             -RequiredSelectorFunction $function `
-                            -RequiredSelector "homed-scalar-cfg"
+                            -RequiredSelector "homed-scalar-cfg" `
+                            -RequiredCandidate "homed-lazy"
                     }
                 }
             }
@@ -1380,8 +1531,10 @@ try {
                         -Sources @(Join-Path $fixtureRoot "inlines.c") `
                         -Defines @() -Expected @("inline stores passed") `
                         -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
+                        -RunArguments @("2", "3", "29") `
                         -RequiredSelectorFunction "main" `
                         -RequiredSelector "spilled-scalar-cfg" `
+                        -RequiredCandidate "spilled-all" `
                         -AssemblyPatterns @(";@dcc.mir inline-simple-store")
                 }
             }
@@ -1404,6 +1557,7 @@ try {
                         -ExpectedExit 0 -StackCheck $stackCheck -Peep $peep `
                         -RequiredSelectorFunction "read_pair" `
                         -RequiredSelector "regional-homed-scalar-cfg" `
+                        -RequiredCandidate "regional" `
                         -AssemblyPatterns @(";@dcc.mir paired-byte-call")
                 }
             }
@@ -1429,7 +1583,8 @@ try {
         Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" `
             $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
     }
-    if ($Cases.Count -eq 0 -or "vlaend" -in $Cases) {
+    if ($Cases.Count -eq 0 -or
+        "vlaend" -in $Cases -or "vlaok" -in $Cases) {
         foreach ($peep in @($true, $false)) {
             Assert-RunCase -Name "vlaend" `
                 -Sources @(Join-Path $fixtureRoot "vlaend.c") -Defines @() `
@@ -1462,7 +1617,27 @@ try {
             }
         }
     }
-    Write-Host "MIR emission-clobber regressions passed" `
+    Assert-RequestedExecutionCounts
+    if ($ExecutionManifest) {
+        $manifestPath = if (
+            [System.IO.Path]::IsPathRooted($ExecutionManifest)
+        ) {
+            [System.IO.Path]::GetFullPath($ExecutionManifest)
+        } else {
+            [System.IO.Path]::GetFullPath(
+                (Join-Path $repoRoot $ExecutionManifest))
+        }
+        $manifestParent = Split-Path -Parent $manifestPath
+        if ($manifestParent) {
+            New-Item -ItemType Directory -Path $manifestParent -Force |
+                Out-Null
+        }
+        @($executedConfigurations | Sort-Object) |
+            ConvertTo-Json |
+            Set-Content -LiteralPath $manifestPath -Encoding utf8
+    }
+    Write-Host "MIR emission-clobber regressions passed " `
+        "$($executedConfigurations.Count) target configurations" `
         -ForegroundColor Green
 } catch {
     $failureRoot = Join-Path $repoRoot ("build/mir-clobber-failure-" + [guid]::NewGuid())

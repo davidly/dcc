@@ -249,6 +249,13 @@ kills must contain the mutation-specific assertion failure. Logs and JSON
 results are retained under `build/mir-compiler-mutations`. These nine controls
 do not establish a general compiler mutation score.
 
+`run-mir-clobber-tests.ps1` records each successful target configuration in an
+optional JSON execution manifest and verifies the exact expected count for
+full and focused runs. Candidate-forcing cases require both the selector and
+the `DCC_MIR_COST_REPORT` candidate identity. Debug MinMax configurations are
+kept as generic debug controls because debug emission intentionally uses the
+incumbent rather than honoring a forced cost-policy candidate.
+
 ### Call Arity Invariants
 
 Each call's argument positions must form a contiguous zero-based set; textual
