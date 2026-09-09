@@ -374,6 +374,7 @@ function Assert-RequestedExecutionCounts {
     }
     $specialCounts = @{
         catalanmut = 444
+        ctypemut = 132
         fuzz = -1
         minimax = 28
         minimaxmut = 320
@@ -392,6 +393,7 @@ function Assert-RequestedExecutionCounts {
             $expected = $specialCounts[$requested]
             $patterns = switch ($requested) {
                 "catalanmut" { @("^catexact\|", "^ct") }
+                "ctypemut" { @("^crexact\|", "^cr") }
                 "fuzz" { @("^fuzz-", "^fuzzforced-") }
                 "minimax" { @("^minimax-") }
                 "minimaxmut" { @("^mmexact\|", "^mx") }
@@ -1980,6 +1982,43 @@ foreach ($mutation in $catalanMutations) {
     ++$catalanMutationIndex
 }
 
+$ctypeReallocMutations = @(
+    "132:immediate:999", "132:src1:999", "132:type:1", "133:src1:999",
+    "135:immediate:999", "135:src1:999", "136:src1:999", "141:src1:999",
+    "157:immediate:999", "157:src1:999", "157:type:1", "158:src1:999",
+    "160:immediate:999", "160:src1:999", "161:src1:999", "166:src1:999",
+    "175:immediate:999", "175:src1:999", "175:src2:999", "176:src1:999",
+    "200:immediate:999", "200:src1:999", "200:type:1", "201:src1:999",
+    "203:immediate:999", "203:src1:999", "204:src1:999", "209:src1:999",
+    "238:type:1", "239:src1:999", "246:src1:999", "253:src1:999"
+)
+$caseDefinitions += [pscustomobject]@{
+    Name = "crexact"
+    Sources = @(Join-Path $repoRoot "tests/tctype.c")
+    Defines = @()
+    Expected = @("ctype/realloc ok")
+    Exit = 0
+    ExactTemplate = "ctype-realloc-schedule"
+    ExactFunction = "main"
+    RequireExact = $true
+}
+$ctypeReallocIndex = 0
+foreach ($mutation in $ctypeReallocMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "cr$($ctypeReallocIndex.ToString('000'))"
+        Sources = @(Join-Path $repoRoot "tests/tctype.c")
+        Defines = @()
+        Expected = @("ctype/realloc ok")
+        Exit = 0
+        ExactTemplate = "ctype-realloc-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+        MachineMutation = $mutation
+        MachineMutationFunction = "main"
+    }
+    ++$ctypeReallocIndex
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
@@ -1994,7 +2033,7 @@ try {
         throw "MIR exact-rejection selection evidence controls failed"
     }
     $knownCases = @($caseDefinitions.Name) + @(
-        "catalanmut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes",
+        "catalanmut", "ctypemut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes",
         "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
@@ -2237,6 +2276,8 @@ try {
         if ($Cases.Count -gt 0 -and $case.Name -notin $Cases -and
             -not (($case.Name -eq "catexact" -or $case.Name.StartsWith("ct")) -and
                 "catalanmut" -in $Cases) -and
+            -not (($case.Name -eq "crexact" -or $case.Name.StartsWith("cr")) -and
+                "ctypemut" -in $Cases) -and
             -not ($case.Name.StartsWith("fuzz-") -and "fuzz" -in $Cases) -and
             -not (($case.Name -eq "mmexact" -or $case.Name.StartsWith("mx")) -and
                 "minimaxmut" -in $Cases) -and

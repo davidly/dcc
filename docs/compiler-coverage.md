@@ -658,7 +658,7 @@ One hundred forty-four byte-math field mutations exercise retained parameter,
 mask, comparison, memory, call, decimal, subtract, add, carry, overflow,
 logical, negative, zero-flag, and SSA operand checks. The original runtime
 program is restored before generic emission, so all 576 target configurations
-validate fallback output. The full clobber manifest contains 3,628 target
+validate fallback output. The full clobber manifest contains 3,760 target
 configurations.
 
 | Metric | Covered / total | Percent |
@@ -758,7 +758,23 @@ This adds 111 covered branch outcomes, 25 lines, and 12 regions while adding
 only one acceptance-diagnostic line. The raw ledger now contains 53,649
 uncovered outcomes.
 
-- Review the remaining 53,649 unreviewed raw uncovered outcomes rather than
+The ctype/realloc schedule now has a named accepted control plus 32
+restored-MIR mutations spanning allocation, failure, copy, grow, preserve,
+byte-store/check, shrink, free, and final-result proofs. All 132 target
+configurations preserve the canonical `ctype/realloc ok` result.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,359 / 4,359 | 100.00% |
+| Lines | 177,002 / 189,945 | 93.19% |
+| Native branch outcomes | 90,654 / 144,518 | 62.73% |
+| Regions | 159,030 / 169,867 | 93.62% |
+
+This adds 32 covered branch outcomes, 17 lines, and eight regions while adding
+only one acceptance-diagnostic line. The raw ledger now contains 53,617
+uncovered outcomes.
+
+- Review the remaining 53,617 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,

@@ -10845,6 +10845,7 @@ int mir_try_emit_container_kernels(MirStream *out)
     }
     if (mir_match_ctype_realloc_schedule(
             &ctype_realloc_schedule)) {
+        mir_machine_accept("ctype-realloc-schedule");
         mir_emit_ctype_realloc_schedule(
             out, &ctype_realloc_schedule);
         return 1;
