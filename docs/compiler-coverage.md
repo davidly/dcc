@@ -651,21 +651,26 @@ between cases and restores the caller environment only when the suite exits.
 Thirteen `ln2` mutations cover every named log-series rejection group while
 executing the original program generically; five source-level reorderings
 provide independent controls. Both mutator functions have exact line, branch,
-and region coverage, and the full clobber manifest contains 716 target
-configurations.
+and region coverage.
+
+Seventeen field mutations also exercise distinct byte-math parameter, mask,
+comparison, memory, call, decimal, subtract, add, carry, overflow, logical,
+negative, and zero-flag checks. The original runtime program is restored before
+generic emission, so all 68 target configurations validate fallback output.
+The full clobber manifest contains 784 target configurations.
 
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
 | Functions | 4,359 / 4,359 | 100.00% |
-| Lines | 176,874 / 189,969 | 93.11% |
-| Native branch outcomes | 89,869 / 144,548 | 62.17% |
-| Regions | 158,961 / 169,908 | 93.56% |
+| Lines | 176,883 / 189,969 | 93.11% |
+| Native branch outcomes | 89,884 / 144,548 | 62.18% |
+| Regions | 158,969 / 169,908 | 93.56% |
 
 The mutation framework adds two fully covered functions and reduces missing
-lines, branch outcomes, and regions by 28, 11, and 15 respectively. The raw
-ledger now contains 54,432 uncovered outcomes.
+lines, branch outcomes, and regions by 37, 26, and 23 respectively. The raw
+ledger now contains 54,417 uncovered outcomes.
 
-- Review the remaining 54,432 unreviewed raw uncovered outcomes rather than
+- Review the remaining 54,417 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,

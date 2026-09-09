@@ -1493,6 +1493,40 @@ foreach ($mutationCase in $logSeriesMutationCases) {
     }
 }
 
+$byteMathMutationCases = @(
+    @{ Name = "bmparam"; Mutation = "1:type:1" },
+    @{ Name = "bmmask"; Mutation = "4:immediate:225" },
+    @{ Name = "bmcmp"; Mutation = "10:immediate:193" },
+    @{ Name = "bmmem"; Mutation = "17:memory_size:2" },
+    @{ Name = "bmcall"; Mutation = "21:identity:120" },
+    @{ Name = "bmdec"; Mutation = "26:type:2" },
+    @{ Name = "bmbcd"; Mutation = "35:immediate:2" },
+    @{ Name = "bmdcall"; Mutation = "67:type:2" },
+    @{ Name = "bmsub"; Mutation = "79:immediate:0" },
+    @{ Name = "bmadd"; Mutation = "99:immediate:45" },
+    @{ Name = "bmcarry"; Mutation = "115:immediate:1" },
+    @{ Name = "bmover"; Mutation = "129:immediate:38" },
+    @{ Name = "bmor"; Mutation = "170:immediate:38" },
+    @{ Name = "bmand"; Mutation = "186:immediate:124" },
+    @{ Name = "bmxor"; Mutation = "196:immediate:38" },
+    @{ Name = "bmneg"; Mutation = "209:immediate:124" },
+    @{ Name = "bmzero"; Mutation = "217:immediate:0" }
+)
+foreach ($mutationCase in $byteMathMutationCases) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = $mutationCase.Name
+        Sources = @(Join-Path $fixtureRoot "bytemath.c")
+        Defines = @()
+        Expected = @("byte math failures=0")
+        Exit = 0
+        ExactTemplate = "byte-math-flags"
+        ExactFunction = "op_math"
+        RequireRejected = $true
+        MachineMutation = $mutationCase.Mutation
+        MachineMutationFunction = "op_math"
+    }
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
