@@ -33,7 +33,7 @@ still need investigation.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `f23f4e8f` (`test: mutate byte matcher fields`).
+  `28a4a727` (`refactor: prune preempted AST assignment paths`).
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -618,13 +618,13 @@ frozen performance gates pass.
 
 The resulting scoped report, after adding malformed-MIR spilled preflight,
 exact byte-math near-mutations, and reusable exact-matcher field mutation, is
-4,359/4,359 functions, 176,883/189,969 lines (93.11%),
-89,884/144,548 native branch outcomes (62.18%), and 158,969/169,908 regions
-(93.56%). The preflight matrix covers
+4,359/4,359 functions, 176,876/189,935 lines (93.12%),
+89,879/144,510 native branch outcomes (62.20%), and 158,957/169,857 regions
+(93.58%). The preflight matrix covers
 invalid return/value widths, unsupported opcodes, unresolved memory, indirect
 widths, direct/indirect call ABI failures, aggregate-call ABI failures, and
 invalid `va_arg` offsets. Exact-shape, selector-rejection, and backend-slot
-diagnostic modes are also covered. The raw ledger has 54,417 uncovered
+diagnostic modes are also covered. The raw ledger has 54,384 uncovered
 outcomes. The byte-math variants alter mask, comparison, complement, addend,
 overflow, and logical semantics; each rejects the named schedule and runs
 generically across 32 target configurations.
@@ -640,6 +640,14 @@ coverage. Seventeen field mutations additionally cover byte-math parameter,
 mask, comparison, memory, call, decimal, arithmetic, carry, overflow, logical,
 negative, and zero-flag checks. The complete clobber manifest now contains 784
 configurations.
+
+A second assignment review removes a preempted 2-D address branch, a
+pointer-array result path already handled for plain assignment, and a member
+fallback already owned by earlier member-pointer and member-array gates.
+Direct multidimensional long/float and pointer rejection controls preserve the
+live behavior. Stack/no-stack censuses remain byte-identical for all 3,039
+functions, and missing lines, branch outcomes, and regions fall by another 27,
+33, and 39.
 
 The next increment should rank gaps only from selected functions in
 `ast-mir-function-coverage.json`. Do not rank raw LLVM rows for classified
