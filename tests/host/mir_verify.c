@@ -8,6 +8,28 @@
 
 static int failures;
 
+static void set_test_environment(const char *name, const char *value)
+{
+#ifdef _WIN32
+    if (_putenv_s(name, value) != 0)
+        fatal("cannot set test environment");
+#else
+    if (setenv(name, value, 1) != 0)
+        fatal("cannot set test environment");
+#endif
+}
+
+static void clear_test_environment(const char *name)
+{
+#ifdef _WIN32
+    if (_putenv_s(name, "") != 0)
+        fatal("cannot clear test environment");
+#else
+    if (unsetenv(name) != 0)
+        fatal("cannot clear test environment");
+#endif
+}
+
 static void clear_liveness(void)
 {
     free(mir.live_in);
@@ -955,7 +977,11 @@ static void verify_spilled_preflight_rejection(void)
     int sid;
 
     setup(3, 1, 1);
+    set_test_environment("DCC_MIR_EXACT_SHAPE_REPORT", "1");
+    set_test_environment("DCC_MIR_SLOT_ACCESS_REPORT", "1");
     expect_spilled_candidate("valid control", 1);
+    clear_test_environment("DCC_MIR_SLOT_ACCESS_REPORT");
+    clear_test_environment("DCC_MIR_EXACT_SHAPE_REPORT");
 
     setup(3, 1, 1);
     mir.local_bytes = 30001;
@@ -979,7 +1005,9 @@ static void verify_spilled_preflight_rejection(void)
 
     setup(3, 1, 1);
     mir.insns[1].opcode = MIR_LOAD;
+    set_test_environment("DCC_MIR_SELECT_REPORT", "1");
     expect_spilled_candidate("memory location rejection", 0);
+    clear_test_environment("DCC_MIR_SELECT_REPORT");
 
     setup(3, 1, 1);
     mir.insns[1].opcode = MIR_LOAD_INDIRECT;

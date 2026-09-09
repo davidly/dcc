@@ -57,7 +57,8 @@ with nonzero-pointer and compound-assignment rejection cases.
 The spilled-emitter preflight matrix independently rejects oversized frames,
 invalid aggregate return/value widths, unsupported opcodes, unresolved memory,
 invalid indirect widths, malformed direct/indirect calls, and invalid
-`va_arg` offsets before code emission.
+`va_arg` offsets before code emission. Successful and rejecting controls also
+exercise exact-shape, selector, and backend-slot diagnostic reporting.
 
 `dcc_mir_verify.c` constructs an independent CFG and immediate-dominator tree
 using reverse postorder. Its storage is linear in the MIR size. Verification
