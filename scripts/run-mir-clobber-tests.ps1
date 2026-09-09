@@ -375,6 +375,7 @@ function Assert-RequestedExecutionCounts {
     $specialCounts = @{
         catalanmut = 444
         ctypemut = 132
+        primemut = 288
         fuzz = -1
         minimax = 28
         minimaxmut = 320
@@ -394,6 +395,7 @@ function Assert-RequestedExecutionCounts {
             $patterns = switch ($requested) {
                 "catalanmut" { @("^catexact\|", "^ct") }
                 "ctypemut" { @("^crexact\|", "^cr") }
+                "primemut" { @("^prexact\|", "^pr") }
                 "fuzz" { @("^fuzz-", "^fuzzforced-") }
                 "minimax" { @("^minimax-") }
                 "minimaxmut" { @("^mmexact\|", "^mx") }
@@ -2019,6 +2021,57 @@ foreach ($mutation in $ctypeReallocMutations) {
     ++$ctypeReallocIndex
 }
 
+$primeMutations = @(
+    "55:type:1", "58:type:1", "5:src1:999", "8:src1:999",
+    "11:immediate:999", "11:src1:999", "11:src2:999", "12:src1:999",
+    "15:src1:999", "15:src2:999", "15:immediate:999",
+    "15:memory_size:3", "15:type:1", "16:src1:999", "16:memory_size:3",
+    "16:type:1", "19:immediate:999", "19:src1:999", "19:type:1",
+    "20:src1:999", "26:immediate:999", "26:src1:999", "26:src2:999",
+    "28:immediate:999", "28:src1:999", "28:src2:999", "29:src1:999",
+    "32:immediate:999", "32:src1:999", "32:src2:999", "33:src1:999",
+    "43:immediate:999", "43:src1:999", "43:src2:999", "40:type:1",
+    "44:src1:999", "50:immediate:999", "50:src1:999", "50:src2:999",
+    "52:src1:999", "55:src1:999", "58:src1:999", "69:immediate:999",
+    "69:src1:999", "69:src2:999", "67:type:1", "70:src1:999",
+    "74:immediate:999", "74:src1:999", "74:src2:999", "72:type:1",
+    "76:immediate:999", "76:src1:999", "76:src2:999", "77:src1:999",
+    "80:src1:999", "90:immediate:999", "90:src1:999", "90:src2:999",
+    "92:src1:999", "96:src1:999", "99:immediate:999", "99:src1:999",
+    "99:src2:999", "100:src1:999", "101:type:1", "111:immediate:999",
+    "111:src1:999", "111:src2:999", "113:src1:999", "119:src1:999"
+)
+$primeExpected = @(
+    "10007", "10009", "10037", "10039", "10061",
+    "10067", "10069", "10079", "10091", "10093"
+)
+$caseDefinitions += [pscustomobject]@{
+    Name = "prexact"
+    Sources = @(Join-Path $repoRoot "tests/primes.c")
+    Defines = @()
+    Expected = $primeExpected
+    Exit = 0
+    ExactTemplate = "prime-search-schedule"
+    ExactFunction = "main"
+    RequireExact = $true
+}
+$primeMutationIndex = 0
+foreach ($mutation in $primeMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "pr$($primeMutationIndex.ToString('000'))"
+        Sources = @(Join-Path $repoRoot "tests/primes.c")
+        Defines = @()
+        Expected = $primeExpected
+        Exit = 0
+        ExactTemplate = "prime-search-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+        MachineMutation = $mutation
+        MachineMutationFunction = "main"
+    }
+    ++$primeMutationIndex
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
@@ -2033,7 +2086,7 @@ try {
         throw "MIR exact-rejection selection evidence controls failed"
     }
     $knownCases = @($caseDefinitions.Name) + @(
-        "catalanmut", "ctypemut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes",
+        "catalanmut", "ctypemut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes", "primemut",
         "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
@@ -2278,6 +2331,8 @@ try {
                 "catalanmut" -in $Cases) -and
             -not (($case.Name -eq "crexact" -or $case.Name.StartsWith("cr")) -and
                 "ctypemut" -in $Cases) -and
+            -not (($case.Name -eq "prexact" -or $case.Name.StartsWith("pr")) -and
+                "primemut" -in $Cases) -and
             -not ($case.Name.StartsWith("fuzz-") -and "fuzz" -in $Cases) -and
             -not (($case.Name -eq "mmexact" -or $case.Name.StartsWith("mx")) -and
                 "minimaxmut" -in $Cases) -and

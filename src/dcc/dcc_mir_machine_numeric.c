@@ -14259,6 +14259,7 @@ int mir_try_emit_numeric_kernels(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_prime_search_schedule(&prime_plan)) {
+            mir_machine_accept("prime-search-schedule");
             mir_emit_prime_search_schedule(out, &prime_plan);
             return 1;
         }

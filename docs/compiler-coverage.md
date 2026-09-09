@@ -658,7 +658,7 @@ One hundred forty-four byte-math field mutations exercise retained parameter,
 mask, comparison, memory, call, decimal, subtract, add, carry, overflow,
 logical, negative, zero-flag, and SSA operand checks. The original runtime
 program is restored before generic emission, so all 576 target configurations
-validate fallback output. The full clobber manifest contains 3,760 target
+validate fallback output. The full clobber manifest contains 4,048 target
 configurations.
 
 | Metric | Covered / total | Percent |
@@ -774,7 +774,23 @@ This adds 32 covered branch outcomes, 17 lines, and eight regions while adding
 only one acceptance-diagnostic line. The raw ledger now contains 53,617
 uncovered outcomes.
 
-- Review the remaining 53,617 unreviewed raw uncovered outcomes rather than
+The prime-search schedule now has a named accepted control plus 71 restored-MIR
+mutations spanning parameter ABI, local layout, initialization, argument
+conversion, odd normalization, loop divisibility, and final reporting. All 288
+target configurations preserve the ten-prime output.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,359 / 4,359 | 100.00% |
+| Lines | 177,017 / 189,946 | 93.19% |
+| Native branch outcomes | 90,730 / 144,518 | 62.78% |
+| Regions | 159,039 / 169,867 | 93.63% |
+
+This adds 76 covered branch outcomes, 15 lines, and nine regions while adding
+only one acceptance-diagnostic line. The raw ledger now contains 53,541
+uncovered outcomes.
+
+- Review the remaining 53,541 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,
