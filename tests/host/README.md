@@ -53,7 +53,9 @@ identifier, long, float, pointer, array, and every compound-assignment operator
 without relying on parser filtering. Pointer-index controls include
 pointer-array elements, dereferenced pointer-to-array rows, computed pointer
 expressions, multidimensional pointer elements, and pointer-valued members,
-with nonzero-pointer and compound-assignment rejection cases.
+with nonzero-pointer and compound-assignment rejection cases. Direct
+multidimensional long/float controls preserve the common lvalue-type gate that
+preempts narrower shape-specific fallbacks.
 The spilled-emitter preflight matrix independently rejects oversized frames,
 invalid aggregate return/value widths, unsupported opcodes, unresolved memory,
 invalid indirect widths, malformed direct/indirect calls, and invalid

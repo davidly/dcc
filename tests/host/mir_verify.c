@@ -196,7 +196,8 @@ static void verify_ast_assignment_support(void)
     ok = ok && ast_assignment_probe(&assign, &lhs, &real, '=') &&
          ast_assignment_probe(&assign, &lhs, &integer, '=') &&
          ast_assignment_probe(&assign, &lhs, &wide, '=') &&
-         ast_assignment_probe(&assign, &lhs, &real, TOK_MULEQ);
+         ast_assignment_probe(&assign, &lhs, &real, TOK_MULEQ) &&
+         !ast_assignment_probe(&assign, &lhs, &real, TOK_MODEQ);
 
     symbol = add_global(
         "verify_assignment_array", TYPE_INT, SC_GLOBAL);
@@ -345,6 +346,10 @@ static void verify_ast_assignment_support(void)
     integer.ival = 3;
     ok = ok && !ast_assignment_probe(
         &assign, &index, &integer, '=');
+    expr_result_dead = 0;
+    ok = ok && !ast_assignment_probe(
+        &assign, &index, &integer, TOK_ADDEQ);
+    expr_result_dead = 1;
 
     symbol = add_global(
         "verify_assignment_nd_long", TYPE_LONG, SC_GLOBAL);

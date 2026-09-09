@@ -670,7 +670,26 @@ The mutation framework adds two fully covered functions and reduces missing
 lines, branch outcomes, and regions by 37, 26, and 23 respectively. The raw
 ledger now contains 54,417 uncovered outcomes.
 
-- Review the remaining 54,417 unreviewed raw uncovered outcomes rather than
+A second assignment review removed a preempted 2-D address branch, a
+pointer-array result path whose plain assignment had already returned, and a
+final member fallback already owned by the earlier member-pointer and
+member-array cases. Direct controls retain multidimensional long/float
+acceptance plus dead-result and nonzero-pointer rejection behavior. Both
+stack modes retain byte-identical selectors and selected hashes for all 3,039
+functions.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,359 / 4,359 | 100.00% |
+| Lines | 176,876 / 189,935 | 93.12% |
+| Native branch outcomes | 89,879 / 144,510 | 62.20% |
+| Regions | 158,957 / 169,857 | 93.58% |
+
+The second pruning reduces missing lines, branch outcomes, and regions by 27,
+33, and 39 respectively, with no target-output or performance change. The raw
+ledger now contains 54,384 uncovered outcomes.
+
+- Review the remaining 54,384 unreviewed raw uncovered outcomes rather than
   labeling them unreachable by default; add supported-input or malformed-IR
   assertions as needed.
 - Preserve exact function coverage while closing the retained line, branch,

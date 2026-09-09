@@ -415,17 +415,9 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                        ast_int_elem_assign_rhs_ok(n);
             }
             if (n->op == '=' && ast_index_addressable_addr(n->a)) {
-                if (ast_index_2d_array_elem_type(n->a, &elem)) {
-                    /* elem set by helper */
-                } else if (n->a->a != NULL && n->a->a->kind == AST_IDENT) {
-                    base = find_sym(n->a->a->sval);
-                    if (base == NULL)
-                        return 0;
-                    decayed = base->is_array ? type_add_ptr(base->type) : base->type;
-                    elem = type_decay_ptr(decayed);
-                } else {
-                    elem = 0;
-                }
+                base = find_sym(n->a->a->sval);
+                decayed = base->is_array ? type_add_ptr(base->type) : base->type;
+                elem = type_decay_ptr(decayed);
                 if (type_ptr_depth(elem) > 0)
                     return type_size(elem) == 2 && ast_pointer_assign_rhs_supported(n->b);
             }
@@ -438,11 +430,6 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                     return 0;
                 return (type_size(elem) == 1 || type_size(elem) == 2) &&
                        ast_int_elem_assign_rhs_ok(n);
-            }
-            if (ast_index_pointer_array_elem_type(n->a, &elem)) {
-                if (n->op != '=')
-                    return 0;
-                return ast_pointer_assign_rhs_supported(n->b);
             }
             if (ast_index_member_pointer_elem_type(n->a, &elem)) {
                 if (type_ptr_depth(elem) > 0)
@@ -488,51 +475,29 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
             }
             if (!ast_index_plain_int_read(n->a))
                 return 0;
-            if (n->a->a->kind == AST_IDENT) {
-                if (!ast_int_elem_assign_rhs_ok(n))
-                    return 0;
-                base = find_sym(n->a->a->sval);
-                decayed = base->is_array ? type_add_ptr(base->type) : base->type;
-                elem = type_decay_ptr(decayed);
-                /* A byte element normally requires plain `=`; also accept a
-                 * dead-result compound assign (`a[i] += k;` as its own
-                 * statement, e.g. inside a for-loop body) the same way the
-                 * N-D array and pointer-element branches above already do -
-                 * this final fallback (a plain local/global 1-D array
-                 * reached by a computed index) had no such exception, so
-                 * every byte array here declined += even though nothing
-                 * about reaching the array through this specific helper
-                 * makes that unsafe. */
-                if (type_size(elem) != 2 &&
-                    (type_size(elem) != 1 ||
-                     (n->op != '=' && !(is_compound && expr_result_dead))))
-                    return 0;
-                if (type_size(elem) == 1 && base->is_array &&
-                    (base->storage == SC_GLOBAL || base->storage == SC_EXTERN))
-                    return expr_result_dead && (n->op == '=' || is_compound);
-            } else if (n->a->a->kind == AST_MEMBER) {
-                if (ast_member_plain_array_field_elem_type(n->a->a, &elem)) {
-                    if (!ast_value_is_plain_int(n->b))
-                        return 0;
-                    if (type_size(elem) != 2 && (n->op != '=' || type_size(elem) != 1))
-                        return 0;
-                } else {
-                    int field_type;
-                    if (!ast_member_lvalue_type(n->a->a, &field_type))
-                        return 0;
-                    if (type_ptr_depth(field_type) <= 0)
-                        return 0;
-                    elem = type_decay_ptr(field_type);
-                    if (!ast_is_plain_int_type(elem))
-                        return 0;
-                    if (type_size(elem) != 2 && (n->op != '=' || type_size(elem) != 1))
-                        return 0;
-                    if (!ast_value_is_plain_int(n->b))
-                        return 0;
-                }
-            } else {
+            if (n->a->a->kind != AST_IDENT)
                 return 0;
-            }
+            if (!ast_int_elem_assign_rhs_ok(n))
+                return 0;
+            base = find_sym(n->a->a->sval);
+            decayed = base->is_array ? type_add_ptr(base->type) : base->type;
+            elem = type_decay_ptr(decayed);
+            /* A byte element normally requires plain `=`; also accept a
+             * dead-result compound assign (`a[i] += k;` as its own
+             * statement, e.g. inside a for-loop body) the same way the
+             * N-D array and pointer-element branches above already do -
+             * this final fallback (a plain local/global 1-D array
+             * reached by a computed index) had no such exception, so
+             * every byte array here declined += even though nothing
+             * about reaching the array through this specific helper
+             * makes that unsafe. */
+            if (type_size(elem) != 2 &&
+                (type_size(elem) != 1 ||
+                 (n->op != '=' && !(is_compound && expr_result_dead))))
+                return 0;
+            if (type_size(elem) == 1 && base->is_array &&
+                (base->storage == SC_GLOBAL || base->storage == SC_EXTERN))
+                return expr_result_dead && (n->op == '=' || is_compound);
             return 1;
         }
         /* Member lvalue store: s.f = rhs / p->f OP= rhs.  Plain int fields use
