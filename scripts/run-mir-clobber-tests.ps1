@@ -20,6 +20,8 @@ $environmentNames = @(
     "DCC_MIR_CACHE_VERIFY",
     "DCC_MIR_EMIT_FUNCTION",
     "DCC_MIR_MACHINE_REPORT",
+    "DCC_MIR_MACHINE_MUTATE",
+    "DCC_MIR_MACHINE_MUTATE_FUNCTION",
     "DCC_MIR_REPORT",
     "DCC_MIR_REQUIRE_COMPLETE",
     "DCC_MIR_REQUIRE_EMIT",
@@ -38,7 +40,11 @@ foreach ($name in $environmentNames) {
 }
 
 function Set-ProcessEnvironment([string]$Name, [string]$Value) {
-    [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+    if ([string]::IsNullOrEmpty($Value)) {
+        [Environment]::SetEnvironmentVariable($Name, $null, "Process")
+    } else {
+        [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+    }
 }
 
 function Invoke-WithTimeout(
@@ -98,6 +104,46 @@ function Test-ExactRejectionIntoGeneric(
         $Output -match $genericSelectionPattern
 }
 
+function Assert-MachineMutationFailure(
+    [string]$Spec,
+    [string]$Expected
+) {
+    Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $Spec
+    Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" "main"
+    try {
+        $result = Invoke-WithTimeout $dccCommand @(
+            "-c", (Join-Path $fixtureRoot "logserie.c"),
+            "-o", (Join-Path $tempRoot "BADMUT.MAC")
+        ) $repoRoot 60
+    } finally {
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
+    }
+    if ($result.TimedOut -or $result.ExitCode -eq 0 -or
+        $result.Output -notmatch [regex]::Escape($Expected)) {
+        throw "MIR mutation '$Spec' did not fail with '$Expected':`n" +
+            $result.Output
+    }
+}
+
+function Assert-MachineMutationIgnored {
+    Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
+    Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" "main"
+    try {
+        $result = Invoke-WithTimeout $dccCommand @(
+            "-c", (Join-Path $fixtureRoot "logserie.c"),
+            "-o", (Join-Path $tempRoot "NOMUTATE.MAC")
+        ) $repoRoot 60
+    } finally {
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
+    }
+    if ($result.TimedOut -or $result.ExitCode -ne 0) {
+        throw "MIR mutation without a specification was not ignored:`n" +
+            $result.Output
+    }
+}
+
 function Assert-RunCase(
     [string]$Name,
     [string[]]$Sources,
@@ -119,6 +165,8 @@ function Assert-RunCase(
     [string[]]$AssemblyPatterns = @(),
     [string[]]$ForbiddenAssemblyPatterns = @(),
     [bool]$OddUpperRuntime = $false,
+    [string]$MachineMutation = "",
+    [string]$MachineMutationFunction = "",
     [string]$DebugMode = ""
 ) {
     $configuration = @(
@@ -178,10 +226,17 @@ __ctu:
     if ($RequiredCandidate) {
         Set-ProcessEnvironment "DCC_MIR_COST_REPORT" "1"
     }
+    if ($MachineMutation) {
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $MachineMutation
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" `
+            $MachineMutationFunction
+    }
     try {
         $build = Invoke-WithTimeout $dccmake $arguments $repoRoot 60
     } finally {
         Set-ProcessEnvironment "DCC_MIR_COST_REPORT" $savedCostReport
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
     }
     if ($build.TimedOut -or $build.ExitCode -ne 0) {
         throw "$Name failed to build ($configuration):`n$($build.Output)"
@@ -1017,6 +1072,66 @@ $caseDefinitions = @(
         RequireRejected = $true
     },
     [pscustomobject]@{
+        Name = "logser"
+        Sources = @(Join-Path $fixtureRoot "logserie.c")
+        Defines = @()
+        Expected = @("0.6931471805599453094172321214581765680755001343602552541206800094933936219696947156058633269964186875")
+        Exit = 0
+        ExactTemplate = "log-series-driver-schedule"
+        ExactFunction = "main"
+        RequireExact = $true
+    },
+    [pscustomobject]@{
+        Name = "loginit"
+        Sources = @(Join-Path $fixtureRoot "logserie.c")
+        Defines = @("MIR_CLOBBER_LOG_INIT_ORDER=1")
+        Expected = @("0.6931471805599453094172321214581765680755001343602552541206800094933936219696947156058633269964186875")
+        Exit = 0
+        ExactTemplate = "log-series-driver-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "lognum"
+        Sources = @(Join-Path $fixtureRoot "logserie.c")
+        Defines = @("MIR_CLOBBER_LOG_NUMERATOR_ORDER=1")
+        Expected = @("0.6931471805599453094172321214581765680755001343602552541206800094933936219696947156058633269964186875")
+        Exit = 0
+        ExactTemplate = "log-series-driver-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "logden"
+        Sources = @(Join-Path $fixtureRoot "logserie.c")
+        Defines = @("MIR_CLOBBER_LOG_DENOMINATOR_ORDER=1")
+        Expected = @("0.6931471805599453094172321214581765680755001343602552541206800094933936219696947156058633269964186875")
+        Exit = 0
+        ExactTemplate = "log-series-driver-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "logcmp"
+        Sources = @(Join-Path $fixtureRoot "logserie.c")
+        Defines = @("MIR_CLOBBER_LOG_COMPARE_ORDER=1")
+        Expected = @("0.6931471805599453094172321214581765680755001343602552541206800094933936219696947156058633269964186875")
+        Exit = 0
+        ExactTemplate = "log-series-driver-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
+        Name = "logdigit"
+        Sources = @(Join-Path $fixtureRoot "logserie.c")
+        Defines = @("MIR_CLOBBER_LOG_DIGIT_ORDER=1")
+        Expected = @("0.6931471805599453094172321214581765680755001343602552541206800094933936219696947156058633269964186875")
+        Exit = 0
+        ExactTemplate = "log-series-driver-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+    },
+    [pscustomobject]@{
         Name = "abortfil"
         Sources = @(Join-Path $fixtureRoot "abortfil.c")
         Defines = @()
@@ -1348,6 +1463,36 @@ $caseDefinitions = @(
     }
 )
 
+$logSeriesMutationCases = @(
+    @{ Name = "lmarray"; Mutation = "18:type:2" },
+    @{ Name = "lmlocal"; Mutation = "3:identity:120" },
+    @{ Name = "lmzero"; Mutation = "1:immediate:1" },
+    @{ Name = "lmfrac"; Mutation = "43:immediate:3" },
+    @{ Name = "lmstate"; Mutation = "90:immediate:1" },
+    @{ Name = "lmzcall"; Mutation = "99:type:3" },
+    @{ Name = "lmadd"; Mutation = "106:type:2" },
+    @{ Name = "lmseries"; Mutation = "113:immediate:2" },
+    @{ Name = "lmprefix"; Mutation = "134:immediate:-1" },
+    @{ Name = "lmouter"; Mutation = "137:immediate:1" },
+    @{ Name = "lminner"; Mutation = "180:immediate:9999" },
+    @{ Name = "lmdigit"; Mutation = "209:memory_size:2" },
+    @{ Name = "lmreturn"; Mutation = "248:immediate:1" }
+)
+foreach ($mutationCase in $logSeriesMutationCases) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = $mutationCase.Name
+        Sources = @(Join-Path $fixtureRoot "logserie.c")
+        Defines = @()
+        Expected = @("0.6931471805599453094172321214581765680755001343602552541206800094933936219696947156058633269964186875")
+        Exit = 0
+        ExactTemplate = "log-series-driver-schedule"
+        ExactFunction = "main"
+        RequireRejected = $true
+        MachineMutation = $mutationCase.Mutation
+        MachineMutationFunction = "main"
+    }
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
@@ -1368,6 +1513,39 @@ try {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
     }
     New-Item -ItemType Directory -Path $tempRoot | Out-Null
+    Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
+    Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
+    Assert-MachineMutationIgnored
+    Assert-MachineMutationFailure "invalid" `
+        "invalid DCC_MIR_MACHINE_MUTATE specification"
+    Assert-MachineMutationFailure "-1:immediate:0" `
+        "invalid DCC_MIR_MACHINE_MUTATE specification"
+    Assert-MachineMutationFailure "x:immediate:0" `
+        "invalid DCC_MIR_MACHINE_MUTATE specification"
+    Assert-MachineMutationFailure "2147483648:immediate:0" `
+        "invalid DCC_MIR_MACHINE_MUTATE specification"
+    Assert-MachineMutationFailure "999:immediate:0" `
+        "invalid DCC_MIR_MACHINE_MUTATE specification"
+    Assert-MachineMutationFailure "1:type:not-a-number" `
+        "invalid DCC_MIR_MACHINE_MUTATE value"
+    Assert-MachineMutationFailure "1:immediate:999999999999999999999999" `
+        "invalid DCC_MIR_MACHINE_MUTATE value"
+    Assert-MachineMutationFailure "1:type:2147483648" `
+        "DCC_MIR_MACHINE_MUTATE integer field is out of range"
+    Assert-MachineMutationFailure "1:type:-2147483649" `
+        "DCC_MIR_MACHINE_MUTATE integer field is out of range"
+    if ($IsWindows) {
+        Assert-MachineMutationFailure "1:immediate:2147483648" `
+            "DCC_MIR_MACHINE_MUTATE value is out of range"
+        Assert-MachineMutationFailure "1:immediate:-2147483649" `
+            "DCC_MIR_MACHINE_MUTATE value is out of range"
+    }
+    Assert-MachineMutationFailure "1:unknown:0" `
+        "unknown DCC_MIR_MACHINE_MUTATE field"
+    Assert-MachineMutationFailure "3:identity:0" `
+        "unknown DCC_MIR_MACHINE_MUTATE field"
+    Assert-MachineMutationFailure "3:identity:256" `
+        "unknown DCC_MIR_MACHINE_MUTATE field"
     Set-ProcessEnvironment "DCC_MIR_REQUIRE_COMPLETE" "1"
     Set-ProcessEnvironment "DCC_MIR_REQUIRE_EMIT" "1"
     Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" "1"
@@ -1595,7 +1773,9 @@ try {
                     -RunArguments $case.Args `
                     -FixturePaths $case.FixturePaths `
                     -AssemblyPatterns $case.AssemblyPatterns `
-                    -OddUpperRuntime ([bool]$case.OddUpperRuntime)
+                    -OddUpperRuntime ([bool]$case.OddUpperRuntime) `
+                    -MachineMutation $case.MachineMutation `
+                    -MachineMutationFunction $case.MachineMutationFunction
                 foreach ($debugMode in $case.DebugModes) {
                     Assert-RunCase -Name $case.Name -Sources $case.Sources `
                         -Defines $case.Defines -Expected $case.Expected `

@@ -14266,6 +14266,7 @@ int mir_try_emit_numeric_kernels(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_log_series_driver_schedule(&log_series_plan)) {
+            mir_machine_accept("log-series-driver-schedule");
             mir_emit_log_series_driver_schedule(
                 out, &log_series_plan);
             return 1;
