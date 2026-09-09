@@ -209,12 +209,13 @@ invalidation calls add three executable lines.
 | Branch outcomes | 85,685 / 145,239 (59.00%) | 85,714 / 145,239 (59.02%) |
 | Functions | 4,057 / 4,383 (92.56%) | 4,057 / 4,383 (92.56%) |
 
-`mir_verify_dominance` itself reaches 214/214 executable lines, 168/168 regions,
-and 125/126 branch outcomes. The remaining true outcome of `incoming == 0`
-is reviewed in `scripts/ast-coverage-reviews.json`: evaluation reaches it only
-for a reachable non-entry PHI block, which necessarily has a reachable incoming
-edge. The entry-PHI error is tested separately. This defensive guard remains in
-both source and coverage totals; it is not deleted or excluded for a percentage.
+`mir_verify_dominance` itself reached 214/214 executable lines, 168/168 regions,
+and 125/126 branch outcomes at this historical checkpoint. The remaining
+`incoming == 0` outcome was reviewed as redundant: evaluation checked only a
+reachable non-entry PHI block, which necessarily had a reachable incoming edge.
+After the user authorized justified source deletion, that disjunct and its
+otherwise-unused counter were removed. The separately tested `start == 0`
+entry-PHI rejection and every predecessor/dominance check remain.
 
 `ast-mir-gaps.json` records uncovered branch outcomes with exact source, function,
 line/column, and true/false identity. Review annotations require an unchanged

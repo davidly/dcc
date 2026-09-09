@@ -194,14 +194,12 @@ int mir_verify_dominance(void)
         if (insn->opcode == MIR_PHI) {
             int start = mir_phi_physical_start(instruction);
             int edge;
-            int incoming = 0;
             for (edge = offsets[start]; edge < offsets[start + 1]; ++edge) {
                 int prior = predecessors[edge];
                 int label;
                 int source;
                 if (rank[prior] < 0)
                     continue;
-                ++incoming;
                 label = mir_block_label_before(prior);
                 source = label == insn->phi_pred1 ? insn->src1 :
                          label == insn->phi_pred2 ? insn->src2 : -1;
@@ -213,7 +211,7 @@ int mir_verify_dominance(void)
                     valid = 0;
                 }
             }
-            if (start == 0 || incoming == 0) {
+            if (start == 0) {
                 fprintf(stderr, "; MIR %s: instruction %d has no incoming PHI edge\n",
                         mir.name, instruction);
                 valid = 0;

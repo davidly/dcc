@@ -643,10 +643,12 @@ NOT the native summary denominator. Mixed AST classification includes 171
 production functions from 286 definitions and excludes 115 legacy-only ones;
 none of those exclusions executed in that run. No new exclusion was introduced.
 
-`mir_verify_dominance` reached 214/214 lines and 125/126 branch outcomes. The
-remaining true outcome of `incoming == 0` has source-anchored reachability
-evidence. Both guard and coverage outcome stay in the totals. Do not label
-other gaps unreachable by analogy or simply because tests have not hit them.
+`mir_verify_dominance` historically reached 214/214 lines and 125/126 branch
+outcomes. The remaining `incoming == 0` check was later removed as redundant
+after justified deletion was authorized: only reachable non-entry PHI blocks
+reach that point, and each has a reachable predecessor by construction. The
+entry-PHI `start == 0` rejection and predecessor dominance checks remain. Do
+not label other gaps unreachable by analogy or merely because tests miss them.
 
 The coverage guide's older "uncommitted" and "remote CI not run" wording
 describes earlier checkpoints. Use GitHub for current publication state and
