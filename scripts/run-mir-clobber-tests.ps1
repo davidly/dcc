@@ -373,7 +373,7 @@ function Assert-RequestedExecutionCounts {
         return
     }
     $specialCounts = @{
-        attentionmut = 80
+        attentionmut = 528
         catalanmut = 444
         ctypemut = 132
         primemut = 288
@@ -2079,7 +2079,43 @@ $attentionMutations = @(
     "6:src1:999", "13:src1:999", "13:src2:999", "13:immediate:999",
     "13:memory_size:3", "15:src1:999", "18:src1:999", "23:immediate:999",
     "23:src1:999", "24:immediate:999", "24:src1:999", "24:src2:999",
-    "25:src1:999", "30:src1:999", "30:src2:999", "30:immediate:999"
+    "25:src1:999", "30:src1:999", "30:src2:999", "30:immediate:999",
+    "30:memory_size:3", "32:src1:999", "35:src1:999",
+    "41:immediate:999", "41:src1:999", "42:immediate:999",
+    "42:src1:999", "42:src2:999", "43:src1:999",
+    "46:immediate:999", "46:src1:999", "46:src2:999",
+    "47:src1:999", "53:src1:999", "53:src2:999", "53:memory_size:3",
+    "57:immediate:999", "57:src1:999", "57:src2:999",
+    "58:immediate:999", "58:src1:999", "58:src2:999",
+    "60:src1:999", "65:immediate:999", "65:src1:999", "65:src2:999",
+    "66:src1:999", "72:immediate:999", "72:src1:999", "72:src2:999",
+    "73:immediate:999", "73:src1:999", "73:src2:999",
+    "79:immediate:999", "79:src1:999", "79:src2:999",
+    "80:immediate:999", "80:src1:999", "80:src2:999",
+    "82:src1:999", "87:immediate:999", "87:src1:999", "87:src2:999",
+    "88:src1:999", "93:src1:999", "99:immediate:999", "99:src1:999",
+    "100:immediate:999", "100:src1:999", "100:src2:999",
+    "101:src1:999", "108:src1:999", "108:src2:999",
+    "108:immediate:999", "118:immediate:999", "118:src1:999",
+    "119:immediate:999", "119:src1:999", "119:src2:999",
+    "120:immediate:999", "120:src1:999", "120:src2:999",
+    "121:src1:999", "121:src2:999", "121:immediate:999",
+    "126:immediate:999", "126:src1:999", "127:immediate:999",
+    "127:src1:999", "127:src2:999", "128:src1:999",
+    "128:src2:999", "128:immediate:999", "134:immediate:999",
+    "134:src1:999", "134:src2:999", "135:src1:999",
+    "140:src1:999", "148:immediate:999", "148:src1:999",
+    "149:immediate:999", "149:src1:999", "149:src2:999",
+    "150:src1:999", "153:src1:999", "153:src2:999",
+    "153:immediate:999", "154:src1:999", "154:memory_size:3",
+    "155:src1:999", "158:src1:999", "158:src2:999",
+    "158:immediate:999", "159:src1:999", "162:src1:999",
+    "162:memory_size:3", "163:immediate:999", "163:src1:999",
+    "163:type:1", "165:immediate:999", "165:src1:999", "165:type:1",
+    "166:immediate:999", "166:src1:999", "166:src2:999",
+    "169:src1:999", "169:src2:999", "169:memory_size:3",
+    "173:immediate:999", "173:src1:999", "173:src2:999",
+    "174:src1:999"
 )
 $attentionMutationIndex = 0
 foreach ($mutation in $attentionMutations) {
