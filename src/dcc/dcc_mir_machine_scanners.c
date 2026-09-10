@@ -10109,6 +10109,26 @@ static int mir_match_sliding_maximum_schedule(
             return mir_machine_reject(
                 "sliding-maximum-schedule",
                 "volatile-indirect-memory");
+        if ((insn->opcode == MIR_LOAD &&
+             !mir_scanner_signed_word_type(insn->type)) ||
+            (insn->opcode == MIR_STORE &&
+             insn->memory_size != 2) ||
+            (insn->opcode == MIR_INDEX_ADDRESS &&
+             (insn->memory_size != 2 ||
+              insn->immediate != 2 ||
+              !mir_scanner_word_pointer_type(insn->type))) ||
+            (insn->opcode == MIR_LOAD_INDIRECT &&
+             !mir_scanner_signed_word_type(insn->type)) ||
+            (insn->opcode == MIR_BINARY &&
+             (!mir_scanner_signed_word_type(insn->type) ||
+              !mir_scanner_signed_word_type(
+                  insn->secondary_offset))) ||
+            (insn->opcode == MIR_CONST &&
+             instruction != 63 && instruction != 66 &&
+             instruction != 107 && instruction != 110 &&
+             !mir_scanner_signed_word_type(insn->type)))
+            return mir_machine_reject(
+                "sliding-maximum-schedule", "word-widths");
     }
 
     if (!mir_machine_parameter_value_offset(
