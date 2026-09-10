@@ -259,6 +259,13 @@ function Invoke-MirClobberShards(
                     $start.Environment[$name] = $Environment[$name]
                 }
             }
+            $profile = $start.Environment["LLVM_PROFILE_FILE"]
+            if ($profile) {
+                $profileName = [System.IO.Path]::GetFileNameWithoutExtension($profile) +
+                    "-clobber-$PID-$index" + [System.IO.Path]::GetExtension($profile)
+                $start.Environment["LLVM_PROFILE_FILE"] = [System.IO.Path]::Combine(
+                    [System.IO.Path]::GetDirectoryName($profile), $profileName)
+            }
             $process = [System.Diagnostics.Process]::new()
             $process.StartInfo = $start
             if (-not $process.Start()) { throw "Failed to start MIR clobber shard $index" }

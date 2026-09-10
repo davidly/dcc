@@ -70,6 +70,9 @@ to 1 and permits 1–256 processes. Each child owns its process environment and
 unique repository-local build/fixture directory; no concurrent runspaces modify
 shared environment variables. Parser and semantic-proof setup runs only on
 shard zero. Generated sources are created only by shards that need them.
+When `LLVM_PROFILE_FILE` is inherited, each child adds a parent-PID/shard suffix
+to its filename, preserving the directory, extension, and LLVM merge pattern.
+Profiles stay directly under the inherited raw directory for `*.profraw` merging.
 
 Every completed shard must match its exact expected keys. The parent also
 checks the exact union: duplicate, missing, unexpected, malformed, or failed

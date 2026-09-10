@@ -198,6 +198,7 @@ if ($Behavior -eq "swapped") {
     $keys = @(Get-MirClobberShard @("a", "b", "c", "d") (1 - $ShardIndex) $ShardCount)
 }
 Write-Host "worker-pid=$PID"
+Write-Host "worker-profile=$env:LLVM_PROFILE_FILE"
 Write-MirClobberManifest $ExecutionManifest $keys $Scratch
 '@ | Set-Content -LiteralPath $worker
     $childParameters = @{
@@ -205,8 +206,10 @@ Write-MirClobberManifest $ExecutionManifest $keys $Scratch
         Behavior = "success"; Scratch = $root
     }
     $old = [Environment]::GetEnvironmentVariable("MIR_CLOBBER_PROCESS_TEST", "Process")
+    $oldProfile = [Environment]::GetEnvironmentVariable("LLVM_PROFILE_FILE", "Process")
     try {
         $env:MIR_CLOBBER_PROCESS_TEST = "parent"
+        $env:LLVM_PROFILE_FILE = "$root/raw/dcc-%8m.profraw"
         $actual = @(Invoke-MirClobberShards $worker $childParameters 2 `
             @("a", "b", "c", "d") $root $repoRoot @{ MIR_CLOBBER_PROCESS_TEST = "child" })
         Assert-MirClobberManifest @("a", "b", "c", "d") $actual
@@ -216,6 +219,20 @@ Write-MirClobberManifest $ExecutionManifest $keys $Scratch
         })
         Assert-True ($pids[0] -and $pids[1] -and $pids[0] -ne $pids[1] -and
             "$PID" -notin $pids) "Shards did not use independent child processes"
+        $profiles = @(0..1 | ForEach-Object {
+            [regex]::Match((Get-Content "$root/shard-$_.log" -Raw),
+                'worker-profile=([^\r\n]+)').Groups[1].Value
+        })
+        Assert-True ($profiles[0] -ne $profiles[1]) "Shards shared profile filenames"
+        foreach ($profile in $profiles) {
+            Assert-True (
+                [System.IO.Path]::GetFullPath([System.IO.Path]::GetDirectoryName($profile)) -eq
+                    [System.IO.Path]::GetFullPath("$root/raw") -and
+                [System.IO.Path]::GetFileName($profile) -match '^dcc-%8m-clobber-\d+-[01]\.profraw$'
+            ) "Shard profile escaped the inherited raw directory or changed its LLVM pattern"
+        }
+        Assert-True ($env:LLVM_PROFILE_FILE -eq "$root/raw/dcc-%8m.profraw") `
+            "Shards changed parent profile configuration"
         foreach ($behavior in @(
             "duplicate", "missing", "unexpected", "error", "no-manifest", "malformed", "swapped"
         )) {
@@ -228,6 +245,7 @@ Write-MirClobberManifest $ExecutionManifest $keys $Scratch
         }
     } finally {
         [Environment]::SetEnvironmentVariable("MIR_CLOBBER_PROCESS_TEST", $old, "Process")
+        [Environment]::SetEnvironmentVariable("LLVM_PROFILE_FILE", $oldProfile, "Process")
     }
     Write-Host "MIR clobber runner harness passed $checks checks"
 } finally {
