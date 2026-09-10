@@ -1,0 +1,93 @@
+[
+  {
+    "Name": "scanner-symbols-exact",
+    "Group": "scanner-symbols",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireExact": true
+  },
+  {
+    "Name": "scanner-symbols-copy-bound",
+    "Group": "scanner-symbols",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": ["COPY_SHORT_NAME"],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_find"
+  },
+  {
+    "Name": "scanner-symbols-loop-relation",
+    "Group": "scanner-symbols",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_find",
+    "MachineMutation": "10:immediate:0",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "scanner-symbols-compare-type",
+    "Group": "scanner-symbols",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_find",
+    "MachineMutation": "19:type:1",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "scanner-symbols-memory-identity",
+    "Group": "scanner-symbols",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_find",
+    "MachineMutation": "56:identity:120",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "scanner-symbols-record-layout",
+    "Group": "scanner-symbols",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_find",
+    "MachineMutation": "64:immediate:15",
+    "MachineMutationFunction": "sym_find"
+  }
+]

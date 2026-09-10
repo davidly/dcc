@@ -14046,6 +14046,7 @@ int mir_try_emit_scanner_kernels(MirStream *out, int late)
                 &symbol_find_schedule)) {
             mir_emit_symbol_find_schedule(
                 out, &symbol_find_schedule);
+            mir_machine_accept("symbol-find-schedule");
             return 1;
         }
         if (mir_match_breadth_first_path_schedule(
