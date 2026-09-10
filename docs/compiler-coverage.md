@@ -128,14 +128,24 @@ comparisons. DCC's established target-width signed wrapping remains exact and
 `tregnarw` retains its checked performance after a rejected over-conservative
 overflow experiment.
 
+The following wave executes 6,758 exact leaf configurations. It adds
+transactional malformed direct/indirect AST-call controls, validates comparison
+parameter displacements, and reduces a 127-mutation exec-recursion operator and
+dataflow audit to zero survivors. All five LLVM report/export/show invocations
+now include `mir-scalar-dag-test`; the binary was already instrumented and
+provenance-tracked, but omitting it from the object list hid its host coverage.
+The immutable collection contains 43 profile-pool files and its execution
+manifest SHA-256 is
+`eb7215b69af536402d4f09b358f3686329bfadaec7eb103b77ab832b206153c0`.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,411 / 4,411 | 100.00% |
-| Lines | 179,830 / 192,261 | 93.53% |
-| Native branch outcomes | 93,192 / 147,178 | 63.32% |
-| Regions | 162,380 / 172,752 | 94.00% |
+| Functions | 4,417 / 4,417 | 100.00% |
+| Lines | 180,008 / 192,419 | 93.55% |
+| Native branch outcomes | 93,322 / 147,314 | 63.35% |
+| Regions | 162,547 / 172,908 | 94.01% |
 
-The raw ledger has 53,739 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,745 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload

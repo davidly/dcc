@@ -1,6 +1,6 @@
 # AST/MIR Correctness: Copilot CLI Handoff
 
-Snapshot: 2026-09-08. This handoff requires no prior chat history, VS Code
+Snapshot: 2026-09-11. This handoff requires no prior chat history, VS Code
 session, local memory, or existing build artifacts. GitHub and the current
 checkout are authoritative if the snapshot becomes stale.
 
@@ -160,9 +160,18 @@ DCC's established target-width wrap semantics were restored, returning `lbig`
 to its parent 18-byte, 2-instruction exact schedule and zero checked
 performance regressions.
 
-Latest integrated totals: 4,411/4,411 functions, 179,830/192,261 lines
-(93.53%), 93,192/147,178 native branch outcomes (63.32%), and
-162,380/172,752 regions (94.00%). The raw uncovered ledger is 53,739.
+The next wave raises the exact inventory to 6,758 configurations. AST-to-MIR
+call lowering now rejects malformed direct and indirect callee chains before
+side effects, comparison selection validates parameter displacements, and the
+exec-recursion schedule proves operators, volatility, ABI, and complete
+dataflow. A 127-mutation exec audit has zero survivors. Coverage reporting now
+includes the already instrumented scalar-DAG host binary in every
+`llvm-cov` report, export, and show operation rather than merely hashing it in
+provenance.
+
+Latest integrated totals: 4,417/4,417 functions, 180,008/192,419 lines
+(93.55%), 93,322/147,314 native branch outcomes (63.35%), and
+162,547/172,908 regions (94.01%). The raw uncovered ledger is 53,745.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -174,7 +183,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `c16b8010` (`Restore constant evaluator wrap semantics`).
+  `27e80ada` (`Complete exec recursion operator proofs`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -236,7 +245,22 @@ parallel-wave summary for the current measurement.
   - `a4666f1c` / `12975ddc` — pointer compound assignment support;
   - `13e979f0` — abort-file runner proofs; and
   - `be9ac5c4` / `c16b8010` — constant evaluator correctness with preserved
-    target wrap semantics and performance.
+    target wrap semantics and performance;
+  - `08409d8b` / `71081ed8` — transactional direct and indirect AST-call
+    lowering preflight;
+  - `527fde43` — comparison parameter-displacement validation;
+  - `d37c8f81` through `27e80ada` — complete exec-recursion operator,
+    volatility, ABI, and dataflow proofs; and
+  - `3d306673` — include the scalar-DAG host binary in all LLVM coverage
+    reports.
+- Wave 14 passed both strict 506-application release modes with no regressions,
+  an independent release build, normal and ASan/UBSan host CTests, selector
+  isolation, 11 compiler mutants, 10 debugger-host tests, two line-debug
+  tests, and exact stack/no-stack frozen-parent census comparisons.
+- Its immutable LLVM 18 collection contains 43 profile-pool files and exactly
+  6,758 unique clobber executions. The manifest SHA-256 is
+  `eb7215b69af536402d4f09b358f3686329bfadaec7eb103b77ab832b206153c0`;
+  `collection.json` records the same digest.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
