@@ -1912,6 +1912,8 @@ long ast_const_apply_int_cast(long v, int type)
 
     if (type_is_float(type) || type_ptr_depth(type) > 0)
         return v;
+    if (type_is_bool(type))
+        return v != 0;
     if (type_size(type) <= 1) {
         u = ((unsigned long)v) & 0xffUL;
         if (!(type & TYPE_UNSIGNED) && (u & 0x80UL))

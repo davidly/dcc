@@ -140,6 +140,51 @@ static void check_ast_binary_fold(
                            expected_ok, expected_value);
 }
 
+static void expect_ast_bool_cast_fold(
+    const char *name, int strict, long input)
+{
+    struct AstNode value;
+    struct AstNode cast;
+    struct AstNode zero;
+    struct AstNode binary;
+    volatile long runtime_input = input;
+    long expected_value = (_Bool)runtime_input;
+    long folded = 0x13579bdfL;
+    int ok;
+
+    memset(&value, 0, sizeof(value));
+    memset(&cast, 0, sizeof(cast));
+    memset(&zero, 0, sizeof(zero));
+    memset(&binary, 0, sizeof(binary));
+    value.kind = AST_INT_LIT;
+    value.type = TYPE_INT;
+    value.ival = input;
+    cast.kind = AST_CAST;
+    cast.type = TYPE_BOOL;
+    cast.a = &value;
+    zero.kind = AST_INT_LIT;
+    zero.type = TYPE_INT;
+    binary.kind = AST_BINARY;
+    binary.op = '+';
+    binary.a = &cast;
+    binary.b = &zero;
+
+    ok = strict ? ast_const_fold_strict(&binary, &folded)
+                : ast_const_scalar_fold(&binary, &folded);
+    if (!ok || folded != expected_value) {
+        fprintf(stderr, "FAIL %s%s: ok=%d value=%ld\n",
+                name, strict ? " strict" : " scalar", ok, folded);
+        ++failures;
+    }
+}
+
+static void check_ast_bool_cast_fold(
+    const char *name, long input)
+{
+    expect_ast_bool_cast_fold(name, 0, input);
+    expect_ast_bool_cast_fold(name, 1, input);
+}
+
 static void verify_ast_binary_folds(void)
 {
     int int_pointer = type_add_ptr(TYPE_INT);
@@ -183,6 +228,10 @@ static void verify_ast_binary_folds(void)
                           TYPE_VOID, 1L, TYPE_INT, 1L, 0, 0L);
     check_ast_binary_fold("struct arithmetic operand", '+',
                           struct_type, 1L, TYPE_INT, 1L, 0, 0L);
+
+    check_ast_bool_cast_fold("positive bool cast", 2L);
+    check_ast_bool_cast_fold("negative bool cast", -7L);
+    check_ast_bool_cast_fold("zero bool cast", 0L);
 }
 
 static void verify_ast_assignment_support(void)
