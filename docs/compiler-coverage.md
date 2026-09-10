@@ -121,14 +121,21 @@ additive-subscript, Fortran-fatal, and long-index proof campaigns. Static and
 collision-mangled Fortran print/exit functions now use canonical assembler
 names, and the long-index controls run through the shared inventory.
 
+The next wave executes 6,602 exact leaf configurations. It validates homed
+branch targets before planning, supports defined pointer compound assignments,
+hardens abort-file runner ABI/dataflow, and fixes constant-function unsigned
+comparisons. DCC's established target-width signed wrapping remains exact and
+`tregnarw` retains its checked performance after a rejected over-conservative
+overflow experiment.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,409 / 4,409 | 100.00% |
-| Lines | 179,611 / 192,054 | 93.52% |
-| Native branch outcomes | 93,083 / 147,006 | 63.32% |
-| Regions | 162,201 / 172,551 | 94.00% |
+| Functions | 4,411 / 4,411 | 100.00% |
+| Lines | 179,830 / 192,261 | 93.53% |
+| Native branch outcomes | 93,192 / 147,178 | 63.32% |
+| Regions | 162,380 / 172,752 | 94.00% |
 
-The raw ledger has 53,676 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,739 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload

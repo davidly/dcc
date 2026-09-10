@@ -152,9 +152,17 @@ fatal emission now uses canonical assembler names for static or mangled print
 and exit callees; long-index tests were migrated from a private script into the
 shared coverage inventory.
 
-Latest integrated totals: 4,409/4,409 functions, 179,611/192,054 lines
-(93.52%), 93,083/147,006 native branch outcomes (63.32%), and
-162,201/172,551 regions (94.00%). The raw uncovered ledger is 53,676.
+The following wave raises the exact inventory to 6,602 configurations with
+homed branch-target validation, pointer compound assignments, abort-file
+proofs, and constant-function evaluator controls. A blanket signed-overflow
+rejection caused a reproduced 4.4x `tregnarw` regression and was rejected;
+DCC's established target-width wrap semantics were restored, returning `lbig`
+to its parent 18-byte, 2-instruction exact schedule and zero checked
+performance regressions.
+
+Latest integrated totals: 4,411/4,411 functions, 179,830/192,261 lines
+(93.53%), 93,192/147,178 native branch outcomes (63.32%), and
+162,380/172,752 regions (94.00%). The raw uncovered ledger is 53,739.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -166,7 +174,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `1497ca3d` (`Fix Fortran fatal symbol emission`).
+  `c16b8010` (`Restore constant evaluator wrap semantics`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -223,7 +231,12 @@ parallel-wave summary for the current measurement.
   - `2b8ab7bb` — transactional spilled branch-target preflight;
   - `af620931` — additive-subscript proof controls;
   - `9beb9817` / `1497ca3d` — Fortran-fatal proofs and symbol-aware calls; and
-  - `8aabd5bd` / `acac351c` — long-index proof and shared campaign.
+  - `8aabd5bd` / `acac351c` — long-index proof and shared campaign;
+  - `7a073161` — transactional homed branch-target validation;
+  - `a4666f1c` / `12975ddc` — pointer compound assignment support;
+  - `13e979f0` — abort-file runner proofs; and
+  - `be9ac5c4` / `c16b8010` — constant evaluator correctness with preserved
+    target wrap semantics and performance.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
