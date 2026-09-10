@@ -565,6 +565,26 @@ static int mir_homed_reject(const char *reason)
     return 0;
 }
 
+/*
+ * Homed emission indexes allocation and liveness arrays directly by MIR
+ * values. Reject malformed references before selector probes or output can
+ * observe them, so a failed candidate remains safe and transactional.
+ */
+static int mir_homed_value_operands_valid(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src1 < -1 || insn->src1 >= mir.next_value ||
+            insn->src2 < -1 || insn->src2 >= mir.next_value ||
+            insn->dst < -1 || insn->dst >= mir.next_value)
+            return 0;
+    }
+    return 1;
+}
+
 int mir_homed_cfg_depends_on_word_store(void)
 {
     int instruction;
@@ -1502,6 +1522,8 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
 
     mir_homed_cfg_frameless = 0;
     mir_homed_cfg_used_unary_not_branch = 0;
+    if (!mir_homed_value_operands_valid())
+        return mir_homed_reject("value-operand");
     /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
      * zero-spill-fallback survey found "return-type" (base type != int)
      * is by far the single largest homed-scalar-cfg rejection cause
