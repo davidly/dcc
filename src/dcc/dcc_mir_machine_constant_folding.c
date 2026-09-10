@@ -181,8 +181,6 @@ static int mir_machine_fold_integer_binary(
             ? (long long)(lhs - modulus) : (long long)lhs;
         long long signed_rhs = (rhs & sign) != 0
             ? (long long)(rhs - modulus) : (long long)rhs;
-        long long minimum = -(long long)sign;
-        long long maximum = (long long)(sign - 1ULL);
         long long signed_value;
 
         switch (operation) {
@@ -206,9 +204,6 @@ static int mir_machine_fold_integer_binary(
         default:
             return 0;
         }
-        if ((operation == '+' || operation == '-' || operation == '*') &&
-            (signed_value < minimum || signed_value > maximum))
-            return 0;
         bits = (unsigned long long)signed_value;
     }
 convert_result:

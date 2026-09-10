@@ -77,6 +77,8 @@ int ce_unsigned_long(void)
     return result;
 }
 
+/* DCC deliberately evaluates signed arithmetic with target-width
+ * two's-complement wrapping, matching generated Z80 arithmetic. */
 int ce_signed_overflow(void)
 {
     int i = 0;
@@ -89,13 +91,61 @@ int ce_signed_overflow(void)
     return value;
 }
 
+int ce_signed_sub_overflow(void)
+{
+    int i = 0;
+    int value = -32768;
+
+    while (i < 1) {
+        value = value - 1;
+        i = i + 1;
+    }
+    return value;
+}
+
+int ce_signed_mul_overflow(void)
+{
+    int i = 0;
+    int value = 20000;
+
+    while (i < 1) {
+        value = value * 2;
+        i = i + 1;
+    }
+    return value;
+}
+
 int ce_long_overflow(void)
 {
     int i = 0;
     long value = 2147483647L;
 
     while (i < 1) {
-        value = value + 1L;
+        value = value + 2L;
+        i = i + 1;
+    }
+    return (int)value;
+}
+
+int ce_long_sub_overflow(void)
+{
+    int i = 0;
+    long value = -2147483647L - 1L;
+
+    while (i < 1) {
+        value = value - 2L;
+        i = i + 1;
+    }
+    return (int)value;
+}
+
+int ce_long_mul_overflow(void)
+{
+    int i = 0;
+    long value = 1073741825L;
+
+    while (i < 1) {
+        value = value * 3L;
         i = i + 1;
     }
     return (int)value;
@@ -176,5 +226,9 @@ int main(void)
     printf("consteval13 int=%d uint=%d long=%d ulong=%d\n",
         ce_integer_ops(), ce_unsigned_int(),
         ce_signed_long(), ce_unsigned_long());
+    printf("consteval13 wrap=%d,%d,%d longwrap=%d,%d,%d\n",
+        ce_signed_overflow(), ce_signed_sub_overflow(),
+        ce_signed_mul_overflow(), ce_long_overflow(),
+        ce_long_sub_overflow(), ce_long_mul_overflow());
     return 0;
 }
