@@ -80,9 +80,17 @@ stack/no-stack frozen-parent census comparison, ASan/UBSan host and compiler
 probes, 10 debugger-host and two line-debug tests, all 11 compiler mutants,
 120 repository script tests, and the full instrumented collection.
 
-Latest integrated totals: 4,359/4,359 functions, 177,120/189,962 lines
-(93.24%), 91,025/144,524 native branch outcomes (62.98%), and
-159,098/169,876 regions (93.66%). The raw uncovered ledger is 53,252.
+The next wave raises the exact inventory to 5,292 unique configurations with
+matrix-product-store, symbol-insert, and compound-runner proofs. Review also
+found that nameless direct and aggregate MIR calls could reach spilled
+emission, produce invalid call targets, and perturb retry state. Both forms
+now reject during side-effect-free preflight; valid direct and indirect
+controls plus empty-output, label-rollback, and byte-identical retry assertions
+pass under normal and ASan/UBSan host builds.
+
+Latest integrated totals: 4,359/4,359 functions, 177,180/189,980 lines
+(93.26%), 91,064/144,530 native branch outcomes (63.01%), and
+159,134/169,883 regions (93.67%). The raw uncovered ledger is 53,219.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -94,7 +102,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `e583976a` (`test: cover directory enumeration schedule`).
+  `3ca20abb` (`Reject nameless aggregate MIR calls`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -105,7 +113,11 @@ parallel-wave summary for the current measurement.
   - `aa2e1bb9` — transactional bounded MIR stream seeking;
   - `20afc983` / `d9052b2f` — symbol-find and softmax matcher proofs;
   - `15e1807c` — target-aware allocation compiler mutants; and
-  - `41c7c62e` / `e583976a` — matrix-add and directory-enumeration proofs.
+  - `41c7c62e` / `e583976a` — matrix-add and directory-enumeration proofs;
+  - `2964a774` / `08b7e938` / `149dcabb` — matrix-store, symbol-insert,
+    and compound-runner proofs; and
+  - `4661c228` / `3ca20abb` — transactional direct and aggregate call
+    preflight.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

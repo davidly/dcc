@@ -60,14 +60,20 @@ raise the clean-build mutation set from nine to eleven. The execution manifest
 contains 5,196 unique keys and exactly matches the independently enumerated
 inventory.
 
+The following integrated wave executes 5,292 exact leaf configurations and
+adds matrix-product-store, symbol-insert, and compound-runner proof campaigns.
+It also fixes malformed-MIR fallback transactions: nameless direct and
+aggregate calls are now rejected before emitting text, recording externals, or
+consuming labels, and repaired retries are byte-identical to clean controls.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
 | Functions | 4,359 / 4,359 | 100.00% |
-| Lines | 177,120 / 189,962 | 93.24% |
-| Native branch outcomes | 91,025 / 144,524 | 62.98% |
-| Regions | 159,098 / 169,876 | 93.66% |
+| Lines | 177,180 / 189,980 | 93.26% |
+| Native branch outcomes | 91,064 / 144,530 | 63.01% |
+| Regions | 159,134 / 169,883 | 93.67% |
 
-The raw ledger has 53,252 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,219 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload
