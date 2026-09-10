@@ -6,6 +6,30 @@ typedef long weight_value_t;
 #define MODEL_VALUE_MAX 32767
 #define MODEL_VALUE_MIN (-32768)
 
+#ifdef SMXW19_VOLATILE_VECTOR
+#define SMXW19_VECTOR_QUAL volatile
+#else
+#define SMXW19_VECTOR_QUAL
+#endif
+
+#ifdef SMXW19_HALF_SCALE
+#define SMXW19_SCALE 128L
+#else
+#define SMXW19_SCALE 256L
+#endif
+
+#ifdef SMXW19_SHIFT_TWO
+#define SMXW19_SHIFT 2
+#else
+#define SMXW19_SHIFT 3
+#endif
+
+#ifdef SMXW19_NE_LOOPS
+#define SMXW19_LOOP_TEST(i, length) ((i) != (length))
+#else
+#define SMXW19_LOOP_TEST(i, length) ((i) < (length))
+#endif
+
 #ifdef SMXW10_SHORT_TABLE
 #define SMXW10_TABLE_LENGTH 255
 #elif defined(SMXW10_LONG_TABLE)
@@ -14,7 +38,11 @@ typedef long weight_value_t;
 #define SMXW10_TABLE_LENGTH 256
 #endif
 
+#ifdef SMXW19_VOLATILE_TABLE
+static volatile model_value_t exponential_table[SMXW10_TABLE_LENGTH] = {
+#else
 static model_value_t exponential_table[SMXW10_TABLE_LENGTH] = {
+#endif
     256, 248, 240, 233, 226, 219, 212, 206,
     199, 193, 187, 182, 176, 171, 165, 160
 };
@@ -32,11 +60,16 @@ static inline model_value_t divide_q8(model_value_t numerator,
                                       model_value_t denominator)
 {
     return clamp_to_model_value(
-        ((weight_value_t)numerator * 256L) / denominator);
+        ((weight_value_t)numerator * SMXW19_SCALE) / denominator);
 }
 
-static model_value_t vector_maximum(model_value_t *vector,
-                                    unsigned char length, int *index)
+#ifdef SMXW19_FASTCALL_MAXIMUM
+extern model_value_t __fastcall vector_maximum(
+    model_value_t *vector, unsigned char length, int *index);
+#else
+static model_value_t vector_maximum(
+    SMXW19_VECTOR_QUAL model_value_t *vector,
+    unsigned char length, int *index)
 {
     model_value_t maximum;
     unsigned char maximum_index, i;
@@ -52,27 +85,51 @@ static model_value_t vector_maximum(model_value_t *vector,
     *index = maximum_index;
     return maximum;
 }
+#endif
 
-static void softmax_wave10(model_value_t *vector, unsigned char length)
+#ifdef SMXW19_INDIRECT_MAXIMUM
+static model_value_t (*maximum_dispatch)(
+    model_value_t *, unsigned char, int *) = vector_maximum;
+#endif
+
+#ifdef SMXW19_RETURN_VALUE
+static model_value_t softmax_wave10(
+#else
+static void softmax_wave10(
+#endif
+    SMXW19_VECTOR_QUAL model_value_t *vector, unsigned char length)
 {
     int mx, d, idx, sum, dummy;
-    model_value_t *item;
+    SMXW19_VECTOR_QUAL model_value_t *item;
     unsigned char i;
 
+#ifdef SMXW19_INDIRECT_MAXIMUM
+    mx = maximum_dispatch(vector, length, &dummy);
+#else
     mx = vector_maximum(vector, length, &dummy);
+#endif
     sum = 0;
-    for (i = 0, item = vector; i < length; i++, item++) {
+    for (i = 0, item = vector; SMXW19_LOOP_TEST(i, length);
+         i++, item++) {
         d = mx - *item;
         if (d < 0)
             d = 0;
-        idx = d >> 3;
+        idx = d >> SMXW19_SHIFT;
         if (idx > 255)
             idx = 255;
         *item = exponential_table[idx];
+#ifdef SMXW19_SUBTRACT_SUM
+        sum = sum - *item;
+#else
         sum = sum + *item;
+#endif
     }
-    for (i = 0, item = vector; i < length; i++, item++)
+    for (i = 0, item = vector; SMXW19_LOOP_TEST(i, length);
+         i++, item++)
         *item = divide_q8(*item, sum);
+#ifdef SMXW19_RETURN_VALUE
+    return sum;
+#endif
 }
 
 struct GuardedVector {
@@ -118,15 +175,19 @@ static void reference_softmax(model_value_t *vector, unsigned char length)
         difference = maximum - vector[i];
         if (difference < 0)
             difference = 0;
-        index = difference >> 3;
+        index = difference >> SMXW19_SHIFT;
         if (index > 255)
             index = 255;
         vector[i] = reference_exponential(index);
+#ifdef SMXW19_SUBTRACT_SUM
+        sum -= vector[i];
+#else
         sum += vector[i];
+#endif
     }
     for (i = 0; i < length; ++i)
         vector[i] = clamp_to_model_value(
-            ((weight_value_t)vector[i] * 256L) / sum);
+            ((weight_value_t)vector[i] * SMXW19_SCALE) / sum);
 }
 
 static void run_case(const model_value_t *input, unsigned char length)
@@ -157,6 +218,51 @@ static void run_case(const model_value_t *input, unsigned char length)
     }
 }
 
+#ifdef SMXW19_ALIAS_CONTROL
+static void run_alias_case(void)
+{
+    static model_value_t expected[SMXW10_TABLE_LENGTH];
+    model_value_t maximum;
+    int difference, index, sum;
+    unsigned char i;
+
+    for (i = 0; i < 16; ++i)
+        expected[i] = exponential_table[i];
+    maximum = expected[0];
+    for (i = 1; i < 16; ++i)
+        if (expected[i] > maximum)
+            maximum = expected[i];
+    sum = 0;
+    for (i = 0; i < 16; ++i) {
+        difference = maximum - expected[i];
+        if (difference < 0)
+            difference = 0;
+        index = difference >> SMXW19_SHIFT;
+        if (index > 255)
+            index = 255;
+        expected[i] = expected[index];
+#ifdef SMXW19_SUBTRACT_SUM
+        sum -= expected[i];
+#else
+        sum += expected[i];
+#endif
+    }
+    for (i = 0; i < 16; ++i)
+        expected[i] = clamp_to_model_value(
+            ((weight_value_t)expected[i] * SMXW19_SCALE) / sum);
+    softmax_wave10(exponential_table, 16);
+    ++checks;
+    if (exponential_table[16] != 0)
+        ++failures;
+    for (i = 0; i < 16; ++i) {
+        ++checks;
+        if (exponential_table[i] != expected[i])
+            ++failures;
+        mix(exponential_table[i]);
+    }
+}
+#endif
+
 int main(void)
 {
     static const model_value_t singleton[] = {32767};
@@ -185,6 +291,9 @@ int main(void)
     run_case(mixed, 16);
 #ifndef SMXW10_SHORT_TABLE
     run_case(clamped, 2);
+#endif
+#if defined(SMXW19_ALIAS_CONTROL) && !defined(SMXW19_VOLATILE_TABLE)
+    run_alias_case();
 #endif
     printf("SMXW10 failures=%d checks=%u hash=%lu\n",
            failures, checks, oracle_hash);

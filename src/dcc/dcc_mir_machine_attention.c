@@ -1951,6 +1951,7 @@ static int mir_match_softmax_schedule(
         dummy_storage != SC_LOCAL || dummy_offset >= 0 ||
         !mir_match_matrix_product_word_type(dummy_type) ||
         !mir_match_matrix_product_pointer_type(mir.insns[7].type) ||
+        mir.insns[10].src1 >= 0 ||
         !mir_match_softmax_call(
             &mir.insns[10], 3, &plan->maximum_function) ||
         !mir_match_matrix_product_pointer_type(
@@ -2266,6 +2267,7 @@ static int mir_match_softmax_schedule(
         !mir_attention_call_arguments(
             &mir.insns[119], 1, &clamp_argument) ||
         clamp_argument != mir.insns[117].dst ||
+        mir.insns[119].src1 >= 0 ||
         !mir_match_softmax_call(
             &mir.insns[119], 1, &plan->clamp_function) ||
         !mir_match_matrix_product_long_type(
