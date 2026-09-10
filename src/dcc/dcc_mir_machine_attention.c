@@ -1501,7 +1501,12 @@ static int mir_match_fixed_softmax_schedule(
         mir.insns[90].immediate != 2 ||
         !mir_match_softmax_call(
             &mir.insns[141], 1, &plan->clamp_function) ||
-        mir.insns[140].src1 != mir.insns[139].dst ||
+        !mir_match_matrix_product_long_type(
+            plan->clamp_function->proto_types[0]) ||
+        !mir_match_softmax_argument(
+            &mir.insns[141], &mir.insns[140], 0,
+            mir.insns[139].dst,
+            plan->clamp_function->proto_types[0]) ||
         mir.insns[142].src1 != mir.insns[129].dst ||
         mir.insns[142].src2 != mir.insns[141].dst)
         return mir_machine_reject(

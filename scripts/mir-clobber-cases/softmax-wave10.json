@@ -339,5 +339,19 @@
     "RequiredSelector": "spilled-scalar-cfg",
     "MachineMutation": "127:type:50",
     "MachineMutationFunction": "softmax_wave10"
+  },
+  {
+    "Name": "smxw10-fixed-clamp-arg-type", "Group": "softmax-wave10",
+    "Sources": ["tests/attnc11.c"], "Defines": [],
+    "Expected": ["accuracy  14/14"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [false],
+    "FixturePaths": ["tests/ATTN.WTS", "tests/ATTN.IN"],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "softmax_8", "RequireRejected": true,
+    "RequiredGenericFunction": "softmax_8",
+    "RequiredSelectorFunction": "softmax_8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "140:type:2",
+    "MachineMutationFunction": "softmax_8"
   }
 ]
