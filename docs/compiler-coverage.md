@@ -38,6 +38,30 @@ included in the input identity.
 artifacts, not coverage exclusions. A build-directory lock prevents overlapping
 stages; separate checkpoints use separate directories.
 
+The first integrated parallel checkpoint executed all 5,076 expected leaf
+configurations (the preserved 5,052-case allocation batch plus 24 scanner
+controls), with exact manifest equality and no removed cases. Report-only
+regeneration preserved the collection stamp and profile hashes. Independent
+compiler mutation measurements with two build jobs per worker were 335.09
+seconds serial and 205.30 seconds with two workers; both baseline controls
+passed and all nine mutants were killed with identical outcomes.
+
+The same wave adds accepted/rejected sliding-maximum controls and fixes an
+overflow in generic `MIR_VA_ARG` preflight: testing `offset > 126` avoids
+overflowing `offset + 1` at `LONG_MAX`. Boundary assertions verify rejection
+does not write output or consume labels and that retrying the valid candidate
+without resetting state produces identical output.
+
+| Metric | Covered / total | Percent |
+| --- | --- | ---: |
+| Functions | 4,359 / 4,359 | 100.00% |
+| Lines | 177,052 / 189,948 | 93.21% |
+| Native branch outcomes | 90,987 / 144,518 | 62.96% |
+| Regions | 159,060 / 169,867 | 93.64% |
+
+The raw ledger has 53,284 uncovered outcomes. This is a checkpoint, not
+completion of the broader four-metric objective.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

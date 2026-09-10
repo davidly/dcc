@@ -63,6 +63,19 @@ exact equality for all four scoped metrics, plus correctness and unchanged
 performance baselines. Parallel execution and fewer repeated gates do not
 relax those completion criteria.
 
+The first integrated parallel wave retains all 5,052 allocation-checkpoint
+configurations and adds 24 scanner controls, for exactly 5,076 successful
+executions. Its generic `va_arg` offset fix rejects `LONG_MAX` without overflow,
+partial text, or consumed labels; same-stream recovery matches a clean valid
+candidate. Strict release gates, frozen performance comparison, sanitizer,
+debugger and all nine clean compiler-mutant controls passed.
+
+Latest integrated totals: 4,359/4,359 functions, 177,052/189,948 lines
+(93.21%), 90,987/144,518 native branch outcomes (62.96%), and
+159,060/169,867 regions (93.64%). The raw uncovered ledger is 53,284.
+The later historical sections retain the earlier checkpoints; use this
+parallel-wave summary for the current measurement.
+
 ## Publication State
 
 - Repository: <https://github.com/davidly/dcc>.
