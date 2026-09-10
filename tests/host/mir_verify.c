@@ -1332,6 +1332,26 @@ static void setup_deferred_function_pointer_call(int malformed)
     mir.debug_event_capacity = 1;
 }
 
+static void add_deferred_debug_event(int point, const char *text)
+{
+    struct MirDebugEvent *events;
+    size_t length = strlen(text) + 1;
+
+    events = (struct MirDebugEvent *)realloc(
+        mir.debug_events,
+        (size_t)(mir.debug_event_count + 1) * sizeof(*mir.debug_events));
+    if (events == NULL)
+        fatal("cannot grow deferred metadata debug events");
+    mir.debug_events = events;
+    mir.debug_event_capacity = mir.debug_event_count + 1;
+    mir.debug_events[mir.debug_event_count].text = (char *)malloc(length);
+    if (mir.debug_events[mir.debug_event_count].text == NULL)
+        fatal("cannot allocate deferred metadata debug text");
+    memcpy(mir.debug_events[mir.debug_event_count].text, text, length);
+    mir.debug_events[mir.debug_event_count].point = point;
+    ++mir.debug_event_count;
+}
+
 static void check_deferred_function_pointer_result(const char *name)
 {
     int ok = 1;
@@ -1395,6 +1415,130 @@ static void verify_deferred_function_pointer_metadata(void)
     mir_resolve_deferred_metadata();
     check_deferred_function_pointer_result(
         "deferred metadata retry after malformed call");
+}
+
+static void verify_deferred_metadata_coordinates(void)
+{
+    int ok = 1;
+
+    setup_deferred_function_pointer_call(0);
+    mir.debug_events[0].point = 3;
+    add_deferred_debug_event(5, ";@dcc-line \"x\" 2\n");
+    add_deferred_debug_event(9, ";@dcc-line \"x\" 3\n");
+    add_deferred_debug_event(INT_MAX, ";@dcc-line \"x\" 4\n");
+    mir.declaration_count = 4;
+    mir.declaration_placeholders[2] = 4;
+    mir.declaration_scope_ends[2] = 5;
+    mir.declaration_scope_labels[2] = -1;
+    mir.declaration_placeholders[3] = INT_MAX;
+    mir.declaration_scope_ends[3] = INT_MAX;
+    mir.declaration_scope_labels[3] = -1;
+    mir.insns[4].opcode = MIR_DECL_PLACEHOLDER;
+
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 11 && mir.next_value == 4;
+    ok = ok && mir.declaration_placeholders[2] == 5;
+    ok = ok && mir.declaration_scope_ends[2] == 6;
+    ok = ok && mir.declaration_placeholders[3] == INT_MAX;
+    ok = ok && mir.declaration_scope_ends[3] == INT_MAX;
+    ok = ok && mir.debug_events[0].point == 4;
+    ok = ok && mir.debug_events[1].point == 7;
+    ok = ok && mir.debug_events[2].point == 11;
+    ok = ok && mir.debug_events[3].point == INT_MAX;
+    ok = ok && mir.insns[5].opcode == MIR_DECL_PLACEHOLDER;
+    ok = ok && mir.insns[6].opcode == MIR_LOAD;
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred metadata coordinate updates\n");
+        ++failures;
+    }
+}
+
+static void verify_deferred_metadata_alias_bounds(void)
+{
+    int ok = 1;
+
+    setup(6, 2, 1);
+    mir.insns[1].opcode = MIR_LOAD;
+    mir.insns[1].dst = 0;
+    strcpy(mir.insns[1].name, "outer");
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_LOAD;
+    mir.insns[3].dst = 1;
+    strcpy(mir.insns[3].name, "outer");
+    mir.insns[4].opcode = MIR_LOAD;
+    strcpy(mir.insns[4].name, "outer");
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 4;
+    mir.declaration_scope_labels[0] = -1;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "outer");
+    strcpy(mir.alias_internal_names[0], "outer#b0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[1].name, "outer");
+    ok = ok && !strcmp(mir.insns[3].name, "outer#b0");
+    ok = ok && !strcmp(mir.insns[4].name, "outer");
+
+    setup(6, 2, 1);
+    mir.insns[1].opcode = MIR_LOAD;
+    mir.insns[1].dst = 0;
+    strcpy(mir.insns[1].name, "outer");
+    mir.insns[3].opcode = MIR_LOAD;
+    mir.insns[3].dst = 1;
+    strcpy(mir.insns[3].name, "outer");
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = -2;
+    mir.declaration_scope_ends[0] = 4;
+    mir.declaration_scope_labels[0] = -1;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "outer");
+    strcpy(mir.alias_internal_names[0], "outer#b0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[1].name, "outer");
+    ok = ok && !strcmp(mir.insns[3].name, "outer");
+
+    mir.alias_declaration_indices[0] = mir.declaration_count;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[1].name, "outer");
+    ok = ok && !strcmp(mir.insns[3].name, "outer");
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred metadata alias bounds\n");
+        ++failures;
+    }
+}
+
+static void verify_deferred_metadata_call_ordering(void)
+{
+    struct MirInsn argument;
+    int ok = 1;
+
+    setup_deferred_function_pointer_call(0);
+    argument = mir.insns[3];
+    mir.insns[3].opcode = MIR_NOP;
+    mir.insns[7] = argument;
+    expect_verification("late deferred function-pointer argument", 0);
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 9 && mir.next_value == 2;
+    ok = ok && mir.insns[5].opcode == MIR_CALL;
+    ok = ok && !strcmp(mir.insns[5].name, "verify_deferred_callback");
+    ok = ok && mir.insns[7].opcode == MIR_ARG;
+    ok = ok && mir.debug_events[0].point == 5;
+
+    setup_deferred_function_pointer_call(0);
+    mir.insns[3].secondary_offset = mir.next_call_id;
+    mir.insns[5].secondary_offset = mir.next_call_id;
+    expect_verification("invalid deferred function-pointer call ID", 0);
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 9 && mir.next_value == 2;
+    ok = ok && mir.insns[5].opcode == MIR_CALL;
+    ok = ok && !strcmp(mir.insns[5].name, "verify_deferred_callback");
+    ok = ok && mir.debug_events[0].point == 5;
+    if (!ok) {
+        fprintf(stderr, "FAIL malformed deferred metadata call ordering\n");
+        ++failures;
+    }
 }
 
 static void verify_five_call_arguments(void)
@@ -3051,6 +3195,9 @@ int main(void)
     verify_parameter_emitters();
     verify_member_metadata_and_address();
     verify_deferred_function_pointer_metadata();
+    verify_deferred_metadata_coordinates();
+    verify_deferred_metadata_alias_bounds();
+    verify_deferred_metadata_call_ordering();
     verify_five_call_arguments();
     verify_spilled_feature_defaults();
     verify_homed_parameter_preflight_transaction();

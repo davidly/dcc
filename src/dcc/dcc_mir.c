@@ -6067,7 +6067,10 @@ static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
 {
     struct MirInsn inserted;
     int declaration;
+    int declaration_count;
     int event;
+    int event_count;
+    int old_count = mir.count;
 
     if (index < 0 || index > mir.count)
         return NULL;
@@ -6075,16 +6078,33 @@ static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
     memmove(&mir.insns[index + 1], &mir.insns[index],
             (size_t)(mir.count - index - 1) * sizeof(*mir.insns));
     mir.insns[index] = inserted;
-    for (event = 0; event < mir.debug_event_count; ++event)
-        if (mir.debug_events[event].point >= index)
+    event_count = mir.debug_events != NULL ? mir.debug_event_count : 0;
+    if (event_count < 0)
+        event_count = 0;
+    if (event_count > mir.debug_event_capacity)
+        event_count = mir.debug_event_capacity;
+    for (event = 0; event < event_count; ++event)
+        if (mir.debug_events[event].point >= index &&
+            mir.debug_events[event].point <= old_count)
             ++mir.debug_events[event].point;
-    /* Keep lexical declaration coordinates attached to the displaced MIR.
-     * An insertion exactly at an exclusive scope end remains outside it. */
-    for (declaration = 0; declaration < mir.declaration_count;
-         ++declaration) {
-        if (mir.declaration_placeholders[declaration] >= index)
+    /* Keep valid lexical coordinates attached to the displaced MIR while
+     * leaving malformed values unchanged for later diagnostics. An insertion
+     * exactly at an exclusive scope end remains outside it. */
+    declaration_count = mir.declaration_count;
+    if (declaration_count < 0)
+        declaration_count = 0;
+    if (declaration_count >
+        (int)(sizeof(mir.declaration_placeholders) /
+              sizeof(mir.declaration_placeholders[0])))
+        declaration_count =
+            (int)(sizeof(mir.declaration_placeholders) /
+                  sizeof(mir.declaration_placeholders[0]));
+    for (declaration = 0; declaration < declaration_count; ++declaration) {
+        if (mir.declaration_placeholders[declaration] >= index &&
+            mir.declaration_placeholders[declaration] < old_count)
             ++mir.declaration_placeholders[declaration];
-        if (mir.declaration_scope_ends[declaration] > index)
+        if (mir.declaration_scope_ends[declaration] > index &&
+            mir.declaration_scope_ends[declaration] <= old_count)
             ++mir.declaration_scope_ends[declaration];
     }
     return &mir.insns[index];
@@ -7026,6 +7046,62 @@ static int mir_try_resolve_deferred_member_address(struct MirInsn *insn)
     return 1;
 }
 
+static int mir_deferred_function_pointer_call_is_well_ordered(
+    int call_index, int declaration)
+{
+    const struct MirInsn *call;
+    int argument_count = 0;
+    long last_position = -1;
+    int matching_calls = 0;
+    int instruction;
+
+    /* Do not partially rewrite malformed calls: inserted conversions change
+     * instruction indices, so a late/duplicate argument could otherwise make
+     * the remainder of this pass skip or rewrite the wrong instruction. */
+    if (call_index < 0 || call_index >= mir.count ||
+        declaration < 0 || declaration >= mir.declared_count)
+        return 0;
+    call = &mir.insns[call_index];
+    if (call->secondary_offset < 0 ||
+        call->secondary_offset >= mir.next_call_id || call->src1 >= 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int prior;
+
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            insn->secondary_offset == call->secondary_offset)
+            ++matching_calls;
+        if (insn->opcode != MIR_ARG ||
+            insn->secondary_offset != call->secondary_offset)
+            continue;
+        if (instruction >= call_index || insn->immediate < 0)
+            return 0;
+        for (prior = 0; prior < instruction; ++prior)
+            if (mir.insns[prior].opcode == MIR_ARG &&
+                mir.insns[prior].secondary_offset == call->secondary_offset &&
+                mir.insns[prior].immediate == insn->immediate)
+                return 0;
+        ++argument_count;
+        if (insn->immediate > last_position)
+            last_position = insn->immediate;
+    }
+    if (matching_calls != 1 ||
+        last_position != (long)argument_count - 1)
+        return 0;
+    if (mir.declared_has_proto[declaration]) {
+        int parameter_count = mir.declared_proto_nargs[declaration];
+
+        if (parameter_count < 0 || parameter_count > MAX_PROTO_PARAMS ||
+            argument_count < parameter_count ||
+            (!mir.declared_proto_variadic[declaration] &&
+             argument_count != parameter_count))
+            return 0;
+    }
+    return 1;
+}
+
 void mir_resolve_deferred_metadata(void)
 {
 
@@ -7050,19 +7126,22 @@ void mir_resolve_deferred_metadata(void)
         int last = mir.count;
         int scope_label = -1;
         int instruction;
-        if (declaration >= 0 && declaration < mir.declaration_count) {
+        if (declaration != -1) {
+            if (declaration < 0 || declaration >= mir.declaration_count)
+                continue;
             first = mir.declaration_placeholders[declaration];
             last = mir.declaration_scope_ends[declaration];
             scope_label = mir.declaration_scope_labels[declaration];
-            if (first < 0)
-                first = 0;
-            if (last < first || last > mir.count)
-                last = mir.count;
+            if (first < 0 || first >= mir.count)
+                continue;
             if (scope_label >= 0) {
                 int scope_end = mir_find_label(scope_label);
-                if (scope_end >= first)
-                    last = scope_end + 1;
+                if (scope_end < first)
+                    continue;
+                last = scope_end;
             } else if (strstr(mir.alias_internal_names[i], "#b") == NULL) {
+                if (last < first || last > mir.count)
+                    continue;
                 /* A for-init alias ends at its loop-exit branch.  General
                  * block aliases use explicit scope labels and must span
                  * conditional branches within the block. */
@@ -7071,11 +7150,12 @@ void mir_resolve_deferred_metadata(void)
                         int target =
                             mir_find_label(mir.insns[instruction].label);
                         if (target > instruction) {
-                            last = target + 1;
+                            last = target;
                             break;
                         }
                     }
-            }
+            } else if (last < first || last > mir.count)
+                continue;
         }
         for (instruction = first; instruction < last; ++instruction) {
             struct MirInsn *insn = &mir.insns[instruction];
@@ -7209,6 +7289,9 @@ scoped_type_repair_done:
             continue;
         mir_copy_name(callee_name, call->name);
         declaration = mir_declared_index(callee_name);
+        if (!mir_deferred_function_pointer_call_is_well_ordered(
+                i, declaration))
+            continue;
         callee_type = mir_named_type(callee_name);
         callee_value = mir_new_value();
         load = mir_insert_instruction_before(i, MIR_LOAD);
