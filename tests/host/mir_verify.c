@@ -1829,6 +1829,102 @@ static void verify_scalar_dag_emission(void)
     clear_liveness();
 }
 
+static void verify_scalar_dag_preflight_transaction(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_output[512];
+    char retry_output[512];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    int ok = 1;
+    int saved_stack_check = opt_stack_check;
+
+    setup(9, 7, 1);
+    mir.insns[1].immediate = 2;
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[2].immediate = 3;
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].immediate = '*';
+    mir.insns[4].opcode = MIR_UNARY;
+    mir.insns[4].dst = 3;
+    mir.insns[4].src1 = 2;
+    mir.insns[4].immediate = '!';
+    mir.insns[5].opcode = MIR_CONST;
+    mir.insns[5].dst = 4;
+    mir.insns[5].immediate = 1;
+    mir.insns[6].opcode = MIR_UNARY;
+    mir.insns[6].dst = 5;
+    mir.insns[6].src1 = 4;
+    mir.insns[6].immediate = '+';
+    mir.insns[7].opcode = MIR_BINARY;
+    mir.insns[7].dst = 6;
+    mir.insns[7].src1 = 3;
+    mir.insns[7].src2 = 5;
+    mir.insns[7].immediate = '+';
+    mir.insns[8].src1 = 6;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL scalar DAG verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL scalar DAG stream allocation\n");
+        ++failures;
+        mir_stream_close(control);
+        mir_stream_close(retry);
+        clear_liveness();
+        return;
+    }
+    opt_stack_check = 0;
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_scalar_dag(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    memset(control_output, 0, sizeof(control_output));
+    control_bytes = mir_stream_read(
+        control_output, 1, sizeof(control_output) - 1, control);
+    ok = ok && control_bytes < sizeof(control_output);
+    ok = ok && strstr(control_output, "\textrn __mulu\n\tcall __mulu\n") != NULL;
+
+    label_id = first_label;
+    mir.insns[6].immediate = '?';
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_scalar_dag(retry);
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == 0 && mir_stream_size(retry) == 0;
+    ok = ok && label_id == first_label;
+
+    mir.insns[6].immediate = '+';
+    result = mir_try_emit_scalar_dag(retry);
+    ok = ok && result == 1;
+    mir_stream_rewind(retry);
+    memset(retry_output, 0, sizeof(retry_output));
+    retry_bytes = mir_stream_read(
+        retry_output, 1, sizeof(retry_output) - 1, retry);
+    ok = ok && retry_bytes < sizeof(retry_output);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_output, retry_output, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL scalar DAG preflight transaction\n");
+        ++failures;
+    }
+    opt_stack_check = saved_stack_check;
+    mir_stream_close(control);
+    mir_stream_close(retry);
+    clear_liveness();
+}
+
 static void diamond(void)
 {
     setup(11, 4, 4);
@@ -1975,6 +2071,7 @@ int main(void)
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
     verify_scalar_dag_emission();
+    verify_scalar_dag_preflight_transaction();
     for (mutation = 0; mutation < 5; ++mutation) {
         setup(5, 1, 1);
         mir.next_call_id = 1;

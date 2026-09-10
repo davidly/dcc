@@ -587,6 +587,53 @@ void mir_emit_scalar_shift(MirStream *out, int operation, int is_unsigned,
     mir_stream_printf(out, "\tdjnz L%d\nL%d:\n", loop_label, end_label);
 }
 
+static int mir_scalar_value_is_emittable(int value, int depth)
+{
+    const struct MirInsn *definition;
+    const struct MirObject *object;
+
+    if (depth > 256)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL || type_size(definition->type) < 1 ||
+        type_size(definition->type) > 2)
+        return 0;
+    switch (definition->opcode) {
+    case MIR_PARAM:
+        if (definition->object < 0 || definition->object >= mir.object_count)
+            return 0;
+        object = &mir.objects[definition->object];
+        return object->storage == SC_PARAM &&
+               type_size(object->type) >= 1 &&
+               type_size(object->type) <= 2;
+    case MIR_CONST:
+        return 1;
+    case MIR_UNARY:
+        if (definition->immediate != 0 && definition->immediate != '+' &&
+            definition->immediate != '-' && definition->immediate != '~' &&
+            definition->immediate != '!')
+            return 0;
+        return mir_scalar_value_is_emittable(
+            definition->src1, depth + 1);
+    case MIR_BINARY:
+        switch ((int)definition->immediate) {
+        case '+': case '-': case '&': case '|': case '^': case '*':
+        case '/': case '%':
+        case TOK_EQ: case TOK_NE: case '<': case '>': case TOK_LE: case TOK_GE:
+        case TOK_SHL: case TOK_SHR:
+            break;
+        default:
+            return 0;
+        }
+        return mir_scalar_value_is_emittable(
+                   definition->src1, depth + 1) &&
+               mir_scalar_value_is_emittable(
+                   definition->src2, depth + 1);
+    default:
+        return 0;
+    }
+}
+
 static int mir_emit_scalar_value(MirStream *out, int value, int depth)
 {
     const struct MirInsn *definition;
@@ -788,6 +835,9 @@ int mir_try_emit_scalar_dag(MirStream *out)
         }
     }
     if (return_insn == NULL || return_insn->src1 < 0)
+        return 0;
+    /* Reject the whole DAG before prologue text or labels become observable. */
+    if (!mir_scalar_value_is_emittable(return_insn->src1, 0))
         return 0;
     mir_emit_prologue(out);
     if (!mir_emit_scalar_value(out, return_insn->src1, 0))
