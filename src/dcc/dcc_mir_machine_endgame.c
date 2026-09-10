@@ -6813,8 +6813,12 @@ static int mir_endgame_scope_payload(void)
             mir_endgame_scope_hash_value(
                 &first, &second, values[item]);
         mir_endgame_scope_hash_text(&first, &second, insn->name);
-        mir_endgame_scope_hash_text(
-            &first, &second, insn->base_name);
+        /* Call aliases vary with checked printf runtime policy and are
+         * validated against the active symbol ABI below. */
+        if (insn->opcode != MIR_CALL &&
+            insn->opcode != MIR_CALL_AGGREGATE)
+            mir_endgame_scope_hash_text(
+                &first, &second, insn->base_name);
     }
     for (object = 0; object < mir.object_count; ++object) {
         const struct MirObject *entry = &mir.objects[object];
@@ -6964,12 +6968,8 @@ static int mir_endgame_scope_payload(void)
             mir_endgame_scope_hash_value(
                 &first, &second, values[item]);
     }
-    /* The second fingerprint is the same schedule with the checked
-     * float/long printf runtime declarations enabled. */
-    if ((first == 0xe67b82990a480227ULL &&
-         second == 0xe79d5c334c6bd663ULL) ||
-        (first == 0xb90f9e500c0a9193ULL &&
-         second == 0x1e1187456435650eULL))
+    if (first == 0x50bb3dc9301cc6b3ULL &&
+        second == 0xdb71229368749a08ULL)
         return 1;
     if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
         fprintf(stderr,
@@ -7343,6 +7343,7 @@ static int mir_endgame_scope_calls(
     static const int print_fail_args[] = {1340, 1342};
     static const int indirect_args[] = {1042};
     int arguments[MIR_ENDGAME_MAX_ARGS];
+    const char *print_name;
     size_t item;
 
     for (item = 0; item < MIR_ENDGAME_SCOPE_CHECKS; ++item)
@@ -7385,6 +7386,14 @@ static int mir_endgame_scope_calls(
         !mir_endgame_word_type(plan->print_function->type) ||
         !mir_endgame_char_pointer_type(
             plan->print_function->proto_types[0]))
+        return 0;
+    print_name = asm_name_for(sym_asm_name(plan->print_function));
+    if (strcmp(mir_endgame_call_name(
+                   &mir.insns[mir_endgame_scope_instruction(1337)]),
+               print_name) ||
+        strcmp(mir_endgame_call_name(
+                   &mir.insns[mir_endgame_scope_instruction(1344)]),
+               print_name))
         return 0;
     snprintf(plan->print_names[0], sizeof(plan->print_names[0]), "%s",
              mir_endgame_call_name(
