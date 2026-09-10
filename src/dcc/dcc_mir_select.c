@@ -3417,7 +3417,7 @@ static int mir_has_bool_value(void)
 
 /* Parameter-home validation happens after the prologue, so callers must run
  * this fallback through mir_try_selector(). */
-static int mir_try_emit_affine_return(MirStream *out)
+int mir_try_emit_affine_return(MirStream *out)
 {
     const struct MirInsn *return_insn = NULL;
     const struct MirInsn *parameter;
@@ -3484,7 +3484,7 @@ static int mir_try_emit_affine_return(MirStream *out)
     return 1;
 }
 
-static int mir_try_emit_z80(MirStream *out)
+int mir_try_emit_z80(MirStream *out)
 {
     /* This path is selected only by DCC_MIR_EMIT_FUNCTION. Exercise the
      * narrow structural diagnostics before the universal generated emitters;
