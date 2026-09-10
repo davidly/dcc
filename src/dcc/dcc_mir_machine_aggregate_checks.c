@@ -7833,6 +7833,33 @@ static int mir_additive_global_root(
     return 1;
 }
 
+static int mir_additive_target_layout(
+    const struct Sym *target, int required_bytes)
+{
+    return target->is_defined && target->storage == SC_GLOBAL &&
+           target->is_array && !target->is_vla &&
+           target->dim_count == 1 &&
+           target->array_len >= required_bytes &&
+           target->elem_size == 1 &&
+           target->size >= required_bytes &&
+           mir_packed_scalar_type(
+               target->type, TYPE_CHAR, 1, 0);
+}
+
+static int mir_additive_source_layout(
+    const struct Sym *source, int required_rows)
+{
+    return source->is_defined && source->storage == SC_GLOBAL &&
+           source->is_array && !source->is_vla &&
+           source->dim_count == 2 &&
+           source->array_len >= required_rows &&
+           source->dims[1] == 2 &&
+           source->elem_size == 4 &&
+           source->size >= required_rows * 4 &&
+           mir_packed_scalar_type(
+               source->type, TYPE_INT, 1, 0);
+}
+
 static int mir_additive_local_word(
     int instruction, int *offset_out)
 {
@@ -7888,6 +7915,7 @@ static int mir_additive_check(
         !mir_packed_scalar_type(
             mir.insns[convert_instruction].type, TYPE_LONG, 0, 0) ||
         !mir_aggregate_direct_function(call_instruction, &function) ||
+        (mir.insns[call_instruction].type & 15) != TYPE_VOID ||
         !mir_machine_three_call_arguments(
             &mir.insns[call_instruction], arguments) ||
         arguments[0] !=
@@ -7957,7 +7985,8 @@ static int mir_match_additive_subscript_runner(
         mir_cfg_block_count() != 7 || mir.local_bytes != 6 ||
         mir.aggregate_temp_bytes != 0 || mir.has_vla ||
         (mir.return_type & 15) != TYPE_VOID)
-        return 0;
+        return mir_machine_reject(
+            "additive-subscript-runner", "shape");
     offset_load_instruction =
         mir.insns[143].opcode == MIR_LOAD ? 143 : 144;
     offset_one_instruction =
@@ -8062,6 +8091,8 @@ static int mir_match_additive_subscript_runner(
     if (!plan->check_function->has_proto ||
         plan->check_function->proto_variadic ||
         plan->check_function->proto_nargs != 3 ||
+        plan->check_function->is_fastcall ||
+        plan->check_function->is_noreturn ||
         (plan->check_function->type & 15) != TYPE_VOID ||
         !mir_packed_scalar_type(
             plan->check_function->proto_types[0], TYPE_CHAR, 0, 1) ||
@@ -8191,11 +8222,28 @@ static int mir_match_additive_subscript_runner(
     for (item = 0; item < MIR_ADDITIVE_CHECKS; ++item) {
         int other;
 
+        if (plan->check_offsets[item] < 0 ||
+            plan->check_offsets[item] >= plan->target->size)
+            return mir_machine_reject(
+                "additive-subscript-runner", "target-layout");
         for (other = item + 1; other < MIR_ADDITIVE_CHECKS; ++other)
             if (plan->strings[item] == plan->strings[other])
                 return mir_machine_reject(
                     "additive-subscript-runner", "check-strings");
     }
+    if (!mir_additive_target_layout(
+            plan->target, plan->fill_count))
+        return mir_machine_reject(
+            "additive-subscript-runner", "target-layout");
+    for (item = 0; item < MIR_ADDITIVE_FIXED_STORES; ++item)
+        if (plan->fixed_offsets[item] < 0 ||
+            plan->fixed_offsets[item] >= plan->target->size)
+            return mir_machine_reject(
+                "additive-subscript-runner", "target-layout");
+    if (!mir_additive_source_layout(
+            plan->source, plan->source_count))
+        return mir_machine_reject(
+            "additive-subscript-runner", "source-layout");
     return 1;
 }
 
@@ -14314,6 +14362,7 @@ int mir_try_emit_aggregate_checks(MirStream *out)
         return 1;
     }
     if (mir_match_additive_subscript_runner(&additive_subscript)) {
+        mir_machine_accept("additive-subscript-runner");
         mir_emit_additive_subscript_runner(out, &additive_subscript);
         return 1;
     }
