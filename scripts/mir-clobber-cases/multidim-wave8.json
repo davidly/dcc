@@ -215,6 +215,24 @@
     "MachineMutationFunction": "multidim_wave8"
   },
   {
+    "Name": "mdw8-check-fastcall",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": ["MDW8_CHECK_FASTCALL"],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
     "Name": "mdw8-print-abi",
     "Group": "multidim-wave8",
     "Sources": ["tests/mir-clobber/mdimw8.c"],

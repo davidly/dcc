@@ -2881,9 +2881,11 @@ static int mir_match_multidim_array_runner(
                 "multidim-array-runner", "check-addresses");
     }
     if (!plan->check_function->has_proto ||
+        plan->check_function->is_fastcall ||
         plan->check_function->proto_variadic ||
         plan->check_function->proto_nargs != 3 ||
-        (plan->check_function->type & 15) != TYPE_VOID ||
+        !mir_packed_scalar_type(
+            plan->check_function->type, TYPE_VOID, 0, 0) ||
         !mir_packed_scalar_type(
             plan->check_function->proto_types[0],
             TYPE_CHAR, 0, 1) ||
@@ -3051,6 +3053,8 @@ static int mir_match_multidim_array_runner(
         mir.insns[232].type != plan->column_function->type ||
         mir.insns[230].src1 >= 0 ||
         mir.insns[232].src1 >= 0 ||
+        mir.insns[230].memory_flags != 0 ||
+        mir.insns[232].memory_flags != 0 ||
         !mir_machine_call_has_no_arguments(&mir.insns[230]) ||
         !mir_machine_call_has_no_arguments(&mir.insns[232]) ||
         mir.insns[231].src1 != mir.insns[229].dst ||
@@ -3060,11 +3064,13 @@ static int mir_match_multidim_array_runner(
         !mir_packed_store(236, 233, 235, 1) ||
         !mir_machine_constant_equals(mir.insns[236].src2, 55) ||
         !plan->row_function->has_proto ||
+        plan->row_function->is_fastcall ||
         plan->row_function->proto_variadic ||
         plan->row_function->proto_nargs != 0 ||
         !mir_packed_scalar_type(
             plan->row_function->type, TYPE_INT, 0, 0) ||
         !plan->column_function->has_proto ||
+        plan->column_function->is_fastcall ||
         plan->column_function->proto_variadic ||
         plan->column_function->proto_nargs != 0 ||
         !mir_packed_scalar_type(
@@ -3163,6 +3169,7 @@ static int mir_match_multidim_array_runner(
         mir.insns[672].type != 0 ||
         mir.insns[679].type != 0 ||
         !plan->print_function->has_proto ||
+        plan->print_function->is_fastcall ||
         !plan->print_function->proto_variadic ||
         plan->print_function->proto_nargs != 1 ||
         !mir_packed_scalar_type(

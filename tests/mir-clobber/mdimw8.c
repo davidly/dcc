@@ -40,13 +40,33 @@ static unsigned char guard4[8];
 
 static int failures;
 
-static void check(const char *name, int got, int expected)
+void mdw8_check_body(const char *name, int got, int expected)
 {
     if (got != expected) {
         printf("FAIL %s got %d expected %d\n", name, got, expected);
         failures++;
     }
 }
+
+#ifdef MDW8_CHECK_FASTCALL
+extern void __fastcall check(const char *name, int got, int expected);
+#asm
+_check:
+        push    bc
+        push    de
+        push    hl
+        call    _mdw8_check_body
+        pop     bc
+        pop     bc
+        pop     bc
+        ret
+#endasm
+#else
+static void check(const char *name, int got, int expected)
+{
+    mdw8_check_body(name, got, expected);
+}
+#endif
 
 static int row_of(void) { return mx.r; }
 static int col_of(void) { return mx.c; }
