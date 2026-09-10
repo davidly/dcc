@@ -12796,6 +12796,7 @@ int mir_try_emit_validation_runners(MirStream *out, int phase)
         }
         if (mir_match_directory_enumeration_runner(
                 &directory_plan)) {
+            mir_machine_accept("directory-enumeration-runner");
             mir_emit_directory_enumeration_runner(
                 out, &directory_plan);
             return 1;

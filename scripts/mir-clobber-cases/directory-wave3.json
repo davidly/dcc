@@ -1,0 +1,188 @@
+[
+  {
+    "Name": "d3exact",
+    "Group": "directory-wave3",
+    "Sources": ["tests/mir-clobber/direnum3.c"],
+    "FixturePaths": [
+      "tests/mir-clobber/Q7ALPHA1.DAT",
+      "tests/mir-clobber/Q7BETA22.D",
+      "tests/mir-clobber/Q7C.D",
+      "tests/mir-clobber/Q7NOPE.TXT",
+      "tests/mir-clobber/R7IGNORE.DAT"
+    ],
+    "Defines": [],
+    "Expected": [
+      "found=Q7BETA22.D",
+      "entry=0 name=Q7ALPHA1.DAT size=128",
+      "entry=1 name=Q7BETA22.D size=256",
+      "entry=2 name=Q7C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireExact": true
+  },
+  {
+    "Name": "d3bdos",
+    "Group": "directory-wave3",
+    "Sources": ["tests/mir-clobber/direnum3.c"],
+    "FixturePaths": [
+      "tests/mir-clobber/Q7ALPHA1.DAT",
+      "tests/mir-clobber/Q7BETA22.D",
+      "tests/mir-clobber/Q7C.D",
+      "tests/mir-clobber/Q7NOPE.TXT",
+      "tests/mir-clobber/R7IGNORE.DAT"
+    ],
+    "Defines": [],
+    "Expected": [
+      "found=Q7BETA22.D",
+      "entry=0 name=Q7ALPHA1.DAT size=128",
+      "entry=1 name=Q7BETA22.D size=256",
+      "entry=2 name=Q7C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "enumerate",
+    "MachineMutation": "199:immediate:19",
+    "MachineMutationFunction": "enumerate"
+  },
+  {
+    "Name": "d3fcb",
+    "Group": "directory-wave3",
+    "Sources": ["tests/mir-clobber/direnum3.c"],
+    "FixturePaths": [
+      "tests/mir-clobber/Q7ALPHA1.DAT",
+      "tests/mir-clobber/Q7BETA22.D",
+      "tests/mir-clobber/Q7C.D",
+      "tests/mir-clobber/Q7NOPE.TXT",
+      "tests/mir-clobber/R7IGNORE.DAT"
+    ],
+    "Defines": [],
+    "Expected": [
+      "found=Q7BETA22.D",
+      "entry=0 name=Q7ALPHA1.DAT size=128",
+      "entry=1 name=Q7BETA22.D size=256",
+      "entry=2 name=Q7C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "enumerate",
+    "MachineMutation": "72:memory_size:7",
+    "MachineMutationFunction": "enumerate"
+  },
+  {
+    "Name": "d3stride",
+    "Group": "directory-wave3",
+    "Sources": ["tests/mir-clobber/direnum3.c"],
+    "FixturePaths": [
+      "tests/mir-clobber/Q7ALPHA1.DAT",
+      "tests/mir-clobber/Q7BETA22.D",
+      "tests/mir-clobber/Q7C.D",
+      "tests/mir-clobber/Q7NOPE.TXT",
+      "tests/mir-clobber/R7IGNORE.DAT"
+    ],
+    "Defines": [],
+    "Expected": [
+      "found=Q7BETA22.D",
+      "entry=0 name=Q7ALPHA1.DAT size=128",
+      "entry=1 name=Q7BETA22.D size=256",
+      "entry=2 name=Q7C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "enumerate",
+    "MachineMutation": "184:immediate:1",
+    "MachineMutationFunction": "enumerate"
+  },
+  {
+    "Name": "d3callback",
+    "Group": "directory-wave3",
+    "Sources": ["tests/mir-clobber/direnum3.c"],
+    "FixturePaths": [
+      "tests/mir-clobber/Q7ALPHA1.DAT",
+      "tests/mir-clobber/Q7BETA22.D",
+      "tests/mir-clobber/Q7C.D",
+      "tests/mir-clobber/Q7NOPE.TXT",
+      "tests/mir-clobber/R7IGNORE.DAT"
+    ],
+    "Defines": [],
+    "Expected": [
+      "found=Q7BETA22.D",
+      "entry=0 name=Q7ALPHA1.DAT size=128",
+      "entry=1 name=Q7BETA22.D size=256",
+      "entry=2 name=Q7C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "enumerate",
+    "MachineMutation": "246:identity:120",
+    "MachineMutationFunction": "enumerate"
+  },
+  {
+    "Name": "d3calltype",
+    "Group": "directory-wave3",
+    "Sources": ["tests/mir-clobber/direnum3.c"],
+    "FixturePaths": [
+      "tests/mir-clobber/Q7ALPHA1.DAT",
+      "tests/mir-clobber/Q7BETA22.D",
+      "tests/mir-clobber/Q7C.D",
+      "tests/mir-clobber/Q7NOPE.TXT",
+      "tests/mir-clobber/R7IGNORE.DAT"
+    ],
+    "Defines": [],
+    "Expected": [
+      "found=Q7BETA22.D",
+      "entry=0 name=Q7ALPHA1.DAT size=128",
+      "entry=1 name=Q7BETA22.D size=256",
+      "entry=2 name=Q7C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "enumerate",
+    "MachineMutation": "248:type:1",
+    "MachineMutationFunction": "enumerate"
+  },
+  {
+    "Name": "d3result",
+    "Group": "directory-wave3",
+    "Sources": ["tests/mir-clobber/direnum3.c"],
+    "FixturePaths": [
+      "tests/mir-clobber/Q7ALPHA1.DAT",
+      "tests/mir-clobber/Q7BETA22.D",
+      "tests/mir-clobber/Q7C.D",
+      "tests/mir-clobber/Q7NOPE.TXT",
+      "tests/mir-clobber/R7IGNORE.DAT"
+    ],
+    "Defines": [],
+    "Expected": [
+      "found=Q7BETA22.D",
+      "entry=0 name=Q7ALPHA1.DAT size=128",
+      "entry=1 name=Q7BETA22.D size=256",
+      "entry=2 name=Q7C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "enumerate",
+    "MachineMutation": "13:immediate:63",
+    "MachineMutationFunction": "enumerate"
+  }
+]
