@@ -280,7 +280,7 @@ function Invoke-MirClobberShards(
                 -ParentScope $env:DCC_PROCESS_SCOPE -DrainTimeoutSeconds 1
             $children.Add([pscustomobject]@{
                 Command = $supervised; Index = $index; Manifest = $manifest
-                Budget = $budget; Consumed = $false
+                Budget = $budget
             })
         }
         $pending = @($children)
@@ -289,11 +289,7 @@ function Invoke-MirClobberShards(
                 $supervised = $child.Command
                 if (-not (Test-SupervisedProcessComplete $supervised $child.Budget)) { continue }
                 $remaining = [Math]::Max(0, $child.Budget - $supervised.Clock.Elapsed.TotalSeconds)
-                try {
-                    $result = Complete-SupervisedProcess $supervised -TimeoutSeconds $remaining
-                } finally {
-                    $child.Consumed = $true
-                }
+                $result = Complete-SupervisedProcess $supervised -TimeoutSeconds $remaining
                 $output = $result.Output
                 if ($result.TimedOut) {
                     throw "MIR clobber shard $($child.Index) timed out (exit or output drain):`n$output"
@@ -318,9 +314,7 @@ function Invoke-MirClobberShards(
         $actual.ToArray()
     } finally {
         foreach ($child in $children) {
-            if (-not $child.Consumed) {
-                Stop-SupervisedProcess $child.Command
-            }
+            Stop-SupervisedProcess $child.Command
         }
     }
 }
