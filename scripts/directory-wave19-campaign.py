@@ -249,7 +249,14 @@ def main():
     parser.add_argument("--skip-runtime", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    compiler = root / ("dcc.exe" if os.name == "nt" else "dcc")
+    compiler_name = os.environ.get("DCC")
+    compiler = (
+        Path(compiler_name)
+        if compiler_name
+        else root / ("dcc.exe" if os.name == "nt" else "dcc")
+    )
+    if not compiler.is_absolute():
+        compiler = (root / compiler).resolve()
     dccmake = root / ("dccmake.exe" if os.name == "nt" else "dccmake")
 
     if not args.skip_runtime:

@@ -120,6 +120,8 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
 python3 scripts/endgame-scope-wave18-campaign.py --jobs "$jobs"
+python3 scripts/directory-wave19-campaign.py --jobs "$jobs" --skip-runtime
+python3 scripts/softmax-wave19-campaign.py --jobs "$jobs"
 env -u DCC_MIR_MACHINE_MUTATE DCC_MIR_MACHINE_MUTATE_FUNCTION=main \
     "$DCC" -c "$repo_root/tests/mir-clobber/logserie.c" \
     -o "$build_dir/no-machine-mutation.MAC"
