@@ -2543,6 +2543,102 @@ static int mir_call_ast_is_complete(const struct AstNode *node)
     return 1;
 }
 
+static int mir_unary_operator_is_supported(int operation)
+{
+    return operation == '&' || operation == '*' || operation == '+' ||
+           operation == '-' || operation == '!' || operation == '~' ||
+           operation == TOK_INC || operation == TOK_DEC;
+}
+
+static int mir_binary_operator_is_supported(int operation)
+{
+    return operation == '+' || operation == '-' || operation == '*' ||
+           operation == '/' || operation == '%' || operation == '&' ||
+           operation == '|' || operation == '^' || operation == '<' ||
+           operation == '>' || operation == TOK_EQ || operation == TOK_NE ||
+           operation == TOK_LE || operation == TOK_GE ||
+           operation == TOK_SHL || operation == TOK_SHR;
+}
+
+static int mir_assignment_operator_is_supported(int operation)
+{
+    return operation == '=' ||
+           mir_compound_binary_operator(operation) != 0;
+}
+
+static int mir_expr_ast_is_complete(const struct AstNode *node)
+{
+    int argument;
+
+    if (node == NULL)
+        return 0;
+    switch (node->kind) {
+    case AST_INT_LIT:
+    case AST_FLOAT_LIT:
+    case AST_SIZEOF_TYPE:
+        return 1;
+    case AST_STR_LIT:
+        return node->str_index >= 0 || node->sval != NULL;
+    case AST_IDENT:
+        return node->sval != NULL || node->sym != NULL;
+    case AST_CALL:
+        if (!mir_call_ast_is_complete(node) ||
+            !mir_expr_ast_is_complete(node->a))
+            return 0;
+        for (argument = 0; argument < node->list_len; ++argument)
+            if (!mir_expr_ast_is_complete(node->list[argument]))
+                return 0;
+        return 1;
+    case AST_INDEX:
+    case AST_LOGAND:
+    case AST_LOGOR:
+    case AST_COMMA:
+        return mir_expr_ast_is_complete(node->a) &&
+               mir_expr_ast_is_complete(node->b);
+    case AST_MEMBER:
+        return (node->op == '.' || node->op == TOK_ARROW) &&
+               node->sval != NULL && mir_expr_ast_is_complete(node->a);
+    case AST_UNARY:
+        return mir_unary_operator_is_supported(node->op) &&
+               mir_expr_ast_is_complete(node->a);
+    case AST_POSTFIX:
+        return (node->op == TOK_INC || node->op == TOK_DEC) &&
+               mir_expr_ast_is_complete(node->a);
+    case AST_BINARY:
+        return mir_binary_operator_is_supported(node->op) &&
+               mir_expr_ast_is_complete(node->a) &&
+               mir_expr_ast_is_complete(node->b);
+    case AST_ASSIGN:
+        return mir_assignment_operator_is_supported(node->op) &&
+               mir_expr_ast_is_complete(node->a) &&
+               mir_expr_ast_is_complete(node->b);
+    case AST_COND:
+        return mir_expr_ast_is_complete(node->a) &&
+               mir_expr_ast_is_complete(node->b) &&
+               mir_expr_ast_is_complete(node->c);
+    case AST_CAST:
+        return node->type != 0 && mir_expr_ast_is_complete(node->a);
+    case AST_COMPOUND_LITERAL:
+        return node->sym != NULL;
+    case AST_SIZEOF_EXPR:
+        return mir_expr_ast_is_complete(node->a);
+    default:
+        return 1;
+    }
+}
+
+static int mir_emit_opaque_expr(const struct AstNode *node)
+{
+    struct MirInsn *insn;
+    int value = mir_new_value();
+
+    insn = mir_emit(MIR_OPAQUE);
+    insn->dst = value;
+    insn->type = node->type;
+    insn->immediate = node->kind;
+    return value;
+}
+
 static int mir_lower_expr(const struct AstNode *node)
 {
     struct MirInsn *insn;
@@ -2562,6 +2658,10 @@ static int mir_lower_expr(const struct AstNode *node)
 
     if (node == NULL)
         return -1;
+    if (!mir_expr_ast_is_complete(node))
+        return mir_emit_opaque_expr(node);
+    if (mir_reject_register_address(node))
+        return mir_emit_opaque_expr(node);
     switch (node->kind) {
     case AST_INT_LIT:
         value = mir_new_value();
@@ -2596,8 +2696,6 @@ static int mir_lower_expr(const struct AstNode *node)
     case AST_SIZEOF_EXPR:
         {
             struct Sym *vla = ast_sizeof_whole_vla_sym(node->a);
-            if (mir_reject_register_address(node->a))
-                return -1;
             value = mir_new_value();
             if (vla != NULL && vla->vla_size_offset != 0) {
                 insn = mir_emit(MIR_VLA_SIZE);
@@ -3514,12 +3612,7 @@ static int mir_lower_expr(const struct AstNode *node)
     /* Unsupported expressions remain explicit barriers in the prototype.
      * They still define a value so surrounding supported operations preserve
      * their use/def structure. */
-    value = mir_new_value();
-    insn = mir_emit(MIR_OPAQUE);
-    insn->dst = value;
-    insn->type = node->type;
-    insn->immediate = node->kind;
-    return value;
+    return mir_emit_opaque_expr(node);
 }
 
 static void mir_lower_stmt(const struct AstNode *node)

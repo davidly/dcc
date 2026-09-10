@@ -798,6 +798,208 @@ static void verify_call_lowering_preflight(void)
     }
 }
 
+static int expect_malformed_expr_transaction(
+    const char *name, const struct AstNode *expr)
+{
+    int aggregate_temp_bytes;
+    int call_id;
+    int has_indirect_incdec;
+    int inline_temp_id;
+    int instruction;
+    int label;
+    int value;
+
+    mir_begin_function(name, name, EMIT_SINK_FINAL, 0, 0, 0);
+    instruction = mir.count;
+    value = mir.next_value;
+    label = mir.next_label;
+    call_id = mir.next_call_id;
+    inline_temp_id = mir.next_inline_temp_id;
+    aggregate_temp_bytes = mir.aggregate_temp_bytes;
+    has_indirect_incdec = mir.has_indirect_incdec;
+    mir_capture_discarded_expr(expr);
+    if (mir.count != instruction + 1 || mir.next_value != value + 1 ||
+        mir.next_label != label || mir.next_call_id != call_id ||
+        mir.next_inline_temp_id != inline_temp_id ||
+        mir.aggregate_temp_bytes != aggregate_temp_bytes ||
+        mir.has_indirect_incdec != has_indirect_incdec ||
+        mir.insns[instruction].opcode != MIR_OPAQUE ||
+        mir.insns[instruction].dst != value ||
+        mir.insns[instruction].type != expr->type ||
+        mir.insns[instruction].immediate != expr->kind) {
+        fprintf(stderr, "FAIL malformed expression transaction %s\n", name);
+        return 0;
+    }
+    return 1;
+}
+
+static void verify_expression_lowering_preflight(void)
+{
+    struct AstNode argument;
+    struct AstNode address;
+    struct AstNode assign;
+    struct AstNode base;
+    struct AstNode binary;
+    struct AstNode call;
+    struct AstNode cast;
+    struct AstNode callee;
+    struct AstNode compound_literal;
+    struct AstNode conditional;
+    struct AstNode index;
+    struct AstNode logical;
+    struct AstNode member;
+    struct AstNode operand;
+    struct AstNode postfix;
+    struct AstNode rhs;
+    struct AstNode sizeof_expr;
+    struct AstNode unary;
+    struct AstNode *arguments[1];
+    struct Sym *symbol;
+    struct Sym *register_symbol;
+    int errors_before;
+    int ok = 1;
+
+    memset(&argument, 0, sizeof(argument));
+    memset(&address, 0, sizeof(address));
+    memset(&assign, 0, sizeof(assign));
+    memset(&base, 0, sizeof(base));
+    memset(&binary, 0, sizeof(binary));
+    memset(&call, 0, sizeof(call));
+    memset(&cast, 0, sizeof(cast));
+    memset(&callee, 0, sizeof(callee));
+    memset(&compound_literal, 0, sizeof(compound_literal));
+    memset(&conditional, 0, sizeof(conditional));
+    memset(&index, 0, sizeof(index));
+    memset(&logical, 0, sizeof(logical));
+    memset(&member, 0, sizeof(member));
+    memset(&operand, 0, sizeof(operand));
+    memset(&postfix, 0, sizeof(postfix));
+    memset(&rhs, 0, sizeof(rhs));
+    memset(&sizeof_expr, 0, sizeof(sizeof_expr));
+    memset(&unary, 0, sizeof(unary));
+
+    symbol = add_global("verify_expr_operand", TYPE_INT, SC_GLOBAL);
+    operand.kind = AST_IDENT;
+    operand.type = TYPE_INT;
+    operand.sval = symbol->name;
+    operand.sym = symbol;
+    rhs.kind = AST_INT_LIT;
+    rhs.type = TYPE_INT;
+    rhs.ival = 1;
+
+    unary.kind = AST_UNARY;
+    unary.type = TYPE_INT;
+    unary.op = '-';
+    ok = expect_malformed_expr_transaction(
+        "verify_missing_unary_operand", &unary) && ok;
+
+    binary.kind = AST_BINARY;
+    binary.type = TYPE_INT;
+    binary.op = '?';
+    binary.a = &operand;
+    binary.b = &rhs;
+    ok = expect_malformed_expr_transaction(
+        "verify_invalid_binary_operator", &binary) && ok;
+
+    postfix.kind = AST_POSTFIX;
+    postfix.type = TYPE_INT;
+    postfix.op = '?';
+    postfix.a = &operand;
+    ok = expect_malformed_expr_transaction(
+        "verify_invalid_postfix_operator", &postfix) && ok;
+
+    base = operand;
+    member.kind = AST_MEMBER;
+    member.type = TYPE_INT;
+    member.op = '?';
+    member.a = &base;
+    member.sval = "missing";
+    ok = expect_malformed_expr_transaction(
+        "verify_invalid_member_operator", &member) && ok;
+
+    assign.kind = AST_ASSIGN;
+    assign.type = TYPE_INT;
+    assign.op = '?';
+    assign.a = &member;
+    assign.b = &rhs;
+    ok = expect_malformed_expr_transaction(
+        "verify_invalid_assignment_operator", &assign) && ok;
+
+    index.kind = AST_INDEX;
+    index.type = TYPE_INT;
+    index.a = &operand;
+    ok = expect_malformed_expr_transaction(
+        "verify_missing_index_operand", &index) && ok;
+
+    logical.kind = AST_LOGAND;
+    logical.type = TYPE_INT;
+    logical.a = &operand;
+    ok = expect_malformed_expr_transaction(
+        "verify_missing_logical_operand", &logical) && ok;
+
+    conditional.kind = AST_COND;
+    conditional.type = TYPE_INT;
+    conditional.a = &operand;
+    conditional.b = &rhs;
+    ok = expect_malformed_expr_transaction(
+        "verify_missing_conditional_operand", &conditional) && ok;
+
+    cast.kind = AST_CAST;
+    cast.type = TYPE_INT;
+    ok = expect_malformed_expr_transaction(
+        "verify_missing_cast_operand", &cast) && ok;
+
+    compound_literal.kind = AST_COMPOUND_LITERAL;
+    compound_literal.type = TYPE_INT;
+    ok = expect_malformed_expr_transaction(
+        "verify_missing_compound_object", &compound_literal) && ok;
+
+    callee.kind = AST_IDENT;
+    callee.type = TYPE_INT;
+    callee.sval = "verify_malformed_argument";
+    argument.kind = AST_UNARY;
+    argument.type = TYPE_INT;
+    argument.op = '-';
+    arguments[0] = &argument;
+    call.kind = AST_CALL;
+    call.type = TYPE_INT;
+    call.a = &callee;
+    call.list = arguments;
+    call.list_len = 1;
+    call.list_cap = 1;
+    ok = expect_malformed_expr_transaction(
+        "verify_malformed_call_argument", &call) && ok;
+
+    register_symbol = add_global(
+        "verify_register_argument", TYPE_INT, SC_GLOBAL);
+    register_symbol->is_register = 1;
+    operand.sval = register_symbol->name;
+    operand.sym = register_symbol;
+    address.kind = AST_UNARY;
+    address.type = type_add_ptr(TYPE_INT);
+    address.op = '&';
+    address.a = &operand;
+    arguments[0] = &address;
+    errors_before = g_diag_error_count;
+    ok = expect_malformed_expr_transaction(
+        "verify_register_address_argument", &call) && ok;
+    if (g_diag_error_count != errors_before + 1) {
+        fprintf(stderr, "FAIL register address diagnostic count\n");
+        ok = 0;
+    }
+    g_diag_error_count = errors_before;
+
+    call.list = NULL;
+    sizeof_expr.kind = AST_SIZEOF_EXPR;
+    sizeof_expr.type = TYPE_INT;
+    sizeof_expr.a = &call;
+    ok = expect_malformed_expr_transaction(
+        "verify_malformed_sizeof_operand", &sizeof_expr) && ok;
+
+    if (!ok)
+        ++failures;
+}
+
 static void diamond(void);
 
 static void verify_diamond_edge_liveness(void)
@@ -3860,6 +4062,7 @@ int main(void)
     verify_ast_binary_folds();
     verify_ast_assignment_support();
     verify_call_lowering_preflight();
+    verify_expression_lowering_preflight();
     verify_diamond_edge_liveness();
     verify_immediate_phi_consumer_forwarding();
     verify_call_argument_liveness();
