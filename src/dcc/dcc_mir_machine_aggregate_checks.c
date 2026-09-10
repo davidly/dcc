@@ -2337,6 +2337,7 @@ static int mir_multidim_fixed_memory(
     int offset, int width)
 {
     const struct MirInsn *memory;
+    const struct MirInsn *stored;
     struct Sym *actual_root;
     long actual_offset;
     int address_value;
@@ -2346,9 +2347,15 @@ static int mir_multidim_fixed_memory(
     memory = &mir.insns[instruction];
     if (memory->opcode != opcode ||
         memory->memory_size != width ||
+        type_size(memory->type) != width ||
         memory->memory_flags != 0 ||
         memory->bit_width != 0)
         return 0;
+    if (opcode == MIR_STORE_INDIRECT) {
+        stored = mir_definition(memory->src2);
+        if (stored == NULL || stored->type != memory->type)
+            return 0;
+    }
     address_value = memory->src1;
     return mir_multidim_fixed_address(
                address_value, &actual_root, &actual_offset, 0) &&
@@ -2613,6 +2620,13 @@ static int mir_match_multidim_array_runner(
     static const int grid_cell_indices[] = {551, 563, 575, 587, 601, 618, 635, 652};
     static const int grid_row_indices[] = {554, 566, 578, 590, 604, 621, 638, 655};
     static const int grid_column_indices[] = {556, 568, 580, 592, 606, 623, 640, 657};
+    static const int byte_stores[] = {
+        9, 18, 27, 36, 124, 187, 236, 559, 571, 583, 595
+    };
+    static const int word_stores[] = {
+        170, 174, 223, 227, 258, 266, 274, 282,
+        338, 342, 354, 433, 518, 522, 526
+    };
     static const int i_local_accesses[] = {95, 136, 387, 452};
     static const int j_local_accesses[] = {
         104, 108, 116, 121, 126, 129,
@@ -2657,6 +2671,12 @@ static int mir_match_multidim_array_runner(
         1000, 2000, 3003, 1202, 4242, 4242,
         0, 123, 100, 21, 123, 10, 21, 32, 23
     };
+    static const int failure_argument_types[2] = {
+        TYPE_CHAR | TYPE_PTR, TYPE_INT
+    };
+    static const int success_argument_types[1] = {
+        TYPE_CHAR | TYPE_PTR
+    };
     struct Sym *roots[4];
     struct Sym *function;
     int arguments[3];
@@ -2674,6 +2694,22 @@ static int mir_match_multidim_array_runner(
         if (mir.insns[instruction].opcode != expected_opcodes[instruction])
             return mir_machine_reject(
                 "multidim-array-runner", "opcodes");
+    for (item = 0;
+         item < (int)(sizeof(byte_stores) / sizeof(byte_stores[0]));
+         ++item)
+        if (!mir_packed_scalar_type(
+                mir.insns[byte_stores[item]].type,
+                TYPE_CHAR, 1, 0))
+            return mir_machine_reject(
+                "multidim-array-runner", "byte-store-types");
+    for (item = 0;
+         item < (int)(sizeof(word_stores) / sizeof(word_stores[0]));
+         ++item)
+        if (!mir_packed_scalar_type(
+                mir.insns[word_stores[item]].type,
+                TYPE_INT, 0, 0))
+            return mir_machine_reject(
+                "multidim-array-runner", "word-store-types");
 
     roots[0] = mir_multidim_array_root(1);
     roots[1] = mir_multidim_array_root(251);
@@ -2865,24 +2901,26 @@ static int mir_match_multidim_array_runner(
         const struct MirInsn *call = &mir.insns[check_calls[item]];
         const struct MirInsn *string = &mir.insns[check_strings[item]];
         struct Sym *root = roots[check_roots[item]];
-        long expected;
 
         if (!mir_packed_direct_function(
                 check_calls[item], &function) ||
             call->type != function->type ||
-            call->memory_flags != 0 || call->src1 >= 0 ||
+            call->memory_flags != 0 ||
+            call->src1 != -1 || call->src2 != -1 ||
             !mir_packed_call_arguments(call, 3, arguments) ||
+            !mir_packed_call_argument_types(
+                call, 3, function->proto_types) ||
             arguments[0] != string->dst ||
             arguments[1] != mir.insns[check_actuals[item]].dst ||
             arguments[2] != mir.insns[check_expected[item]].dst ||
             string->opcode != MIR_STRING_ADDRESS ||
             string->immediate < 0 ||
+            string->immediate >= nstrings ||
             !mir_packed_scalar_type(
                 string->type, TYPE_CHAR, 0, 1) ||
-            !mir_machine_constant_value(
-                mir.insns[check_expected[item]].dst,
-                &expected, 0) ||
-            expected != check_values[item] ||
+            !mir_packed_constant(
+                check_expected[item], check_values[item],
+                TYPE_INT, 0) ||
             (item != 0 && function != plan->check_function))
             return mir_machine_reject(
                 "multidim-array-runner", "check-calls");
@@ -3052,29 +3090,29 @@ static int mir_match_multidim_array_runner(
         !mir_multidim_fixed_memory(571, MIR_STORE_INDIRECT, roots[3], 8, 1) ||
         !mir_multidim_fixed_memory(583, MIR_STORE_INDIRECT, roots[3], 13, 1) ||
         !mir_multidim_fixed_memory(595, MIR_STORE_INDIRECT, roots[3], 9, 1) ||
-        !mir_machine_constant_equals(mir.insns[9].src2, 1) ||
-        !mir_machine_constant_equals(mir.insns[18].src2, 15) ||
-        !mir_machine_constant_equals(mir.insns[27].src2, 42) ||
-        !mir_machine_constant_equals(mir.insns[36].src2, 99) ||
-        !mir_machine_constant_equals(mir.insns[258].src2, 1000) ||
-        !mir_machine_constant_equals(mir.insns[266].src2, 2000) ||
-        !mir_machine_constant_equals(mir.insns[274].src2, 3003) ||
-        !mir_machine_constant_equals(mir.insns[282].src2, 1202) ||
-        !mir_machine_constant_equals(mir.insns[559].src2, 10) ||
-        !mir_machine_constant_equals(mir.insns[571].src2, 21) ||
-        !mir_machine_constant_equals(mir.insns[583].src2, 32) ||
-        !mir_machine_constant_equals(mir.insns[595].src2, 23))
+        !mir_packed_constant(8, 1, TYPE_CHAR, 1) ||
+        !mir_packed_constant(17, 15, TYPE_CHAR, 1) ||
+        !mir_packed_constant(26, 42, TYPE_CHAR, 1) ||
+        !mir_packed_constant(35, 99, TYPE_CHAR, 1) ||
+        !mir_packed_constant(257, 1000, TYPE_INT, 0) ||
+        !mir_packed_constant(265, 2000, TYPE_INT, 0) ||
+        !mir_packed_constant(273, 3003, TYPE_INT, 0) ||
+        !mir_packed_constant(281, 1202, TYPE_INT, 0) ||
+        !mir_packed_constant(558, 10, TYPE_CHAR, 1) ||
+        !mir_packed_constant(570, 21, TYPE_CHAR, 1) ||
+        !mir_packed_constant(582, 32, TYPE_CHAR, 1) ||
+        !mir_packed_constant(594, 23, TYPE_CHAR, 1))
         return mir_machine_reject(
             "multidim-array-runner", "initializers");
 
     if (!mir_packed_store(170, 168, 169, 2) ||
         !mir_packed_store(174, 172, 173, 2) ||
-        !mir_machine_constant_equals(mir.insns[170].src2, 2) ||
-        !mir_machine_constant_equals(mir.insns[174].src2, 1) ||
+        !mir_packed_constant(169, 2, TYPE_INT, 0) ||
+        !mir_packed_constant(173, 1, TYPE_INT, 0) ||
         !mir_packed_load(179, 178, TYPE_INT, 0, 2) ||
         mir.insns[180].src1 != mir.insns[176].dst ||
         !mir_packed_store(187, 184, 186, 1) ||
-        !mir_machine_constant_equals(mir.insns[187].src2, 77) ||
+        !mir_packed_constant(186, 77, TYPE_CHAR, 1) ||
         mir.insns[180].src2 != mir.insns[179].dst ||
         !mir_packed_load(183, 182, TYPE_INT, 0, 2) ||
         mir.insns[184].src1 != mir.insns[180].dst ||
@@ -3087,15 +3125,17 @@ static int mir_match_multidim_array_runner(
         mir.insns[213].src2 != mir.insns[212].dst ||
         !mir_packed_store(223, 221, 222, 2) ||
         !mir_packed_store(227, 225, 226, 2) ||
-        !mir_machine_constant_equals(mir.insns[223].src2, 1) ||
-        !mir_machine_constant_equals(mir.insns[227].src2, 3) ||
+        !mir_packed_constant(222, 1, TYPE_INT, 0) ||
+        !mir_packed_constant(226, 3, TYPE_INT, 0) ||
         !mir_packed_direct_function(230, &plan->row_function) ||
         !mir_packed_direct_function(232, &plan->column_function) ||
         plan->row_function == plan->column_function ||
         mir.insns[230].type != plan->row_function->type ||
         mir.insns[232].type != plan->column_function->type ||
-        mir.insns[230].src1 >= 0 ||
-        mir.insns[232].src1 >= 0 ||
+        mir.insns[230].src1 != -1 ||
+        mir.insns[230].src2 != -1 ||
+        mir.insns[232].src1 != -1 ||
+        mir.insns[232].src2 != -1 ||
         mir.insns[230].memory_flags != 0 ||
         mir.insns[232].memory_flags != 0 ||
         !mir_machine_call_has_no_arguments(&mir.insns[230]) ||
@@ -3105,7 +3145,7 @@ static int mir_match_multidim_array_runner(
         mir.insns[233].src1 != mir.insns[231].dst ||
         mir.insns[233].src2 != mir.insns[232].dst ||
         !mir_packed_store(236, 233, 235, 1) ||
-        !mir_machine_constant_equals(mir.insns[236].src2, 55) ||
+        !mir_packed_constant(235, 55, TYPE_CHAR, 1) ||
         !plan->row_function->has_proto ||
         plan->row_function->is_fastcall ||
         plan->row_function->proto_variadic ||
@@ -3123,8 +3163,8 @@ static int mir_match_multidim_array_runner(
 
     if (!mir_packed_store(338, 336, 337, 2) ||
         !mir_packed_store(342, 340, 341, 2) ||
-        !mir_machine_constant_equals(mir.insns[338].src2, 2) ||
-        !mir_machine_constant_equals(mir.insns[342].src2, 2) ||
+        !mir_packed_constant(337, 2, TYPE_INT, 0) ||
+        !mir_packed_constant(341, 2, TYPE_INT, 0) ||
         !mir_packed_load(347, 346, TYPE_INT, 0, 2) ||
         mir.insns[348].src1 != mir.insns[344].dst ||
         mir.insns[348].src2 != mir.insns[347].dst ||
@@ -3132,7 +3172,7 @@ static int mir_match_multidim_array_runner(
         mir.insns[352].src1 != mir.insns[348].dst ||
         mir.insns[352].src2 != mir.insns[351].dst ||
         !mir_packed_store(354, 352, 353, 2) ||
-        !mir_machine_constant_equals(mir.insns[354].src2, 4242) ||
+        !mir_packed_constant(353, 4242, TYPE_INT, 0) ||
         !mir_packed_load(374, 373, TYPE_INT, 0, 2) ||
         mir.insns[375].src1 != mir.insns[371].dst ||
         mir.insns[375].src2 != mir.insns[374].dst ||
@@ -3148,9 +3188,9 @@ static int mir_match_multidim_array_runner(
         !mir_packed_store(518, 516, 517, 2) ||
         !mir_packed_store(522, 520, 521, 2) ||
         !mir_packed_store(526, 524, 525, 2) ||
-        !mir_machine_constant_equals(mir.insns[518].src2, 1) ||
-        !mir_machine_constant_equals(mir.insns[522].src2, 2) ||
-        !mir_machine_constant_equals(mir.insns[526].src2, 3) ||
+        !mir_packed_constant(517, 1, TYPE_INT, 0) ||
+        !mir_packed_constant(521, 2, TYPE_INT, 0) ||
+        !mir_packed_constant(525, 3, TYPE_INT, 0) ||
         !mir_packed_load(533, 532, TYPE_INT, 0, 2) ||
         mir.insns[534].src1 != mir.insns[530].dst ||
         mir.insns[534].src2 != mir.insns[533].dst ||
@@ -3192,14 +3232,20 @@ static int mir_match_multidim_array_runner(
         function != plan->print_function ||
         mir.insns[670].type != plan->print_function->type ||
         mir.insns[677].type != plan->print_function->type ||
-        mir.insns[670].src1 >= 0 ||
-        mir.insns[677].src1 >= 0 ||
+        mir.insns[670].src1 != -1 ||
+        mir.insns[670].src2 != -1 ||
+        mir.insns[677].src1 != -1 ||
+        mir.insns[677].src2 != -1 ||
         mir.insns[670].memory_flags != MIR_CALL_FLAG_VARIADIC ||
         mir.insns[677].memory_flags != MIR_CALL_FLAG_VARIADIC ||
         !mir_packed_call_arguments(&mir.insns[670], 2, arguments) ||
+        !mir_packed_call_argument_types(
+            &mir.insns[670], 2, failure_argument_types) ||
         arguments[0] != mir.insns[666].dst ||
         arguments[1] != mir.insns[668].dst ||
         !mir_packed_call_arguments(&mir.insns[677], 1, arguments) ||
+        !mir_packed_call_argument_types(
+            &mir.insns[677], 1, success_argument_types) ||
         arguments[0] != mir.insns[675].dst ||
         !mir_packed_scalar_type(
             mir.insns[666].type, TYPE_CHAR, 0, 1) ||
@@ -3224,7 +3270,10 @@ static int mir_match_multidim_array_runner(
             "multidim-array-runner", "returns");
     plan->failure_string = (int)mir.insns[666].immediate;
     plan->success_string = (int)mir.insns[675].immediate;
-    if (plan->failure_string < 0 || plan->success_string < 0 ||
+    if (plan->failure_string < 0 ||
+        plan->failure_string >= nstrings ||
+        plan->success_string < 0 ||
+        plan->success_string >= nstrings ||
         plan->failure_string == plan->success_string)
         return mir_machine_reject(
             "multidim-array-runner", "summary-strings");
