@@ -3,7 +3,7 @@
 unsigned char minimax_wave8_guard_before = 0x5a;
 
 #define main minimax_wave8_original_main
-#include "ttt.c"
+#include "../ttt.c"
 #undef main
 
 unsigned char minimax_wave8_guard_after = 0xa5;
