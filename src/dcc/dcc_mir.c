@@ -2514,15 +2514,28 @@ static int mir_compound_binary_operator(int assignment_operator)
     }
 }
 
+static const struct AstNode *mir_call_callee_base(
+    const struct AstNode *callee)
+{
+    while (callee != NULL && callee->kind == AST_UNARY &&
+           callee->op == '*')
+        callee = callee->a;
+    return callee;
+}
+
 static int mir_call_ast_is_complete(const struct AstNode *node)
 {
+    const struct AstNode *callee;
     int argument;
 
     if (node == NULL || node->kind != AST_CALL || node->a == NULL ||
         node->list_len < 0 || node->list_cap < 0 ||
         node->list_len > node->list_cap ||
-        (node->list_len > 0 && node->list == NULL) ||
-        (node->a->kind == AST_IDENT && node->a->sval == NULL))
+        (node->list_len > 0 && node->list == NULL))
+        return 0;
+    callee = mir_call_callee_base(node->a);
+    if (callee == NULL ||
+        (callee->kind == AST_IDENT && callee->sval == NULL))
         return 0;
     for (argument = 0; argument < node->list_len; ++argument)
         if (node->list[argument] == NULL)
@@ -3338,10 +3351,8 @@ static int mir_lower_expr(const struct AstNode *node)
             }
         }
         if (strcmp(call_name, "<indirect>") == 0) {
-            const struct AstNode *callee = node->a;
-            while (callee != NULL && callee->kind == AST_UNARY &&
-                   callee->op == '*')
-                callee = callee->a;
+            const struct AstNode *callee =
+                mir_call_callee_base(node->a);
             call_prototype = ast_indirect_call_proto_sym(node);
             callee_value = mir_lower_expr(callee);
         }

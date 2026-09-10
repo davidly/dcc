@@ -637,7 +637,9 @@ static void verify_call_lowering_preflight(void)
     struct AstNode call;
     struct AstNode callee;
     struct AstNode argument;
+    struct AstNode indirect_callee[2];
     struct AstNode *arguments[1];
+    struct Sym *indirect_symbol;
     int call_id;
     int case_index;
     int instruction;
@@ -646,6 +648,7 @@ static void verify_call_lowering_preflight(void)
     memset(&call, 0, sizeof(call));
     memset(&callee, 0, sizeof(callee));
     memset(&argument, 0, sizeof(argument));
+    memset(indirect_callee, 0, sizeof(indirect_callee));
     call.kind = AST_CALL;
     call.type = TYPE_INT;
     callee.kind = AST_IDENT;
@@ -681,7 +684,73 @@ static void verify_call_lowering_preflight(void)
         }
     }
 
+    indirect_callee[0].kind = AST_UNARY;
+    indirect_callee[0].op = '*';
+    indirect_callee[0].type = type_add_ptr(TYPE_INT);
+    indirect_callee[1].kind = AST_UNARY;
+    indirect_callee[1].op = '*';
+    indirect_callee[1].type = type_add_ptr(TYPE_INT);
+    indirect_callee[1].a = &indirect_callee[0];
+    call.list_len = 0;
+    call.list_cap = 0;
+    call.list = NULL;
+    for (case_index = 0; case_index < 2; ++case_index) {
+        call.a = &indirect_callee[case_index];
+        mir_begin_function(
+            "verify_malformed_indirect_call",
+            "_verify_malformed_indirect_call", EMIT_SINK_FINAL, 0, 0, 0);
+        instruction = mir.count;
+        value = mir.next_value;
+        call_id = mir.next_call_id;
+        mir_capture_discarded_expr(&call);
+        if (mir.count != instruction + 1 || mir.next_value != value + 1 ||
+            mir.next_call_id != call_id ||
+            mir.insns[instruction].opcode != MIR_OPAQUE ||
+            mir.insns[instruction].dst != value ||
+            mir.insns[instruction].type != TYPE_INT ||
+            mir.insns[instruction].immediate != AST_CALL) {
+            fprintf(stderr,
+                    "FAIL malformed indirect call transaction depth %d\n",
+                    case_index + 1);
+            ++failures;
+        }
+    }
+
+    indirect_symbol = add_global(
+        "verify_indirect_callee", type_add_ptr(TYPE_INT), SC_GLOBAL);
+    indirect_symbol->is_funcptr = 1;
+    callee.type = indirect_symbol->type;
+    callee.sval = indirect_symbol->name;
+    callee.sym = indirect_symbol;
+    indirect_callee[0].a = &callee;
+    for (case_index = 0; case_index < 2; ++case_index) {
+        call.a = &indirect_callee[case_index];
+        mir_begin_function(
+            "verify_valid_indirect_call",
+            "_verify_valid_indirect_call", EMIT_SINK_FINAL, 0, 0, 0);
+        instruction = mir.count;
+        value = mir.next_value;
+        call_id = mir.next_call_id;
+        mir_capture_discarded_expr(&call);
+        if (mir.count != instruction + 2 || mir.next_value != value + 2 ||
+            mir.next_call_id != call_id + 1 ||
+            mir.insns[instruction].opcode != MIR_LOAD ||
+            mir.insns[instruction].dst != value ||
+            mir.insns[instruction + 1].opcode != MIR_CALL ||
+            mir.insns[instruction + 1].dst != value + 1 ||
+            mir.insns[instruction + 1].src1 != value ||
+            mir.insns[instruction + 1].secondary_offset != call_id ||
+            strcmp(mir.insns[instruction + 1].name, "<indirect>") != 0) {
+            fprintf(stderr,
+                    "FAIL valid indirect call transaction depth %d\n",
+                    case_index + 1);
+            ++failures;
+        }
+    }
+
     callee.sval = "verify_implicit_call";
+    callee.sym = NULL;
+    callee.type = TYPE_INT;
     call.a = &callee;
     call.list_len = 0;
     call.list_cap = 0;
