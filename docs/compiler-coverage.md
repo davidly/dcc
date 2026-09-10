@@ -115,14 +115,20 @@ requires opcode-specific operands before spilled allocation indexing, and
 fully validates both current reordered endgame-scope opcode layouts. The
 endgame controls use the shared clobber runner rather than a private harness.
 
+The following wave executes 6,528 exact leaf configurations. It rejects
+missing or unresolved spilled branch targets before frame planning and adds
+additive-subscript, Fortran-fatal, and long-index proof campaigns. Static and
+collision-mangled Fortran print/exit functions now use canonical assembler
+names, and the long-index controls run through the shared inventory.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,389 / 4,389 | 100.00% |
-| Lines | 179,082 / 191,532 | 93.50% |
-| Native branch outcomes | 92,709 / 146,412 | 63.32% |
-| Regions | 161,559 / 171,916 | 93.98% |
+| Functions | 4,409 / 4,409 | 100.00% |
+| Lines | 179,611 / 192,054 | 93.52% |
+| Native branch outcomes | 93,083 / 147,006 | 63.32% |
+| Regions | 162,201 / 172,551 | 94.00% |
 
-The raw ledger has 53,456 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,676 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload

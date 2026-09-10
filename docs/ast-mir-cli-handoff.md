@@ -145,9 +145,16 @@ closing 38 sanitizer-reproduced malformed-input paths while preserving valid
 void-call and void-return sentinels. Endgame tests were moved from a private
 runner into the shared coverage inventory.
 
-Latest integrated totals: 4,389/4,389 functions, 179,082/191,532 lines
-(93.50%), 92,709/146,412 native branch outcomes (63.32%), and
-161,559/171,916 regions (93.98%). The raw uncovered ledger is 53,456.
+The next wave raises the exact inventory to 6,528 configurations with
+additive-subscript, Fortran-fatal, and long-index proof campaigns. Missing and
+unresolved branch targets now reject before spilled frame planning. Fortran
+fatal emission now uses canonical assembler names for static or mangled print
+and exit callees; long-index tests were migrated from a private script into the
+shared coverage inventory.
+
+Latest integrated totals: 4,409/4,409 functions, 179,611/192,054 lines
+(93.52%), 93,083/147,006 native branch outcomes (63.32%), and
+162,201/172,551 regions (94.00%). The raw uncovered ledger is 53,676.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -159,7 +166,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `b847b62e` (`ci: build all registered MIR host tests`).
+  `1497ca3d` (`Fix Fortran fatal symbol emission`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -212,7 +219,11 @@ parallel-wave summary for the current measurement.
   - `cd9cd9c1` — square-grid proof controls;
   - `930bf5b0` / `3eab3f44` — endgame-scope proof and shared campaign; and
   - `b847b62e` — CI now builds every registered MIR host-test target before
-    CTest on Linux, macOS, and Windows.
+    CTest on Linux, macOS, and Windows;
+  - `2b8ab7bb` — transactional spilled branch-target preflight;
+  - `af620931` — additive-subscript proof controls;
+  - `9beb9817` / `1497ca3d` — Fortran-fatal proofs and symbol-aware calls; and
+  - `8aabd5bd` / `acac351c` — long-index proof and shared campaign.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
