@@ -99,6 +99,9 @@ set(diagnostic "")
 file(WRITE "{self.trace.as_posix()}/${{mutation}}.start"
     "${{CMAKE_CURRENT_SOURCE_DIR}}\\n${{CMAKE_CURRENT_BINARY_DIR}}\\n${{DCC_RUNTIME_OUTPUT_DIRECTORY}}\\n")
 configure_file(configuration.h.in configuration.h @ONLY)
+if(NOT EXISTS "${{CMAKE_CURRENT_SOURCE_DIR}}/../../tests/host/mir_scalar_dag.c")
+    message(FATAL_ERROR "Auxiliary host test was not copied")
+endif()
 add_executable(dcc ../../tests/host/mir_verify.c)
 set_target_properties(dcc PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${{DCC_RUNTIME_OUTPUT_DIRECTORY}}")
 add_executable(mir-verify-test ../../tests/host/mir_verify.c)
@@ -185,6 +188,9 @@ int main(int argc, char **argv) {
 #endif
 }
 ''')
+        (self.repo / "tests/host/mir_scalar_dag.c").write_text(
+            "/* Auxiliary host test copied into mutation workspaces. */\n"
+        )
 
     def run_fixture(self, jobs=None, expected_exit=0):
         output = self.workspace / "output with spaces"

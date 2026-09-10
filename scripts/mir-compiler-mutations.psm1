@@ -126,7 +126,9 @@ function Invoke-MirMutationWorker(
         New-Item -ItemType Directory -Path "$Workspace/src", "$Workspace/tests/host",
             "$Workspace/include", "$Workspace/bin", "$Workspace/output" | Out-Null
         Copy-Item -LiteralPath (Join-Path $RepoRoot "src/dcc") -Destination "$Workspace/src/dcc" -Recurse
-        Copy-Item -LiteralPath (Join-Path $RepoRoot "tests/host/mir_verify.c") -Destination "$Workspace/tests/host/mir_verify.c"
+        Get-ChildItem -LiteralPath (Join-Path $RepoRoot "tests/host") `
+            -Filter "*.c" -File |
+            Copy-Item -Destination "$Workspace/tests/host"
         Get-ChildItem -LiteralPath $RepoRoot -Filter "*.h" -File |
             Copy-Item -Destination "$Workspace/include"
         $result.phase = "mutate"
