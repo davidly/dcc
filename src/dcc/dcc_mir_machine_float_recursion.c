@@ -454,6 +454,21 @@ static int mir_machine_same_global_byte_access(
            access_symbol == symbol && access_offset == offset;
 }
 
+static int mir_machine_byte_math_local_access(
+    const struct MirInsn *insn, int size)
+{
+    return mir_machine_named_nonvolatile(insn) &&
+        insn->memory_size == size && insn->bit_width == 0;
+}
+
+static int mir_machine_byte_math_signed_int_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        ((type & 15) == 0 || (type & 15) == TYPE_INT) &&
+        (type & TYPE_UNSIGNED) == 0 &&
+        type_size(type) == 2;
+}
+
 static void mir_emit_leaf_dest(MirStream *out,int off)
 {
     mir_stream_puts("\tld l,(ix+4)\n\tld h,(ix+5)\n",out);
@@ -6273,6 +6288,25 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         { 157, 201 }, { 163, 174 }, { 173, 200 },
         { 179, 190 }, { 189, 199 }
     };
+    static const int accumulator_members[] = {
+        16, 94, 124, 135, 153, 166, 182, 192, 205, 215
+    };
+    static const int accumulator_loads[] = {
+        17, 95, 125, 136, 167, 183, 193, 206, 216
+    };
+    static const int flag_members[] = {
+        26, 101, 112, 122, 203, 213
+    };
+    static const int op_loads[] = {
+        30, 39, 63, 72, 88, 160, 176
+    };
+    static const int rhs_loads[] = {
+        65, 77, 97, 126, 168, 184, 194
+    };
+    static const int byte_stores[] = { 9, 81, 84, 110 };
+    static const int truth_values[] = {
+        13, 32, 41, 49, 53, 61, 74, 90, 118, 132, 150, 162, 178
+    };
     const struct MirInsn *op = &mir.insns[1];
     const struct MirInsn *rhs = &mir.insns[2];
     const struct MirInsn *op_store = &mir.insns[9];
@@ -6308,6 +6342,65 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         if (mir.insns[edge_pairs[edge][0]].label !=
             mir.insns[edge_pairs[edge][1]].label)
             return 0;
+    for (instruction = 0;
+         instruction <
+             (int)(sizeof(accumulator_members) /
+                   sizeof(accumulator_members[0]));
+         ++instruction)
+        if (mir.insns[accumulator_members[instruction]].type !=
+            (TYPE_PTR | TYPE_CHAR | TYPE_UNSIGNED))
+            return mir_machine_reject(
+                "byte-math-flags", "byte-signedness");
+    for (instruction = 0;
+         instruction <
+             (int)(sizeof(accumulator_loads) /
+                   sizeof(accumulator_loads[0]));
+         ++instruction)
+        if (mir.insns[accumulator_loads[instruction]].type != op->type)
+            return mir_machine_reject(
+                "byte-math-flags", "byte-signedness");
+    for (instruction = 0;
+         instruction <
+             (int)(sizeof(flag_members) / sizeof(flag_members[0]));
+         ++instruction)
+        if (mir.insns[flag_members[instruction]].type !=
+            (TYPE_PTR | TYPE_BOOL))
+            return mir_machine_reject(
+                "byte-math-flags", "flag-type");
+    for (instruction = 0;
+         instruction < (int)(sizeof(op_loads) / sizeof(op_loads[0]));
+         ++instruction)
+        if (mir.insns[op_loads[instruction]].type != op->type ||
+            !mir_machine_byte_math_local_access(
+                &mir.insns[op_loads[instruction]], 0))
+            return mir_machine_reject(
+                "byte-math-flags", "op-access");
+    for (instruction = 0;
+         instruction < (int)(sizeof(rhs_loads) / sizeof(rhs_loads[0]));
+         ++instruction)
+        if (mir.insns[rhs_loads[instruction]].type != rhs->type ||
+            !mir_machine_byte_math_local_access(
+                &mir.insns[rhs_loads[instruction]], 0))
+            return mir_machine_reject(
+                "byte-math-flags", "rhs-access");
+    for (instruction = 0;
+         instruction <
+             (int)(sizeof(byte_stores) / sizeof(byte_stores[0]));
+         ++instruction)
+        if (!mir_machine_byte_math_local_access(
+                &mir.insns[byte_stores[instruction]], 1))
+            return mir_machine_reject(
+                "byte-math-flags", "byte-store");
+    if (!mir_machine_byte_math_local_access(&mir.insns[106], 2))
+        return mir_machine_reject("byte-math-flags", "wide-store");
+    for (instruction = 0;
+         instruction <
+             (int)(sizeof(truth_values) / sizeof(truth_values[0]));
+         ++instruction)
+        if (!mir_machine_byte_math_signed_int_type(
+                mir.insns[truth_values[instruction]].type))
+            return mir_machine_reject(
+                "byte-math-flags", "flag-truth");
     if ((op->type & 15) != TYPE_CHAR ||
         (op->type & TYPE_UNSIGNED) == 0 ||
         type_ptr_depth(op->type) != 0 ||
@@ -6356,7 +6449,11 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         !plan->compare_function->is_defined ||
         plan->compare_function->storage != SC_FUNC ||
         plan->compare_function->is_funcptr ||
+        plan->compare_function->is_fastcall ||
         plan->compare_function->is_noreturn ||
+        plan->compare_function->type != compare_call->type ||
+        type_ptr_depth(plan->compare_function->type) != 0 ||
+        (plan->compare_function->type & 15) != TYPE_VOID ||
         (compare_call->memory_flags &
          (MIR_CALL_FLAG_VARIADIC |
           MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
@@ -6431,7 +6528,11 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         !plan->decimal_function->is_defined ||
         plan->decimal_function->storage != SC_FUNC ||
         plan->decimal_function->is_funcptr ||
+        plan->decimal_function->is_fastcall ||
         plan->decimal_function->is_noreturn ||
+        plan->decimal_function->type != decimal_call->type ||
+        type_ptr_depth(plan->decimal_function->type) != 0 ||
+        (plan->decimal_function->type & 15) != TYPE_VOID ||
         (decimal_call->memory_flags &
          (MIR_CALL_FLAG_VARIADIC |
           MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
@@ -6498,6 +6599,7 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         mir.insns[99].immediate != '+' ||
         mir.insns[99].src1 != mir.insns[96].dst ||
         mir.insns[99].src2 != mir.insns[98].dst ||
+        mir.insns[99].type != mir.insns[96].type ||
         !mir_machine_global_byte_access(
             100, 101, 102, MIR_LOAD_INDIRECT,
             &state, &plan->carry_offset) ||
@@ -6519,6 +6621,7 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         mir.insns[108].src1 != mir.insns[104].dst ||
         mir.insns[108].type != rhs->type ||
         !mir_machine_unobservable_local_store(result_store) ||
+        !mir_machine_byte_math_local_access(result_store, 1) ||
         result_store->src1 != mir.insns[108].dst)
         return 0;
 
@@ -6527,9 +6630,11 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
             plan->state, plan->carry_offset) ||
         !mir_machine_constant_equals(mir.insns[113].dst, 0) ||
         !mir_machine_constant_equals(mir.insns[115].dst, 65280) ||
+        mir.insns[115].type != mir.insns[104].type ||
         mir.insns[116].immediate != '&' ||
         mir.insns[116].src1 != mir.insns[104].dst ||
         mir.insns[116].src2 != mir.insns[115].dst ||
+        mir.insns[116].type != mir.insns[104].type ||
         mir.insns[118].immediate != TOK_NE ||
         mir.insns[118].src1 != mir.insns[113].dst ||
         mir.insns[118].src2 != mir.insns[116].dst ||
@@ -6607,6 +6712,7 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         mir.insns[170].src2 != mir.insns[169].dst ||
         mir.insns[171].immediate != 0 ||
         mir.insns[171].src1 != mir.insns[170].dst ||
+        mir.insns[171].type != op->type ||
         !mir_machine_same_global_byte_access(
             165, 166, 172, MIR_STORE_INDIRECT,
             plan->state, plan->accumulator_offset) ||
@@ -6632,6 +6738,7 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         mir.insns[186].src2 != mir.insns[185].dst ||
         mir.insns[187].immediate != 0 ||
         mir.insns[187].src1 != mir.insns[186].dst ||
+        mir.insns[187].type != op->type ||
         !mir_machine_same_global_byte_access(
             181, 182, 188, MIR_STORE_INDIRECT,
             plan->state, plan->accumulator_offset) ||
@@ -6648,6 +6755,7 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         mir.insns[196].src2 != mir.insns[195].dst ||
         mir.insns[197].immediate != 0 ||
         mir.insns[197].src1 != mir.insns[196].dst ||
+        mir.insns[197].type != op->type ||
         !mir_machine_same_global_byte_access(
             191, 192, 198, MIR_STORE_INDIRECT,
             plan->state, plan->accumulator_offset) ||
@@ -6687,6 +6795,22 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         mir.insns[219].src2 != mir.insns[218].dst)
         return 0;
 
+    if (mir.insns[22].src1 >= 0 || mir.insns[68].src1 >= 0)
+        return mir_machine_reject("byte-math-flags", "return-value");
+    if (plan->state->size <= 0 ||
+        plan->accumulator_offset < 0 ||
+        plan->negative_offset < 0 ||
+        plan->overflow_offset < 0 ||
+        plan->decimal_offset < 0 ||
+        plan->zero_offset < 0 ||
+        plan->carry_offset < 0 ||
+        plan->accumulator_offset >= plan->state->size ||
+        plan->negative_offset >= plan->state->size ||
+        plan->overflow_offset >= plan->state->size ||
+        plan->decimal_offset >= plan->state->size ||
+        plan->zero_offset >= plan->state->size ||
+        plan->carry_offset >= plan->state->size)
+        return mir_machine_reject("byte-math-flags", "state-bounds");
     if (plan->accumulator_offset == plan->negative_offset ||
         plan->accumulator_offset == plan->overflow_offset ||
         plan->accumulator_offset == plan->decimal_offset ||
