@@ -44,7 +44,7 @@ int main(void)
     local_sample.left = 0x33;
     local_sample.right = 0xcc;
     qualified_pointer->signed_byte = -4.75f;
-    qualified_pointer->unsigned_byte = 260.75f;
+    qualified_pointer->unsigned_byte = 4.75f;
     qualified_pointer->signed_word = -8L;
     qualified_pointer->unsigned_word = 260L;
 
