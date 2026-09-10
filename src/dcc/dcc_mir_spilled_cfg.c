@@ -31205,12 +31205,17 @@ static int mir_spilled_dimensions_valid(void)
     int64_t effective_local_bytes;
     int64_t base_frame_bytes;
 
+    /* Value and label IDs are created while building instructions. The
+     * instruction buffer capacity is therefore a conservative representation
+     * bound and prevents sparse corrupted IDs from driving multi-GB tables. */
     if (mir.count < 0 || mir.count > mir.capacity ||
         mir.next_value < 0 || mir.next_label < 0 ||
         mir.object_count < 0 ||
         mir.object_count >
             (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
         (mir.count > 0 && mir.insns == NULL) ||
+        mir.next_value > mir.capacity ||
+        mir.next_label > mir.capacity ||
         (size_t)mir.next_value > SIZE_MAX / sizeof(int) ||
         (size_t)mir.next_label > SIZE_MAX / sizeof(int) ||
         mir.next_value > (INT_MAX - 2 * mir.object_count) / 2)
@@ -31316,63 +31321,71 @@ static int mir_spilled_value_operands_valid(int *invalid_instruction)
 
 static int mir_spilled_cfg_metadata_valid(int *invalid_instruction)
 {
-    int instruction;
-
-    for (instruction = 0; instruction < mir.count; ++instruction) {
-        const struct MirInsn *insn = &mir.insns[instruction];
-        int successor;
-
-        if (insn->object < -1 || insn->object >= mir.object_count ||
-            insn->successor_count < 0 || insn->successor_count > 2) {
-            if (invalid_instruction != NULL)
-                *invalid_instruction = instruction;
-            return 0;
-        }
-        for (successor = 0; successor < insn->successor_count; ++successor)
-            if (insn->successors[successor] < 0 ||
-                insn->successors[successor] >= mir.count) {
-                if (invalid_instruction != NULL)
-                    *invalid_instruction = instruction;
-                return 0;
-            }
-    }
-    return 1;
-}
-
-static int mir_spilled_branch_targets_valid(int *invalid_instruction)
-{
-    unsigned char *labels;
+    int *label_instructions;
+    int label;
     int instruction;
     int valid = 1;
 
-    /* Reject malformed probes before frame planning allocates slots or
-     * emission consumes labels and writes a partial candidate stream. */
-    labels = (unsigned char *)calloc(
-        (size_t)(mir.next_label > 0 ? mir.next_label : 1), 1);
-    if (labels == NULL)
-        fatal("out of memory validating MIR branch targets");
+    label_instructions = (int *)malloc(
+        (size_t)(mir.next_label > 0 ? mir.next_label : 1) *
+        sizeof(*label_instructions));
+    if (label_instructions == NULL)
+        fatal("out of memory validating MIR spilled CFG metadata");
+    for (label = 0; label < mir.next_label; ++label)
+        label_instructions[label] = -1;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
-        if (insn->opcode == MIR_LABEL &&
-            insn->label >= 0 && insn->label < mir.next_label)
-            labels[insn->label] = 1;
+        if (insn->object < -1 || insn->object >= mir.object_count ||
+            insn->successor_count < 0 || insn->successor_count > 2) {
+            valid = 0;
+            break;
+        }
+        if (insn->opcode == MIR_LABEL) {
+            if (insn->label < 0 || insn->label >= mir.next_label ||
+                label_instructions[insn->label] >= 0) {
+                valid = 0;
+                break;
+            }
+            label_instructions[insn->label] = instruction;
+        }
     }
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = 0; valid && instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
+        int expected[2];
+        int expected_count = 0;
+        int successor;
 
-        if (insn->opcode != MIR_JUMP &&
-            insn->opcode != MIR_BRANCH_FALSE)
-            continue;
-        if (insn->label >= 0 && insn->label < mir.next_label &&
-            labels[insn->label])
-            continue;
-        if (invalid_instruction != NULL)
-            *invalid_instruction = instruction;
-        valid = 0;
-        break;
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE) {
+            if (insn->label < 0 || insn->label >= mir.next_label ||
+                label_instructions[insn->label] < 0) {
+                valid = 0;
+                break;
+            }
+            expected[expected_count++] =
+                label_instructions[insn->label];
+        }
+        if (insn->opcode == MIR_BRANCH_FALSE &&
+            instruction + 1 < mir.count)
+            expected[expected_count++] = instruction + 1;
+        else if (insn->opcode != MIR_JUMP &&
+                 insn->opcode != MIR_RETURN &&
+                 instruction + 1 < mir.count)
+            expected[expected_count++] = instruction + 1;
+        if (insn->successor_count != expected_count) {
+            valid = 0;
+            break;
+        }
+        for (successor = 0; successor < expected_count; ++successor)
+            if (insn->successors[successor] != expected[successor]) {
+                valid = 0;
+                break;
+            }
     }
-    free(labels);
+    if (!valid && invalid_instruction != NULL)
+        *invalid_instruction = instruction;
+    free(label_instructions);
     return valid;
 }
 
@@ -31745,9 +31758,6 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         if (!mir_spilled_value_operands_valid(&invalid_instruction))
             return mir_scalar_cfg_preflight_reject(
                 "value-operand", invalid_instruction);
-        if (!mir_spilled_branch_targets_valid(&invalid_instruction))
-            return mir_scalar_cfg_preflight_reject(
-                "branch-target", invalid_instruction);
         if (!mir_spilled_cfg_metadata_valid(&invalid_instruction))
             return mir_scalar_cfg_preflight_reject(
                 "cfg-metadata", invalid_instruction);

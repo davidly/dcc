@@ -67,6 +67,31 @@ static void setup(int count, int values, int labels)
     mir.insns[count - 1].src1 = 0;
 }
 
+static void prepare_test_cfg_metadata(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *insn = &mir.insns[instruction];
+        int target;
+
+        insn->successor_count = 0;
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE) {
+            target = mir_find_label(insn->label);
+            if (target >= 0)
+                insn->successors[insn->successor_count++] = target;
+        }
+        if (insn->opcode == MIR_BRANCH_FALSE &&
+            instruction + 1 < mir.count)
+            insn->successors[insn->successor_count++] = instruction + 1;
+        else if (insn->opcode != MIR_JUMP &&
+                 insn->opcode != MIR_RETURN &&
+                 instruction + 1 < mir.count)
+            insn->successors[insn->successor_count++] = instruction + 1;
+    }
+}
+
 static void expect_verification(const char *name, int valid)
 {
     if (mir_verify_and_dump() != valid) {
@@ -1630,6 +1655,7 @@ static int spilled_candidate_result(void)
     int result;
 
     mir_invalidate_use_cache();
+    prepare_test_cfg_metadata();
     stream = mir_stream_open();
     if (stream == NULL) {
         fprintf(stderr, "FAIL spilled preflight stream allocation\n");
@@ -2800,29 +2826,43 @@ static void verify_spilled_branch_target_preflight_transaction(void)
 
 static void verify_spilled_cfg_metadata_preflight_transaction(void)
 {
+    struct CfgMutation {
+        const char *name;
+        int successor_count;
+        int successor0;
+        int successor1;
+    };
+    static const struct CfgMutation mutations[] = {
+        { "wrong branch target", 2, 4, 3 },
+        { "missing branch fallthrough", 1, 5, 3 },
+        { "wrong branch fallthrough predecessor", 2, 5, 4 },
+        { "excess branch successor count", 3, 5, 3 }
+    };
     MirStream *control;
-    MirStream *retry;
     char control_text[2048];
     char retry_text[2048];
     size_t control_bytes;
     size_t retry_bytes;
     int first_label;
     int result;
+    size_t mutation;
     int ok = 1;
 
-    setup(6, 2, 2);
-    mir.insns[2].opcode = MIR_BINARY;
-    mir.insns[2].dst = 1;
+    setup(8, 3, 2);
+    mir.insns[2].opcode = MIR_BRANCH_FALSE;
     mir.insns[2].src1 = 0;
-    mir.insns[2].src2 = 0;
-    mir.insns[2].immediate = '+';
-    mir.insns[2].secondary_offset = TYPE_INT;
-    mir.insns[3].opcode = MIR_BRANCH_FALSE;
-    mir.insns[3].src1 = 1;
-    mir.insns[3].label = 1;
-    mir.insns[4].opcode = MIR_LABEL;
-    mir.insns[4].label = 1;
-    mir.insns[5].src1 = 1;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_CONST;
+    mir.insns[3].dst = 1;
+    mir.insns[3].immediate = 11;
+    mir.insns[4].opcode = MIR_RETURN;
+    mir.insns[4].src1 = 1;
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 1;
+    mir.insns[6].opcode = MIR_CONST;
+    mir.insns[6].dst = 2;
+    mir.insns[6].immediate = 22;
+    mir.insns[7].src1 = 2;
     if (!mir_verify_and_dump()) {
         fprintf(stderr, "FAIL spilled CFG metadata verification control\n");
         ++failures;
@@ -2830,12 +2870,10 @@ static void verify_spilled_cfg_metadata_preflight_transaction(void)
         return;
     }
     control = mir_stream_open();
-    retry = mir_stream_open();
-    if (control == NULL || retry == NULL) {
+    if (control == NULL) {
         fprintf(stderr, "FAIL spilled CFG metadata stream allocation\n");
         ++failures;
         mir_stream_close(control);
-        mir_stream_close(retry);
         clear_liveness();
         return;
     }
@@ -2849,32 +2887,167 @@ static void verify_spilled_cfg_metadata_preflight_transaction(void)
         control_text, 1, sizeof(control_text), control);
     ok = ok && control_bytes < sizeof(control_text);
 
-    label_id = first_label;
-    mir.insns[3].successor_count = 3;
-    mir_extrn_begin_attempt();
-    result = mir_try_emit_spilled_scalar_cfg(retry);
-    ok = ok && result == 0 &&
-         mir_stream_tell(retry) == 0 && mir_stream_size(retry) == 0 &&
-         label_id == first_label &&
-         mir_spilled_cfg_emitted_frame_bytes() == 0;
+    for (mutation = 0;
+         mutation < sizeof(mutations) / sizeof(mutations[0]); ++mutation) {
+        MirStream *retry = mir_stream_open();
+        int mutation_ok = retry != NULL;
 
-    mir.insns[3].successor_count = 2;
-    mir_extrn_begin_attempt();
-    result = mir_try_emit_spilled_scalar_cfg(retry);
-    ok = ok && result == 1;
-    mir_stream_rewind(retry);
-    retry_bytes = mir_stream_read(
-        retry_text, 1, sizeof(retry_text), retry);
-    ok = ok && retry_bytes < sizeof(retry_text) &&
-         retry_bytes == control_bytes &&
-         memcmp(retry_text, control_text, control_bytes) == 0;
+        if (!mutation_ok)
+            break;
+        label_id = first_label;
+        mir.insns[2].successor_count = mutations[mutation].successor_count;
+        mir.insns[2].successors[0] = mutations[mutation].successor0;
+        mir.insns[2].successors[1] = mutations[mutation].successor1;
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_spilled_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 0 &&
+            mir_stream_tell(retry) == 0 && mir_stream_size(retry) == 0 &&
+            label_id == first_label &&
+            mir_spilled_cfg_emitted_frame_bytes() == 0;
+
+        mir.insns[2].successor_count = 2;
+        mir.insns[2].successors[0] = 5;
+        mir.insns[2].successors[1] = 3;
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_spilled_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 1;
+        mir_stream_rewind(retry);
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text) &&
+            retry_bytes == control_bytes &&
+            memcmp(retry_text, control_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr, "FAIL spilled CFG metadata %s\n",
+                    mutations[mutation].name);
+        ok = ok && mutation_ok;
+        mir_stream_close(retry);
+    }
+
+    setup(7, 2, 2);
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_CONST;
+    mir.insns[3].dst = 1;
+    mir.insns[3].immediate = 33;
+    mir.insns[4].opcode = MIR_RETURN;
+    mir.insns[4].src1 = 1;
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 1;
+    mir.insns[6].src1 = 0;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL spilled jump metadata verification control\n");
+        ++failures;
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    {
+        MirStream *jump_control = mir_stream_open();
+        MirStream *retry = mir_stream_open();
+        char jump_control_text[2048];
+        size_t jump_control_bytes = 0;
+        int mutation_ok = jump_control != NULL && retry != NULL;
+
+        if (mutation_ok) {
+            label_id = first_label;
+            result = mir_try_emit_spilled_scalar_cfg(jump_control);
+            mutation_ok = result == 1;
+            mir_stream_rewind(jump_control);
+            jump_control_bytes = mir_stream_read(
+                jump_control_text, 1, sizeof(jump_control_text),
+                jump_control);
+            mutation_ok = mutation_ok &&
+                jump_control_bytes < sizeof(jump_control_text);
+
+            label_id = first_label;
+            mir.insns[2].successors[0] = 3;
+            mir_extrn_begin_attempt();
+            result = mir_try_emit_spilled_scalar_cfg(retry);
+            mutation_ok = mutation_ok && result == 0 &&
+                mir_stream_tell(retry) == 0 &&
+                mir_stream_size(retry) == 0 &&
+                label_id == first_label;
+            mir.insns[2].successors[0] = 5;
+            result = mir_try_emit_spilled_scalar_cfg(retry);
+            mutation_ok = mutation_ok && result == 1;
+            mir_stream_rewind(retry);
+            retry_bytes = mir_stream_read(
+                retry_text, 1, sizeof(retry_text), retry);
+            mutation_ok = mutation_ok &&
+                retry_bytes == jump_control_bytes &&
+                memcmp(retry_text, jump_control_text,
+                       jump_control_bytes) == 0;
+        }
+        mir_stream_close(jump_control);
+        mir_stream_close(retry);
+        if (!mutation_ok)
+            fprintf(stderr, "FAIL spilled CFG metadata wrong jump target\n");
+        ok = ok && mutation_ok;
+    }
     if (!ok) {
         fprintf(stderr,
                 "FAIL spilled CFG metadata preflight transaction\n");
         ++failures;
     }
     mir_stream_close(control);
-    mir_stream_close(retry);
+    clear_liveness();
+}
+
+static void verify_spilled_dimension_preflight_transaction(void)
+{
+    int invalid_dimensions[2];
+    MirStream *stream;
+    int first_label;
+    int saved_next_label;
+    int saved_next_value;
+    int result;
+    int mutation;
+    int ok = 1;
+
+    setup(3, 1, 1);
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL spilled dimension verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    stream = mir_stream_open();
+    if (stream == NULL) {
+        fprintf(stderr, "FAIL spilled dimension stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    saved_next_label = mir.next_label;
+    saved_next_value = mir.next_value;
+    invalid_dimensions[0] = mir.capacity + 1;
+    invalid_dimensions[1] = INT_MAX;
+
+    for (mutation = 0; mutation < 2; ++mutation) {
+        mir.next_label = invalid_dimensions[mutation];
+        result = mir_try_emit_spilled_scalar_cfg(stream);
+        ok = ok && result == 0 &&
+             mir_stream_tell(stream) == 0 && mir_stream_size(stream) == 0 &&
+             label_id == first_label;
+        mir.next_label = saved_next_label;
+
+        mir.next_value = invalid_dimensions[mutation];
+        result = mir_try_emit_spilled_scalar_cfg(stream);
+        ok = ok && result == 0 &&
+             mir_stream_tell(stream) == 0 && mir_stream_size(stream) == 0 &&
+             label_id == first_label;
+        mir.next_value = saved_next_value;
+    }
+
+    result = mir_try_emit_spilled_scalar_cfg(stream);
+    ok = ok && result == 1 && mir_stream_size(stream) > 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL spilled dimension preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(stream);
     clear_liveness();
 }
 
@@ -3371,6 +3544,7 @@ int main(void)
     verify_aggregate_call_name_preflight();
     verify_spilled_branch_target_preflight_transaction();
     verify_spilled_cfg_metadata_preflight_transaction();
+    verify_spilled_dimension_preflight_transaction();
     verify_spilled_vla_size_preflight_transaction();
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
