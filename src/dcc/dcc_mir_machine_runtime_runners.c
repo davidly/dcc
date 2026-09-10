@@ -661,29 +661,6 @@ static int mir_machine_single_call_argument(
     return count == 1;
 }
 
-static int mir_machine_three_call_arguments(
-    const struct MirInsn *call, int arguments[3])
-{
-    int count = 0;
-    int instruction;
-
-    arguments[0] = arguments[1] = arguments[2] = -1;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
-        const struct MirInsn *arg = &mir.insns[instruction];
-        int index;
-
-        if (arg->opcode != MIR_ARG ||
-            arg->secondary_offset != call->secondary_offset)
-            continue;
-        index = (int)arg->immediate;
-        if (index < 0 || index >= 3 || arguments[index] >= 0)
-            return 0;
-        arguments[index] = arg->src1;
-        ++count;
-    }
-    return count == 3;
-}
-
 static int mir_machine_two_call_arguments(
     const struct MirInsn *call, int arguments[2])
 {
@@ -1035,6 +1012,72 @@ static int mir_call_runner_local_offset(
     return 1;
 }
 
+enum MirExecRecursionArgumentKind {
+    MIR_EXEC_RECURSION_WORD = 1,
+    MIR_EXEC_RECURSION_CHAR_POINTER,
+    MIR_EXEC_RECURSION_CHAR_POINTER_POINTER
+};
+
+static int mir_exec_recursion_argument_type(int type, int kind)
+{
+    if (kind == MIR_EXEC_RECURSION_WORD)
+        return mir_memory_runner_word_type(type, 0);
+    return (type & 15) == TYPE_CHAR &&
+           type_size(type) == 2 &&
+           type_ptr_depth(type) ==
+               (kind == MIR_EXEC_RECURSION_CHAR_POINTER ? 1 : 2);
+}
+
+static struct Sym *mir_exec_recursion_typed_call(
+    int instruction, int variadic, int prototype_arguments,
+    int argument_count, const int *argument_kinds,
+    int *arguments, char call_name[64])
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function = mir_call_recovery_function(
+        instruction, variadic, prototype_arguments, 0, call_name);
+    int argument;
+    int scan;
+
+    if (function == NULL || function->is_fastcall ||
+        !mir_memory_runner_word_type(function->type, 0) ||
+        call->type != function->type ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments))
+        return NULL;
+    for (argument = 0; argument < prototype_arguments; ++argument)
+        if (!mir_exec_recursion_argument_type(
+                function->proto_types[argument],
+                argument_kinds[argument]))
+            return NULL;
+    for (argument = 0; argument < argument_count; ++argument) {
+        const struct MirInsn *arg = NULL;
+
+        for (scan = 0; scan < mir.count; ++scan)
+            if (mir.insns[scan].opcode == MIR_ARG &&
+                mir.insns[scan].secondary_offset ==
+                    call->secondary_offset &&
+                mir.insns[scan].immediate == argument) {
+                arg = &mir.insns[scan];
+                break;
+            }
+        if (arg == NULL || arg->src1 != arguments[argument] ||
+            !mir_exec_recursion_argument_type(
+                arg->type, argument_kinds[argument]))
+            return NULL;
+    }
+    return function;
+}
+
+static int mir_exec_recursion_word_memory(
+    const struct MirInsn *insn, int memory_size)
+{
+    return mir_machine_named_nonvolatile(insn) &&
+           mir_memory_runner_word_type(insn->type, 0) &&
+           insn->memory_size == memory_size &&
+           insn->memory_flags == 0;
+}
+
 static int mir_match_exec_recursion_schedule(
     struct MirExecRecursionSchedule *plan)
 {
@@ -1077,6 +1120,29 @@ static int mir_match_exec_recursion_schedule(
     int exec_arguments[2];
     int recursive_arguments[3];
     int print_arguments[4];
+    static const int execv_argument_kinds[2] = {
+        MIR_EXEC_RECURSION_CHAR_POINTER,
+        MIR_EXEC_RECURSION_CHAR_POINTER_POINTER
+    };
+    static const int exec_argument_kinds[2] = {
+        MIR_EXEC_RECURSION_CHAR_POINTER,
+        MIR_EXEC_RECURSION_CHAR_POINTER
+    };
+    static const int recursive_argument_kinds[3] = {
+        MIR_EXEC_RECURSION_WORD,
+        MIR_EXEC_RECURSION_WORD,
+        MIR_EXEC_RECURSION_WORD
+    };
+    static const int base_print_argument_kinds[2] = {
+        MIR_EXEC_RECURSION_CHAR_POINTER,
+        MIR_EXEC_RECURSION_WORD
+    };
+    static const int recursive_print_argument_kinds[4] = {
+        MIR_EXEC_RECURSION_CHAR_POINTER,
+        MIR_EXEC_RECURSION_WORD,
+        MIR_EXEC_RECURSION_WORD,
+        MIR_EXEC_RECURSION_WORD
+    };
     int depth_offset;
     int marker_offset;
     int mode_offset;
@@ -1084,6 +1150,7 @@ static int mir_match_exec_recursion_schedule(
     int vector_offset_again;
     int local_check_offset;
     int result_offset;
+    char print_name[64];
     struct Sym *failure_count;
 
     memset(plan, 0, sizeof(*plan));
@@ -1133,6 +1200,8 @@ static int mir_match_exec_recursion_schedule(
         !mir_machine_constant_equals(mir.insns[14].dst, 0) ||
         mir.insns[17].src1 != mir.insns[15].dst ||
         mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[17].memory_size != 2 ||
+        mir.insns[17].memory_flags != 0 ||
         mir.insns[20].src1 != mir.insns[18].dst ||
         mir.insns[20].src2 != mir.insns[19].dst ||
         mir.insns[20].immediate != 2 ||
@@ -1140,21 +1209,21 @@ static int mir_match_exec_recursion_schedule(
         !mir_machine_constant_equals(mir.insns[19].dst, 1) ||
         !mir_machine_constant_equals(mir.insns[21].dst, 0) ||
         mir.insns[23].src1 != mir.insns[20].dst ||
-        mir.insns[23].src2 != mir.insns[21].dst)
+        mir.insns[23].src2 != mir.insns[21].dst ||
+        mir.insns[23].memory_size != 2 ||
+        mir.insns[23].memory_flags != 0)
         return mir_machine_reject(
             "exec-recursion-schedule", "argument-vector");
-    plan->execv_function = mir_call_recovery_function(
-        28, 0, 2, 0, plan->execv_name);
-    plan->exec_function = mir_call_recovery_function(
-        38, 0, 2, 0, plan->exec_name);
+    plan->execv_function = mir_exec_recursion_typed_call(
+        28, 0, 2, 2, execv_argument_kinds,
+        execv_arguments, plan->execv_name);
+    plan->exec_function = mir_exec_recursion_typed_call(
+        38, 0, 2, 2, exec_argument_kinds,
+        exec_arguments, plan->exec_name);
     if (plan->execv_function == NULL ||
         plan->exec_function == NULL ||
-        !mir_machine_two_call_arguments(
-            &mir.insns[28], execv_arguments) ||
         execv_arguments[0] != mir.insns[24].dst ||
         execv_arguments[1] != mir.insns[26].dst ||
-        !mir_machine_two_call_arguments(
-            &mir.insns[38], exec_arguments) ||
         exec_arguments[0] != mir.insns[34].dst ||
         exec_arguments[1] != mir.insns[36].dst ||
         mir.insns[16].immediate != mir.insns[24].immediate ||
@@ -1176,17 +1245,18 @@ static int mir_match_exec_recursion_schedule(
         mir.insns[46].label != mir.insns[60].label)
         return mir_machine_reject(
             "exec-recursion-schedule", "base-result");
-    plan->print_function = mir_call_recovery_function(
-        51, 1, 1, 0, plan->print_name);
+    plan->print_function = mir_exec_recursion_typed_call(
+        51, 1, 1, 2, base_print_argument_kinds,
+        print_arguments, plan->print_name);
     if (plan->print_function == NULL ||
-        !mir_machine_two_call_arguments(
-            &mir.insns[51], print_arguments) ||
         print_arguments[0] != mir.insns[47].dst ||
         print_arguments[1] != mir.insns[49].dst)
         return mir_machine_reject(
             "exec-recursion-schedule", "base-report");
     failure_count = find_global(mir.insns[52].name);
     if (failure_count == NULL || failure_count->is_volatile ||
+        !mir_exec_recursion_word_memory(&mir.insns[52], 0) ||
+        !mir_exec_recursion_word_memory(&mir.insns[55], 2) ||
         !mir_machine_same_location(
             &mir.insns[52], &mir.insns[55]) ||
         !mir_machine_constant_equals(mir.insns[53].dst, 1) ||
@@ -1205,6 +1275,7 @@ static int mir_match_exec_recursion_schedule(
         mir.insns[67].src1 != mir.insns[65].dst ||
         mir.insns[67].src2 != mir.insns[66].dst ||
         mir.insns[67].immediate != '+' ||
+        !mir_exec_recursion_word_memory(&mir.insns[69], 2) ||
         !mir_call_runner_local_offset(
             &mir.insns[69], &local_check_offset) ||
         mir.insns[69].src1 != mir.insns[67].dst ||
@@ -1215,16 +1286,16 @@ static int mir_match_exec_recursion_schedule(
         mir.insns[72].immediate != '-')
         return mir_machine_reject(
             "exec-recursion-schedule", "recursive-state");
-    plan->recursive_function = mir_call_recovery_function(
-        78, 0, 3, 0, plan->recursive_name);
+    plan->recursive_function = mir_exec_recursion_typed_call(
+        78, 0, 3, 3, recursive_argument_kinds,
+        recursive_arguments, plan->recursive_name);
     if (plan->recursive_function == NULL ||
-        !mir_machine_three_call_arguments(
-            &mir.insns[78], recursive_arguments) ||
         recursive_arguments[0] != mir.insns[72].dst ||
         recursive_arguments[1] != mir.insns[74].dst ||
         recursive_arguments[2] != mir.insns[76].dst ||
         strcmp(mir.insns[74].name, mir.insns[2].name) ||
         strcmp(mir.insns[76].name, mir.insns[3].name) ||
+        !mir_exec_recursion_word_memory(&mir.insns[80], 2) ||
         !mir_call_runner_local_offset(
             &mir.insns[80], &result_offset) ||
         mir.insns[80].src1 != mir.insns[78].dst ||
@@ -1236,14 +1307,16 @@ static int mir_match_exec_recursion_schedule(
         mir.insns[84].label != mir.insns[102].label)
         return mir_machine_reject(
             "exec-recursion-schedule", "recursive-call");
-    if (find_global(mir.insns[93].name) != plan->print_function ||
-        strcmp(mir.insns[93].base_name, plan->print_name) ||
-        !mir_machine_call_arguments(
-            &mir.insns[93], 4, print_arguments) ||
+    if (mir_exec_recursion_typed_call(
+            93, 1, 1, 4, recursive_print_argument_kinds,
+            print_arguments, print_name) != plan->print_function ||
+        strcmp(print_name, plan->print_name) ||
         print_arguments[0] != mir.insns[85].dst ||
         print_arguments[1] != mir.insns[87].dst ||
         print_arguments[2] != mir.insns[89].dst ||
         print_arguments[3] != mir.insns[78].dst ||
+        !mir_exec_recursion_word_memory(&mir.insns[94], 0) ||
+        !mir_exec_recursion_word_memory(&mir.insns[97], 2) ||
         !mir_machine_same_location(
             &mir.insns[52], &mir.insns[94]) ||
         !mir_machine_same_location(
@@ -1258,6 +1331,7 @@ static int mir_match_exec_recursion_schedule(
             "exec-recursion-schedule", "result-report");
     if (!mir_machine_same_location(
             &mir.insns[69], &mir.insns[103]) ||
+        !mir_exec_recursion_word_memory(&mir.insns[103], 0) ||
         strcmp(mir.insns[104].name, mir.insns[2].name) ||
         strcmp(mir.insns[105].name, mir.insns[1].name) ||
         mir.insns[106].src1 != mir.insns[104].dst ||
@@ -1270,14 +1344,16 @@ static int mir_match_exec_recursion_schedule(
         mir.insns[108].label != mir.insns[128].label)
         return mir_machine_reject(
             "exec-recursion-schedule", "local-check");
-    if (find_global(mir.insns[119].name) != plan->print_function ||
-        strcmp(mir.insns[119].base_name, plan->print_name) ||
-        !mir_machine_call_arguments(
-            &mir.insns[119], 4, print_arguments) ||
+    if (mir_exec_recursion_typed_call(
+            119, 1, 1, 4, recursive_print_argument_kinds,
+            print_arguments, print_name) != plan->print_function ||
+        strcmp(print_name, plan->print_name) ||
         print_arguments[0] != mir.insns[109].dst ||
         print_arguments[1] != mir.insns[111].dst ||
         print_arguments[2] != mir.insns[115].dst ||
         print_arguments[3] != mir.insns[117].dst ||
+        !mir_exec_recursion_word_memory(&mir.insns[120], 0) ||
+        !mir_exec_recursion_word_memory(&mir.insns[123], 2) ||
         !mir_machine_same_location(
             &mir.insns[52], &mir.insns[120]) ||
         !mir_machine_same_location(
@@ -1288,6 +1364,7 @@ static int mir_match_exec_recursion_schedule(
         mir.insns[123].src1 != mir.insns[122].dst ||
         !mir_machine_constant_equals(mir.insns[125].dst, 64537) ||
         mir.insns[126].src1 != mir.insns[125].dst ||
+        !mir_exec_recursion_word_memory(&mir.insns[129], 0) ||
         !mir_machine_same_location(
             &mir.insns[80], &mir.insns[129]) ||
         mir.insns[130].src1 != mir.insns[129].dst)
@@ -11500,6 +11577,7 @@ int mir_try_emit_runtime_runners(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_exec_recursion_schedule(&exec_recursion)) {
+            mir_machine_accept("exec-recursion-schedule");
             mir_emit_exec_recursion_schedule(out, &exec_recursion);
             return 1;
         }
