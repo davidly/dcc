@@ -141,6 +141,38 @@
     "MachineMutationFunction": "probe_do_while"
   },
   {
+    "Name": "dw5cond3",
+    "Group": "do-while-wave5",
+    "Sources": ["tests/mir-clobber/dw5pf.c"],
+    "Defines": [],
+    "Expected": ["dw5 oracle calls=8 hash=3280 failures=0"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "constant-do-while-schedule",
+    "ExactFunction": "probe_do_while",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "probe_do_while",
+    "MachineMutation": "92:identity:120",
+    "MachineMutationFunction": "probe_do_while"
+  },
+  {
+    "Name": "dw5cond4",
+    "Group": "do-while-wave5",
+    "Sources": ["tests/mir-clobber/dw5pf.c"],
+    "Defines": [],
+    "Expected": ["dw5 oracle calls=8 hash=3280 failures=0"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "constant-do-while-schedule",
+    "ExactFunction": "probe_do_while",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "probe_do_while",
+    "MachineMutation": "147:identity:120",
+    "MachineMutationFunction": "probe_do_while"
+  },
+  {
     "Name": "dw5debug",
     "Group": "do-while-wave5-debug",
     "Sources": ["tests/mir-clobber/dw5pf.c"],

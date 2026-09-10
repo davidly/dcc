@@ -5404,6 +5404,7 @@ static int mir_match_constant_do_while_schedule(
         !mir_machine_same_location(&mir.insns[77], execution_store) ||
         !mir_machine_same_location(&mir.insns[78], condition_store) ||
         !mir_machine_same_location(&mir.insns[81], condition_store) ||
+        !mir_machine_same_location(&mir.insns[92], condition_store) ||
         mir.insns[76].src1 != mir.insns[74].dst ||
         mir.insns[76].src2 != mir.insns[75].dst ||
         mir.insns[76].immediate != '+' ||
@@ -5464,6 +5465,7 @@ static int mir_match_constant_do_while_schedule(
         !mir_machine_same_location(&mir.insns[130], condition_store) ||
         !mir_machine_same_location(&mir.insns[141], hit_store) ||
         !mir_machine_same_location(&mir.insns[144], hit_store) ||
+        !mir_machine_same_location(&mir.insns[147], condition_store) ||
         mir.insns[125].src1 != mir.insns[123].dst ||
         mir.insns[125].src2 != mir.insns[124].dst ||
         mir.insns[125].immediate != '+' ||
