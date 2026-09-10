@@ -1235,6 +1235,9 @@ static int mir_match_exec_recursion_schedule(
             &mir.insns[30], &mir.insns[40]) ||
         !mir_machine_same_location(
             &mir.insns[30], &mir.insns[44]) ||
+        !mir_exec_recursion_word_memory(&mir.insns[30], 2) ||
+        !mir_exec_recursion_word_memory(&mir.insns[40], 2) ||
+        !mir_exec_recursion_word_memory(&mir.insns[44], 0) ||
         mir.insns[30].src1 != mir.insns[28].dst ||
         mir.insns[40].src1 != mir.insns[38].dst ||
         !mir_machine_constant_equals(mir.insns[43].dst, 65535) ||

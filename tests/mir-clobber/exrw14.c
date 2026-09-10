@@ -29,7 +29,11 @@ static int rw14_recurse(int depth, int marker, int use_execv)
     int result;
 
     if (0 == depth) {
+#ifdef RW14_VOLATILE_BASE_RESULT
+        volatile int r;
+#else
         int r;
+#endif
         if (use_execv) {
             char *av[2];
             av[0] = "RW14MISS";

@@ -163,6 +163,89 @@
     "MachineMutationFunction": "rw14_recurse"
   },
   {
+    "Name": "erw14-base-execv-store",
+    "Group": "exec-runtime-wave14",
+    "Sources": ["tests/mir-clobber/exrw14.c"],
+    "Defines": [],
+    "Expected": [
+      "RW14 oracle=3550463 first=12345 second=22222 exec=1 execv=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 2048,
+    "StackModes": [false],
+    "ExactTemplate": "exec-recursion-schedule",
+    "ExactFunction": "rw14_recurse",
+    "RequireRejected": true,
+    "MachineMutation": "30:memory_size:1",
+    "MachineMutationFunction": "rw14_recurse"
+  },
+  {
+    "Name": "erw14-base-exec-store",
+    "Group": "exec-runtime-wave14",
+    "Sources": ["tests/mir-clobber/exrw14.c"],
+    "Defines": [],
+    "Expected": [
+      "RW14 oracle=3550463 first=12345 second=22222 exec=1 execv=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 2048,
+    "StackModes": [false],
+    "ExactTemplate": "exec-recursion-schedule",
+    "ExactFunction": "rw14_recurse",
+    "RequireRejected": true,
+    "MachineMutation": "40:memory_size:1",
+    "MachineMutationFunction": "rw14_recurse"
+  },
+  {
+    "Name": "erw14-base-result-load",
+    "Group": "exec-runtime-wave14",
+    "Sources": ["tests/mir-clobber/exrw14.c"],
+    "Defines": [],
+    "Expected": [
+      "RW14 oracle=3550463 first=12345 second=22222 exec=1 execv=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 2048,
+    "StackModes": [false],
+    "ExactTemplate": "exec-recursion-schedule",
+    "ExactFunction": "rw14_recurse",
+    "RequireRejected": true,
+    "MachineMutation": "44:type:1",
+    "MachineMutationFunction": "rw14_recurse"
+  },
+  {
+    "Name": "erw14-base-result-width",
+    "Group": "exec-runtime-wave14",
+    "Sources": ["tests/mir-clobber/exrw14.c"],
+    "Defines": [],
+    "Expected": [
+      "RW14 oracle=3550463 first=12345 second=22222 exec=1 execv=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 2048,
+    "StackModes": [false],
+    "ExactTemplate": "exec-recursion-schedule",
+    "ExactFunction": "rw14_recurse",
+    "RequireRejected": true,
+    "MachineMutation": "44:memory_size:1",
+    "MachineMutationFunction": "rw14_recurse"
+  },
+  {
+    "Name": "erw14-volatile-base-result",
+    "Group": "exec-runtime-wave14",
+    "Sources": ["tests/mir-clobber/exrw14.c"],
+    "Defines": ["RW14_VOLATILE_BASE_RESULT"],
+    "Expected": [
+      "RW14 oracle=3550463 first=12345 second=22222 exec=1 execv=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 2048,
+    "StackModes": [false],
+    "ExactTemplate": "exec-recursion-schedule",
+    "ExactFunction": "rw14_recurse",
+    "RequireRejected": true
+  },
+  {
     "Name": "erw14-volatile-side-effect",
     "Group": "exec-runtime-wave14",
     "Sources": ["tests/mir-clobber/exrw14.c"],
