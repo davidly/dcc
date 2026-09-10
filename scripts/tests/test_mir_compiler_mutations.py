@@ -38,21 +38,29 @@ class CompilerMutationTests(unittest.TestCase):
         for name in ("run-mir-compiler-mutations.ps1",
                      "run-mir-compiler-mutation-worker.ps1",
                      "mir-compiler-mutations.psm1",
+                     "test-mir-matcher-restoration.ps1",
                      "process-supervision.psm1", "process-supervisor.ps1"):
             shutil.copyfile(ROOT / "scripts" / name, self.repo / "scripts" / name)
         (self.repo / "scripts/new-mir-fuzz-source.ps1").write_text(
             'param($OutputPath, $Seed, $Programs)\n'
             'Set-Content -LiteralPath $OutputPath -Value "/* probe */"\n')
-        self.anchor_text = "\n".join(
-            m["Before"] for m in self.mutations if "Before" in m
-        ) + """
+        self.source_text = {}
+        for mutation in self.mutations:
+            if "Before" not in mutation:
+                continue
+            source = mutation.get("Source", "src/dcc/dcc_mir.c")
+            self.source_text.setdefault(source, []).append(mutation["Before"])
+        self.source_text["src/dcc/dcc_mir.c"].append("""
 static int mir_promote_objects(void)
 mir_invalidate_use_cache();
 mir_invalidate_use_cache();
 mir_invalidate_use_cache();
 struct MirAllocationSummary
-"""
-        (self.source / "dcc_mir.c").write_text(self.anchor_text)
+""")
+        for relative, fragments in self.source_text.items():
+            path = self.repo / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(fragments))
         self.configure_fixture()
 
     def tearDown(self):
@@ -73,10 +81,18 @@ if(NOT found EQUAL -1)
     set(diagnostic "{diagnostic}")
 endif()
 """)
+        reads = []
+        for index, relative in enumerate(self.source_text):
+            reads.append(
+                f'file(READ "${{CMAKE_CURRENT_SOURCE_DIR}}/'
+                f'{Path(relative).name}" source{index})\n'
+                f'string(APPEND text "${{source{index}}}\\n")\n'
+            )
         (self.source / "CMakeLists.txt").write_text(f"""
 cmake_minimum_required(VERSION 3.10)
 project(mutation_fixture C)
-file(READ "${{CMAKE_CURRENT_SOURCE_DIR}}/dcc_mir.c" text)
+set(text "")
+{''.join(reads)}
 set(mutation "baseline")
 set(diagnostic "")
 {''.join(tests)}
@@ -144,6 +160,19 @@ int main(int argc, char **argv) {
         puts("dcc: fatal: MIR use-cache mismatch");
         return 1;
     }
+    if (getenv("DCC_MIR_MACHINE_MUTATE")) {
+        done();
+        if (!strncmp(MUTATION, "allocation-", 11)) {
+            puts("; MIR machine function=main template=allocation-lifetime-runner accept=emitted");
+            puts("; MIR selection function=main selector=scheduled-machine-cfg result=mir");
+        } else if (strstr(getenv("DCC_MIR_MACHINE_MUTATE"), "memory_size")) {
+            puts("; MIR machine function=main template=allocation-lifetime-runner reject=large-writes");
+            puts("; MIR selection function=main selector=spilled-scalar-cfg result=mir");
+        } else {
+            puts("; MIR machine function=main template=allocation-lifetime-runner reject=first-allocation");
+            puts("; MIR selection function=main selector=spilled-scalar-cfg result=mir");
+        }
+    }
     for (i = 1; i + 1 < argc; ++i) {
         if (!strcmp(argv[i], "-o")) {
             FILE *f = fopen(argv[i + 1], "w");
@@ -178,12 +207,15 @@ int main(int argc, char **argv) {
                          [m["Name"] for m in self.mutations])
         self.assertFalse(list(output.glob("work-*")))
         self.assertFalse((self.workspace / "forbidden-normal-coverage").exists())
-        self.assertEqual((self.source / "dcc_mir.c").read_text(), self.anchor_text)
+        for relative, fragments in self.source_text.items():
+            self.assertEqual((self.repo / relative).read_text(), "\n".join(fragments))
         return results
 
     def test_default_serial_and_parallel_are_equal_and_bounded(self):
         serial = self.run_fixture()
-        self.assertEqual([r["outcome"] for r in serial], ["passed"] + ["killed"] * 9)
+        self.assertEqual(
+            [r["outcome"] for r in serial],
+            ["passed"] + ["killed"] * (len(self.mutations) - 1))
         self.assert_concurrency(1)
         for path in self.trace.iterdir():
             path.unlink()
@@ -224,8 +256,9 @@ int main(int argc, char **argv) {
 
     def test_survivors_invalid_exits_builds_and_worker_errors_are_recorded(self):
         self.configure_fixture("mixed")
-        self.anchor_text += "\nphi_value = phi->dst;\n"
-        (self.source / "dcc_mir.c").write_text(self.anchor_text)
+        self.source_text["src/dcc/dcc_mir.c"].append("phi_value = phi->dst;")
+        (self.source / "dcc_mir.c").write_text(
+            "\n".join(self.source_text["src/dcc/dcc_mir.c"]))
         worker = self.repo / "scripts/run-mir-compiler-mutation-worker.ps1"
         worker.write_text(worker.read_text().replace(
             '$ErrorActionPreference = "Stop"',
@@ -244,15 +277,21 @@ int main(int argc, char **argv) {
             "callback-identity": "invalid", "phi-edge-liveness": "invalid",
             "call-argument-liveness": "killed", "phi-consumer-value": "invalid",
             "promotion-cache": "killed",
+            "allocation-first-result": "killed",
+            "allocation-store-width": "killed",
         })
 
     def test_classifier_requires_exact_diagnostic_exit_and_completion(self):
         module = (ROOT / "scripts/mir-compiler-mutations.psm1").as_posix()
         command = f"Import-Module '{module}'; " + r'''
 $hostMutation = @(Get-MirCompilerMutations)[1]
-$cacheMutation = @(Get-MirCompilerMutations)[9]
+$cacheMutation = Get-MirCompilerMutations |
+    Where-Object Name -eq "promotion-cache"
+$matcherMutation = Get-MirCompilerMutations |
+    Where-Object Name -eq "allocation-first-result"
 $hostLog = "FAIL branch value cannot escape join`nMIR verifier failures=1`n"
 $cacheLog = "; MIR CACHE MISMATCH mir_definition function=f value=1 cached=2 uncached=-1`ndcc: fatal: MIR use-cache mismatch`n"
+$matcherLog = "FAIL allocation matcher accepted mutated first result`nMIR matcher restoration failures=1`n"
 foreach ($case in @(
     @($hostMutation, $hostLog, 1, $false, "killed"),
     @($hostMutation, $hostLog, 8, $false, "invalid"),
@@ -264,7 +303,11 @@ foreach ($case in @(
     @($cacheMutation, $cacheLog, 134, $false, "invalid"),
     @($cacheMutation, $cacheLog, 1, $true, "invalid"),
     @($cacheMutation, $cacheLog.Replace("mir_definition", "other"), 1, $false, "invalid"),
-    @($cacheMutation, "", 0, $false, "survived")
+    @($cacheMutation, "", 0, $false, "survived"),
+    @($matcherMutation, $matcherLog, 1, $false, "killed"),
+    @($matcherMutation, $matcherLog, 134, $false, "invalid"),
+    @($matcherMutation, $matcherLog.Replace("first result", "other"), 1, $false, "invalid"),
+    @($matcherMutation, "MIR matcher restoration failures=0`n", 0, $false, "survived")
 )) {
     $actual = Get-MirMutationOutcome @{
         Output = $case[1]; ExitCode = $case[2]; TimedOut = $case[3]
@@ -410,7 +453,7 @@ $result = Complete-MirMutationProcess $child 1
         self.assertNotEqual(completed.returncode, 0)
         self.assertLess(time.monotonic() - started, 8)
         results = json.loads((output / "results.json").read_text())
-        self.assertEqual(len(results), 10)
+        self.assertEqual(len(results), len(self.mutations))
         self.assertTrue(all(result["outcome"] == "invalid" for result in results))
         if not exit_worker:
             self.assertEqual(results[0]["detail"], "Worker timed out; see worker.log")

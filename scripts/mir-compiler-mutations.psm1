@@ -13,7 +13,27 @@ function Get-MirCompilerMutations {
         @{ Name = "phi-edge-liveness"; Before = 'value == phi->src1'; After = 'value == phi->src2'; ExpectedFailure = 'FAIL PHI values must be live only on their own edges' },
         @{ Name = "call-argument-liveness"; Before = 'insn_is_call && mir_call_uses_value(insn, value)'; After = '0 && insn_is_call && mir_call_uses_value(insn, value)'; ExpectedFailure = 'FAIL argument must remain live through its matching call' },
         @{ Name = "phi-consumer-value"; Before = 'phi_value = phi->dst;'; After = 'phi_value = -1;'; ExpectedFailure = 'FAIL immediate PHI consumer forwarding' },
-        @{ Name = "promotion-cache"; CompileProbe = $true }
+        @{ Name = "promotion-cache"; CompileProbe = $true },
+        @{
+            Name = "allocation-first-result"
+            Source = "src/dcc/dcc_mir_machine_validation_runners.c"
+            Before = 'mir.insns[5].immediate != 0 ||'
+            After = '0 && mir.insns[5].immediate != 0 ||'
+            MatcherProbe = "5:immediate:999"
+            MatcherReject = "first-allocation"
+            ExpectedFailure =
+                "FAIL allocation matcher accepted mutated first result"
+        },
+        @{
+            Name = "allocation-store-width"
+            Source = "src/dcc/dcc_mir_machine_validation_runners.c"
+            Before = 'mir.insns[22].memory_size != 1 ||'
+            After = '0 && mir.insns[22].memory_size != 1 ||'
+            MatcherProbe = "22:memory_size:3"
+            MatcherReject = "large-writes"
+            ExpectedFailure =
+                "FAIL allocation matcher accepted mutated store width"
+        }
     )
 }
 
@@ -64,10 +84,17 @@ function Get-MirMutationOutcome($Execution, $Mutation) {
     } else {
         $assertion = $Execution.Output -cmatch (
             '(?m)^' + [regex]::Escape($Mutation.ExpectedFailure) + '\r?$')
-        $failed = $Execution.Output -cmatch '(?m)^MIR verifier failures=[1-9]\d*\r?$'
+        $failureLabel = if ($Mutation.MatcherProbe) {
+            "MIR matcher restoration failures"
+        } else {
+            "MIR verifier failures"
+        }
+        $failed = $Execution.Output -cmatch (
+            '(?m)^' + [regex]::Escape($failureLabel) + '=[1-9]\d*\r?$')
         if ($Execution.ExitCode -eq 1 -and $assertion -and $failed) { return "killed" }
         if ($Execution.ExitCode -eq 0 -and
-            $Execution.Output -cmatch '(?m)^MIR verifier failures=0\r?$' -and
+            $Execution.Output -cmatch (
+                '(?m)^' + [regex]::Escape($failureLabel) + '=0\r?$') -and
             $Execution.Output -cnotmatch '(?m)^FAIL ' -and -not $failed) {
             return "survived"
         }
@@ -103,7 +130,12 @@ function Invoke-MirMutationWorker(
         Get-ChildItem -LiteralPath $RepoRoot -Filter "*.h" -File |
             Copy-Item -Destination "$Workspace/include"
         $result.phase = "mutate"
-        $sourcePath = "$Workspace/src/dcc/dcc_mir.c"
+        $source = if ($mutation.Source) {
+            $mutation.Source
+        } else {
+            "src/dcc/dcc_mir.c"
+        }
+        $sourcePath = Join-Path $Workspace $source
         $text = [System.IO.File]::ReadAllText($sourcePath)
         if ($mutation.Before) {
             if ([regex]::Matches($text, [regex]::Escape($mutation.Before)).Count -ne 1) {
@@ -166,6 +198,54 @@ function Invoke-MirMutationWorker(
             if ($execution.TimedOut -or $execution.ExitCode -ne 0 -or
                 -not (Test-Path -LiteralPath "$Workspace/output/PROBE.MAC")) {
                 $result.detail = "Unmutated cache probe failed; see compile.log"
+                return
+            }
+        }
+        $matcherProbes = if ($Name -eq "baseline") {
+            @(Get-MirCompilerMutations | Where-Object { $_.MatcherProbe })
+        } elseif ($mutation.MatcherProbe) {
+            @($mutation)
+        } else {
+            @()
+        }
+        foreach ($probe in $matcherProbes) {
+            $result.phase = "matcher"
+            $compiler = Find-MirMutationBinary "$Workspace/bin" "dcc"
+            $probeLog = if ($Name -eq "baseline") {
+                Join-Path $OutputDirectory (
+                    "matcher-$($probe.Name).log")
+            } else {
+                Join-Path $OutputDirectory "test.log"
+            }
+            $execution = Complete-MirMutationProcess (Start-MirMutationProcess `
+                (Get-Process -Id $PID).Path @(
+                    "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                    (Join-Path $RepoRoot "scripts/test-mir-matcher-restoration.ps1"),
+                    "-Compiler", $compiler,
+                    "-Source", (Join-Path $RepoRoot "tests/tmalloch.c"),
+                    "-IncludeDirectory", "$Workspace/include",
+                    "-OutputPath", "$Workspace/output/TMALLOCH.MAC",
+                    "-MachineMutation", $probe.MatcherProbe,
+                    "-ExpectedReject", $probe.MatcherReject,
+                    "-ExpectedFailure", $probe.ExpectedFailure
+                ) "$Workspace/output" $probeLog @{
+                    DCC_MIR_REQUIRE_COMPLETE = "1"
+                    DCC_MIR_REQUIRE_EMIT = "1"
+                    DCC_MIR_CACHE_VERIFY = "1"
+                    DCC_MIR_MACHINE_REPORT = "1"
+                    DCC_MIR_SELECT_REPORT = "1"
+                } -ParentScope $processScope) 60
+            $result.exitCode = $execution.ExitCode
+            if ($Name -eq "baseline") {
+                if ($execution.TimedOut -or $execution.ExitCode -ne 0) {
+                    $result.detail =
+                        "Unmutated matcher restoration probe failed; see " +
+                        [System.IO.Path]::GetFileName($probeLog)
+                    return
+                }
+            } else {
+                $result.outcome = Get-MirMutationOutcome $execution $probe
+                $result.detail = "Matcher restoration probe; see test.log"
                 return
             }
         }
