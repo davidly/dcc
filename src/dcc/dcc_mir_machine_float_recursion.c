@@ -458,7 +458,8 @@ static int mir_machine_byte_math_local_access(
     const struct MirInsn *insn, int size)
 {
     return mir_machine_named_nonvolatile(insn) &&
-        insn->memory_size == size && insn->bit_width == 0;
+        insn->memory_size == size && insn->memory_flags == 0 &&
+        insn->bit_width == 0;
 }
 
 static int mir_machine_byte_math_signed_int_type(int type)
@@ -467,6 +468,120 @@ static int mir_machine_byte_math_signed_int_type(int type)
         ((type & 15) == 0 || (type & 15) == TYPE_INT) &&
         (type & TYPE_UNSIGNED) == 0 &&
         type_size(type) == 2;
+}
+
+static int mir_machine_byte_math_instruction_metadata(void)
+{
+    /* 33/34 are unsigned char/int, 49 is unsigned char *, and 22 is
+     * _Bool *. State-pointer types (-1) depend on the struct type id. */
+    static const int expected_types[220] = {
+        0, 33, 33, 33, 2, 2, 2, 33, 33, 33,
+        2, 33, 2, 2, 0, -1, 49, 33, 33, 33,
+        33, 3, 0, 0, 0, -1, 22, 6, 0, 2,
+        33, 2, 2, 0, 0, 0, 0, 0, 2, 33,
+        2, 2, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 33, 33, 33, 33, 3, 0, 0,
+        0, 2, 33, 2, 2, 0, 2, 33, 2, 2,
+        33, 33, 2, 33, 33, 0, 0, 2, 33, 2,
+        2, 0, 0, -1, 49, 33, 34, 33, 34, 34,
+        -1, 22, 6, 34, 34, 34, 34, 34, 33, 33,
+        33, -1, 22, 2, 34, 34, 34, 34, 2, 6,
+        6, -1, 22, -1, 49, 33, 33, 2, 2, 2,
+        2, 2, 2, 0, -1, 49, 33, 33, 2, 2,
+        2, 2, 2, 0, 0, 0, 0, 0, 0, 0,
+        0, 6, -1, 49, 33, 33, 0, 0, 0, 2,
+        33, 2, 2, 0, 0, -1, 49, 33, 33, 2,
+        2, 33, 33, 0, 0, 2, 33, 2, 2, 0,
+        0, -1, 49, 33, 33, 2, 2, 33, 33, 0,
+        0, -1, 49, 33, 33, 2, 2, 33, 33, 0,
+        0, 0, -1, 22, -1, 49, 33, 2, 2, 2,
+        6, 6, -1, 22, -1, 49, 33, 2, 6, 6
+    };
+    static const int binary_instructions[] = {
+        6, 13, 32, 41, 74, 79, 90, 99, 104, 116, 118,
+        129, 131, 140, 142, 162, 170, 178, 186, 196, 209
+    };
+    static const int unsigned_binary_instructions[] = {
+        99, 104, 116, 118
+    };
+    static const int assignment_metadata_instructions[] = {
+        8, 80, 83, 105, 109
+    };
+    int binary;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected_memory_flags = 0;
+        int marker;
+
+        if (expected_types[instruction] >= 0 &&
+            insn->type != expected_types[instruction])
+            return 0;
+        for (marker = 0;
+             marker <
+                 (int)(sizeof(assignment_metadata_instructions) /
+                       sizeof(assignment_metadata_instructions[0]));
+             ++marker)
+            if (instruction ==
+                assignment_metadata_instructions[marker])
+                expected_memory_flags = 512;
+        if ((insn->opcode == MIR_CALL
+             ? (insn->memory_flags &
+                ~MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0
+             : insn->memory_flags != expected_memory_flags) ||
+            insn->pointee_volatile_mask != 0 ||
+            insn->has_pointer_qualifiers ||
+            insn->bit_width != 0 || insn->bit_shift != 0 ||
+            insn->bit_mask != 0 || insn->divmod_cast_types != 0)
+            return 0;
+    }
+    for (binary = 0;
+         binary <
+             (int)(sizeof(binary_instructions) /
+                   sizeof(binary_instructions[0]));
+         ++binary) {
+        int expected_type = TYPE_INT;
+        int unsigned_binary;
+
+        instruction = binary_instructions[binary];
+        for (unsigned_binary = 0;
+             unsigned_binary <
+                 (int)(sizeof(unsigned_binary_instructions) /
+                       sizeof(unsigned_binary_instructions[0]));
+             ++unsigned_binary)
+            if (instruction ==
+                unsigned_binary_instructions[unsigned_binary])
+                expected_type = TYPE_INT | TYPE_UNSIGNED;
+        if (mir.insns[instruction].secondary_offset != expected_type)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_machine_byte_math_state_address_types(
+    const struct Sym *state)
+{
+    static const int state_address_instructions[] = {
+        15, 25, 93, 100, 111, 121, 123, 134,
+        152, 165, 181, 191, 202, 204, 212, 214
+    };
+    int instruction;
+    int pointer_type;
+
+    if (state == NULL)
+        return 0;
+    pointer_type = type_add_ptr(state->type);
+    for (instruction = 0;
+         instruction <
+             (int)(sizeof(state_address_instructions) /
+                   sizeof(state_address_instructions[0]));
+         ++instruction)
+        if (mir.insns[state_address_instructions[instruction]].type !=
+            pointer_type)
+            return 0;
+    return 1;
 }
 
 static void mir_emit_leaf_dest(MirStream *out,int off)
@@ -6288,6 +6403,11 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         { 157, 201 }, { 163, 174 }, { 173, 200 },
         { 179, 190 }, { 189, 199 }
     };
+    static const int label_instructions[] = {
+        0, 24, 34, 37, 43, 46, 48, 50, 52, 55, 58, 60, 70,
+        86, 92, 144, 147, 149, 158, 164, 174, 180, 190, 199,
+        200, 201
+    };
     static const int accumulator_members[] = {
         16, 94, 124, 135, 153, 166, 182, 192, 205, 215
     };
@@ -6321,7 +6441,9 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 220 || mir_cfg_block_count() != 26 ||
-        (mir.return_type & 15) != TYPE_VOID || mir.has_vla)
+        mir.return_type != TYPE_VOID || mir.object_count != 4 ||
+        mir.has_vla || mir.has_runtime_stride_param ||
+        mir.is_variadic_function)
         return mir_machine_reject("byte-math-flags", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -6335,6 +6457,30 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
              (insn->memory_flags & (1 | 8)) != 0))
             return mir_machine_reject(
                 "byte-math-flags", "memory-access");
+    }
+    if (!mir_machine_byte_math_instruction_metadata())
+        return mir_machine_reject(
+            "byte-math-flags", "instruction-metadata");
+    for (instruction = 0;
+         instruction <
+             (int)(sizeof(label_instructions) /
+                   sizeof(label_instructions[0]));
+         ++instruction) {
+        int other;
+        int label = mir.insns[label_instructions[instruction]].label;
+
+        if (label < 0)
+            return mir_machine_reject(
+                "byte-math-flags", "label-identity");
+        for (other = instruction + 1;
+             other <
+                 (int)(sizeof(label_instructions) /
+                       sizeof(label_instructions[0]));
+             ++other)
+            if (label ==
+                mir.insns[label_instructions[other]].label)
+                return mir_machine_reject(
+                    "byte-math-flags", "label-identity");
     }
     for (edge = 0;
          edge < (int)(sizeof(edge_pairs) / sizeof(edge_pairs[0]));
@@ -6443,11 +6589,15 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         mir.insns[20].type != rhs->type)
         return 0;
     plan->state = state;
+    if (!mir_machine_byte_math_state_address_types(plan->state))
+        return mir_machine_reject(
+            "byte-math-flags", "state-pointer-type");
     plan->compare_function = find_global(compare_call->name);
     if (compare_call->src1 >= 0)
         return mir_machine_reject(
             "byte-math-flags", "compare-call-indirect");
-    if (plan->compare_function == NULL ||
+    if (compare_call->immediate != 0 ||
+        plan->compare_function == NULL ||
         (compare_call->type & 15) != TYPE_VOID ||
         !plan->compare_function->is_defined ||
         plan->compare_function->storage != SC_FUNC ||
@@ -6458,8 +6608,7 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         type_ptr_depth(plan->compare_function->type) != 0 ||
         (plan->compare_function->type & 15) != TYPE_VOID ||
         (compare_call->memory_flags &
-         (MIR_CALL_FLAG_VARIADIC |
-          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+         ~MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0 ||
         (compare_call->base_name[0] != 0 &&
          strcmp(compare_call->base_name,
                 asm_name_for(sym_asm_name(
@@ -6529,7 +6678,8 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
     if (decimal_call->src1 >= 0)
         return mir_machine_reject(
             "byte-math-flags", "decimal-call-indirect");
-    if (plan->decimal_function == NULL ||
+    if (decimal_call->immediate != 0 ||
+        plan->decimal_function == NULL ||
         (decimal_call->type & 15) != TYPE_VOID ||
         !plan->decimal_function->is_defined ||
         plan->decimal_function->storage != SC_FUNC ||
@@ -6540,8 +6690,7 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         type_ptr_depth(plan->decimal_function->type) != 0 ||
         (plan->decimal_function->type & 15) != TYPE_VOID ||
         (decimal_call->memory_flags &
-         (MIR_CALL_FLAG_VARIADIC |
-          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+         ~MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0 ||
         (decimal_call->base_name[0] != 0 &&
          strcmp(decimal_call->base_name,
                 asm_name_for(sym_asm_name(
