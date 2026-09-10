@@ -988,6 +988,7 @@ static int mir_machine_evaluate_constant_function(int *result)
                 mir.objects[insn->object].storage != SC_LOCAL ||
                 !mir_machine_constant_scalar_type(
                     mir.objects[insn->object].type) ||
+                insn->type != mir.objects[insn->object].type ||
                 insn->memory_size !=
                     type_size(mir.objects[insn->object].type) ||
                 !mir_machine_constant_value_has_type(
@@ -1030,6 +1031,7 @@ static int mir_machine_evaluate_constant_function(int *result)
                     insn->src1, mir.objects[source].type) ||
                 insn->type != mir.objects[source].type ||
                 insn->memory_size != type_size(mir.objects[source].type) ||
+                insn->bit_width != 0 ||
                 (insn->memory_flags & (1 | 8)) != 0 ||
                 !object_known[source])
                 goto done;
@@ -1052,6 +1054,7 @@ static int mir_machine_evaluate_constant_function(int *result)
                 !mir_machine_constant_value_points_to_type(
                     insn->src1, mir.objects[target].type) ||
                 insn->memory_size != type_size(mir.objects[target].type) ||
+                insn->bit_width != 0 ||
                 !mir_machine_constant_value_has_type(
                     insn->src2, mir.objects[target].type) ||
                 (insn->memory_flags & (1 | 8)) != 0)

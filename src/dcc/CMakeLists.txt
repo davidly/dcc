@@ -126,6 +126,11 @@ if(DCC_BUILD_MIR_TESTS)
         ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
         mir-selector-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_executable(mir-consteval-isolation-test
+        ../../tests/host/mir_consteval_isolation.c
+        ${DCC_MIR_TEST_SOURCES})
+    target_include_directories(
+        mir-consteval-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     if(DCC_ENABLE_COVERAGE)
         target_compile_options(mir-verify-test PRIVATE
             -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
@@ -139,9 +144,15 @@ if(DCC_BUILD_MIR_TESTS)
             -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
         set_property(TARGET mir-selector-isolation-test APPEND_STRING PROPERTY
             LINK_FLAGS " -fprofile-instr-generate")
+        target_compile_options(mir-consteval-isolation-test PRIVATE
+            -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+        set_property(TARGET mir-consteval-isolation-test APPEND_STRING PROPERTY
+            LINK_FLAGS " -fprofile-instr-generate")
     endif()
     add_test(NAME mir-verify COMMAND mir-verify-test)
     add_test(NAME mir-scalar-dag COMMAND mir-scalar-dag-test)
     add_test(
         NAME mir-selector-isolation COMMAND mir-selector-isolation-test)
+    add_test(
+        NAME mir-consteval-isolation COMMAND mir-consteval-isolation-test)
 endif()

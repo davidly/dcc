@@ -8,7 +8,8 @@
       "consteval13 int=44 uint=29 long=-7883 ulong=36",
       "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3",
       "consteval13 divmod=-1127,6 casts=-128",
-      "consteval13 effects=5,11,11"
+      "consteval13 effects=5,11,11",
+      "consteval13 memory=4660,4660,13398"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -26,7 +27,8 @@
       "consteval13 int=44 uint=29 long=-7883 ulong=36",
       "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3",
       "consteval13 divmod=-1127,6 casts=-128",
-      "consteval13 effects=5,11,11"
+      "consteval13 effects=5,11,11",
+      "consteval13 memory=4660,4660,13398"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -44,7 +46,8 @@
       "consteval13 int=44 uint=29 long=-7883 ulong=36",
       "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3",
       "consteval13 divmod=-1127,6 casts=-128",
-      "consteval13 effects=5,11,11"
+      "consteval13 effects=5,11,11",
+      "consteval13 memory=4660,4660,13398"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -173,6 +176,34 @@
     "RequireRejected": true,
     "MachineMutation": "5:memory_size:1",
     "MachineMutationFunction": "ce_integer_ops"
+  },
+  {
+    "Name": "ce16storetype",
+    "Group": "consteval-wave16",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": ["CEVAL16_EXTENDED"],
+    "Expected": ["consteval13 memory=4660,4660,13398"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_store_type",
+    "RequireExact": true
+  },
+  {
+    "Name": "ce16mstoretype",
+    "Group": "consteval-wave16",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": ["CEVAL16_EXTENDED"],
+    "Expected": ["consteval13 memory=4660,4660,13398"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_store_type",
+    "RequireRejected": true,
+    "MachineMutation": "14:type:1",
+    "MachineMutationFunction": "ce_store_type"
   },
   {
     "Name": "ce16mphi",

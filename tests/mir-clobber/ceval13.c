@@ -351,6 +351,45 @@ int ce_bounded(void)
     return i;
 }
 
+int ce_store_type(void)
+{
+    int i = 0;
+    int value = 0;
+
+    while (i < 1) {
+        value = 0x1234;
+        i = i + 1;
+    }
+    return value;
+}
+
+int ce_indirect_load(void)
+{
+    int i = 0;
+    int value = 0x1234;
+    int result = 0;
+    int *pointer = &value;
+
+    while (i < 1) {
+        result = *pointer;
+        i = i + 1;
+    }
+    return result;
+}
+
+int ce_indirect_store(void)
+{
+    int i = 0;
+    int value = 0x1200;
+    int *pointer = &value;
+
+    while (i < 1) {
+        *pointer = 0x3456;
+        i = i + 1;
+    }
+    return value;
+}
+
 int main(void)
 {
     printf("consteval13 int=%d uint=%d long=%d ulong=%d\n",
@@ -365,6 +404,8 @@ int main(void)
         ce_signed_divmod(), ce_unsigned_divmod(), ce_narrow_casts());
     printf("consteval13 effects=%d,%d,%d\n",
         ce_boolean_cast(), ce_volatile_local(), ce_global_store());
+    printf("consteval13 memory=%d,%d,%d\n",
+        ce_store_type(), ce_indirect_load(), ce_indirect_store());
 #endif
     return 0;
 }
