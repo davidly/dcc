@@ -6640,11 +6640,13 @@ static int mir_match_symbol_insert_schedule(
         type_size(mir.return_type) != 2 ||
         type_is_float(mir.return_type) ||
         type_ptr_depth(mir.return_type) != 0)
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "shape");
     for (instruction = 0; instruction < 71; ++instruction)
         if (mir.insns[instruction].opcode !=
             expected_opcodes[instruction])
-            return 0;
+            return mir_machine_reject(
+                "symbol-insert-schedule", "opcodes");
     if (!mir_machine_parameter_value_offset(
             mir.insns[1].dst, &plan->name_stack_offset) ||
         !mir_machine_parameter_value_offset(
@@ -6662,7 +6664,8 @@ static int mir_match_symbol_insert_schedule(
         (mir.insns[3].type & 15) != TYPE_INT ||
         (mir.insns[3].type & TYPE_UNSIGNED) != 0 ||
         type_size(mir.insns[3].type) != 2)
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "parameters");
     plan->symbol_limit = (int)mir.insns[5].immediate;
     if (!mir_scalar_memory_location(
             &mir.insns[4], &count_type, &count_storage,
@@ -6690,7 +6693,8 @@ static int mir_match_symbol_insert_schedule(
             &mir.insns[10], &error_argument) ||
         error_argument != mir.insns[8].dst ||
         mir.insns[10].memory_flags != 0)
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "symbol-limit");
     plan->error_string_id = (int)mir.insns[8].immediate;
     plan->error_function = find_global(mir.insns[10].name);
     if (plan->error_function == NULL ||
@@ -6701,7 +6705,8 @@ static int mir_match_symbol_insert_schedule(
         plan->error_function->proto_nargs != 1 ||
         (plan->error_function->type & 15) != TYPE_VOID ||
         type_ptr_depth(plan->error_function->proto_types[0]) != 1)
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "error-function");
     if (!mir_machine_same_location(
             &mir.insns[4], &mir.insns[12]) ||
         !mir_machine_constant_equals(mir.insns[13].dst, 1) ||
@@ -6712,7 +6717,8 @@ static int mir_match_symbol_insert_schedule(
         mir.insns[15].memory_size != 2 ||
         mir.insns[17].src1 != mir.insns[12].dst ||
         mir.insns[17].memory_size != 2)
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "count-update");
     plan->count_root = find_global(mir.insns[4].name);
     if (!mir_scalar_memory_location(
             &mir.insns[18], &symbols_type, &symbols_storage,
@@ -6721,7 +6727,8 @@ static int mir_match_symbol_insert_schedule(
         type_ptr_depth(symbols_type) != 1 ||
         type_size(symbols_type) != 2 ||
         !mir_machine_named_nonvolatile(&mir.insns[18]))
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "symbols-global");
     plan->symbols_root = find_global(mir.insns[18].name);
     plan->record_stride = (int)mir.insns[20].immediate;
     if (plan->count_root == NULL || plan->symbols_root == NULL ||
@@ -6748,7 +6755,8 @@ static int mir_match_symbol_insert_schedule(
             &mir.insns[18], &mir.insns[56]) ||
         !mir_machine_same_location(
             &mir.insns[18], &mir.insns[62]))
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "record-address");
     if (!mir_machine_three_call_arguments(
             &mir.insns[28], memset_arguments) ||
         memset_arguments[0] != mir.insns[20].dst ||
@@ -6762,7 +6770,8 @@ static int mir_match_symbol_insert_schedule(
         memset_destination != memset_arguments[0] ||
         memset_fill != memset_arguments[1] ||
         memset_count != memset_arguments[2])
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "record-clear");
     plan->name_size = mir.insns[32].memory_size;
     if (mir.insns[31].src1 != mir.insns[29].dst ||
         mir.insns[31].src2 != mir.insns[12].dst ||
@@ -6783,7 +6792,8 @@ static int mir_match_symbol_insert_schedule(
         copy_arguments[1] != mir.insns[34].dst ||
         copy_arguments[2] != mir.insns[38].dst ||
         mir.insns[41].memory_flags != 0)
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "name-copy");
     plan->copy_function = find_global(mir.insns[41].name);
     if (plan->copy_function == NULL ||
         plan->copy_function->storage != SC_FUNC ||
@@ -6796,7 +6806,8 @@ static int mir_match_symbol_insert_schedule(
         type_ptr_depth(plan->copy_function->proto_types[1]) != 1 ||
         type_size(plan->copy_function->proto_types[2]) != 2 ||
         plan->copy_function == plan->error_function)
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "copy-function");
     plan->kind_offset = (int)mir.insns[45].immediate;
     plan->scope_offset = (int)mir.insns[52].immediate;
     plan->size_offset = (int)mir.insns[59].immediate;
@@ -6866,7 +6877,8 @@ static int mir_match_symbol_insert_schedule(
         plan->element_size_offset != 18 ||
         plan->size_offset != 21 ||
         plan->element_size != 2)
-        return 0;
+        return mir_machine_reject(
+            "symbol-insert-schedule", "record-fields");
     return 1;
 }
 
@@ -14040,6 +14052,7 @@ int mir_try_emit_scanner_kernels(MirStream *out, int late)
                 &symbol_insert_schedule)) {
             mir_emit_symbol_insert_schedule(
                 out, &symbol_insert_schedule);
+            mir_machine_accept("symbol-insert-schedule");
             return 1;
         }
         if (mir_match_symbol_find_schedule(
