@@ -6444,6 +6444,9 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         return 0;
     plan->state = state;
     plan->compare_function = find_global(compare_call->name);
+    if (compare_call->src1 >= 0)
+        return mir_machine_reject(
+            "byte-math-flags", "compare-call-indirect");
     if (plan->compare_function == NULL ||
         (compare_call->type & 15) != TYPE_VOID ||
         !plan->compare_function->is_defined ||
@@ -6523,6 +6526,9 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
         mir.insns[66].type != rhs->type)
         return 0;
     plan->decimal_function = find_global(decimal_call->name);
+    if (decimal_call->src1 >= 0)
+        return mir_machine_reject(
+            "byte-math-flags", "decimal-call-indirect");
     if (plan->decimal_function == NULL ||
         (decimal_call->type & 15) != TYPE_VOID ||
         !plan->decimal_function->is_defined ||

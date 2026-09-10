@@ -246,6 +246,16 @@
     "MachineMutation": "21:type:2", "MachineMutationFunction": "op_math"
   },
   {
+    "Name": "bmw9cmpindirect", "Group": "byte-math-wave9",
+    "Sources": ["tests/mir-clobber/bmw9.c"], "Defines": [],
+    "Expected": ["BMW9 oracle checks=2048 failures=0 hash=2065919540"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "byte-math-flags", "ExactFunction": "op_math",
+    "RequireRejected": true, "RequiredGenericFunction": "op_math",
+    "RequiredSelectorFunction": "op_math", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "21:src1:0", "MachineMutationFunction": "op_math"
+  },
+  {
     "Name": "bmw9decarg", "Group": "byte-math-wave9",
     "Sources": ["tests/mir-clobber/bmw9.c"], "Defines": [],
     "Expected": ["BMW9 oracle checks=2048 failures=0 hash=2065919540"],
@@ -254,6 +264,16 @@
     "RequireRejected": true, "RequiredGenericFunction": "op_math",
     "RequiredSelectorFunction": "op_math", "RequiredSelector": "spilled-scalar-cfg",
     "MachineMutation": "64:type:1", "MachineMutationFunction": "op_math"
+  },
+  {
+    "Name": "bmw9decindirect", "Group": "byte-math-wave9",
+    "Sources": ["tests/mir-clobber/bmw9.c"], "Defines": [],
+    "Expected": ["BMW9 oracle checks=2048 failures=0 hash=2065919540"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "byte-math-flags", "ExactFunction": "op_math",
+    "RequireRejected": true, "RequiredGenericFunction": "op_math",
+    "RequiredSelectorFunction": "op_math", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "67:src1:0", "MachineMutationFunction": "op_math"
   },
   {
     "Name": "bmw9cmpreturn", "Group": "byte-math-wave9",
