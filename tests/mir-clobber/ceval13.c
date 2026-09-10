@@ -151,6 +151,47 @@ int ce_long_mul_overflow(void)
     return (int)value;
 }
 
+int ce_signed_divmod(void)
+{
+    int i = 0;
+    int value = 0;
+    long wide = -100003L;
+
+    while (i < 1) {
+        value = -7 / 3 + -7 % 3 + 7 / -3 + 7 % -3;
+        wide = wide / 97L + wide % 97L;
+        i = i + 1;
+    }
+    return value + (int)wide;
+}
+
+int ce_unsigned_divmod(void)
+{
+    int i = 0;
+    unsigned value = 65530u;
+
+    while (i < 1) {
+        value = value / 251u;
+        value = value % 17u;
+        i = i + 1;
+    }
+    return (int)value;
+}
+
+int ce_narrow_casts(void)
+{
+    int i = 0;
+    signed char signed_value = 127;
+    unsigned char unsigned_value = 255;
+
+    while (i < 1) {
+        signed_value = (signed char)(signed_value + 1);
+        unsigned_value = (unsigned char)(unsigned_value + 1);
+        i = i + 1;
+    }
+    return (int)signed_value + (int)unsigned_value;
+}
+
 int ce_divide_zero(void)
 {
     int i = 0;
@@ -159,6 +200,19 @@ int ce_divide_zero(void)
 
     while (i < 1) {
         value = value / divisor;
+        i = i + 1;
+    }
+    return value;
+}
+
+int ce_modulo_zero(void)
+{
+    int i = 0;
+    int divisor = 0;
+    int value = 12;
+
+    while (i < 1) {
+        value = value % divisor;
         i = i + 1;
     }
     return value;
@@ -176,6 +230,42 @@ int ce_divide_minimum(void)
     return value;
 }
 
+int ce_modulo_minimum(void)
+{
+    int i = 0;
+    int value = -32768;
+
+    while (i < 1) {
+        value = value % -1;
+        i = i + 1;
+    }
+    return value;
+}
+
+int ce_long_divide_minimum(void)
+{
+    int i = 0;
+    long value = -2147483647L - 1L;
+
+    while (i < 1) {
+        value = value / -1L;
+        i = i + 1;
+    }
+    return (int)value;
+}
+
+int ce_long_modulo_minimum(void)
+{
+    int i = 0;
+    long value = -2147483647L - 1L;
+
+    while (i < 1) {
+        value = value % -1L;
+        i = i + 1;
+    }
+    return (int)value;
+}
+
 static int ce_identity(int value)
 {
     return value;
@@ -191,6 +281,46 @@ int ce_call(void)
         i = i + 1;
     }
     return value;
+}
+
+int ce_boolean_cast(void)
+{
+    int i = 0;
+    int value = 2;
+    _Bool flag = 0;
+
+    while (i < 1) {
+        flag = (_Bool)value;
+        value = (int)flag + 4;
+        i = i + 1;
+    }
+    return value;
+}
+
+int ce_volatile_local(void)
+{
+    int i = 0;
+    volatile int value = 3;
+
+    while (i < 2) {
+        value = value + 4;
+        i = i + 1;
+    }
+    return value;
+}
+
+int ce_global_value;
+
+int ce_global_store(void)
+{
+    int i = 0;
+
+    ce_global_value = 3;
+    while (i < 2) {
+        ce_global_value = ce_global_value + 4;
+        i = i + 1;
+    }
+    return ce_global_value;
 }
 
 int ce_parameter(int value)
@@ -230,5 +360,11 @@ int main(void)
         ce_signed_overflow(), ce_signed_sub_overflow(),
         ce_signed_mul_overflow(), ce_long_overflow(),
         ce_long_sub_overflow(), ce_long_mul_overflow());
+#ifdef CEVAL16_EXTENDED
+    printf("consteval13 divmod=%d,%d casts=%d\n",
+        ce_signed_divmod(), ce_unsigned_divmod(), ce_narrow_casts());
+    printf("consteval13 effects=%d,%d,%d\n",
+        ce_boolean_cast(), ce_volatile_local(), ce_global_store());
+#endif
     return 0;
 }
