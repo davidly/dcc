@@ -81,14 +81,21 @@ value graph before any output, external reference, or label side effect.
 Review added a fastcall ABI rejection for the packed-record dump callback and
 defined fractional `_Bool` conversion controls.
 
+The next wave executes 5,648 exact leaf configurations and adds sliding-window
+and ctype/realloc ABI campaigns. It also makes homed scalar-DAG rejection
+transactional and keeps declaration placeholders and exclusive scope ends
+aligned when deferred metadata inserts MIR instructions. The standalone
+scalar-DAG host binary is part of both CTest and coverage provenance, and
+isolated compiler-mutant workspaces copy every host C source.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,362 / 4,362 | 100.00% |
-| Lines | 177,515 / 190,171 | 93.34% |
-| Native branch outcomes | 91,430 / 144,834 | 63.13% |
-| Regions | 159,656 / 170,205 | 93.80% |
+| Functions | 4,364 / 4,364 | 100.00% |
+| Lines | 177,615 / 190,238 | 93.36% |
+| Native branch outcomes | 91,538 / 144,922 | 63.16% |
+| Regions | 159,782 / 170,300 | 93.82% |
 
-The raw ledger has 53,157 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,137 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload

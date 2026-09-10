@@ -105,9 +105,18 @@ and removed an undefined signed-char conversion oracle. Scalar-DAG preflight
 now proves the complete value graph before producing output, externals, or
 labels, so repaired retries remain byte-identical.
 
-Latest integrated totals: 4,362/4,362 functions, 177,515/190,171 lines
-(93.34%), 91,430/144,834 native branch outcomes (63.13%), and
-159,656/170,205 regions (93.80%). The raw uncovered ledger is 53,157.
+The following wave raises the exact inventory to 5,648 configurations with
+new sliding-maximum and ctype/realloc ABI proofs. It also preflights homed
+scalar DAGs before stack-check, external, or label side effects and fixes
+deferred MIR insertion so declaration placeholders and exclusive scope ends
+move with debug points. Coverage provenance now includes both host-test
+binaries, and compiler-mutant workspaces copy all host C test sources. An
+initial collection was correctly rejected after a concurrent script test
+changed `dccmake`; the clean rerun used an immutable tool bundle.
+
+Latest integrated totals: 4,364/4,364 functions, 177,615/190,238 lines
+(93.36%), 91,538/144,922 native branch outcomes (63.16%), and
+159,782/170,300 regions (93.82%). The raw uncovered ledger is 53,137.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -119,7 +128,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `38c9b425` (`Test fractional float bool pointer stores`).
+  `893bc5bd` (`test: copy all host mutation sources`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -144,7 +153,12 @@ parallel-wave summary for the current measurement.
   - `07512363` / `38c9b425` — defined float pointer assignment support;
   - `b06b122b` / `2d84f13f` — packed-record proof and fastcall ABI hardening;
     and
-  - `b4776307` — transactional scalar-DAG preflight.
+  - `b4776307` — transactional scalar-DAG preflight;
+  - `1021efdf` — transactional homed scalar-DAG preflight;
+  - `d411dd2a` / `4a85836c` — sliding-maximum and ctype/realloc ABI proofs;
+  - `69c94414` — deferred declaration/scope metadata repair; and
+  - `e41dea92` / `893bc5bd` — complete host-test provenance and mutation
+    workspace inputs.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
