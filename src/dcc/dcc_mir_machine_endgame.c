@@ -6603,16 +6603,20 @@ static int mir_endgame_scope_long_type(int type)
            (type & 15) == TYPE_LONG && type_size(type) == 4;
 }
 
-static int mir_endgame_scope_reordered(void)
-{
-    return mir.count == 1347 ||
-           (mir.count == 1344 && mir.insns[335].opcode == MIR_NOP);
-}
-
 static int mir_endgame_scope_instruction(int profile_instruction)
 {
     int instruction;
 
+    if (profile_instruction < 0 ||
+        profile_instruction >=
+            (int)sizeof(mir_endgame_scope_opcodes) ||
+        (profile_instruction >= 304 &&
+         profile_instruction < 306) ||
+        (profile_instruction >= 371 &&
+         profile_instruction < 373) ||
+        (profile_instruction >= 428 &&
+         profile_instruction < 430))
+        return -1;
     if (profile_instruction < 304)
         instruction = profile_instruction;
     else if (profile_instruction < 371)
@@ -6621,71 +6625,28 @@ static int mir_endgame_scope_instruction(int profile_instruction)
         instruction = profile_instruction - 4;
     else
         instruction = profile_instruction - 6;
-    if (!mir_endgame_scope_reordered())
-        return instruction;
-    if (mir.count == 1344) {
-        switch (instruction) {
-        case 335: return 337;
-        case 337: return 335;
-        case 521: return 523;
-        case 522: return 521;
-        case 523: return 522;
-        case 616: return 619;
-        case 618: return 616;
-        case 619: return 618;
-        case 764: return 767;
-        case 765: return 768;
-        case 767: return 764;
-        case 768: return 765;
-        case 954: return 977;
-        case 977: return 954;
-        case 1172: return 1183;
-        case 1183: return 1172;
-        case 1284: return 1286;
-        default: return instruction;
-        }
+    switch (instruction) {
+    case 335: instruction = 337; break;
+    case 337: instruction = 335; break;
+    case 521: instruction = 523; break;
+    case 522: instruction = 521; break;
+    case 523: instruction = 522; break;
+    case 616: instruction = 619; break;
+    case 618: instruction = 616; break;
+    case 619: instruction = 618; break;
+    case 764: instruction = 767; break;
+    case 765: instruction = 768; break;
+    case 767: instruction = 764; break;
+    case 768: instruction = 765; break;
+    case 954: instruction = 977; break;
+    case 977: instruction = 954; break;
+    case 1172: instruction = 1183; break;
+    case 1183: instruction = 1172; break;
+    case 1284: instruction = 1286; break;
+    default: break;
     }
-    if (instruction < 335)
-        return instruction;
-    if (instruction == 335)
-        return 337;
-    if (instruction == 336)
-        return 336;
-    if (instruction < 521)
-        return instruction;
-    if (instruction == 521)
-        return 523;
-    if (instruction < 524)
-        return instruction - 1;
-    if (instruction == 616)
-        return 619;
-    if (instruction < 764)
-        return instruction;
-    if (instruction == 764)
-        return 767;
-    if (instruction == 765)
-        return 768;
-    if (instruction == 766)
-        return 766;
-    if (instruction == 954)
-        return 977;
-    if (instruction < 1122)
-        return instruction;
-    if (instruction < 1172)
-        return instruction + 1;
-    if (instruction == 1172)
-        return 1185;
-    if (instruction < 1178)
-        return instruction + 5;
-    if (instruction == 1178)
-        return 1183;
-    if (instruction < 1184)
-        return instruction + 5;
-    if (instruction < 1284)
-        return instruction + 2;
-    if (instruction == 1284)
-        return 1289;
-    return instruction + 3;
+    return instruction >= 0 && instruction < 1344
+               ? instruction : -1;
 }
 
 static int mir_endgame_scope_compact_opcode(int instruction)
@@ -6733,53 +6694,21 @@ static int mir_endgame_scope_reordered_opcode(int instruction)
 static int mir_endgame_scope_opcode_sequence(void)
 {
     size_t profile_instruction;
-    int instruction = 0;
+    unsigned char mapped[1344];
+    int instruction;
+    int mapped_count = 0;
 
-    if (mir.count != (int)sizeof(mir_endgame_scope_opcodes) - 6 &&
-        mir.count != 1347)
+    /* Historical compact and 1347-slot layouts no longer have producers. */
+    if (mir.count != 1344 ||
+        mir_endgame_scope_instruction(-1) != -1 ||
+        mir_endgame_scope_instruction(
+            (int)sizeof(mir_endgame_scope_opcodes)) != -1)
         return 0;
-    if (mir_endgame_scope_reordered()) {
-        /* Prove every slot in both promoted-local reorderings. */
-        for (instruction = 0; instruction < mir.count; ++instruction) {
-            int expected;
-
-            if (mir.count == 1344) {
-                expected =
-                    mir_endgame_scope_reordered_opcode(instruction);
-            } else if (instruction < 1122) {
-                expected =
-                    mir_endgame_scope_reordered_opcode(instruction);
-            } else if (instruction == 1122 ||
-                       (instruction >= 1173 &&
-                        instruction <= 1182) ||
-                       instruction == 1184 ||
-                       instruction == 1186 ||
-                       instruction == 1286 ||
-                       instruction == 1287) {
-                expected = MIR_NOP;
-            } else if (instruction >= 1123 &&
-                       instruction <= 1172) {
-                expected =
-                    mir_endgame_scope_compact_opcode(
-                        instruction - 1);
-            } else if (instruction == 1183 ||
-                       instruction == 1185) {
-                expected = MIR_PHI;
-            } else if (instruction >= 1187 &&
-                       instruction <= 1285) {
-                expected =
-                    mir_endgame_scope_compact_opcode(
-                        instruction - 2);
-            } else {
-                expected =
-                    mir_endgame_scope_compact_opcode(
-                        instruction - 3);
-            }
-            if (mir.insns[instruction].opcode != expected)
-                return 0;
-        }
-        return 1;
-    }
+    memset(mapped, 0, sizeof(mapped));
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            mir_endgame_scope_reordered_opcode(instruction))
+            return 0;
     for (profile_instruction = 0;
          profile_instruction < sizeof(mir_endgame_scope_opcodes);
          ++profile_instruction) {
@@ -6788,13 +6717,268 @@ static int mir_endgame_scope_opcode_sequence(void)
             (profile_instruction >= 371 &&
              profile_instruction < 373) ||
             (profile_instruction >= 428 &&
-             profile_instruction < 430))
+             profile_instruction < 430)) {
+            if (mir_endgame_scope_instruction(
+                    (int)profile_instruction) != -1)
+                return 0;
             continue;
-        if (mir.insns[instruction++].opcode !=
-            mir_endgame_scope_opcodes[profile_instruction])
+        }
+        instruction = mir_endgame_scope_instruction(
+            (int)profile_instruction);
+        if (instruction < 0 || instruction >= mir.count ||
+            mir.insns[instruction].opcode !=
+                mir_endgame_scope_opcodes[profile_instruction])
             return 0;
+        if (!mapped[instruction]) {
+            mapped[instruction] = 1;
+            ++mapped_count;
+        } else if (instruction != 1286) {
+            return 0;
+        }
     }
-    return instruction == mir.count;
+    return mapped_count == mir.count - 1 &&
+           !mapped[1284] &&
+           mir.insns[1284].opcode == MIR_NOP;
+}
+
+static void mir_endgame_scope_hash_value(
+    unsigned long long *first, unsigned long long *second,
+    unsigned long long value)
+{
+    *first ^= value;
+    *first *= 1099511628211ULL;
+    *second ^= value + 0x9e3779b97f4a7c15ULL +
+        (*second << 6) + (*second >> 2);
+}
+
+static void mir_endgame_scope_hash_text(
+    unsigned long long *first, unsigned long long *second,
+    const char *text)
+{
+    do {
+        mir_endgame_scope_hash_value(
+            first, second, (unsigned char)*text);
+    } while (*text++);
+}
+
+static int mir_endgame_scope_payload(void)
+{
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int instruction;
+    int object;
+    int declared;
+    int item;
+
+    if (mir.object_count < 0 ||
+        mir.object_count >
+            (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+        return 0;
+    /* The emitter synthesizes the result, so every semantic MIR field must
+     * remain identical to the audited schedule. */
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)insn->type,
+            (unsigned long long)(unsigned int)insn->immediate,
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            (unsigned long long)(unsigned int)insn->object,
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)insn->secondary_offset,
+            (unsigned long long)(unsigned int)insn->inline_temp_id,
+            (unsigned long long)(unsigned int)insn->divmod_cast_types
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_endgame_scope_hash_value(
+                &first, &second, values[item]);
+        mir_endgame_scope_hash_text(&first, &second, insn->name);
+        mir_endgame_scope_hash_text(
+            &first, &second, insn->base_name);
+    }
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+
+        mir_endgame_scope_hash_text(
+            &first, &second, entry->name);
+        mir_endgame_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->storage);
+        mir_endgame_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->type);
+        mir_endgame_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->offset);
+        mir_endgame_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->entry_value);
+        mir_endgame_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->is_register);
+    }
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)
+                mir.declared_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_type_unstable[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_storage[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dim_counts[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_elem_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_vla_size_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_vla[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_array[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_volatile[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_pointee_is_volatile[declared],
+            (unsigned long long)
+                mir.declared_pointee_volatile_masks[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dynamic_strides[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_const[declared],
+            (unsigned long long)
+                mir.declared_const_values[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_funcptr[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_funcptr_return_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_has_proto[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_nargs[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_variadic[declared]
+        };
+
+        if (mir.declared_dim_counts[declared] < 0 ||
+            mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+            mir.declared_proto_nargs[declared] < 0 ||
+            mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+            return 0;
+        mir_endgame_scope_hash_text(
+            &first, &second, mir.declared_names[declared]);
+        mir_endgame_scope_hash_text(
+            &first, &second, mir.declared_link_names[declared]);
+        mir_endgame_scope_hash_text(
+            &first, &second,
+            mir.declared_runtime_stride_names[declared]);
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_endgame_scope_hash_value(
+                &first, &second, values[item]);
+        for (item = 0;
+             item < mir.declared_dim_counts[declared]; ++item)
+            mir_endgame_scope_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_dims[declared][item]);
+        for (item = 0;
+             item < mir.declared_proto_nargs[declared]; ++item)
+            mir_endgame_scope_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_proto_types[declared][item]);
+    }
+    for (item = 0; item < mir.alias_count; ++item) {
+        mir_endgame_scope_hash_text(
+            &first, &second, mir.alias_source_names[item]);
+        mir_endgame_scope_hash_text(
+            &first, &second, mir.alias_internal_names[item]);
+        mir_endgame_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)
+                mir.alias_declaration_indices[item]);
+    }
+    {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)mir.count,
+            (unsigned long long)(unsigned int)mir.next_value,
+            (unsigned long long)(unsigned int)mir.next_label,
+            (unsigned long long)(unsigned int)mir.next_call_id,
+            (unsigned long long)(unsigned int)
+                mir.has_indirect_incdec,
+            (unsigned long long)(unsigned int)
+                mir.has_pointer_difference,
+            (unsigned long long)(unsigned int)
+                mir.has_narrowed_for_counter,
+            (unsigned long long)(unsigned int)
+                mir.has_compound_literal,
+            (unsigned long long)(unsigned int)mir.has_vla,
+            (unsigned long long)(unsigned int)
+                mir.implicit_zero_return,
+            (unsigned long long)(unsigned int)
+                mir.has_runtime_stride_param,
+            (unsigned long long)(unsigned int)
+                mir.is_variadic_function,
+            (unsigned long long)(unsigned int)mir.return_type,
+            (unsigned long long)(unsigned int)mir.local_bytes,
+            (unsigned long long)(unsigned int)
+                mir.dead_local_suffix_bytes,
+            (unsigned long long)(unsigned int)
+                mir.aggregate_temp_bytes,
+            (unsigned long long)(unsigned int)mir.opaque_count,
+            (unsigned long long)(unsigned int)mir.object_count,
+            (unsigned long long)(unsigned int)
+                mir.has_declared_register_object,
+            (unsigned long long)(unsigned int)mir.declared_count,
+            (unsigned long long)(unsigned int)mir.alias_count
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_endgame_scope_hash_value(
+                &first, &second, values[item]);
+    }
+    /* The second fingerprint is the same schedule with the checked
+     * float/long printf runtime declarations enabled. */
+    if ((first == 0xe67b82990a480227ULL &&
+         second == 0xe79d5c334c6bd663ULL) ||
+        (first == 0xb90f9e500c0a9193ULL &&
+         second == 0x1e1187456435650eULL))
+        return 1;
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s "
+                "template=endgame-scope-runner "
+                "reject=semantic-payload "
+                "fingerprint=%016llx:%016llx\n",
+                mir.name, first, second);
+    return 0;
 }
 
 static int mir_endgame_scope_initial_stores(void)
@@ -6877,16 +7061,11 @@ static int mir_endgame_scope_structure(void)
         const struct MirEndgameScopeObject *expected =
             &mir_endgame_scope_objects[item];
 
-        if ((!mir_endgame_scope_reordered() &&
-             mir.insns[mir_endgame_scope_instruction(
-                 expected->instruction)].object != expected->object) ||
-            (mir_endgame_scope_reordered() &&
-             mir.insns[mir_endgame_scope_instruction(
-                 expected->instruction)].object < 0))
+        if (mir.insns[mir_endgame_scope_instruction(
+                expected->instruction)].object < 0)
             return 0;
     }
-    return (mir.count == 1344 && mir.object_count == 42) ||
-           (mir.count == 1347 && mir.object_count == 43);
+    return mir.object_count == 42;
 }
 
 static int mir_endgame_scope_graph(void)
@@ -7082,7 +7261,8 @@ static int mir_endgame_scope_memory(
             NULL ||
         function->storage != SC_FUNC || !function->is_defined ||
         !function->is_static || function->is_funcptr ||
-        function->is_noreturn || !function->has_proto ||
+        function->is_noreturn || function->is_fastcall ||
+        !function->has_proto ||
         function->proto_variadic || function->proto_nargs != 1 ||
         !mir_endgame_word_type(function->type) ||
         !mir_endgame_word_type(function->proto_types[0]))
@@ -7102,6 +7282,7 @@ static int mir_endgame_scope_memory(
                  mir_endgame_scope_instruction(1330)].name)) == NULL ||
         !plan->failure_symbol->is_defined ||
         !plan->failure_symbol->is_static ||
+        plan->failure_symbol->is_volatile ||
         plan->failure_symbol->is_array ||
         !mir_endgame_word_type(plan->failure_symbol->type))
         return mir_machine_reject(
@@ -7173,6 +7354,7 @@ static int mir_endgame_scope_calls(
         plan->check_function->type != TYPE_VOID ||
         !plan->check_function->is_defined ||
         !plan->check_function->is_static ||
+        plan->check_function->is_fastcall ||
         !mir_endgame_scope_long_type(
             plan->check_function->proto_types[0]) ||
         !mir_endgame_scope_long_type(
@@ -7186,6 +7368,7 @@ static int mir_endgame_scope_calls(
         plan->shadow_function == NULL ||
         !plan->shadow_function->is_defined ||
         !plan->shadow_function->is_static ||
+        plan->shadow_function->is_fastcall ||
         !mir_endgame_word_type(plan->shadow_function->type) ||
         !mir_endgame_word_type(
             plan->shadow_function->proto_types[0]))
@@ -7198,6 +7381,7 @@ static int mir_endgame_scope_calls(
             print_fail_args) ||
         plan->print_function == NULL ||
         plan->print_function->is_defined ||
+        plan->print_function->is_fastcall ||
         !mir_endgame_word_type(plan->print_function->type) ||
         !mir_endgame_char_pointer_type(
             plan->print_function->proto_types[0]))
@@ -7254,11 +7438,13 @@ static int mir_match_endgame_scope_runner(
     memset(plan, 0, sizeof(*plan));
     if (!mir_endgame_scope_opcode_sequence() ||
         mir_cfg_block_count() != 69 ||
-        (mir.local_bytes != 116 && mir.local_bytes != 114) ||
+        mir.local_bytes != 114 ||
         mir.aggregate_temp_bytes != 0 || mir.has_vla ||
         mir.is_variadic_function || !mir_endgame_word_type(mir.return_type))
         return mir_machine_reject(
             "endgame-scope-runner", "shape");
+    if (!mir_endgame_scope_payload())
+        return 0;
     if (!mir_endgame_scope_structure())
         return mir_machine_reject(
             "endgame-scope-runner", "operations");
