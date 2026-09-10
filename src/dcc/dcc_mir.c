@@ -2116,124 +2116,15 @@ static void mir_set_node_memory(struct MirInsn *insn,
         insn->memory_flags |= 4;
 }
 
-#define MIR_AST_PREFLIGHT_MAX_DEPTH 256
-#define MIR_AST_PREFLIGHT_MAX_NODES 4096
-
-struct MirAstPreflight {
-    const struct AstNode *path[MIR_AST_PREFLIGHT_MAX_DEPTH];
-    int depth;
-    int nodes;
-};
-
-static int mir_ast_preflight_enter(struct MirAstPreflight *preflight,
-                                   const struct AstNode *node)
-{
-    int index;
-
-    if (node == NULL ||
-        preflight->depth >= MIR_AST_PREFLIGHT_MAX_DEPTH ||
-        preflight->nodes >= MIR_AST_PREFLIGHT_MAX_NODES)
-        return 0;
-    for (index = 0; index < preflight->depth; ++index)
-        if (preflight->path[index] == node)
-            return 0;
-    preflight->path[preflight->depth++] = node;
-    ++preflight->nodes;
-    return 1;
-}
-
-static void mir_ast_preflight_leave(struct MirAstPreflight *preflight)
-{
-    --preflight->depth;
-}
-
 static int mir_expr_list_metadata_is_valid(const struct AstNode *node)
 {
     if (node->kind != AST_CALL)
         return node->list_len == 0 && node->list_cap == 0 &&
                node->list == NULL;
     if (node->list_len < 0 || node->list_cap < 0 ||
-        node->list_len > node->list_cap ||
-        node->list_cap > MIR_AST_PREFLIGHT_MAX_NODES)
+        node->list_len > node->list_cap)
         return 0;
     return (node->list_cap == 0) == (node->list == NULL);
-}
-
-static int mir_reject_register_address_visit(
-    const struct AstNode *node, struct MirAstPreflight *preflight)
-{
-    int index;
-    int reject = 0;
-
-    if (node == NULL)
-        return 0;
-    if (!mir_ast_preflight_enter(preflight, node))
-        return 0;
-    if (node->kind == AST_UNARY && node->op == '&' &&
-        node->a != NULL && node->a->kind == AST_IDENT) {
-        struct Sym *symbol = mir_ident_symbol(node->a);
-
-        if (symbol != NULL && symbol->is_register) {
-            dcc_error_at(node->file, node->line, -1,
-                         "cannot take address of register object",
-                         mir_ident_name(node->a));
-            reject = 1;
-        }
-    }
-    if (!reject) {
-        switch (node->kind) {
-        case AST_CALL:
-            reject = mir_reject_register_address_visit(
-                node->a, preflight);
-            if (!reject && mir_expr_list_metadata_is_valid(node))
-                for (index = 0; index < node->list_len; ++index)
-                    if (mir_reject_register_address_visit(
-                            node->list[index], preflight)) {
-                        reject = 1;
-                        break;
-                    }
-            break;
-        case AST_INDEX:
-        case AST_LOGAND:
-        case AST_LOGOR:
-        case AST_BINARY:
-        case AST_ASSIGN:
-        case AST_COMMA:
-            reject = mir_reject_register_address_visit(
-                node->a, preflight) ||
-                     mir_reject_register_address_visit(
-                         node->b, preflight);
-            break;
-        case AST_COND:
-            reject = mir_reject_register_address_visit(
-                node->a, preflight) ||
-                     mir_reject_register_address_visit(
-                         node->b, preflight) ||
-                     mir_reject_register_address_visit(
-                         node->c, preflight);
-            break;
-        case AST_MEMBER:
-        case AST_UNARY:
-        case AST_POSTFIX:
-        case AST_CAST:
-        case AST_SIZEOF_EXPR:
-            reject = mir_reject_register_address_visit(
-                node->a, preflight);
-            break;
-        default:
-            break;
-        }
-    }
-    mir_ast_preflight_leave(preflight);
-    return reject;
-}
-
-static int mir_reject_register_address(const struct AstNode *node)
-{
-    struct MirAstPreflight preflight;
-
-    memset(&preflight, 0, sizeof(preflight));
-    return mir_reject_register_address_visit(node, &preflight);
 }
 
 static int mir_lower_lvalue_address(const struct AstNode *node)
@@ -2653,93 +2544,201 @@ static int mir_assignment_operator_is_supported(int operation)
            mir_compound_binary_operator(operation) != 0;
 }
 
-static int mir_expr_ast_is_complete_visit(
-    const struct AstNode *node, struct MirAstPreflight *preflight)
-{
-    int argument;
-    int complete = 0;
+#define MIR_AST_PREFLIGHT_INLINE_FRAMES 32
 
-    if (node == NULL || !mir_expr_list_metadata_is_valid(node) ||
-        !mir_ast_preflight_enter(preflight, node))
+struct MirAstPreflightFrame {
+    const struct AstNode *node;
+    size_t next_child;
+    int checked;
+};
+
+struct MirAstPreflight {
+    struct MirAstPreflightFrame *frames;
+    size_t count;
+    size_t capacity;
+    struct MirAstPreflightFrame
+        inline_frames[MIR_AST_PREFLIGHT_INLINE_FRAMES];
+};
+
+static void mir_ast_preflight_init(struct MirAstPreflight *preflight)
+{
+    preflight->frames = preflight->inline_frames;
+    preflight->count = 0;
+    preflight->capacity = MIR_AST_PREFLIGHT_INLINE_FRAMES;
+}
+
+static void mir_ast_preflight_dispose(struct MirAstPreflight *preflight)
+{
+    if (preflight->frames != preflight->inline_frames)
+        free(preflight->frames);
+}
+
+static void mir_ast_preflight_grow(struct MirAstPreflight *preflight)
+{
+    struct MirAstPreflightFrame *grown;
+    size_t new_capacity;
+
+    if (preflight->capacity > (size_t)-1 / 2)
+        fatal("out of memory");
+    new_capacity = preflight->capacity * 2;
+    if (new_capacity > (size_t)-1 / sizeof(*grown))
+        fatal("out of memory");
+    grown = (struct MirAstPreflightFrame *)xmalloc(
+        new_capacity * sizeof(*grown));
+    memcpy(grown, preflight->frames,
+           preflight->count * sizeof(*grown));
+    if (preflight->frames != preflight->inline_frames)
+        free(preflight->frames);
+    preflight->frames = grown;
+    preflight->capacity = new_capacity;
+}
+
+static int mir_ast_preflight_push(struct MirAstPreflight *preflight,
+                                  const struct AstNode *node)
+{
+    size_t index;
+    struct MirAstPreflightFrame *frame;
+
+    if (node == NULL)
+        return 0;
+    for (index = 0; index < preflight->count; ++index)
+        if (preflight->frames[index].node == node)
+            return 0;
+    if (preflight->count == preflight->capacity)
+        mir_ast_preflight_grow(preflight);
+    frame = &preflight->frames[preflight->count++];
+    frame->node = node;
+    frame->next_child = 0;
+    frame->checked = 0;
+    return 1;
+}
+
+static int mir_expr_ast_node_is_complete(const struct AstNode *node)
+{
+    if (!mir_expr_list_metadata_is_valid(node))
         return 0;
     switch (node->kind) {
     case AST_INT_LIT:
     case AST_FLOAT_LIT:
     case AST_SIZEOF_TYPE:
-        complete = 1;
-        break;
+        return 1;
     case AST_STR_LIT:
-        complete = node->str_index >= 0 || node->sval != NULL;
-        break;
+        return node->str_index >= 0 || node->sval != NULL;
     case AST_IDENT:
-        complete = node->sval != NULL || node->sym != NULL;
-        break;
+        return node->sval != NULL || node->sym != NULL;
     case AST_CALL:
-        complete = mir_call_ast_is_complete(node) &&
-                   mir_expr_ast_is_complete_visit(node->a, preflight);
-        for (argument = 0; complete && argument < node->list_len; ++argument)
-            complete = mir_expr_ast_is_complete_visit(
-                node->list[argument], preflight);
-        break;
+        return mir_call_ast_is_complete(node);
+    case AST_MEMBER:
+        return (node->op == '.' || node->op == TOK_ARROW) &&
+               node->sval != NULL;
+    case AST_UNARY:
+        return mir_unary_operator_is_supported(node->op);
+    case AST_POSTFIX:
+        return node->op == TOK_INC || node->op == TOK_DEC;
+    case AST_BINARY:
+        return mir_binary_operator_is_supported(node->op);
+    case AST_ASSIGN:
+        return mir_assignment_operator_is_supported(node->op);
+    case AST_CAST:
+        return node->type != 0;
+    case AST_COMPOUND_LITERAL:
+        return node->sym != NULL;
+    default:
+        return 1;
+    }
+}
+
+static int mir_expr_ast_child(const struct AstNode *node, size_t index,
+                              const struct AstNode **child)
+{
+    switch (node->kind) {
+    case AST_CALL:
+        if (index == 0) {
+            *child = node->a;
+            return 1;
+        }
+        --index;
+        if (index < (size_t)node->list_len) {
+            *child = node->list[index];
+            return 1;
+        }
+        return 0;
     case AST_INDEX:
     case AST_LOGAND:
     case AST_LOGOR:
-    case AST_COMMA:
-        complete = mir_expr_ast_is_complete_visit(node->a, preflight) &&
-                   mir_expr_ast_is_complete_visit(node->b, preflight);
-        break;
-    case AST_MEMBER:
-        complete = (node->op == '.' || node->op == TOK_ARROW) &&
-                   node->sval != NULL &&
-                   mir_expr_ast_is_complete_visit(node->a, preflight);
-        break;
-    case AST_UNARY:
-        complete = mir_unary_operator_is_supported(node->op) &&
-                   mir_expr_ast_is_complete_visit(node->a, preflight);
-        break;
-    case AST_POSTFIX:
-        complete = (node->op == TOK_INC || node->op == TOK_DEC) &&
-                   mir_expr_ast_is_complete_visit(node->a, preflight);
-        break;
     case AST_BINARY:
-        complete = mir_binary_operator_is_supported(node->op) &&
-                   mir_expr_ast_is_complete_visit(node->a, preflight) &&
-                   mir_expr_ast_is_complete_visit(node->b, preflight);
-        break;
     case AST_ASSIGN:
-        complete = mir_assignment_operator_is_supported(node->op) &&
-                   mir_expr_ast_is_complete_visit(node->a, preflight) &&
-                   mir_expr_ast_is_complete_visit(node->b, preflight);
-        break;
+    case AST_COMMA:
+        if (index < 2) {
+            *child = index == 0 ? node->a : node->b;
+            return 1;
+        }
+        return 0;
     case AST_COND:
-        complete = mir_expr_ast_is_complete_visit(node->a, preflight) &&
-                   mir_expr_ast_is_complete_visit(node->b, preflight) &&
-                   mir_expr_ast_is_complete_visit(node->c, preflight);
-        break;
+        if (index < 3) {
+            *child = index == 0 ? node->a :
+                     index == 1 ? node->b : node->c;
+            return 1;
+        }
+        return 0;
+    case AST_MEMBER:
+    case AST_UNARY:
+    case AST_POSTFIX:
     case AST_CAST:
-        complete = node->type != 0 &&
-                   mir_expr_ast_is_complete_visit(node->a, preflight);
-        break;
-    case AST_COMPOUND_LITERAL:
-        complete = node->sym != NULL;
-        break;
     case AST_SIZEOF_EXPR:
-        complete = mir_expr_ast_is_complete_visit(node->a, preflight);
-        break;
+        if (index == 0) {
+            *child = node->a;
+            return 1;
+        }
+        return 0;
     default:
-        complete = 1;
-        break;
+        return 0;
     }
-    mir_ast_preflight_leave(preflight);
-    return complete;
 }
 
 static int mir_expr_ast_is_complete(const struct AstNode *node)
 {
+    const struct AstNode *child;
     struct MirAstPreflight preflight;
+    int complete = 1;
 
-    memset(&preflight, 0, sizeof(preflight));
-    return mir_expr_ast_is_complete_visit(node, &preflight);
+    mir_ast_preflight_init(&preflight);
+    if (!mir_ast_preflight_push(&preflight, node))
+        complete = 0;
+    while (complete && preflight.count > 0) {
+        struct MirAstPreflightFrame *frame =
+            &preflight.frames[preflight.count - 1];
+
+        if (!frame->checked) {
+            if (!mir_expr_ast_node_is_complete(frame->node)) {
+                complete = 0;
+                break;
+            }
+            if (frame->node->kind == AST_UNARY &&
+                frame->node->op == '&' && frame->node->a != NULL &&
+                frame->node->a->kind == AST_IDENT) {
+                struct Sym *symbol = mir_ident_symbol(frame->node->a);
+
+                if (symbol != NULL && symbol->is_register) {
+                    dcc_error_at(frame->node->file, frame->node->line, -1,
+                                 "cannot take address of register object",
+                                 mir_ident_name(frame->node->a));
+                    complete = 0;
+                    break;
+                }
+            }
+            frame->checked = 1;
+        }
+        if (mir_expr_ast_child(frame->node, frame->next_child, &child)) {
+            ++frame->next_child;
+            if (!mir_ast_preflight_push(&preflight, child))
+                complete = 0;
+        } else {
+            --preflight.count;
+        }
+    }
+    mir_ast_preflight_dispose(&preflight);
+    return complete;
 }
 
 static int mir_emit_opaque_expr(const struct AstNode *node)
@@ -2774,8 +2773,6 @@ static int mir_lower_expr(const struct AstNode *node)
     if (node == NULL)
         return -1;
     if (!mir_expr_ast_is_complete(node))
-        return mir_emit_opaque_expr(node);
-    if (mir_reject_register_address(node))
         return mir_emit_opaque_expr(node);
     switch (node->kind) {
     case AST_INT_LIT:

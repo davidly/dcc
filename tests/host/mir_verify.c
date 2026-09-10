@@ -833,6 +833,104 @@ static int expect_malformed_expr_transaction(
     return 1;
 }
 
+static int expect_valid_expr_lowering(
+    const char *name, const struct AstNode *expr, int expected_instructions,
+    int expected_values, int expected_calls)
+{
+    int first_instruction;
+    int instruction;
+    int label;
+    int call_id;
+    int value;
+
+    mir_begin_function(name, name, EMIT_SINK_FINAL, 0, 0, 0);
+    first_instruction = mir.count;
+    label = mir.next_label;
+    call_id = mir.next_call_id;
+    value = mir.next_value;
+    mir_capture_discarded_expr(expr);
+    if (mir.count != first_instruction + expected_instructions ||
+        mir.next_value != value + expected_values ||
+        mir.next_label != label ||
+        mir.next_call_id != call_id + expected_calls) {
+        fprintf(stderr,
+                "FAIL valid expression lowering %s"
+                " count=%d/%d values=%d/%d labels=%d/%d calls=%d/%d\n",
+                name, mir.count - first_instruction, expected_instructions,
+                mir.next_value - value, expected_values,
+                mir.next_label, label,
+                mir.next_call_id - call_id, expected_calls);
+        return 0;
+    }
+    for (instruction = first_instruction; instruction < mir.count;
+         ++instruction)
+        if (mir.insns[instruction].opcode == MIR_OPAQUE) {
+            fprintf(stderr, "FAIL unexpected opaque expression %s\n", name);
+            return 0;
+        }
+    return 1;
+}
+
+static void verify_large_expression_preflight(void)
+{
+    struct AstNode argument;
+    struct AstNode call;
+    struct AstNode callee;
+    struct AstNode *chain;
+    struct AstNode **arguments;
+    int argument_count;
+    int depth;
+    int index;
+    int ok = 1;
+
+    chain = (struct AstNode *)xmalloc(258 * sizeof(*chain));
+    memset(chain, 0, 258 * sizeof(*chain));
+    chain[257].kind = AST_INT_LIT;
+    chain[257].type = TYPE_INT;
+    chain[257].ival = 1;
+    for (index = 256; index >= 0; --index) {
+        chain[index].kind = AST_UNARY;
+        chain[index].type = TYPE_INT;
+        chain[index].op = '!';
+        chain[index].a = &chain[index + 1];
+    }
+    for (depth = 256; depth <= 257; ++depth)
+        ok = expect_valid_expr_lowering(
+            depth == 256 ? "verify_unary_depth_256" :
+                           "verify_unary_depth_257",
+            &chain[257 - depth], depth + 1, depth + 1, 0) && ok;
+    free(chain);
+
+    memset(&argument, 0, sizeof(argument));
+    memset(&call, 0, sizeof(call));
+    memset(&callee, 0, sizeof(callee));
+    argument.kind = AST_INT_LIT;
+    argument.type = TYPE_INT;
+    argument.ival = 1;
+    callee.kind = AST_IDENT;
+    callee.type = TYPE_INT;
+    callee.sval = "verify_large_variadic_call";
+    call.kind = AST_CALL;
+    call.type = TYPE_INT;
+    call.a = &callee;
+    arguments = (struct AstNode **)xmalloc(4097 * sizeof(*arguments));
+    for (index = 0; index < 4097; ++index)
+        arguments[index] = &argument;
+    call.list = arguments;
+    for (argument_count = 4096; argument_count <= 4097; ++argument_count) {
+        call.list_len = argument_count;
+        call.list_cap = argument_count;
+        ok = expect_valid_expr_lowering(
+            argument_count == 4096 ? "verify_call_arguments_4096" :
+                                     "verify_call_arguments_4097",
+            &call, argument_count * 2 + 1, argument_count + 1, 1) && ok;
+    }
+    free(arguments);
+
+    if (!ok)
+        ++failures;
+}
+
 static void verify_expression_lowering_preflight(void)
 {
     struct AstNode argument;
@@ -4107,6 +4205,7 @@ int main(void)
     verify_ast_assignment_support();
     verify_call_lowering_preflight();
     verify_expression_lowering_preflight();
+    verify_large_expression_preflight();
     verify_diamond_edge_liveness();
     verify_immediate_phi_consumer_forwarding();
     verify_call_argument_liveness();
