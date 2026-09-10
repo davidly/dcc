@@ -1481,6 +1481,7 @@ static int mir_match_ctype_call_target(
     const struct MirInsn *call, struct Sym *function)
 {
     return function != NULL && !function->is_funcptr &&
+        !function->is_fastcall &&
         !function->is_noreturn && function->has_proto &&
         (call->base_name[0] == 0 ||
          !strcmp(call->base_name,
