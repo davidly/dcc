@@ -74,14 +74,21 @@ non-integer operands and `_Bool` normalization. The two new maintained helpers
 are explicitly classified as active, while `ast_const_fold_strict` and the
 legacy emitter path remain excluded and unexecuted.
 
+The following wave executes 5,548 exact leaf configurations. It adds LCS and
+packed-record proof campaigns, admits defined float assignments through
+integer and `_Bool` pointer lvalues, and preflights the complete scalar-DAG
+value graph before any output, external reference, or label side effect.
+Review added a fastcall ABI rejection for the packed-record dump callback and
+defined fractional `_Bool` conversion controls.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,361 / 4,361 | 100.00% |
-| Lines | 177,375 / 190,064 | 93.32% |
-| Native branch outcomes | 91,264 / 144,656 | 63.09% |
-| Regions | 159,452 / 170,020 | 93.78% |
+| Functions | 4,362 / 4,362 | 100.00% |
+| Lines | 177,515 / 190,171 | 93.34% |
+| Native branch outcomes | 91,430 / 144,834 | 63.13% |
+| Regions | 159,656 / 170,205 | 93.80% |
 
-The raw ledger has 53,145 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,157 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload

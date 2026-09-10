@@ -98,9 +98,16 @@ cycles by 15–20% without moving its baseline. Static classification validates
 287 mixed-AST functions and no new test executes the excluded strict-fold or
 legacy emitter path.
 
-Latest integrated totals: 4,361/4,361 functions, 177,375/190,064 lines
-(93.32%), 91,264/144,656 native branch outcomes (63.09%), and
-159,452/170,020 regions (93.78%). The raw uncovered ledger is 53,145.
+The next wave raises the exact inventory to 5,548 configurations with LCS and
+packed-record proofs plus defined float-to-integer and float-to-`_Bool`
+dereference assignments. Review caught and fixed a packed fastcall ABI hole
+and removed an undefined signed-char conversion oracle. Scalar-DAG preflight
+now proves the complete value graph before producing output, externals, or
+labels, so repaired retries remain byte-identical.
+
+Latest integrated totals: 4,362/4,362 functions, 177,515/190,171 lines
+(93.34%), 91,430/144,834 native branch outcomes (63.13%), and
+159,656/170,205 regions (93.80%). The raw uncovered ledger is 53,157.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -112,7 +119,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `6be3462c` (`Keep AST fold coverage on active path`).
+  `38c9b425` (`Test fractional float bool pointer stores`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -132,7 +139,12 @@ parallel-wave summary for the current measurement.
   - `7a710e7f` / `2b5993b9` — transactional homed parameter preflight;
   - `4ac605f3` / `9e2e7d84` — aliased/direct byte-sum proof restoration; and
   - `059d6fee` through `6be3462c` — active-only integer and `_Bool` fold
-    correctness.
+    correctness;
+  - `e9317bcf` — LCS exact proofs;
+  - `07512363` / `38c9b425` — defined float pointer assignment support;
+  - `b06b122b` / `2d84f13f` — packed-record proof and fastcall ABI hardening;
+    and
+  - `b4776307` — transactional scalar-DAG preflight.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
