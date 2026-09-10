@@ -9656,6 +9656,7 @@ int mir_try_emit_structural_checks(MirStream *out)
     }
     if (mir_match_compound_check_runner(
             &compound_check_runner)) {
+        mir_machine_accept("compound-check-runner");
         mir_emit_compound_check_runner(
             out, &compound_check_runner);
         return 1;

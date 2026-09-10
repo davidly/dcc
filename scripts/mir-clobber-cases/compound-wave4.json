@@ -1,0 +1,169 @@
+[
+  {
+    "Name": "cmp4ok",
+    "Group": "compound-wave4",
+    "Sources": ["tests/mir-clobber/cmpw4.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS (a+=5) val = 25",
+      "PASS (*p>>=2) b = 10",
+      "PASS (arr<<=2) = 12",
+      "PASS (s.x|=1) = 13",
+      "PASS global pointer += global = 1",
+      "PASS (float global -= global) value = 1",
+      "PASS carr0 = 7",
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "cmp4op",
+    "Group": "compound-wave4",
+    "Sources": ["tests/mir-clobber/cmpw4.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "6:immediate:45",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp4arg",
+    "Group": "compound-wave4",
+    "Sources": ["tests/mir-clobber/cmpw4.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "14:src1:0",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp4idx",
+    "Group": "compound-wave4",
+    "Sources": ["tests/mir-clobber/cmpw4.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "513:immediate:2",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp4wid",
+    "Group": "compound-wave4",
+    "Sources": ["tests/mir-clobber/cmpw4.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "520:memory_size:2",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp4mem",
+    "Group": "compound-wave4",
+    "Sources": ["tests/mir-clobber/cmpw4.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "734:immediate:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp4call",
+    "Group": "compound-wave4",
+    "Sources": ["tests/mir-clobber/cmpw4.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "796:identity:120",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp4br",
+    "Group": "compound-wave4",
+    "Sources": ["tests/mir-clobber/cmpw4.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "965:src1:635",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp4ret",
+    "Group": "compound-wave4",
+    "Sources": ["tests/mir-clobber/cmpw4.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "971:type:1",
+    "MachineMutationFunction": "main"
+  }
+]
