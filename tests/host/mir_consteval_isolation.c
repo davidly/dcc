@@ -10,6 +10,17 @@ enum ConstevalMemoryCase {
     CONSTEVAL_INDIRECT_STORE
 };
 
+enum ConstevalIntegerCase {
+    CONSTEVAL_IMPLICIT_INT,
+    CONSTEVAL_PROMOTED_COMPARE
+};
+
+enum ConstevalIntegerMutation {
+    CONSTEVAL_INTEGER_VALID,
+    CONSTEVAL_INTEGER_POINTER_OPERAND,
+    CONSTEVAL_INTEGER_NARROW_OPERAND
+};
+
 static void initialize_instruction(struct MirInsn *insn)
 {
     memset(insn, 0, sizeof(*insn));
@@ -205,6 +216,156 @@ static int run_constant_memory_case(
     return ok;
 }
 
+static void setup_constant_integer_case(
+    const char *name, enum ConstevalIntegerCase integer_case,
+    enum ConstevalIntegerMutation mutation)
+{
+    struct Sym *function;
+    int counter_type =
+        integer_case == CONSTEVAL_PROMOTED_COMPARE
+        ? TYPE_UNSIGNED | TYPE_CHAR : TYPE_INT;
+    int counter_width = type_size(counter_type);
+    int instruction;
+
+    function = add_global(name, TYPE_INT, SC_FUNC);
+    function->is_defined = 1;
+    mir_begin_function(name, name, EMIT_SINK_FINAL, 0, 0, 0);
+    mir.return_type = TYPE_INT;
+    mir.count = 22;
+    mir.next_value = 12;
+    mir.next_label = 3;
+    mir.object_count = 2;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    memset(&mir.objects[1], 0, sizeof(mir.objects[1]));
+    strcpy(mir.objects[0].name, "counter");
+    mir.objects[0].storage = SC_LOCAL;
+    mir.objects[0].type = counter_type;
+    mir.objects[0].offset = -counter_width;
+    strcpy(mir.objects[1].name, "total");
+    mir.objects[1].storage = SC_LOCAL;
+    mir.objects[1].type = TYPE_INT;
+    mir.objects[1].offset = -counter_width - 2;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        initialize_instruction(&mir.insns[instruction]);
+
+    mir.insns[0].opcode = MIR_LABEL;
+    mir.insns[0].label = 0;
+    mir.insns[1].opcode = MIR_CONST;
+    mir.insns[1].dst = 0;
+    mir.insns[1].immediate = 0;
+    mir.insns[1].type = counter_type;
+    mir.insns[2].opcode = MIR_STORE;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].object = 0;
+    mir.insns[2].memory_size = counter_width;
+    mir.insns[2].type = counter_type;
+    mir.insns[3].opcode = MIR_CONST;
+    mir.insns[3].dst = 1;
+    mir.insns[3].immediate = 0;
+    mir.insns[4].opcode = MIR_STORE;
+    mir.insns[4].src1 = 1;
+    mir.insns[4].object = 1;
+    mir.insns[4].memory_size = 2;
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 1;
+    mir.insns[6].opcode = MIR_LOAD;
+    mir.insns[6].dst = 2;
+    mir.insns[6].object = 0;
+    mir.insns[6].type = counter_type;
+    mir.insns[7].opcode = MIR_CONST;
+    mir.insns[7].dst = 3;
+    mir.insns[7].immediate = 3;
+    mir.insns[7].type = 0;
+    mir.insns[8].opcode = MIR_BINARY;
+    mir.insns[8].dst = 4;
+    mir.insns[8].src1 = 2;
+    mir.insns[8].src2 = 3;
+    mir.insns[8].immediate = '<';
+    mir.insns[8].secondary_offset = TYPE_INT;
+    mir.insns[9].opcode = MIR_BRANCH_FALSE;
+    mir.insns[9].src1 = 4;
+    mir.insns[9].label = 2;
+    mir.insns[10].opcode = MIR_LOAD;
+    mir.insns[10].dst = 5;
+    mir.insns[10].object = 1;
+    mir.insns[11].opcode = MIR_CONST;
+    mir.insns[11].dst = 6;
+    mir.insns[11].immediate = 1;
+    mir.insns[11].type = 0;
+    mir.insns[12].opcode = MIR_BINARY;
+    mir.insns[12].dst = 7;
+    mir.insns[12].src1 = 5;
+    mir.insns[12].src2 = 6;
+    mir.insns[12].immediate = '+';
+    mir.insns[12].type = 0;
+    mir.insns[12].secondary_offset = 0;
+    mir.insns[13].opcode = MIR_STORE;
+    mir.insns[13].src1 = 7;
+    mir.insns[13].object = 1;
+    mir.insns[13].memory_size = 2;
+    mir.insns[14].opcode = MIR_LOAD;
+    mir.insns[14].dst = 8;
+    mir.insns[14].object = 0;
+    mir.insns[14].type = counter_type;
+    mir.insns[15].opcode = MIR_CONST;
+    mir.insns[15].dst = 9;
+    mir.insns[15].immediate = 1;
+    mir.insns[15].type =
+        integer_case == CONSTEVAL_IMPLICIT_INT ? 0 : counter_type;
+    mir.insns[16].opcode = MIR_BINARY;
+    mir.insns[16].dst = 10;
+    mir.insns[16].src1 = 8;
+    mir.insns[16].src2 = 9;
+    mir.insns[16].immediate = '+';
+    mir.insns[16].type =
+        integer_case == CONSTEVAL_IMPLICIT_INT ? 0 : counter_type;
+    mir.insns[16].secondary_offset =
+        integer_case == CONSTEVAL_IMPLICIT_INT ? 0 : counter_type;
+    mir.insns[17].opcode = MIR_STORE;
+    mir.insns[17].src1 = 10;
+    mir.insns[17].object = 0;
+    mir.insns[17].memory_size = counter_width;
+    mir.insns[17].type = counter_type;
+    mir.insns[18].opcode = MIR_JUMP;
+    mir.insns[18].label = 1;
+    mir.insns[19].opcode = MIR_LABEL;
+    mir.insns[19].label = 2;
+    mir.insns[20].opcode = MIR_LOAD;
+    mir.insns[20].dst = 11;
+    mir.insns[20].object = 1;
+    mir.insns[21].opcode = MIR_RETURN;
+    mir.insns[21].src1 = 11;
+
+    if (mutation == CONSTEVAL_INTEGER_POINTER_OPERAND)
+        mir.insns[15].type = type_add_ptr(TYPE_INT);
+    else if (mutation == CONSTEVAL_INTEGER_NARROW_OPERAND)
+        mir.insns[8].secondary_offset = TYPE_UNSIGNED | TYPE_CHAR;
+}
+
+static int run_constant_integer_case(
+    const char *name, enum ConstevalIntegerCase integer_case,
+    enum ConstevalIntegerMutation mutation)
+{
+    MirStream *stream = mir_stream_open();
+    char output[128];
+    size_t bytes;
+    int accepted;
+    int ok;
+
+    if (stream == NULL)
+        fatal("cannot create constant evaluator isolation stream");
+    setup_constant_integer_case(name, integer_case, mutation);
+    accepted = mir_try_emit_constant_folding_kernels(stream);
+    mir_stream_rewind(stream);
+    memset(output, 0, sizeof(output));
+    bytes = mir_stream_read(output, 1, sizeof(output) - 1, stream);
+    ok = mutation == CONSTEVAL_INTEGER_VALID
+        ? accepted == 1 && strstr(output, "\tld hl,3\n") != NULL
+        : accepted == 0 && bytes == 0;
+    mir_stream_close(stream);
+    return ok;
+}
+
 int main(void)
 {
     int ok = 1;
@@ -243,6 +404,32 @@ int main(void)
             "consteval_store_indirect_bitfield",
             CONSTEVAL_INDIRECT_STORE, 1, 0)) {
         fprintf(stderr, "indirect store bit-field mutation was accepted\n");
+        ok = 0;
+    }
+    if (!run_constant_integer_case(
+            "consteval_implicit_int",
+            CONSTEVAL_IMPLICIT_INT, CONSTEVAL_INTEGER_VALID)) {
+        fprintf(stderr, "implicit integer control failed\n");
+        ok = 0;
+    }
+    if (!run_constant_integer_case(
+            "consteval_implicit_pointer",
+            CONSTEVAL_IMPLICIT_INT,
+            CONSTEVAL_INTEGER_POINTER_OPERAND)) {
+        fprintf(stderr, "pointer operand mutation was accepted\n");
+        ok = 0;
+    }
+    if (!run_constant_integer_case(
+            "consteval_promoted_compare",
+            CONSTEVAL_PROMOTED_COMPARE, CONSTEVAL_INTEGER_VALID)) {
+        fprintf(stderr, "promoted comparison control failed\n");
+        ok = 0;
+    }
+    if (!run_constant_integer_case(
+            "consteval_narrow_compare",
+            CONSTEVAL_PROMOTED_COMPARE,
+            CONSTEVAL_INTEGER_NARROW_OPERAND)) {
+        fprintf(stderr, "narrow comparison mutation was accepted\n");
         ok = 0;
     }
     return ok ? 0 : 1;

@@ -420,11 +420,26 @@ static int mir_machine_constant_scalar_type(int type)
            mir_machine_constant_pointer_type(type);
 }
 
+static int mir_machine_constant_effective_integer_type(int type)
+{
+    /* Lowering leaves context-inferred int constants/arithmetic untyped. */
+    return type == 0 ? TYPE_INT : type;
+}
+
+static int mir_machine_constant_implicit_integer_type(int type)
+{
+    return mir_machine_constant_integer_type(
+        mir_machine_constant_effective_integer_type(type));
+}
+
 static int mir_machine_constant_value_has_type(int value, int type)
 {
     const struct MirInsn *definition = mir_definition(value);
 
-    return definition != NULL && definition->type == type;
+    return definition != NULL &&
+           mir_machine_constant_effective_integer_type(
+               definition->type) ==
+           mir_machine_constant_effective_integer_type(type);
 }
 
 static int mir_machine_constant_value_is_integer(int value)
@@ -432,7 +447,23 @@ static int mir_machine_constant_value_is_integer(int value)
     const struct MirInsn *definition = mir_definition(value);
 
     return definition != NULL &&
-           mir_machine_constant_integer_type(definition->type);
+           mir_machine_constant_implicit_integer_type(definition->type);
+}
+
+static int mir_machine_constant_value_converts_to_integer_type(
+    int value, int type)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int definition_type;
+
+    if (definition == NULL ||
+        !mir_machine_constant_integer_type(type))
+        return 0;
+    definition_type = mir_machine_constant_effective_integer_type(
+        definition->type);
+    return mir_machine_constant_integer_type(definition_type) &&
+           (definition_type == type ||
+            type_size(definition_type) < type_size(type));
 }
 
 static int mir_machine_constant_value_points_to_type(int value, int type)
@@ -448,10 +479,14 @@ static int mir_machine_constant_value_has_integer_width(
     int value, int width)
 {
     const struct MirInsn *definition = mir_definition(value);
+    int type;
 
-    return definition != NULL &&
-           mir_machine_constant_integer_type(definition->type) &&
-           type_size(definition->type) == width;
+    if (definition == NULL)
+        return 0;
+    type = mir_machine_constant_effective_integer_type(
+        definition->type);
+    return mir_machine_constant_integer_type(type) &&
+           type_size(type) == width;
 }
 
 static int mir_machine_evaluate_constant_flow(
@@ -945,7 +980,7 @@ static int mir_machine_evaluate_constant_function(int *result)
             break;
         case MIR_CONST:
             if (insn->dst < 0 || insn->dst >= value_capacity ||
-                !mir_machine_constant_integer_type(insn->type))
+                !mir_machine_constant_implicit_integer_type(insn->type))
                 goto done;
             values[insn->dst] = insn->immediate;
             value_known[insn->dst] = 1;
@@ -1105,8 +1140,11 @@ static int mir_machine_evaluate_constant_function(int *result)
         case MIR_BINARY:
         {
             int comparison;
-            int operand_type = insn->secondary_offset != 0
-                ? insn->secondary_offset : insn->type;
+            int result_type =
+                mir_machine_constant_effective_integer_type(insn->type);
+            int operand_type = mir_machine_constant_effective_integer_type(
+                insn->secondary_offset != 0
+                ? insn->secondary_offset : insn->type);
 
             if (insn->dst < 0 || insn->dst >= value_capacity ||
                 insn->src1 < 0 || insn->src1 >= value_capacity ||
@@ -1116,9 +1154,9 @@ static int mir_machine_evaluate_constant_function(int *result)
                 value_addresses[insn->src1] >= 0 ||
                 value_addresses[insn->src2] >= 0 ||
                 !mir_machine_constant_integer_type(operand_type) ||
-                !mir_machine_constant_value_has_type(
+                !mir_machine_constant_value_converts_to_integer_type(
                     insn->src1, operand_type) ||
-                !mir_machine_constant_value_has_type(
+                !mir_machine_constant_value_converts_to_integer_type(
                     insn->src2, operand_type))
                 goto done;
             comparison = insn->immediate == TOK_EQ ||
@@ -1128,7 +1166,7 @@ static int mir_machine_evaluate_constant_function(int *result)
                          insn->immediate == TOK_LE ||
                          insn->immediate == TOK_GE;
             if ((comparison && insn->type != TYPE_INT) ||
-                (!comparison && insn->type != operand_type))
+                (!comparison && result_type != operand_type))
                 goto done;
             if (comparison) {
                 if (!mir_machine_fold_constant_comparison(
@@ -1138,7 +1176,7 @@ static int mir_machine_evaluate_constant_function(int *result)
             } else if (!mir_machine_fold_integer_binary(
                            (int)insn->immediate,
                            values[insn->src1], values[insn->src2],
-                           insn->type, &values[insn->dst])) {
+                           result_type, &values[insn->dst])) {
                 goto done;
             }
             value_known[insn->dst] = 1;
