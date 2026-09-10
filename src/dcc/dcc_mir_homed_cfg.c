@@ -636,6 +636,91 @@ static int mir_homed_value_operands_valid(void)
     return 1;
 }
 
+/* Generic call emission otherwise discovers malformed ARG groups only after
+ * writing the function prologue and earlier instructions. */
+static int mir_homed_call_valid(int call_instruction)
+{
+    const struct MirInsn *call = &mir.insns[call_instruction];
+    struct Sym *callee;
+    int returns_value;
+    int argument_count = 0;
+    int instruction;
+
+    returns_value = type_ptr_depth(call->type) > 0 ||
+                    (call->type & 15) != TYPE_VOID;
+    if (call->secondary_offset < 0 ||
+        call->secondary_offset >= mir.next_call_id ||
+        call->src1 >= 0 || call->src2 >= 0 ||
+        (!strcmp(call->name, "<indirect>")) ||
+        (returns_value && call->dst < 0))
+        return 0;
+    callee = find_global(call->name);
+    if (callee == NULL || callee->storage != SC_FUNC ||
+        callee->is_funcptr || callee->type != call->type ||
+        (callee->has_proto &&
+         (callee->proto_nargs < 0 ||
+          callee->proto_nargs > MAX_PROTO_PARAMS)))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *argument = &mir.insns[instruction];
+        const struct MirInsn *definition;
+
+        if (instruction != call_instruction &&
+            argument->opcode == MIR_CALL &&
+            argument->secondary_offset == call->secondary_offset)
+            return 0;
+        if (argument->opcode != MIR_ARG ||
+            argument->secondary_offset != call->secondary_offset)
+            continue;
+        if (instruction >= call_instruction ||
+            argument->immediate != argument_count)
+            return 0;
+        definition = mir_definition(argument->src1);
+        if (definition == NULL ||
+            definition >= argument ||
+            definition->type != argument->type)
+            return 0;
+        if (callee->has_proto &&
+            argument->immediate < callee->proto_nargs &&
+            argument->type !=
+                callee->proto_types[argument->immediate])
+            return 0;
+        ++argument_count;
+    }
+    if (callee->has_proto &&
+        (argument_count < callee->proto_nargs ||
+         (!callee->proto_variadic &&
+          argument_count != callee->proto_nargs)))
+        return 0;
+    return 1;
+}
+
+static int mir_homed_calls_valid(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_CALL &&
+            !mir_homed_call_valid(instruction))
+            return 0;
+        if (insn->opcode == MIR_ARG) {
+            int call_count = 0;
+            int scan;
+
+            for (scan = instruction + 1; scan < mir.count; ++scan)
+                if (mir.insns[scan].opcode == MIR_CALL &&
+                    mir.insns[scan].secondary_offset ==
+                        insn->secondary_offset)
+                    ++call_count;
+            if (call_count != 1)
+                return 0;
+        }
+    }
+    return 1;
+}
+
 static int mir_homed_branch_targets_valid(void)
 {
     unsigned char *definitions;
@@ -1611,6 +1696,8 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
     mir_homed_cfg_used_unary_not_branch = 0;
     if (!mir_homed_value_operands_valid())
         return mir_homed_reject("value-operand");
+    if (!mir_homed_calls_valid())
+        return mir_homed_reject("call");
     if (!mir_homed_branch_targets_valid())
         return mir_homed_reject("branch-target");
     /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
