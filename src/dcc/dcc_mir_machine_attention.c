@@ -3323,6 +3323,7 @@ int mir_try_emit_attention_kernels(MirStream *out)
     }
     if (mir_match_softmax_schedule(&softmax_schedule)) {
         mir_emit_softmax_schedule(out, &softmax_schedule);
+        mir_machine_accept("softmax-schedule");
         return 1;
     }
     if (mir_match_backward_pass_schedule(
