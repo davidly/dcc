@@ -126,6 +126,10 @@ python3 scripts/softmax-wave19-campaign.py --jobs "$jobs"
 # run-mir-clobber-tests.ps1 above.
 python3 scripts/byte-math-wave19-audit.py --jobs 2 \
     --output-dir "$build_dir/byte-math-wave19-audit"
+# Compile-only mutation audit; multidimensional runtime controls already ran
+# through run-mir-clobber-tests.ps1 above.
+python3 scripts/multidim-wave19-audit.py --jobs 2 \
+    --output-dir "$build_dir/multidim-wave19-audit"
 env -u DCC_MIR_MACHINE_MUTATE DCC_MIR_MACHINE_MUTATE_FUNCTION=main \
     "$DCC" -c "$repo_root/tests/mir-clobber/logserie.c" \
     -o "$build_dir/no-machine-mutation.MAC"
