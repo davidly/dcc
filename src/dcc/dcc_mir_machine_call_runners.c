@@ -5297,6 +5297,25 @@ static int mir_match_constant_do_while_schedule(
                 expected_opcodes[instruction])
             return mir_machine_reject(
                 "constant-do-while-schedule", "opcodes");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if ((insn->opcode == MIR_CONST ||
+             insn->opcode == MIR_LOAD ||
+             insn->opcode == MIR_BINARY ||
+             insn->opcode == MIR_STORE) &&
+            !mir_call_safe_signed_word_type(insn->type))
+            return mir_machine_reject(
+                "constant-do-while-schedule", "types-widths");
+        if (insn->opcode == MIR_STORE && insn->memory_size != 2)
+            return mir_machine_reject(
+                "constant-do-while-schedule", "types-widths");
+        if ((insn->opcode == MIR_UNARY ||
+             insn->opcode == MIR_ARG) &&
+            !mir_call_safe_bool_type(insn->type))
+            return mir_machine_reject(
+                "constant-do-while-schedule", "types-widths");
+    }
     if (!mir_machine_constant_equals(mir.insns[1].dst, 0) ||
         !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
         !mir_machine_constant_equals(mir.insns[11].dst, 1) ||
@@ -5318,6 +5337,7 @@ static int mir_match_constant_do_while_schedule(
         mir.insns[18].src1 != mir.insns[4].dst ||
         mir.insns[18].src2 != mir.insns[17].dst ||
         mir.insns[18].immediate != TOK_NE ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
         mir.insns[19].label != mir.insns[21].label ||
         mir.insns[20].label != mir.insns[7].label ||
         mir.insns[24].src1 != mir.insns[12].dst ||
@@ -5352,6 +5372,7 @@ static int mir_match_constant_do_while_schedule(
         mir.insns[49].src1 != mir.insns[43].dst ||
         mir.insns[49].src2 != mir.insns[48].dst ||
         mir.insns[49].immediate != '>' ||
+        mir.insns[50].src1 != mir.insns[49].dst ||
         mir.insns[50].label != mir.insns[52].label ||
         mir.insns[51].label != mir.insns[34].label ||
         mir.insns[55].src1 != mir.insns[39].dst ||
@@ -5394,11 +5415,13 @@ static int mir_match_constant_do_while_schedule(
         mir.insns[84].src1 != mir.insns[76].dst ||
         mir.insns[84].src2 != mir.insns[83].dst ||
         mir.insns[84].immediate != TOK_EQ ||
+        mir.insns[85].src1 != mir.insns[84].dst ||
         mir.insns[85].label != mir.insns[89].label ||
         mir.insns[87].label != mir.insns[97].label ||
         mir.insns[94].src1 != mir.insns[92].dst ||
         mir.insns[94].src2 != mir.insns[93].dst ||
         mir.insns[94].immediate != '>' ||
+        mir.insns[95].src1 != mir.insns[94].dst ||
         mir.insns[95].label != mir.insns[97].label ||
         mir.insns[96].label != mir.insns[71].label ||
         !mir_machine_same_location(&mir.insns[98], execution_store) ||
@@ -5455,6 +5478,7 @@ static int mir_match_constant_do_while_schedule(
         mir.insns[135].src1 != mir.insns[133].dst ||
         mir.insns[135].src2 != mir.insns[134].dst ||
         mir.insns[135].immediate != TOK_EQ ||
+        mir.insns[136].src1 != mir.insns[135].dst ||
         mir.insns[136].label != mir.insns[140].label ||
         mir.insns[138].label != mir.insns[146].label ||
         mir.insns[143].src1 != mir.insns[141].dst ||
@@ -5464,6 +5488,7 @@ static int mir_match_constant_do_while_schedule(
         mir.insns[149].src1 != mir.insns[147].dst ||
         mir.insns[149].src2 != mir.insns[148].dst ||
         mir.insns[149].immediate != '>' ||
+        mir.insns[150].src1 != mir.insns[149].dst ||
         mir.insns[150].label != mir.insns[152].label ||
         mir.insns[151].label != mir.insns[119].label ||
         !mir_machine_same_location(&mir.insns[153], execution_store) ||
@@ -12347,6 +12372,7 @@ int mir_try_emit_call_runners(MirStream *out)
             return 1;
         }
         if (mir_match_constant_do_while_schedule(&do_while_plan)) {
+            mir_machine_accept("constant-do-while-schedule");
             mir_emit_constant_do_while_schedule(
                 out, &do_while_plan);
             return 1;
