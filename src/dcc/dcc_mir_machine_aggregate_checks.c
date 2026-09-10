@@ -8322,6 +8322,47 @@ static int mir_vla_smooth_pointer_type(int type)
            type_size(type) == 2;
 }
 
+static int mir_vla_smooth_declared_object(
+    const struct MirInsn *insn)
+{
+    const struct MirObject *object;
+    int declaration;
+    int matches = 0;
+
+    if (insn->object < 0 || insn->object >= mir.object_count)
+        return 0;
+    object = &mir.objects[insn->object];
+    if (strcmp(insn->name, object->name) != 0 ||
+        object->is_register ||
+        (object->storage == SC_PARAM
+             ? object->entry_value != insn->dst
+             : object->entry_value != -1))
+        return 0;
+    for (declaration = 0;
+         declaration < mir.declared_count;
+         ++declaration) {
+        if (strcmp(mir.declared_names[declaration], object->name) != 0)
+            continue;
+        ++matches;
+        if (mir.declared_types[declaration] != object->type ||
+            mir.declared_storage[declaration] != object->storage ||
+            mir.declared_offsets[declaration] != object->offset ||
+            mir.declared_sizes[declaration] != type_size(object->type) ||
+            mir.declared_dim_counts[declaration] != 0 ||
+            mir.declared_elem_sizes[declaration] != 0 ||
+            mir.declared_vla_size_offsets[declaration] != 0 ||
+            mir.declared_is_vla[declaration] ||
+            mir.declared_is_array[declaration] ||
+            mir.declared_is_volatile[declaration] ||
+            mir.declared_pointee_is_volatile[declaration] ||
+            mir.declared_pointee_volatile_masks[declaration] != 0 ||
+            mir.declared_dynamic_strides[declaration] != 0 ||
+            mir.declared_runtime_stride_names[declaration][0] != '\0')
+            return 0;
+    }
+    return matches == 1;
+}
+
 static int mir_vla_smooth_parameter(
     int instruction, int expected_offset, int pointer,
     int *stack_offset)
@@ -8333,9 +8374,12 @@ static int mir_vla_smooth_parameter(
 
     if (parameter->opcode != MIR_PARAM ||
         parameter->object < 0 ||
+        !mir_machine_named_nonvolatile(parameter) ||
+        !mir_vla_smooth_declared_object(parameter) ||
         !mir_scalar_memory_location(
             parameter, &memory_type, &memory_storage, &memory_offset) ||
         memory_storage != SC_PARAM ||
+        memory_offset != expected_offset + 2 ||
         (pointer
              ? (!mir_vla_smooth_pointer_type(parameter->type) ||
                 !mir_vla_smooth_pointer_type(memory_type) ||
@@ -8363,6 +8407,7 @@ static int mir_vla_smooth_local(
         memory_storage != SC_LOCAL ||
         !mir_vla_smooth_signed_type(memory_type, width) ||
         !mir_vla_smooth_signed_type(insn->type, width) ||
+        !mir_vla_smooth_declared_object(insn) ||
         !mir_machine_named_nonvolatile(insn))
         return 0;
     if (offset_out != NULL)
@@ -8406,6 +8451,126 @@ static int mir_vla_smooth_index(
            index->memory_size == 2 &&
            index->memory_flags == 0 &&
            mir_vla_smooth_pointer_type(index->type);
+}
+
+struct MirVlaSmoothMetadata {
+    int instruction;
+    int type;
+    int memory_size;
+    int memory_flags;
+    int secondary_offset;
+};
+
+static int mir_vla_smooth_instruction_metadata(void)
+{
+    static const struct MirVlaSmoothMetadata expected[] = {
+        {0, 0, 0, 0, 0},
+        {1, TYPE_INT, 0, 0, 0},
+        {2, TYPE_INT, 0, 0, 0},
+        {3, TYPE_INT | TYPE_PTR, 0, 0, 0},
+        {4, TYPE_INT | TYPE_PTR, 0, 0, 0},
+        {6, TYPE_LONG, 0, 0, 0},
+        {7, TYPE_LONG, 4, 128, 0},
+        {9, TYPE_INT, 0, 0, 0},
+        {10, TYPE_INT, 0, 0, TYPE_INT},
+        {11, TYPE_INT, 2, 128, 0},
+        {24, TYPE_INT, 0, 0, 0},
+        {25, TYPE_INT, 2, 0, 0},
+        {26, 0, 0, 0, 0},
+        {33, TYPE_INT, 0, 0, 0},
+        {39, TYPE_INT, 0, 0, TYPE_INT},
+        {40, 0, 0, 0, 0},
+        {43, TYPE_LONG, 0, 0, 0},
+        {44, TYPE_LONG, 4, 0, 0},
+        {46, TYPE_INT, 0, 0, 0},
+        {47, TYPE_INT, 2, 0, 0},
+        {51, TYPE_INT, 0, 0, TYPE_INT},
+        {52, TYPE_INT, 2, 0, 0},
+        {53, 0, 0, 0, 0},
+        {64, TYPE_INT, 0, 0, 0},
+        {67, TYPE_INT, 0, 0, TYPE_INT},
+        {68, TYPE_INT, 0, 0, TYPE_INT},
+        {69, 0, 0, 0, 0},
+        {70, TYPE_INT, 0, 0, 0},
+        {71, TYPE_INT, 0, 0, 0},
+        {72, TYPE_INT, 0, 0, TYPE_INT},
+        {73, 0, 0, 0, 0},
+        {74, TYPE_INT, 0, 0, 0},
+        {76, TYPE_INT, 0, 0, TYPE_INT},
+        {77, 0, 0, 0, 0},
+        {78, 0, 0, 0, 0},
+        {79, 0, 0, 0, 0},
+        {80, 0, 0, 0, 0},
+        {81, 0, 0, 0, 0},
+        {82, 0, 0, 0, 0},
+        {83, 0, 0, 0, 0},
+        {84, 0, 0, 0, 0},
+        {85, 0, 0, 0, 0},
+        {86, TYPE_LONG, 0, 0, 0},
+        {88, TYPE_INT, 0, 0, 0},
+        {89, TYPE_INT | TYPE_PTR, 2, 0, 0},
+        {90, TYPE_INT, 2, 0, 0},
+        {91, TYPE_LONG, 0, 0, TYPE_LONG},
+        {93, TYPE_LONG, 4, 0, 0},
+        {94, TYPE_INT, 0, 0, 0},
+        {95, 0, 0, 0, 0},
+        {96, 0, 0, 0, 0},
+        {97, TYPE_INT, 2, 0, 0},
+        {99, 0, 0, 0, 0},
+        {101, 0, 0, 0, 0},
+        {102, TYPE_INT, 0, 0, 0},
+        {103, 0, 0, 0, 0},
+        {104, 0, 0, 0, 0},
+        {105, TYPE_INT, 2, 0, 0},
+        {106, 0, 0, 0, 0},
+        {107, 0, 0, 0, 0},
+        {110, TYPE_INT | TYPE_PTR, 2, 0, 0},
+        {111, TYPE_LONG, 0, 0, 0},
+        {112, TYPE_INT, 0, 0, 0},
+        {113, TYPE_LONG, 0, 0, TYPE_LONG},
+        {114, TYPE_INT, 0, 0, 0},
+        {115, TYPE_INT, 2, 0, 0},
+        {118, TYPE_INT | TYPE_PTR, 2, 0, 0},
+        {119, TYPE_INT, 2, 0, 0},
+        {122, TYPE_INT | TYPE_PTR, 2, 0, 0},
+        {123, TYPE_INT, 2, 0, 0},
+        {124, TYPE_INT, 0, 0, TYPE_INT},
+        {125, 0, 0, 0, 0},
+        {126, TYPE_LONG, 0, 0, 0},
+        {127, TYPE_LONG, 0, 0, 0},
+        {128, TYPE_LONG, 0, 0, TYPE_LONG},
+        {129, TYPE_LONG, 4, 0, 0},
+        {130, 0, 0, 0, 0},
+        {132, 0, 0, 0, 0},
+        {134, 0, 0, 0, 0},
+        {135, 0, 0, 0, 0},
+        {136, TYPE_INT, 2, 0, 0},
+        {137, 0, 0, 0, 0},
+        {138, 0, 0, 0, 0},
+        {139, TYPE_LONG, 0, 0, 0},
+        {140, 0, 0, 0, 0}
+    };
+    int item;
+
+    for (item = 0;
+         item < (int)(sizeof(expected) / sizeof(expected[0]));
+         ++item) {
+        const struct MirVlaSmoothMetadata *metadata = &expected[item];
+        const struct MirInsn *insn = &mir.insns[metadata->instruction];
+
+        if (insn->type != metadata->type ||
+            insn->memory_size != metadata->memory_size ||
+            insn->memory_flags != metadata->memory_flags ||
+            insn->secondary_offset != metadata->secondary_offset ||
+            insn->pointee_volatile_mask != 0 ||
+            insn->has_pointer_qualifiers ||
+            insn->bit_width != 0 ||
+            insn->bit_shift != 0 ||
+            insn->bit_mask != 0 ||
+            insn->divmod_cast_types != 0)
+            return 0;
+    }
+    return 1;
 }
 
 static int mir_match_vla_smooth(
@@ -8468,14 +8633,21 @@ static int mir_match_vla_smooth(
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 141 || mir_cfg_block_count() != 12 ||
+        mir.object_count != 10 || mir.declared_count != 10 ||
         mir.has_vla || mir.local_bytes != 16 ||
+        mir.dead_local_suffix_bytes != 0 ||
         mir.aggregate_temp_bytes != 0 ||
+        mir.has_runtime_stride_param ||
+        mir.is_variadic_function ||
+        mir.implicit_zero_return ||
         !mir_vla_smooth_signed_type(mir.return_type, 4))
-        return 0;
+        return mir_machine_reject("vla-smooth", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
             expected_opcodes[instruction])
             return mir_machine_reject("vla-smooth", "opcodes");
+    if (!mir_vla_smooth_instruction_metadata())
+        return mir_machine_reject("vla-smooth", "instruction-metadata");
     for (item = 0; item < 12; ++item) {
         int other;
 
@@ -8520,6 +8692,11 @@ static int mir_match_vla_smooth(
         !mir_vla_smooth_local(47, 2, objects[8], &offsets[4]) ||
         !mir_vla_smooth_local(52, 2, objects[9], &offsets[5]))
         return mir_machine_reject("vla-smooth", "local-types");
+    for (item = 0; item < 6; ++item)
+        if (offsets[item] < -mir.local_bytes ||
+            offsets[item] > -local_widths[item])
+            return mir_machine_reject(
+                "vla-smooth", "local-frame");
     for (item = 0; item < 6; ++item) {
         int other;
 
@@ -14354,6 +14531,7 @@ int mir_try_emit_aggregate_checks(MirStream *out)
         return 1;
     }
     if (mir_match_vla_smooth(&vla_smooth)) {
+        mir_machine_accept("vla-smooth");
         mir_emit_vla_smooth(out, &vla_smooth);
         return 1;
     }

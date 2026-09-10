@@ -131,6 +131,14 @@ if(DCC_BUILD_MIR_TESTS)
         ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
         mir-consteval-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    set(DCC_VLA_SMOOTH_TEST_SOURCES ${DCC_MIR_TEST_SOURCES})
+    list(REMOVE_ITEM DCC_VLA_SMOOTH_TEST_SOURCES
+        dcc_mir_machine_aggregate_checks.c)
+    add_executable(mir-vla-smooth-isolation-test
+        ../../tests/host/mir_vla_smooth_isolation.c
+        ${DCC_VLA_SMOOTH_TEST_SOURCES})
+    target_include_directories(
+        mir-vla-smooth-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     if(DCC_ENABLE_COVERAGE)
         target_compile_options(mir-verify-test PRIVATE
             -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
@@ -148,6 +156,10 @@ if(DCC_BUILD_MIR_TESTS)
             -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
         set_property(TARGET mir-consteval-isolation-test APPEND_STRING PROPERTY
             LINK_FLAGS " -fprofile-instr-generate")
+        target_compile_options(mir-vla-smooth-isolation-test PRIVATE
+            -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+        set_property(TARGET mir-vla-smooth-isolation-test APPEND_STRING PROPERTY
+            LINK_FLAGS " -fprofile-instr-generate")
     endif()
     add_test(NAME mir-verify COMMAND mir-verify-test)
     add_test(NAME mir-scalar-dag COMMAND mir-scalar-dag-test)
@@ -155,4 +167,7 @@ if(DCC_BUILD_MIR_TESTS)
         NAME mir-selector-isolation COMMAND mir-selector-isolation-test)
     add_test(
         NAME mir-consteval-isolation COMMAND mir-consteval-isolation-test)
+    add_test(
+        NAME mir-vla-smooth-isolation
+        COMMAND mir-vla-smooth-isolation-test)
 endif()
