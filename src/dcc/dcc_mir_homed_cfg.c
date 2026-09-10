@@ -685,6 +685,21 @@ static int mir_homed_instruction_dominates(
     return 1;
 }
 
+static int mir_homed_value_has_unique_definition(
+    int value, const struct MirInsn *expected)
+{
+    const struct MirInsn *definition = NULL;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].dst == value) {
+            if (definition != NULL)
+                return 0;
+            definition = &mir.insns[instruction];
+        }
+    return definition == expected;
+}
+
 static int mir_homed_call_valid(
     int call_instruction, const int *labels,
     int *work, unsigned char *visited)
@@ -702,7 +717,9 @@ static int mir_homed_call_valid(
         call->src1 >= 0 || call->src2 >= 0 ||
         (!strcmp(call->name, "<indirect>")) ||
         (returns_value &&
-         (call->dst < 0 || mir_definition(call->dst) != call)))
+         (call->dst < 0 ||
+          mir_definition(call->dst) != call ||
+          !mir_homed_value_has_unique_definition(call->dst, call))))
         return 0;
     callee = find_global(call->name);
     if (callee == NULL || callee->storage != SC_FUNC ||

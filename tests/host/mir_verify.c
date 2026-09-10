@@ -2066,7 +2066,8 @@ static void verify_homed_call_preflight_transaction(void)
         "later argument definition",
         "reversed arguments",
         "missing call result",
-        "call result collision"
+        "call result collision",
+        "later call result redefinition"
     };
     struct Sym *callee;
     struct MirInsn control_insns[9];
@@ -2190,8 +2191,12 @@ static void verify_homed_call_preflight_transaction(void)
             mir.insns[4].immediate = 0;
         } else if (mutation == 15) {
             mir.insns[6].dst = -1;
-        } else {
+        } else if (mutation == 16) {
             mir.insns[6].dst = 1;
+        } else {
+            mir.insns[7].opcode = MIR_CONST;
+            mir.insns[7].dst = 2;
+            mir.insns[7].immediate = 99;
         }
 
         mir_invalidate_use_cache();
