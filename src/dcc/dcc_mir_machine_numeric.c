@@ -14292,6 +14292,7 @@ int mir_try_emit_numeric_kernels(MirStream *out, int phase)
         struct MirScopedTempSchedule scoped_temp_plan;
 
         if (mir_match_lcs_dp_schedule(&lcs_plan)) {
+            mir_machine_accept("lcs-dp");
             mir_emit_lcs_dp_schedule(out, &lcs_plan);
             return 1;
         }
