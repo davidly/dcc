@@ -1626,13 +1626,21 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
         case MIR_PHI: case MIR_JUMP: case MIR_BRANCH_FALSE:
             break;
         case MIR_PARAM:
-            if ((mir_value_has_use(insn->dst) ||
-                 !mir_regional_home_plan_is_active()) &&
-                (insn->object < 0 ||
-                 (type_size(mir.objects[insn->object].type) != 1 &&
-                  type_size(mir.objects[insn->object].type) != 2 &&
-                  type_size(mir.objects[insn->object].type) != 4)))
-                return mir_homed_reject("parameter-type");
+            if (mir_value_has_use(insn->dst) ||
+                !mir_regional_home_plan_is_active()) {
+                int parameter_size;
+
+                if (insn->object < 0 ||
+                    insn->object >= mir.object_count ||
+                    mir.objects[insn->object].storage != SC_PARAM)
+                    return mir_homed_reject("parameter-object");
+                parameter_size =
+                    type_size(mir.objects[insn->object].type);
+                if (parameter_size != 1 &&
+                    parameter_size != 2 &&
+                    parameter_size != 4)
+                    return mir_homed_reject("parameter-type");
+            }
             break;
         case MIR_STORE:
             if (!mir_object_is_fully_promoted(insn->object) ||

@@ -1152,6 +1152,7 @@ static void verify_homed_parameter_preflight_transaction(void)
     int saved_spill_count;
     int sid;
     int result;
+    int mutation;
     int ok = 1;
 
     setup(5, 1, 2);
@@ -1178,12 +1179,10 @@ static void verify_homed_parameter_preflight_transaction(void)
         return;
     }
     control = mir_stream_open();
-    retry = mir_stream_open();
-    if (control == NULL || retry == NULL) {
+    if (control == NULL) {
         fprintf(stderr, "FAIL homed parameter preflight stream allocation\n");
         ++failures;
         mir_stream_close(control);
-        mir_stream_close(retry);
         clear_liveness();
         return;
     }
@@ -1194,40 +1193,59 @@ static void verify_homed_parameter_preflight_transaction(void)
     mir_extrn_begin_attempt();
     result = mir_try_emit_homed_scalar_cfg(control);
     ok = ok && result == 1 && mir_stream_size(control) > 0;
-
-    label_id = first_label;
     sid = add_struct_def("verify_homed_invalid_parameter");
     struct_defs[sid - 1].size = 6;
-    mir.objects[0].type = make_struct_type(sid);
-    mir_extrn_begin_attempt();
-    result = mir_try_emit_homed_scalar_cfg(retry);
-    ok = ok && result == 0;
-    ok = ok && mir_stream_tell(retry) == 0 && mir_stream_size(retry) == 0;
-    ok = ok && label_id == first_label;
-    ok = ok && mir.allocation_colors[0] == saved_color;
-    ok = ok && mir.allocation_spills[0] == saved_spill;
-    ok = ok && mir.allocation_spill_count == saved_spill_count;
-
-    mir.objects[0].type = TYPE_INT;
-    mir_extrn_begin_attempt();
-    result = mir_try_emit_homed_scalar_cfg(retry);
-    ok = ok && result == 1;
     mir_stream_rewind(control);
-    mir_stream_rewind(retry);
     control_bytes = mir_stream_read(
         control_text, 1, sizeof(control_text), control);
-    retry_bytes = mir_stream_read(
-        retry_text, 1, sizeof(retry_text), retry);
     ok = ok && control_bytes < sizeof(control_text);
-    ok = ok && retry_bytes < sizeof(retry_text);
-    ok = ok && control_bytes == retry_bytes;
-    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+
+    for (mutation = 0; mutation < 3; ++mutation) {
+        retry = mir_stream_open();
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        label_id = first_label;
+        mir.insns[1].object = 0;
+        mir.objects[0].storage = SC_PARAM;
+        mir.objects[0].type = TYPE_INT;
+        if (mutation == 0)
+            mir.objects[0].type = make_struct_type(sid);
+        else if (mutation == 1)
+            mir.insns[1].object = mir.object_count;
+        else
+            mir.objects[0].storage = SC_LOCAL;
+
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        ok = ok && result == 0;
+        ok = ok && mir_stream_tell(retry) == 0 &&
+             mir_stream_size(retry) == 0;
+        ok = ok && label_id == first_label;
+        ok = ok && mir.allocation_colors[0] == saved_color;
+        ok = ok && mir.allocation_spills[0] == saved_spill;
+        ok = ok && mir.allocation_spill_count == saved_spill_count;
+
+        mir.insns[1].object = 0;
+        mir.objects[0].storage = SC_PARAM;
+        mir.objects[0].type = TYPE_INT;
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        ok = ok && result == 1;
+        mir_stream_rewind(retry);
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        ok = ok && retry_bytes < sizeof(retry_text);
+        ok = ok && control_bytes == retry_bytes;
+        ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+        mir_stream_close(retry);
+    }
     if (!ok) {
         fprintf(stderr, "FAIL homed parameter preflight transaction\n");
         ++failures;
     }
     mir_stream_close(control);
-    mir_stream_close(retry);
     clear_liveness();
 }
 
