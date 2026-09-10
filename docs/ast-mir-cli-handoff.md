@@ -130,9 +130,17 @@ and failure controls. Review added direct-call proofs for byte-math helpers and
 validates every fixed and variadic directory-call argument type before exact
 emission.
 
-Latest integrated totals: 4,376/4,376 functions, 178,307/190,754 lines
-(93.47%), 92,030/145,488 native branch outcomes (63.26%), and
-160,669/171,006 regions (93.96%). The raw uncovered ledger is 53,211.
+The next wave raises the exact inventory to 6,224 configurations with numeric
+bitfield assignments, packed-record ABI proofs, and opcode-aware homed operand
+validation. Review found a high-severity fixed-softmax false acceptance:
+changing `sum += *item` to subtraction still selected code that added. A
+complete fixed-kernel proof and 206-mutation survivor audit now cover operators,
+dataflow, types, table bounds, call ABI, loops, and normalization with a defined
+upper-clamp sentinel oracle.
+
+Latest integrated totals: 4,386/4,386 functions, 178,932/191,369 lines
+(93.50%), 92,547/146,238 native branch outcomes (63.29%), and
+161,433/171,769 regions (93.98%). The raw uncovered ledger is 53,444.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -144,7 +152,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `fee9f2a3` (`Validate directory call argument ABI`).
+  `9a92aa0a` (`Prove fixed softmax schedule semantics`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -186,7 +194,12 @@ parallel-wave summary for the current measurement.
   - `45dd8b14` — scalar-DAG cast and preflight correctness;
   - `49d3da4a` / `4425846c` — byte-math proof and direct-call hardening; and
   - `ce71729b` / `fee9f2a3` — directory dataflow, ownership, and argument ABI
-    proofs.
+    proofs;
+  - `98e8d7fb` / `36232484` — complete homed operand preflight;
+  - `e17dfb9f` — numeric integer bitfield assignments;
+  - `00554317` — additional packed-record ABI proofs; and
+  - `1c8c01b0` through `9a92aa0a` — complete variable and fixed softmax
+    semantic proofs.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

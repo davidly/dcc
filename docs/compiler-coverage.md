@@ -102,14 +102,21 @@ exhaustive byte-math plus fixture-backed directory-enumeration proof campaigns.
 Review added direct-call requirements for byte-math helpers and complete fixed
 and variadic argument ABI validation for every directory callback.
 
+The following wave executes 6,224 exact leaf configurations. It adds numeric
+bitfield assignments, required-operand validation for homed MIR, and further
+packed-record ABI proofs. A fixed-softmax survivor audit reduced 206 accepted
+semantic mutations to zero by proving operators, dataflow, local types, table
+bounds, argument ABI, loops, and normalization; its upper-clamp oracle now uses
+defined 16-bit arithmetic.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,376 / 4,376 | 100.00% |
-| Lines | 178,307 / 190,754 | 93.47% |
-| Native branch outcomes | 92,030 / 145,488 | 63.26% |
-| Regions | 160,669 / 171,006 | 93.96% |
+| Functions | 4,386 / 4,386 | 100.00% |
+| Lines | 178,932 / 191,369 | 93.50% |
+| Native branch outcomes | 92,547 / 146,238 | 63.29% |
+| Regions | 161,433 / 171,769 | 93.98% |
 
-The raw ledger has 53,211 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,444 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload
