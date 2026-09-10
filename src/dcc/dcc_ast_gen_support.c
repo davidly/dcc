@@ -1738,6 +1738,13 @@ int ast_unary_float_const_fold(const struct AstNode *n, unsigned long *out)
     return 0;
 }
 
+static int ast_fold_integer_type(int type)
+{
+    return ast_is_plain_int_type(type) ||
+           (type_ptr_depth(type) == 0 && !(type & TYPE_STRUCT) &&
+            type_is_long(type));
+}
+
 /* Fold one integer binary operator with TARGET semantics (16-bit int,
  * 32-bit long) so a compile-time fold produces exactly what the same
  * expression computes at run time.  Applies the usual arithmetic
@@ -1752,8 +1759,9 @@ int ast_unary_float_const_fold(const struct AstNode *n, unsigned long *out)
  *
  * type_a / type_b are the operands' own (pre-promotion) source types.
  * Returns 1 with *out set (as a sign/zero-extended host long matching the
- * result type), or 0 to decline the fold (divide/modulo by zero, signed
- * minimum divided/modulo -1, or an out-of-range shift count). */
+ * result type), or 0 to decline the fold (a non-integer operand type,
+ * divide/modulo by zero, signed minimum divided/modulo -1, or an out-of-range
+ * shift count). */
 static int ast_fold_binary_target(int op, int type_a, int type_b,
                                   long a, long b, long *out)
 {
@@ -1762,11 +1770,12 @@ static int ast_fold_binary_target(int op, int type_a, int type_b,
     unsigned long ua, ub;
     unsigned long width_mask;
 
+    if (!ast_fold_integer_type(type_a) || !ast_fold_integer_type(type_b))
+        return 0;
+
     if (op == TOK_SHL || op == TOK_SHR) {
         int lt = promote_int_type(type_a);
         int lbits;
-        if (type_is_float(lt))
-            return 0;
         lbits = type_is_long(lt) ? 32 : 16;
         if (b < 0 || b >= lbits)
             return 0;
@@ -1933,12 +1942,12 @@ int ast_const_condition_fold(const struct AstNode *n, long *out)
  * at run time regardless of host long width or operand sign). The remaining
  * difference is caller intent: ast_const_fold_strict is the entry point used
  * where the whole node is about to be replaced by an emitted immediate
- * (gen_binary_ast / gen_long_arith_ast), and it declines (returns 0) the two
- * cases with no defined target value - divide/modulo by zero, signed minimum
- * divided/modulo -1, and an out-of-range shift count - so the caller falls
- * back to ordinary codegen rather than baking in a bogus constant. Callers
- * may emit the folded immediate (masked to the result width) directly
- * whenever it returns 1.
+ * (gen_binary_ast / gen_long_arith_ast), and it declines (returns 0) cases
+ * with no defined target value - divide/modulo by zero, signed minimum
+ * divided/modulo -1, and an out-of-range shift count - plus malformed
+ * non-integer binary operands, so the caller falls back to ordinary codegen
+ * rather than baking in a bogus constant. Callers may emit the folded
+ * immediate (masked to the result width) directly whenever it returns 1.
  */
 int ast_const_fold_strict(const struct AstNode *n, long *out)
 {
