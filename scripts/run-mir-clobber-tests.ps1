@@ -2529,7 +2529,8 @@ try {
     if ($Cases.Count -eq 0 -or "oldloops" -in $Cases) {
         try {
             foreach ($function in @(
-                "countdown", "accumulate", "divide7", "repeated", "compare")) {
+                "countdown", "accumulate", "divide7", "repeated",
+                "repeated_bool", "compare")) {
                 Set-ProcessEnvironment "DCC_MIR_EMIT_FUNCTION" $function
                 foreach ($stackCheck in @($true, $false)) {
                     foreach ($peep in @($true, $false)) {

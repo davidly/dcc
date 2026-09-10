@@ -166,6 +166,12 @@ enum RepeatedAddMutation {
     REPEATED_COMPARE_SIGNEDNESS,
     REPEATED_INDEX_OBJECT_SIGNEDNESS,
     REPEATED_SIGNED_WORD_LIMIT,
+    REPEATED_BOOL_INDEX_OBJECT,
+    REPEATED_BOOL_INDEX_PHI_UPDATE,
+    REPEATED_BOOL_INCREMENT_OPERAND,
+    REPEATED_BOOL_COMPARE_RESULT,
+    REPEATED_BOOL_COMPARE_OPERAND,
+    REPEATED_BOOL_SOURCE_COUNTER,
     REPEATED_FACTOR_OFFSET,
     REPEATED_FACTOR_STORAGE,
     REPEATED_STORE_WIDTH,
@@ -191,6 +197,9 @@ static const char *repeated_add_mutation_name(int mutation)
         "index pointer type", "first result type", "second result type",
         "increment result type", "compare operand type",
         "compare signedness", "index object signedness", "signed word limit",
+        "bool index object", "bool index PHI/update",
+        "bool increment operand", "bool compare result",
+        "bool compare operand", "bool source counter",
         "factor offset", "factor storage", "store width", "branch target",
         "backedge target",
         "total PHI predecessor", "index PHI predecessor", "extra branch",
@@ -348,6 +357,16 @@ static void setup_repeated_invariant_add(void)
 
 static void mutate_repeated_invariant_add(int mutation)
 {
+    if (mutation >= REPEATED_BOOL_INDEX_OBJECT &&
+        mutation <= REPEATED_BOOL_SOURCE_COUNTER) {
+        mir.objects[2].type = TYPE_CHAR;
+        mir.insns[7].memory_size = 1;
+        mir.insns[11].type = TYPE_CHAR;
+        mir.insns[31].type = TYPE_CHAR;
+        mir.insns[31].secondary_offset = TYPE_CHAR;
+        mir.insns[32].memory_size = 1;
+        mir.insns[15].secondary_offset = TYPE_CHAR;
+    }
     switch (mutation) {
     case REPEATED_FIRST_OPERATOR: mir.insns[19].immediate = '-'; break;
     case REPEATED_SECOND_OPERATOR: mir.insns[24].immediate = '-'; break;
@@ -371,6 +390,26 @@ static void mutate_repeated_invariant_add(int mutation)
         mir.objects[2].type = TYPE_INT | TYPE_UNSIGNED;
         break;
     case REPEATED_SIGNED_WORD_LIMIT: mir.insns[13].immediate = 32768; break;
+    case REPEATED_BOOL_INDEX_OBJECT: mir.objects[2].type = TYPE_BOOL; break;
+    case REPEATED_BOOL_INDEX_PHI_UPDATE:
+        mir.insns[11].type = TYPE_BOOL;
+        mir.insns[31].type = TYPE_BOOL;
+        break;
+    case REPEATED_BOOL_INCREMENT_OPERAND:
+        mir.insns[31].secondary_offset = TYPE_BOOL;
+        break;
+    case REPEATED_BOOL_COMPARE_RESULT: mir.insns[15].type = TYPE_BOOL; break;
+    case REPEATED_BOOL_COMPARE_OPERAND:
+        mir.insns[15].secondary_offset = TYPE_BOOL;
+        break;
+    case REPEATED_BOOL_SOURCE_COUNTER:
+        mir.objects[2].type = TYPE_BOOL;
+        mir.insns[6].type = TYPE_BOOL;
+        mir.insns[11].type = TYPE_BOOL;
+        mir.insns[30].type = TYPE_BOOL;
+        mir.insns[31].type = TYPE_BOOL;
+        mir.insns[31].secondary_offset = TYPE_BOOL;
+        break;
     case REPEATED_FACTOR_OFFSET: mir.objects[0].offset = 125; break;
     case REPEATED_FACTOR_STORAGE: mir.objects[0].storage = SC_LOCAL; break;
     case REPEATED_STORE_WIDTH: mir.insns[21].memory_size = 1; break;

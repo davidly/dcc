@@ -38,6 +38,18 @@ int repeated(int factor)
     return total;
 }
 
+/* Compile-only near match: canonical _Bool increment never reaches 5. */
+int repeated_bool(int factor)
+{
+    int total = 0;
+    _Bool index;
+    for (index = 0; index < 5; ++index) {
+        total += factor;
+        total += factor;
+    }
+    return total;
+}
+
 int compare(int left, int right)
 {
     if (left < right)

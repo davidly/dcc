@@ -1078,20 +1078,26 @@ int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
         return 0;
     index_size = type_size(index_phi->type);
     if ((index_size != 1 && index_size != 2) ||
+        type_is_bool(index_phi->type) ||
         type_ptr_depth(index_phi->type) != 0 ||
         type_is_float(index_phi->type) ||
         type_size(mir.objects[index_object].type) != index_size ||
+        type_is_bool(mir.objects[index_object].type) ||
         type_ptr_depth(mir.objects[index_object].type) != 0 ||
         type_is_float(mir.objects[index_object].type) ||
         ((mir.objects[index_object].type & TYPE_UNSIGNED) != 0) !=
             ((index_phi->type & TYPE_UNSIGNED) != 0) ||
+        type_is_bool(index_update->type) ||
         index_update->type != index_phi->type ||
         type_size(index_update->secondary_offset) != index_size ||
+        type_is_bool(index_update->secondary_offset) ||
         type_ptr_depth(index_update->secondary_offset) != 0 ||
         type_is_float(index_update->secondary_offset) ||
         ((index_update->secondary_offset & TYPE_UNSIGNED) != 0) !=
             ((index_phi->type & TYPE_UNSIGNED) != 0) ||
         type_size(compare->secondary_offset) != index_size ||
+        type_is_bool(compare->type) ||
+        type_is_bool(compare->secondary_offset) ||
         type_ptr_depth(compare->secondary_offset) != 0 ||
         type_is_float(compare->secondary_offset) ||
         ((compare->secondary_offset & TYPE_UNSIGNED) != 0) !=
