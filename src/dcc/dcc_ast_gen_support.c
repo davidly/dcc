@@ -505,8 +505,15 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
          * wide-value tail for the supported arithmetic compound operators. */
         if (n->a->kind == AST_MEMBER) {
             int field_type;
-            if (ast_member_bitfield_lvalue_type(n->a, &field_type))
+            if (ast_member_bitfield_lvalue_type(n->a, &field_type)) {
+                /* Plain assignment converts numeric RHS values before the
+                 * masked bitfield store, just like other integer lvalues. */
+                if (n->op == '=')
+                    return ast_value_is_plain_int(n->b) ||
+                           ast_value_is_long_word(n->b) ||
+                           ast_value_is_float_word(n->b);
                 return ast_value_is_plain_int(n->b);
+            }
             if (!ast_member_lvalue_type(n->a, &field_type))
                 return 0;
             if (type_is_long(field_type)) {
