@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+import time
 import unittest
 import uuid
 
@@ -35,7 +37,8 @@ class CompilerMutationTests(unittest.TestCase):
         self.trace.mkdir()
         for name in ("run-mir-compiler-mutations.ps1",
                      "run-mir-compiler-mutation-worker.ps1",
-                     "mir-compiler-mutations.psm1"):
+                     "mir-compiler-mutations.psm1",
+                     "process-supervision.psm1", "process-supervisor.ps1"):
             shutil.copyfile(ROOT / "scripts" / name, self.repo / "scripts" / name)
         (self.repo / "scripts/new-mir-fuzz-source.ps1").write_text(
             'param($OutputPath, $Seed, $Programs)\n'
@@ -274,7 +277,7 @@ foreach ($case in @(
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_worker_and_build_limits_reject_zero(self):
-        for parameter in ("Jobs", "BuildJobs"):
+        for parameter in ("Jobs", "BuildJobs", "WorkerTimeout"):
             completed = subprocess.run(
                 [PWSH, "-NoProfile", "-File",
                  str(self.repo / "scripts/run-mir-compiler-mutations.ps1"),
@@ -303,7 +306,7 @@ if ($env:DCC_MIR_CACHE_VERIFY -ne "parent-cache" -or
 $child = Start-MirMutationProcess $pwsh @(
     "-NoProfile", "-Command", 'Write-Output started; Start-Sleep -Seconds 30'
 ) $directory "$directory/timeout.log"
-$result = Complete-MirMutationProcess $child 1
+$result = Complete-MirMutationProcess $child 3
 if (-not $result.TimedOut -or $result.Output -notmatch 'started') {
     throw "Child timeout did not preserve its diagnostic"
 }
@@ -311,6 +314,111 @@ if (-not $result.TimedOut -or $result.Output -notmatch 'started') {
         completed = subprocess.run([PWSH, "-NoProfile", "-Command", command],
                                    capture_output=True, text=True, timeout=15)
         self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_exited_parent_with_inherited_pipe_is_bounded_and_child_is_killed(self):
+        # The direct Python parent exits immediately; its child keeps both pipes
+        # open. A wait for the parent's exit alone cannot enforce this deadline.
+        parent = (
+            'import subprocess, sys; '
+            'child = subprocess.Popen([sys.executable, "-c", '
+            '"import time; time.sleep(4)"]); '
+            'print(child.pid, flush=True)'
+        )
+        command = (
+            f"Import-Module '{ROOT.as_posix()}/scripts/mir-compiler-mutations.psm1'; "
+            f"$directory = '{self.workspace.as_posix()}'; "
+            f"$python = '{Path(sys.executable).as_posix()}'; "
+            "$parent = @'\n" + parent + "\n'@\n"
+        ) + r'''
+$child = Start-MirMutationProcess $python @("-c", $parent) $directory "$directory/drain.log"
+$startup = [Diagnostics.Stopwatch]::StartNew()
+while (-not $child.Process.HasExited -and $startup.Elapsed.TotalSeconds -lt 5) {
+    Start-Sleep -Milliseconds 10
+}
+if (-not $child.Process.HasExited) { throw "Fixture parent did not exit" }
+if ($child.Stdout.IsCompleted) { throw "Fixture descendant did not retain the pipe" }
+$watch = [Diagnostics.Stopwatch]::StartNew()
+$result = Complete-MirMutationProcess $child 1
+[ordered]@{
+    outcome = Get-MirMutationOutcome $result @(Get-MirCompilerMutations)[1]
+    timedOut = $result.TimedOut
+    elapsed = $watch.Elapsed.TotalSeconds
+    total = $child.Clock.Elapsed.TotalSeconds
+    child = [int]$result.Output.Trim()
+} | ConvertTo-Json
+'''
+        completed = subprocess.run([PWSH, "-NoProfile", "-Command", command],
+                                   capture_output=True, text=True, timeout=12)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertTrue(result["timedOut"])
+        self.assertEqual(result["outcome"], "invalid")
+        self.assertLess(result["elapsed"], 2.5, result)
+        self.assert_process_gone(result["child"])
+        self.assertFalse(list(self.workspace.rglob("process-id")))
+        print(f"Inherited-pipe regression: invalid in {result['total']:.3f}s total "
+              f"({result['elapsed']:.3f}s completion); child cleaned")
+
+    def assert_process_gone(self, process_id):
+        command = (
+            f"$p = Get-Process -Id {process_id} -ErrorAction SilentlyContinue; "
+            "if ($p -and -not $p.HasExited) { exit 1 }; exit 0"
+        )
+        # Allow the OS reaper to collect an already-killed orphan.
+        deadline = time.monotonic() + 2
+        while True:
+            completed = subprocess.run([PWSH, "-NoProfile", "-Command", command],
+                                       capture_output=True, text=True, timeout=5)
+            if completed.returncode == 0:
+                return
+            if time.monotonic() >= deadline:
+                self.fail(f"Owned descendant {process_id} survived cleanup")
+            time.sleep(0.05)
+
+    def test_worker_watchdog_records_invalid_and_stops_descendants(self):
+        self.check_worker_cleanup(exit_worker=False)
+
+    def test_exited_worker_cleans_nested_process_scopes(self):
+        self.check_worker_cleanup(exit_worker=True)
+
+    def check_worker_cleanup(self, exit_worker):
+        worker = self.repo / "scripts/run-mir-compiler-mutation-worker.ps1"
+        child_code = (
+            'import os, pathlib, time; '
+            f'pathlib.Path({str(self.workspace / "watchdog-child")!r}).write_text(str(os.getpid())); '
+            'time.sleep(30)'
+        )
+        worker.write_text(
+            'param($RepoRoot, $Workspace, $OutputDirectory, $Name, $BuildJobs)\n'
+            f"Import-Module '{self.repo.as_posix()}/scripts/mir-compiler-mutations.psm1';\n"
+            "$code = @'\n" + child_code + "\n'@\n"
+            # A nested command has its own session, not the worker's group.
+            f"$child = Start-MirMutationProcess '{Path(sys.executable).as_posix()}' "
+            '@("-c", $code) $OutputDirectory "$OutputDirectory/nested.log" '
+            '-ParentScope $env:DCC_PROCESS_SCOPE\n'
+            '$started = [Diagnostics.Stopwatch]::StartNew()\n'
+            f"while (-not (Test-Path '{self.workspace.as_posix()}/watchdog-child') "
+            '-and $started.Elapsed.TotalSeconds -lt 5) { Start-Sleep -Milliseconds 10 }\n'
+            + ('exit 0\n' if exit_worker else 'Start-Sleep -Seconds 30\n'))
+        output = self.workspace / "watchdog-output"
+        started = time.monotonic()
+        completed = subprocess.run(
+            [PWSH, "-NoProfile", "-File",
+             str(self.repo / "scripts/run-mir-compiler-mutations.ps1"),
+             "-Jobs", "2", "-WorkerTimeout", "4", "-OutputDirectory", str(output)],
+            capture_output=True, text=True, timeout=12)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertLess(time.monotonic() - started, 8)
+        results = json.loads((output / "results.json").read_text())
+        self.assertEqual(len(results), 10)
+        self.assertTrue(all(result["outcome"] == "invalid" for result in results))
+        if not exit_worker:
+            self.assertEqual(results[0]["detail"], "Worker timed out; see worker.log")
+        self.assertTrue(all(result["phase"] == "not-run" for result in results[1:]))
+        process_id = int((self.workspace / "watchdog-child").read_text())
+        self.assert_process_gone(process_id)
+        self.assertFalse(list(output.rglob("process-id")))
+        self.assertFalse(list(output.glob("work-*")))
 
 
 if __name__ == "__main__":

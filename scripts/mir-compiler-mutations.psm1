@@ -1,5 +1,6 @@
 #Requires -Version 7
 $ErrorActionPreference = "Stop"
+Import-Module (Join-Path $PSScriptRoot "process-supervision.psm1") -Force
 
 function Get-MirCompilerMutations {
     @(
@@ -18,65 +19,35 @@ function Get-MirCompilerMutations {
 
 function Start-MirMutationProcess(
     [string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory,
-    [string]$LogPath, [hashtable]$Environment = @{}
+    [string]$LogPath, [hashtable]$Environment = @{}, [string]$ParentScope = ""
 ) {
-    $start = [System.Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $FilePath
-    $start.WorkingDirectory = $WorkingDirectory
-    $start.UseShellExecute = $false
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    foreach ($argument in $Arguments) { $start.ArgumentList.Add($argument) }
-    foreach ($name in @($start.Environment.Keys)) {
-        if ($name -like "DCC_*" -or $name -eq "LLVM_PROFILE_FILE") {
-            [void]$start.Environment.Remove($name)
-        }
-    }
+    $removed = @([Environment]::GetEnvironmentVariables().Keys |
+        Where-Object { $_ -like "DCC_*" -or $_ -eq "LLVM_PROFILE_FILE" })
     # Even instrumentation inherited through CFLAGS cannot join normal coverage.
     $profiles = Join-Path $WorkingDirectory "profiles"
     $scratch = Join-Path $WorkingDirectory "scratch"
     New-Item -ItemType Directory -Path $profiles, $scratch -Force | Out-Null
-    $start.Environment["LLVM_PROFILE_FILE"] = Join-Path $profiles "%p-%m.profraw"
+    $overrides = @{ LLVM_PROFILE_FILE = (Join-Path $profiles "%p-%m.profraw") }
     foreach ($name in @("TMPDIR", "TMP", "TEMP")) {
-        $start.Environment[$name] = $scratch
+        $overrides[$name] = $scratch
     }
     foreach ($name in $Environment.Keys) {
-        $start.Environment[$name] = $Environment[$name]
+        $overrides[$name] = $Environment[$name]
     }
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    if (-not $process.Start()) { throw "Failed to start $FilePath" }
-    [pscustomobject]@{
-        Process = $process; LogPath = $LogPath
-        Stdout = $process.StandardOutput.ReadToEndAsync()
-        Stderr = $process.StandardError.ReadToEndAsync()
-    }
+    Start-SupervisedProcess $FilePath $Arguments $WorkingDirectory $LogPath `
+        -Environment $overrides -RemoveEnvironment $removed -ParentScope $ParentScope
 }
 
 function Stop-MirMutationProcess($Command) {
-    if (-not $Command.Process.HasExited) {
-        $Command.Process.Kill($true)
-        $Command.Process.WaitForExit()
-    }
-    $Command.Process.Dispose()
+    Stop-SupervisedProcess $Command
 }
 
-function Complete-MirMutationProcess($Command, [int]$TimeoutSeconds = 60) {
-    try {
-        $timedOut = -not $Command.Process.WaitForExit($TimeoutSeconds * 1000)
-        if ($timedOut) {
-            $Command.Process.Kill($true)
-            $Command.Process.WaitForExit()
-        }
-        $text = $Command.Stdout.GetAwaiter().GetResult() +
-            $Command.Stderr.GetAwaiter().GetResult()
-        [System.IO.File]::WriteAllText($Command.LogPath, $text)
-        [pscustomobject]@{
-            ExitCode = $Command.Process.ExitCode; TimedOut = $timedOut; Output = $text
-        }
-    } finally {
-        $Command.Process.Dispose()
-    }
+function Test-MirMutationProcessComplete($Command, [double]$TimeoutSeconds) {
+    Test-SupervisedProcessComplete $Command $TimeoutSeconds
+}
+
+function Complete-MirMutationProcess($Command, [double]$TimeoutSeconds = 60) {
+    Complete-SupervisedProcess $Command $TimeoutSeconds
 }
 
 function Get-MirMutationOutcome($Execution, $Mutation) {
@@ -117,6 +88,7 @@ function Invoke-MirMutationWorker(
     [string]$RepoRoot, [string]$Workspace, [string]$OutputDirectory,
     [string]$Name, [int]$BuildJobs
 ) {
+    $processScope = $env:DCC_PROCESS_SCOPE
     $result = [ordered]@{
         mutation = $Name; outcome = "invalid"; phase = "prepare"
         exitCode = $null; detail = "Worker did not complete"
@@ -159,7 +131,7 @@ function Invoke-MirMutationWorker(
             "-S", "$Workspace/src/dcc", "-B", "$Workspace/cmake",
             "-DDCC_BUILD_MIR_TESTS=ON", "-DDCC_ENABLE_COVERAGE=OFF", "-DCMAKE_BUILD_TYPE=Debug",
             "-DDCC_RUNTIME_OUTPUT_DIRECTORY=$Workspace/bin"
-        ) "$Workspace/output" "$OutputDirectory/configure.log") 120
+        ) "$Workspace/output" "$OutputDirectory/configure.log" -ParentScope $processScope) 120
         $result.exitCode = $execution.ExitCode
         if ($execution.TimedOut -or $execution.ExitCode -ne 0) {
             $result.detail = "Configure failed or timed out; see configure.log"
@@ -170,7 +142,7 @@ function Invoke-MirMutationWorker(
         $execution = Complete-MirMutationProcess (Start-MirMutationProcess "cmake" @(
             "--build", "$Workspace/cmake", "--target", "mir-verify-test", "dcc",
             "--config", "Debug", "--parallel", "$BuildJobs"
-        ) "$Workspace/output" "$OutputDirectory/build.log") 1800
+        ) "$Workspace/output" "$OutputDirectory/build.log" -ParentScope $processScope) 1800
         $result.exitCode = $execution.ExitCode
         if ($execution.TimedOut -or $execution.ExitCode -ne 0) {
             $result.detail = "Build failed or timed out; see build.log"
@@ -184,7 +156,7 @@ function Invoke-MirMutationWorker(
                 "$Workspace/probe.c", "-o", "$Workspace/output/PROBE.MAC"
             ) "$Workspace/output" "$OutputDirectory/compile.log" @{
                 DCC_MIR_CACHE_VERIFY = "1"
-            }) 60
+            } -ParentScope $processScope) 60
             $result.exitCode = $execution.ExitCode
             if ($mutation.CompileProbe) {
                 $result.outcome = Get-MirMutationOutcome $execution $mutation
@@ -204,7 +176,7 @@ function Invoke-MirMutationWorker(
         $execution = Complete-MirMutationProcess (Start-MirMutationProcess $verifier @() `
             "$Workspace/output" "$OutputDirectory/test.log" @{
                 DCC_MIR_CACHE_VERIFY = "1"
-            }) 60
+            } -ParentScope $processScope) 60
         $result.exitCode = $execution.ExitCode
         $result.outcome = Get-MirMutationOutcome $execution @{
             ExpectedFailure = $mutation.ExpectedFailure
@@ -224,4 +196,4 @@ function Invoke-MirMutationWorker(
 
 Export-ModuleMember -Function Get-MirCompilerMutations, Start-MirMutationProcess,
     Complete-MirMutationProcess, Stop-MirMutationProcess, Get-MirMutationOutcome,
-    Invoke-MirMutationWorker
+    Invoke-MirMutationWorker, Test-MirMutationProcessComplete

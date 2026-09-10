@@ -2,7 +2,9 @@
 param(
     [string]$OutputDirectory = "build/mir-compiler-mutations",
     [ValidateRange(1, 1024)][int]$Jobs = 1,
-    [ValidateRange(1, 1024)][int]$BuildJobs = 2
+    [ValidateRange(1, 1024)][int]$BuildJobs = 2,
+    # Overall worker deadline, including startup, builds, tests, and pipe drain.
+    [ValidateRange(1, 86400)][int]$WorkerTimeout = 2100
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,14 +61,18 @@ try {
             ++$next
         }
         if ($active.Count -eq 0) { break }
-        $completed = @($active | Where-Object { $_.Command.Process.HasExited })
+        $completed = @($active | Where-Object {
+            Test-MirMutationProcessComplete $_.Command $WorkerTimeout
+        })
         if ($completed.Count -eq 0) {
             Start-Sleep -Milliseconds 100
             continue
         }
         foreach ($item in $completed) {
             [void]$active.Remove($item)
-            $execution = Complete-MirMutationProcess $item.Command
+            $remaining = [Math]::Max(
+                0, $WorkerTimeout - $item.Command.Clock.Elapsed.TotalSeconds)
+            $execution = Complete-MirMutationProcess $item.Command $remaining
             $result = $null
             if (Test-Path -LiteralPath $item.ResultPath -PathType Leaf) {
                 try {
@@ -83,7 +89,9 @@ try {
                 ($item.Index -gt 0 -and $result.outcome -eq "passed")) {
                 $results[$item.Index].phase = "worker"
                 $results[$item.Index].exitCode = $execution.ExitCode
-                $results[$item.Index].detail = "Worker failed; see worker.log"
+                $results[$item.Index].detail = if ($execution.TimedOut) {
+                    "Worker timed out; see worker.log"
+                } else { "Worker failed; see worker.log" }
             } else {
                 $results[$item.Index] = $result
             }
