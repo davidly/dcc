@@ -403,8 +403,13 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                     return (type_size(elem) == 1 || type_size(elem) == 2) &&
                            ast_int_elem_assign_rhs_ok(n);
             }
+            /* The general non-identifier compound tail preserves a word
+             * result in HL.  Keep byte elements dead-result-only because
+             * their stored truncation is not rebuilt for expression use. */
             if (ast_index_symbol_nd_elem_type(n->a, &elem)) {
-                if (n->op != '=' && !(is_compound && expr_result_dead))
+                if (n->op != '=' &&
+                    !(is_compound &&
+                      (expr_result_dead || type_size(elem) == 2)))
                     return 0;
                 if (type_ptr_depth(elem) > 0)
                     return n->op == '=' && type_size(elem) == 2 &&
@@ -432,7 +437,9 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                     return type_size(elem) == 2 && ast_pointer_assign_rhs_supported(n->b);
             }
             if (ast_index_2d_array_elem_type(n->a, &elem)) {
-                if (n->op != '=')
+                if (n->op != '=' &&
+                    !(is_compound &&
+                      (expr_result_dead || type_size(elem) == 2)))
                     return 0;
                 if (type_ptr_depth(elem) > 0)
                     return type_size(elem) == 2 && ast_pointer_assign_rhs_supported(n->b);
