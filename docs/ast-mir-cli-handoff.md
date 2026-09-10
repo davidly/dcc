@@ -169,9 +169,20 @@ includes the already instrumented scalar-DAG host binary in every
 `llvm-cov` report, export, and show operation rather than merely hashing it in
 provenance.
 
-Latest integrated totals: 4,417/4,417 functions, 180,008/192,419 lines
-(93.55%), 93,322/147,314 native branch outcomes (63.35%), and
-162,547/172,908 regions (94.01%). The raw uncovered ledger is 53,745.
+The following wave raises the exact inventory to 6,854 configurations. It
+supports live results from word-sized multidimensional compound assignments,
+hardens the compound-check schedule's ABI, memory, control-flow, and promoted
+assignment proofs, and completes the repeated-invariant-add legality proof.
+Independent review found that `_Bool` loop counters were incorrectly accepted;
+the exact schedule now rejects every boolean counter type surface. The repeated
+add audit has zero survivors across 34 mutations. The compound audit rejects
+1,482/1,575 mutations; all 93 survivors are evidenced as 72 field-identity
+rewrites, 10 byte-identical stores, and 11 overwritten-before-read stores with
+passing runtime oracles.
+
+Latest integrated totals: 4,421/4,421 functions, 180,307/192,698 lines
+(93.57%), 93,574/147,628 native branch outcomes (63.38%), and
+162,951/173,293 regions (94.03%). The raw uncovered ledger is 53,807.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -183,7 +194,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `27e80ada` (`Complete exec recursion operator proofs`).
+  `c1d6e591` (`Reject boolean repeated-add counters`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -252,7 +263,12 @@ parallel-wave summary for the current measurement.
   - `d37c8f81` through `27e80ada` — complete exec-recursion operator,
     volatility, ABI, and dataflow proofs; and
   - `3d306673` — include the scalar-DAG host binary in all LLVM coverage
-    reports.
+    reports;
+  - `1b909d5f` — live multidimensional compound-assignment results;
+  - `a63128dc` — compound-runner structural and ABI hardening;
+  - `cfdbecd1` / `c1d6e591` — repeated-invariant-add proof hardening and
+    boolean-counter rejection; and
+  - `a3cab0df` — updated exact built-in inventory contract.
 - Wave 14 passed both strict 506-application release modes with no regressions,
   an independent release build, normal and ASan/UBSan host CTests, selector
   isolation, 11 compiler mutants, 10 debugger-host tests, two line-debug
@@ -260,6 +276,16 @@ parallel-wave summary for the current measurement.
 - Its immutable LLVM 18 collection contains 43 profile-pool files and exactly
   6,758 unique clobber executions. The manifest SHA-256 is
   `eb7215b69af536402d4f09b358f3686329bfadaec7eb103b77ab832b206153c0`;
+  `collection.json` records the same digest.
+- Wave 15 passed both strict 506-application release modes with zero
+  regressions, normal and ASan/UBSan host CTests, 152 focused target
+  configurations, the eight-probe candidate matrix, required-emission checks,
+  11 compiler mutants, 10 debugger-host and two line-debug tests, all 120
+  repository script tests, and exact 3,039-function stack/no-stack
+  frozen-parent censuses.
+- Its immutable LLVM 18 collection contains 43 profile-pool files and exactly
+  6,854 unique clobber executions. The manifest SHA-256 is
+  `d590eac25af8174ee7ec4f271fc51ee011db3c03c9fb0a4689f0254f7245ed96`;
   `collection.json` records the same digest.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.

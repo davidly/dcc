@@ -138,14 +138,25 @@ The immutable collection contains 43 profile-pool files and its execution
 manifest SHA-256 is
 `eb7215b69af536402d4f09b358f3686329bfadaec7eb103b77ab832b206153c0`.
 
+The next wave executes 6,854 exact leaf configurations. It adds live-result
+multidimensional compound assignments, hardens compound-runner ABI/memory/CFG
+proofs, and completes repeated-invariant-add validation. Review caught a
+semantic `_Bool` counter acceptance; all boolean type surfaces now reject.
+The repeated-add audit has zero survivors across 34 mutations. The compound
+audit rejects 1,482/1,575 mutations and classifies the remaining 93 as 72
+no-op field-identity rewrites, 10 byte-identical value-equivalent stores, and
+11 runtime-proven overwritten-before-read stores. The immutable collection
+contains 43 profile-pool files and manifest SHA-256
+`d590eac25af8174ee7ec4f271fc51ee011db3c03c9fb0a4689f0254f7245ed96`.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,417 / 4,417 | 100.00% |
-| Lines | 180,008 / 192,419 | 93.55% |
-| Native branch outcomes | 93,322 / 147,314 | 63.35% |
-| Regions | 162,547 / 172,908 | 94.01% |
+| Functions | 4,421 / 4,421 | 100.00% |
+| Lines | 180,307 / 192,698 | 93.57% |
+| Native branch outcomes | 93,574 / 147,628 | 63.38% |
+| Regions | 162,951 / 173,293 | 94.03% |
 
-The raw ledger has 53,745 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,807 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload
