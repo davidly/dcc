@@ -549,6 +549,7 @@ int mir_extrn_should_emit_name(const char *name);
 void mir_emit_runtime_call(MirStream *out, const char *name);
 int mir_try_selector(MirStream *out, int (*selector)(MirStream *));
 int mir_try_emit_affine_return(MirStream *out);
+int mir_try_emit_repeated_invariant_add_loop(MirStream *out);
 int mir_try_emit_z80(MirStream *out);
 void mir_clear_debug_events(void);
 void mir_emit_debug_events(MirStream *out, int point);

@@ -902,7 +902,23 @@ static int mir_try_emit_unsigned_division_loop(MirStream *out)
  *     }
  *
  * IY holds the loop-invariant 2*factor, BC holds i and DE holds total. */
-static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
+static int mir_repeated_add_plain_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 && !type_is_float(type) &&
+           (type & 15) == TYPE_INT && type_size(type) == 2;
+}
+
+static int mir_repeated_add_phi_matches(
+    const struct MirInsn *phi, int initial_value, int update_value,
+    int entry_label, int backedge_label)
+{
+    return (phi->src1 == initial_value && phi->phi_pred1 == entry_label &&
+            phi->src2 == update_value && phi->phi_pred2 == backedge_label) ||
+           (phi->src2 == initial_value && phi->phi_pred2 == entry_label &&
+            phi->src1 == update_value && phi->phi_pred1 == backedge_label);
+}
+
+int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
 {
     const struct MirInsn *parameter = NULL;
     const struct MirInsn *total_phi = NULL;
@@ -911,17 +927,43 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
     const struct MirInsn *second_add = NULL;
     const struct MirInsn *index_update = NULL;
     const struct MirInsn *compare = NULL;
+    const struct MirInsn *branch = NULL;
+    const struct MirInsn *backedge = NULL;
     const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *first_store = NULL;
+    const struct MirInsn *second_store = NULL;
+    const struct MirInsn *index_store = NULL;
     int factor_values[2];
     int factor_load_count = 0;
     int factor_object = -1;
     int total_object = -1;
     int index_object = -1;
+    int branch_count = 0;
+    int jump_count = 0;
+    int return_count = 0;
+    int label_count = 0;
+    int factor_stack_offset;
+    int header_label;
+    int entry_label;
+    int backedge_label;
+    int total_initial_value;
+    int index_initial_value;
+    int branch_index;
+    int backedge_index;
+    int target_index;
+    int first_store_count = 0;
+    int second_store_count = 0;
+    int index_store_count = 0;
+    int total_initial_store_count = 0;
+    int index_initial_store_count = 0;
+    int index_size;
     long limit;
     int top_label;
     int end_label;
     int i;
 
+    if (mir.has_vla || !mir_repeated_add_plain_word_type(mir.return_type))
+        return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
         if (insn->opcode == MIR_PARAM) {
@@ -929,15 +971,21 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
                 return 0;
             parameter = insn;
             factor_object = insn->object;
-        } else if (insn->opcode == MIR_LOAD &&
-                   insn->object == factor_object) {
+        }
+    }
+    if (parameter == NULL || factor_object < 0 ||
+        factor_object >= mir.object_count)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_LOAD) {
+            if (insn->object != factor_object)
+                return 0;
             if (factor_load_count >= 2)
                 return 0;
             factor_values[factor_load_count++] = insn->dst;
         }
     }
-    if (parameter == NULL || factor_object < 0)
-        return 0;
     if (factor_load_count == 0) {
         factor_values[0] = parameter->dst;
         factor_values[1] = parameter->dst;
@@ -973,19 +1021,34 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
             }
         } else if (insn->opcode == MIR_BRANCH_FALSE) {
             const struct MirInsn *candidate = mir_definition(insn->src1);
+            ++branch_count;
+            branch = insn;
             if (candidate != NULL && candidate->opcode == MIR_BINARY &&
                 candidate->immediate == '<')
                 compare = candidate;
+        } else if (insn->opcode == MIR_JUMP) {
+            ++jump_count;
+            backedge = insn;
         } else if (insn->opcode == MIR_RETURN) {
+            ++return_count;
             return_insn = insn;
-        } else if (insn->opcode == MIR_CALL || insn->opcode == MIR_OPAQUE ||
-                   insn->opcode == MIR_INDEX_LOAD || insn->opcode == MIR_ARG) {
+        } else if (insn->opcode == MIR_LABEL) {
+            ++label_count;
+        } else if (insn->opcode != MIR_NOP && insn->opcode != MIR_PARAM &&
+                   insn->opcode != MIR_LOAD && insn->opcode != MIR_STORE &&
+                   insn->opcode != MIR_CONST && insn->opcode != MIR_UNARY &&
+                   insn->opcode != MIR_BINARY) {
             return 0;
         }
     }
     if (total_phi == NULL || index_phi == NULL || first_add == NULL ||
         second_add == NULL || index_update == NULL || compare == NULL ||
         return_insn == NULL || total_object < 0 || index_object < 0)
+        return 0;
+    if (total_object >= mir.object_count || index_object >= mir.object_count ||
+        total_object == index_object || factor_object == total_object ||
+        factor_object == index_object || branch_count != 1 ||
+        jump_count != 1 || return_count != 1 || label_count != 4)
         return 0;
     if (first_add->immediate != '+' ||
         !((first_add->src1 == total_phi->dst &&
@@ -1004,36 +1067,150 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
         !mir_is_const_value(index_update->src2, 1) ||
         compare->src1 != index_phi->dst || return_insn->src1 != total_phi->dst)
         return 0;
+    if (!mir_repeated_add_plain_word_type(parameter->type) ||
+        !mir_repeated_add_plain_word_type(mir.objects[factor_object].type) ||
+        !mir_repeated_add_plain_word_type(total_phi->type) ||
+        !mir_repeated_add_plain_word_type(mir.objects[total_object].type) ||
+        !mir_repeated_add_plain_word_type(first_add->type) ||
+        !mir_repeated_add_plain_word_type(first_add->secondary_offset) ||
+        !mir_repeated_add_plain_word_type(second_add->type) ||
+        !mir_repeated_add_plain_word_type(second_add->secondary_offset))
+        return 0;
+    index_size = type_size(index_phi->type);
+    if ((index_size != 1 && index_size != 2) ||
+        type_ptr_depth(index_phi->type) != 0 ||
+        type_is_float(index_phi->type) ||
+        type_size(mir.objects[index_object].type) != index_size ||
+        type_ptr_depth(mir.objects[index_object].type) != 0 ||
+        type_is_float(mir.objects[index_object].type) ||
+        ((mir.objects[index_object].type & TYPE_UNSIGNED) != 0) !=
+            ((index_phi->type & TYPE_UNSIGNED) != 0) ||
+        index_update->type != index_phi->type ||
+        type_size(index_update->secondary_offset) != index_size ||
+        type_ptr_depth(index_update->secondary_offset) != 0 ||
+        type_is_float(index_update->secondary_offset) ||
+        ((index_update->secondary_offset & TYPE_UNSIGNED) != 0) !=
+            ((index_phi->type & TYPE_UNSIGNED) != 0) ||
+        type_size(compare->secondary_offset) != index_size ||
+        type_ptr_depth(compare->secondary_offset) != 0 ||
+        type_is_float(compare->secondary_offset) ||
+        ((compare->secondary_offset & TYPE_UNSIGNED) != 0) !=
+            ((index_phi->type & TYPE_UNSIGNED) != 0))
+        return 0;
     {
         const struct MirInsn *limit_definition = mir_definition(compare->src2);
         if (limit_definition == NULL || limit_definition->opcode != MIR_CONST)
             return 0;
         limit = limit_definition->immediate;
     }
-    if (limit <= 0 || limit > 32768)
+    if (limit <= 0 || limit > 32768 ||
+        (index_size == 2 && (index_phi->type & TYPE_UNSIGNED) == 0 &&
+         limit > 32767) ||
+        (index_size == 1 &&
+         limit > ((index_phi->type & TYPE_UNSIGNED) != 0 ? 255 : 127)))
         return 0;
-    if (!((mir_is_const_value(total_phi->src1, 0) &&
-           total_phi->src2 == second_add->dst) ||
-          (mir_is_const_value(total_phi->src2, 0) &&
-           total_phi->src1 == second_add->dst)) ||
-        !((mir_is_const_value(index_phi->src1, 0) &&
-           index_phi->src2 == index_update->dst) ||
-          (mir_is_const_value(index_phi->src2, 0) &&
-           index_phi->src1 == index_update->dst)))
+    branch_index = (int)(branch - mir.insns);
+    backedge_index = (int)(backedge - mir.insns);
+    target_index = mir_find_label(branch->label);
+    header_label = mir_block_label_before((int)(total_phi - mir.insns));
+    backedge_label = mir_block_label_before(backedge_index);
+    if (header_label < 0 || backedge_label < 0 ||
+        mir_find_label(backedge->label) != mir_find_label(header_label) ||
+        target_index <= backedge_index ||
+        branch_index >= (int)(first_add - mir.insns) ||
+        (int)(first_add - mir.insns) >= (int)(second_add - mir.insns) ||
+        (int)(second_add - mir.insns) >= backedge_index ||
+        (int)(index_update - mir.insns) >= backedge_index ||
+        (int)(return_insn - mir.insns) <= target_index)
         return 0;
-    if (mir.objects[factor_object].storage != SC_PARAM ||
-        type_size(mir.objects[factor_object].type) != 2 ||
-        type_size(mir.objects[total_object].type) != 2 ||
-        (type_size(mir.objects[index_object].type) != 2 &&
-         type_size(mir.objects[index_object].type) != 1) ||
-        (type_size(mir.objects[index_object].type) == 1 && limit > 255))
+    if (total_phi->phi_pred1 == backedge_label)
+        entry_label = total_phi->phi_pred2;
+    else if (total_phi->phi_pred2 == backedge_label)
+        entry_label = total_phi->phi_pred1;
+    else
         return 0;
+    if (mir_is_const_value(total_phi->src1, 0))
+        total_initial_value = total_phi->src1;
+    else if (mir_is_const_value(total_phi->src2, 0))
+        total_initial_value = total_phi->src2;
+    else
+        return 0;
+    if (mir_is_const_value(index_phi->src1, 0))
+        index_initial_value = index_phi->src1;
+    else if (mir_is_const_value(index_phi->src2, 0))
+        index_initial_value = index_phi->src2;
+    else
+        return 0;
+    if (mir_find_label(entry_label) < 0 ||
+        mir_find_label(entry_label) >= mir_find_label(header_label) ||
+        !mir_repeated_add_phi_matches(
+            total_phi, total_initial_value,
+            second_add->dst, entry_label, backedge_label) ||
+        !mir_repeated_add_phi_matches(
+            index_phi, index_initial_value,
+            index_update->dst, entry_label, backedge_label))
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        const struct MirInsn *definition;
+
+        if (insn->opcode != MIR_STORE)
+            continue;
+        definition = mir_definition(insn->src1);
+        if (insn->object < 0 || insn->object >= mir.object_count ||
+            insn->memory_size != type_size(mir.objects[insn->object].type) ||
+            !mir_machine_unobservable_local_store(insn))
+            return 0;
+        if (insn->object == total_object) {
+            if (definition == first_add) {
+                first_store = insn;
+                ++first_store_count;
+            } else if (definition == second_add) {
+                second_store = insn;
+                ++second_store_count;
+            } else if (mir_is_const_value(insn->src1, 0)) {
+                ++total_initial_store_count;
+            } else {
+                return 0;
+            }
+        } else if (insn->object == index_object) {
+            if (definition == index_update) {
+                index_store = insn;
+                ++index_store_count;
+            } else if (mir_is_const_value(insn->src1, 0)) {
+                ++index_initial_store_count;
+            } else {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+    }
+    if (first_store_count != 1 || second_store_count != 1 ||
+        index_store_count != 1 || total_initial_store_count > 1 ||
+        index_initial_store_count > 1 ||
+        first_store <= first_add || second_store <= second_add ||
+        index_store <= index_update || second_store >= backedge ||
+        index_store >= backedge)
+        return 0;
+    if (!mir_machine_named_nonvolatile(parameter) ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &factor_stack_offset) ||
+        factor_stack_offset > 122)
+        return 0;
+    for (i = 0; i < factor_load_count; ++i) {
+        const struct MirInsn *load = mir_definition(factor_values[i]);
+        if (load == NULL || !mir_repeated_add_plain_word_type(load->type) ||
+            !mir_machine_named_nonvolatile(load) ||
+            !mir_machine_same_location(load, parameter))
+            return 0;
+    }
 
     top_label = new_label();
     end_label = new_label();
     mir_emit_iy_prologue(out);
-    mir_stream_printf(out, "\tld l,(ix%+d)\n", mir.objects[factor_object].offset + 2);
-    mir_stream_printf(out, "\tld h,(ix%+d)\n", mir.objects[factor_object].offset + 3);
+    mir_stream_printf(out, "\tld l,(ix%+d)\n", factor_stack_offset + 4);
+    mir_stream_printf(out, "\tld h,(ix%+d)\n", factor_stack_offset + 5);
     mir_stream_puts("\tadd hl,hl\n\tpush hl\n\tpop iy\n", out);
     mir_stream_puts("\tld bc,0\n\tld de,0\n", out);
     mir_stream_printf(out, "L%d:\n", top_label);
