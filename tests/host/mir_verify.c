@@ -1113,12 +1113,26 @@ static void verify_spilled_preflight_rejection(void)
     mir.next_value = 0;
     expect_spilled_candidate("wide call ABI rejection", 0);
 
-    setup(3, 1, 1);
-    mir.insns[1].opcode = MIR_CALL_AGGREGATE;
-    mir.insns[1].dst = -1;
-    strcpy(mir.insns[1].name, "<indirect>");
-    mir.next_value = 0;
-    expect_spilled_candidate("aggregate call ABI rejection", 0);
+    sid = add_struct_def("verify_spilled_indirect_aggregate");
+    struct_defs[sid - 1].size = 2;
+    setup(4, 2, 1);
+    mir.local_bytes = 2;
+    mir.next_call_id = 1;
+    mir.insns[1].type = type_add_ptr(make_struct_type(sid));
+    mir.insns[2].opcode = MIR_CALL_AGGREGATE;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = type_add_ptr(make_struct_type(sid));
+    mir.insns[2].immediate = -2;
+    mir.insns[2].memory_size = 2;
+    mir.insns[2].secondary_offset = 0;
+    strcpy(mir.insns[2].name, "<indirect>");
+    mir.insns[3].src1 = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL indirect aggregate call verification control\n");
+        ++failures;
+    }
+    expect_spilled_candidate("indirect aggregate call rejection", 0);
 
     setup(3, 1, 1);
     mir.insns[1].opcode = MIR_CALL_AGGREGATE;
@@ -1316,6 +1330,98 @@ static void verify_direct_call_name_preflight(void)
         control_bytes != retry_bytes ||
         memcmp(control_text, retry_text, control_bytes) != 0) {
         fprintf(stderr, "FAIL direct call retry changed valid output\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    mir_stream_close(retry);
+    clear_liveness();
+}
+
+static void verify_aggregate_call_name_preflight(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    int sid;
+
+    sid = add_struct_def("verify_named_aggregate_result");
+    struct_defs[sid - 1].size = 2;
+    setup(3, 1, 1);
+    mir.local_bytes = 2;
+    mir.next_call_id = 1;
+    mir.insns[1].opcode = MIR_CALL_AGGREGATE;
+    mir.insns[1].type = type_add_ptr(make_struct_type(sid));
+    mir.insns[1].immediate = -2;
+    mir.insns[1].memory_size = 2;
+    mir.insns[1].secondary_offset = 0;
+    strcpy(mir.insns[1].name, "verify_named_aggregate_call");
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL aggregate call name verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL aggregate call name stream allocation\n");
+        ++failures;
+        mir_stream_close(control);
+        mir_stream_close(retry);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    if (result != 1 || mir_stream_size(control) <= 0) {
+        fprintf(stderr, "FAIL valid direct aggregate call name\n");
+        ++failures;
+    }
+    label_id = first_label;
+    mir.insns[1].name[0] = '\0';
+    clear_liveness();
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL empty aggregate call name was not verifier-valid\n");
+        ++failures;
+    }
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    if (result != 0) {
+        fprintf(stderr, "FAIL empty aggregate call name accepted\n");
+        ++failures;
+    }
+    if (mir_stream_tell(retry) != 0 || mir_stream_size(retry) != 0) {
+        fprintf(stderr, "FAIL empty aggregate call name emitted text\n");
+        ++failures;
+    }
+    if (label_id != first_label) {
+        fprintf(stderr, "FAIL empty aggregate call name consumed labels\n");
+        ++failures;
+    }
+    strcpy(mir.insns[1].name, "verify_named_aggregate_call");
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    if (result != 1) {
+        fprintf(stderr, "FAIL aggregate call retry after empty name\n");
+        ++failures;
+    }
+    mir_stream_rewind(control);
+    mir_stream_rewind(retry);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    if (control_bytes == sizeof(control_text) ||
+        retry_bytes == sizeof(retry_text) ||
+        control_bytes != retry_bytes ||
+        memcmp(control_text, retry_text, control_bytes) != 0) {
+        fprintf(stderr, "FAIL aggregate call retry changed valid output\n");
         ++failures;
     }
     mir_stream_close(control);
@@ -1634,6 +1740,7 @@ int main(void)
     verify_spilled_preflight_rejection();
     verify_va_arg_offset_preflight();
     verify_direct_call_name_preflight();
+    verify_aggregate_call_name_preflight();
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
     verify_scalar_dag_emission();

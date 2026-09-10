@@ -31639,7 +31639,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
              type_size(insn->type) > 4))
             return mir_scalar_cfg_preflight_reject("call-abi", i);
         if (insn->opcode == MIR_CALL_AGGREGATE &&
-            (strcmp(insn->name, "<indirect>") == 0 ||
+            (insn->name[0] == '\0' ||
+             strcmp(insn->name, "<indirect>") == 0 ||
              insn->memory_size <= 0))
             return mir_scalar_cfg_preflight_reject("aggregate-call-abi", i);
         if (insn->opcode == MIR_VA_ARG &&
