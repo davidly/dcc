@@ -56,14 +56,30 @@ static int rw14_recurse(int depth, int marker, int use_execv)
         printf(
             "result depth=%d marker=%d got=%d\n",
             depth, marker, result);
+#ifdef RW14_DECREMENT_RESULT_FAILURE
+        --failures;
+#else
         ++failures;
+#endif
         return -999;
     }
     if (local_check != marker + depth) {
         printf(
             "local depth=%d expected=%d got=%d\n",
-            depth, marker + depth, local_check);
+            depth,
+#ifdef RW14_REPEAT_MARKER_LOCAL_EXPECTED
+            marker + marker,
+#elif defined(RW14_SUBTRACT_LOCAL_EXPECTED)
+            marker - depth,
+#else
+            marker + depth,
+#endif
+            local_check);
+#ifdef RW14_DECREMENT_LOCAL_FAILURE
+        --failures;
+#else
         ++failures;
+#endif
         return -999;
     }
     return result;
