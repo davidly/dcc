@@ -4,17 +4,27 @@ param(
     [string]$Emulator = "ntvcm",
     [string[]]$Cases = @(),
     [int[]]$FuzzSeeds = @(23117, 1, 65535),
-    [string]$ExecutionManifest = ""
+    [string]$ExecutionManifest = "",
+    [string]$ListExecutions = "",
+    [ValidateRange(1, 256)][int]$Jobs = 1,
+    [ValidateRange(0, 2147483647)][int]$ShardIndex = 0,
+    [ValidateRange(1, 2147483647)][int]$ShardCount = 1
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "mir-clobber-runner.ps1")
+if ($ShardIndex -ge $ShardCount) {
+    throw "ShardIndex must be less than ShardCount"
+}
+if ($Jobs -gt 1 -and ($ShardIndex -ne 0 -or $ShardCount -ne 1)) {
+    throw "Jobs cannot be combined with an explicit shard"
+}
 $Cases = @($Cases -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
 $dccmake = Join-Path $repoRoot "dccmake"
 $dccCommand = if ($env:DCC) { $env:DCC } else { Join-Path $repoRoot "dcc" }
-$emulator = (Get-Command $Emulator -ErrorAction Stop).Source
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
-    "dcc-mir-clobber-tests-" + [guid]::NewGuid())
+$tempRoot = Join-Path $repoRoot (
+    "build/mir-clobber-tests-" + [guid]::NewGuid())
 $environmentNames = @(
     "DCC_MIR_COST_REPORT",
     "DCC_MIR_CACHE_VERIFY",
@@ -33,6 +43,9 @@ $savedEnvironment = @{}
 $executedConfigurations =
     [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal)
+$executionPlan = [System.Collections.Generic.Dictionary[string, object]]::new(
+    [System.StringComparer]::Ordinal)
+$collectExecutions = $true
 
 foreach ($name in $environmentNames) {
     $savedEnvironment[$name] =
@@ -176,6 +189,11 @@ function Assert-RunCase(
     ) -join "-"
     if ($DebugMode) {
         $configuration += "-debug-$DebugMode"
+    }
+    if ($collectExecutions) {
+        Add-MirClobberExecution $executionPlan "$Name|$configuration" `
+            "Assert-RunCase" $PSBoundParameters $environmentNames
+        return
     }
     $buildDir = Join-Path $tempRoot "$Name-$configuration"
     $outputBase = ($Name -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
@@ -351,111 +369,6 @@ __ctu:
     }
 }
 
-function Assert-RequestedExecutionCounts {
-    if ($Cases.Count -eq 0) {
-        $expectedTotal = 0
-        foreach ($definition in $caseDefinitions) {
-            $stackCount = if (
-                $definition.PSObject.Properties.Name -contains "StackModes"
-            ) { @($definition.StackModes).Count } else { 2 }
-            $debugCount = if (
-                $definition.PSObject.Properties.Name -contains "DebugModes"
-            ) { @($definition.DebugModes).Count } else { 0 }
-            $expectedTotal += $stackCount * 2 * (1 + $debugCount)
-        }
-        $expectedTotal += 8 * $FuzzSeeds.Count
-        $expectedTotal += 28 + 20 + 8 + 4 + 8 + 4 + 8
-        if ($executedConfigurations.Count -ne $expectedTotal) {
-            throw "full MIR clobber run executed " +
-                "$($executedConfigurations.Count) target configurations, " +
-                "expected $expectedTotal"
-        }
-        return
-    }
-    $specialCounts = @{
-        allocmut = 476
-        attentionmut = 528
-        catalanmut = 444
-        ctypemut = 132
-        primemut = 288
-        fuzz = -1
-        minimax = 28
-        minimaxmut = 320
-        ndivmut = 504
-        oldloops = 20
-        lazywide = 8
-        inlines = 4
-        pairedbytes = 8
-        vlaend = 4
-        vlaok = 4
-    }
-    foreach ($requested in $Cases) {
-        $expected = 0
-        $patterns = @("^$([regex]::Escape($requested))\|")
-        if ($specialCounts.ContainsKey($requested)) {
-            $expected = $specialCounts[$requested]
-            $patterns = switch ($requested) {
-                "allocmut" { @("^almexact\|", "^am") }
-                "attentionmut" { @("^ax") }
-                "catalanmut" { @("^catexact\|", "^ct") }
-                "ctypemut" { @("^crexact\|", "^cr") }
-                "primemut" { @("^prexact\|", "^pr") }
-                "fuzz" { @("^fuzz-", "^fuzzforced-") }
-                "minimax" { @("^minimax-") }
-                "minimaxmut" { @("^mmexact\|", "^mx") }
-                "ndivmut" { @("^nd") }
-                "oldloops" { @("^oldloop-") }
-                "lazywide" { @("^lazywide-") }
-                "pairedbytes" { @("^pairedbytes\|", "^pairedbytes-near\|") }
-                "vlaend" { @("^vlaend\|", "^vlaok\|") }
-                "vlaok" { @("^vlaend\|", "^vlaok\|") }
-                default { @("^$([regex]::Escape($requested))\|") }
-            }
-            if ($requested -eq "fuzz") {
-                $expected = 8 * $FuzzSeeds.Count
-                foreach ($definition in @($caseDefinitions |
-                    Where-Object { $_.Name.StartsWith("fuzz-") })) {
-                    $stackCount = if (
-                        $definition.PSObject.Properties.Name -contains
-                            "StackModes"
-                    ) { @($definition.StackModes).Count } else { 2 }
-                    $debugCount = if (
-                        $definition.PSObject.Properties.Name -contains
-                            "DebugModes"
-                    ) { @($definition.DebugModes).Count } else { 0 }
-                    $expected += $stackCount * 2 * (1 + $debugCount)
-                }
-            }
-        } else {
-            $definition = $caseDefinitions |
-                Where-Object { $_.Name -eq $requested } |
-                Select-Object -First 1
-            if ($null -eq $definition) {
-                throw "no execution expectation for MIR clobber case: $requested"
-            }
-            $stackCount = if (
-                $definition.PSObject.Properties.Name -contains "StackModes"
-            ) { @($definition.StackModes).Count } else { 2 }
-            $debugCount = if (
-                $definition.PSObject.Properties.Name -contains "DebugModes"
-            ) { @($definition.DebugModes).Count } else { 0 }
-            $expected = $stackCount * 2 * (1 + $debugCount)
-            if ($requested -in @("regbyte", "arbiter")) {
-                $expected += 4
-                $patterns += "^$([regex]::Escape($requested))-forced\|"
-            }
-        }
-        $actual = @($executedConfigurations | Where-Object {
-            $key = $_
-            @($patterns | Where-Object { $key -match $_ }).Count -gt 0
-        }).Count
-        if ($actual -ne $expected) {
-            throw "MIR clobber case '$requested' executed $actual " +
-                "configurations, expected $expected"
-        }
-    }
-}
-
 function Assert-ForcedRegionalSafe(
     [string]$Name,
     [string]$Source,
@@ -468,6 +381,11 @@ function Assert-ForcedRegionalSafe(
         if ($StackCheck) { "stack" } else { "nostack" }
         if ($Peep) { "peep" } else { "nopeep" }
     ) -join "-"
+    if ($collectExecutions) {
+        Add-MirClobberExecution $executionPlan "$Name-forced|$configuration" `
+            "Assert-ForcedRegionalSafe" $PSBoundParameters $environmentNames
+        return
+    }
     $buildDir = Join-Path $tempRoot "$Name-forced-$configuration"
     $outputBase = ($Name -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
     if ($outputBase.Length -gt 8) {
@@ -2203,6 +2121,31 @@ foreach ($mutation in $allocationMutations) {
     ++$allocationMutationIndex
 }
 
+$specialCases = @(
+    "allocmut", "attentionmut", "catalanmut", "ctypemut", "fuzz",
+    "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut",
+    "oldloops", "pairedbytes", "primemut", "vlaend", "vlaok"
+)
+# Freeze historical alias membership before loading independently named campaigns.
+foreach ($case in $caseDefinitions) {
+    $group = switch -Regex ($case.Name) {
+        '^(almexact$|am)' { "allocmut"; break }
+        '^ax' { "attentionmut"; break }
+        '^(catexact$|ct)' { "catalanmut"; break }
+        '^(crexact$|cr)' { "ctypemut"; break }
+        '^(prexact$|pr)' { "primemut"; break }
+        '^(mmexact$|mx)' { "minimaxmut"; break }
+        '^nd' { "ndivmut"; break }
+        default { "" }
+    }
+    $case | Add-Member -NotePropertyName Group -NotePropertyValue $group
+}
+$campaignCases = @(Import-MirClobberCases `
+    (Join-Path $PSScriptRoot "mir-clobber-cases") $repoRoot `
+    $caseDefinitions.Name $specialCases)
+$campaignNames = @($campaignCases.Name)
+$caseDefinitions += $campaignCases
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
@@ -2216,15 +2159,13 @@ try {
                 "selector=scheduled-machine-cfg") "shape" "target")) {
         throw "MIR exact-rejection selection evidence controls failed"
     }
-    $knownCases = @($caseDefinitions.Name) + @(
-        "allocmut", "attentionmut", "catalanmut", "ctypemut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes", "primemut",
-        "vlaend", "vlaok")
+    $knownCases = @($caseDefinitions.Name) + @($caseDefinitions.Group) + $specialCases
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
     }
-    New-Item -ItemType Directory -Path $tempRoot | Out-Null
     Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
     Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
+    $mutationSetup = {
     Assert-MachineMutationIgnored
     Assert-MachineMutationFailure "invalid" `
         "invalid DCC_MIR_MACHINE_MUTATE specification"
@@ -2256,6 +2197,7 @@ try {
         "unknown DCC_MIR_MACHINE_MUTATE field"
     Assert-MachineMutationFailure "3:identity:256" `
         "unknown DCC_MIR_MACHINE_MUTATE field"
+    }
     Set-ProcessEnvironment "DCC_MIR_REQUIRE_COMPLETE" "1"
     Set-ProcessEnvironment "DCC_MIR_REQUIRE_EMIT" "1"
     Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" "1"
@@ -2265,20 +2207,21 @@ try {
         Set-ProcessEnvironment "DCC_MIR_CACHE_VERIFY" "1"
         foreach ($seed in $FuzzSeeds) {
             $fuzzSource = Join-Path $tempRoot "fz$seed.c"
-            & (Join-Path $PSScriptRoot "new-mir-fuzz-source.ps1") -OutputPath $fuzzSource -Seed $seed
             $caseDefinitions += [pscustomobject]@{
                 Name = "fuzz-$seed"; Sources = @($fuzzSource); Defines = @()
                 Expected = @("MIR fuzz seed=$seed checks=96 failures=0"); Exit = 0
                 DebugModes = @("true", "lines")
+                Group = "fuzz"
             }
             $caseDefinitions += [pscustomobject]@{
                 Name = "fuzz-mutant-$seed"; Sources = @($fuzzSource); Defines = @("FUZZ_MUTATE=1")
                 Expected = @("MIR fuzz seed=$seed checks=96 failures=96"); Exit = 1
+                Group = "fuzz"
             }
         }
     }
 
-    if ($Cases.Count -eq 0 -or "qualgen" -in $Cases) {
+    $generateQualifiers = {
         $seeds = @(0, 1, 127, 255, 256, 32767, 32768, 65535)
         $variants = @("plain", "cast", "typedef", "return", "conditional", "roundtrip")
         $source = [System.Text.StringBuilder]::new()
@@ -2335,6 +2278,7 @@ try {
             $source.ToString(), [System.Text.Encoding]::ASCII)
     }
 
+    $semanticProofSetup = {
     foreach ($proofCase in @(
         @{
             Name = "qualexpr"; Source = "qualexpr.c"
@@ -2456,21 +2400,11 @@ try {
         }
     }
 
+    }
+
     foreach ($case in $caseDefinitions) {
         if ($Cases.Count -gt 0 -and $case.Name -notin $Cases -and
-            -not (($case.Name -eq "almexact" -or $case.Name.StartsWith("am")) -and
-                "allocmut" -in $Cases) -and
-            -not ($case.Name.StartsWith("ax") -and "attentionmut" -in $Cases) -and
-            -not (($case.Name -eq "catexact" -or $case.Name.StartsWith("ct")) -and
-                "catalanmut" -in $Cases) -and
-            -not (($case.Name -eq "crexact" -or $case.Name.StartsWith("cr")) -and
-                "ctypemut" -in $Cases) -and
-            -not (($case.Name -eq "prexact" -or $case.Name.StartsWith("pr")) -and
-                "primemut" -in $Cases) -and
-            -not ($case.Name.StartsWith("fuzz-") -and "fuzz" -in $Cases) -and
-            -not (($case.Name -eq "mmexact" -or $case.Name.StartsWith("mx")) -and
-                "minimaxmut" -in $Cases) -and
-            -not ($case.Name.StartsWith("nd") -and "ndivmut" -in $Cases)) {
+            $case.Group -notin $Cases) {
             continue
         }
         $stackModes = if ($case.PSObject.Properties.Name -contains
@@ -2481,36 +2415,41 @@ try {
         }
         foreach ($stackCheck in $stackModes) {
             foreach ($peep in @($true, $false)) {
-                Assert-RunCase -Name $case.Name -Sources $case.Sources `
-                    -Defines $case.Defines -Expected $case.Expected `
-                    -ExpectedExit $case.Exit -StackCheck $stackCheck `
-                    -Peep $peep -ExactTemplate $case.ExactTemplate `
-                    -ExactFunction $case.ExactFunction `
-                    -RequireExact ([bool]$case.RequireExact) `
-                    -RequireRejected ([bool]$case.RequireRejected) `
-                    -RequiredGenericFunction $case.RequiredGenericFunction `
-                    -RequiredSelectorFunction $case.RequiredSelectorFunction `
-                    -RequiredSelector $case.RequiredSelector `
-                    -RequiredCandidate $case.RequiredCandidate `
-                    -RunArguments $case.Args `
-                    -FixturePaths $case.FixturePaths `
-                    -AssemblyPatterns $case.AssemblyPatterns `
-                    -OddUpperRuntime ([bool]$case.OddUpperRuntime) `
-                    -StackBytes $(if ($case.StackBytes) {
-                        [int]$case.StackBytes
-                    } else { 512 }) `
-                    -MachineMutation $case.MachineMutation `
-                    -MachineMutationFunction $case.MachineMutationFunction
-                foreach ($debugMode in $case.DebugModes) {
-                    Assert-RunCase -Name $case.Name -Sources $case.Sources `
-                        -Defines $case.Defines -Expected $case.Expected `
-                        -ExpectedExit $case.Exit -StackCheck $stackCheck `
-                        -Peep $peep -DebugMode $debugMode `
-                        -RequiredGenericFunction $case.RequiredGenericFunction `
-                        -RequiredSelectorFunction $case.RequiredSelectorFunction `
-                        -RequiredSelector $case.RequiredSelector `
-                        -RunArguments $case.Args `
-                        -FixturePaths $case.FixturePaths
+                $parameters = @{
+                    Name = $case.Name; Sources = $case.Sources
+                    Defines = $case.Defines; Expected = $case.Expected
+                    ExpectedExit = $case.Exit; StackCheck = $stackCheck; Peep = $peep
+                    RunArguments = $case.Args
+                }
+                foreach ($property in @(
+                    "ExactTemplate", "ExactFunction", "RequireExact", "RequireRejected",
+                    "RequiredGenericFunction", "RequiredSelectorFunction", "RequiredSelector",
+                    "RequiredCandidate", "FixturePaths", "AssemblyPatterns",
+                    "ForbiddenAssemblyPatterns", "OddUpperRuntime", "StackBytes",
+                    "MachineMutation", "MachineMutationFunction"
+                )) {
+                    if ($case.PSObject.Properties.Name -contains $property) {
+                        $parameters[$property] = $case.$property
+                    }
+                }
+                foreach ($debugMode in @("") + @($case.DebugModes)) {
+                    if ($null -eq $debugMode) { continue }
+                    $modeParameters = $parameters
+                    if ($debugMode -and $case.Name -notin $campaignNames) {
+                        # Keep built-in debug contracts unchanged; campaigns carry all assertions.
+                        $modeParameters = @{}
+                        foreach ($property in @(
+                            "Name", "Sources", "Defines", "Expected", "ExpectedExit",
+                            "StackCheck", "Peep", "RequiredGenericFunction",
+                            "RequiredSelectorFunction", "RequiredSelector",
+                            "RunArguments", "FixturePaths"
+                        )) {
+                            if ($parameters.ContainsKey($property)) {
+                                $modeParameters[$property] = $parameters[$property]
+                            }
+                        }
+                    }
+                    Assert-RunCase @modeParameters -DebugMode $debugMode
                 }
             }
         }
@@ -2728,24 +2667,54 @@ try {
             }
         }
     }
-    Assert-RequestedExecutionCounts
+    $expectedKeys = @(Get-MirClobberShard @($executionPlan.Keys) $ShardIndex $ShardCount)
+    if ($ListExecutions) {
+        Write-MirClobberManifest $ListExecutions $expectedKeys $repoRoot
+        Write-Host "Listed $($expectedKeys.Count) MIR clobber target configurations"
+        return
+    }
+    $emulator = (Get-Command $Emulator -ErrorAction Stop).Source
+    New-Item -ItemType Directory -Path $tempRoot | Out-Null
+    if ($Jobs -gt 1) {
+        $childParameters = @{
+            RunTimeout = $RunTimeout; Emulator = $Emulator
+            Cases = $Cases; FuzzSeeds = $FuzzSeeds
+        }
+        $actual = @(Invoke-MirClobberShards $PSCommandPath $childParameters `
+            $Jobs $expectedKeys $tempRoot $repoRoot $savedEnvironment)
+        foreach ($key in $actual) { [void]$executedConfigurations.Add($key) }
+    } else {
+        # Shared compiler parser/proof controls belong to shard zero only.
+        if ($ShardIndex -eq 0) {
+            & $mutationSetup
+            & $semanticProofSetup
+        }
+        $selectedSources = @($expectedKeys | ForEach-Object {
+            $executionPlan[$_].Parameters.Sources
+        })
+        if ((Join-Path $tempRoot "qualgen.c") -in $selectedSources) {
+            & $generateQualifiers
+        }
+        foreach ($seed in $FuzzSeeds) {
+            $fuzzSource = Join-Path $tempRoot "fz$seed.c"
+            if ($fuzzSource -in $selectedSources) {
+                & (Join-Path $PSScriptRoot "new-mir-fuzz-source.ps1") `
+                    -OutputPath $fuzzSource -Seed $seed
+            }
+        }
+        $collectExecutions = $false
+        foreach ($key in $expectedKeys) {
+            $execution = $executionPlan[$key]
+            foreach ($name in $environmentNames) {
+                Set-ProcessEnvironment $name $execution.Environment[$name]
+            }
+            $parameters = $execution.Parameters
+            & $execution.Command @parameters
+        }
+    }
+    Assert-MirClobberManifest $expectedKeys @($executedConfigurations)
     if ($ExecutionManifest) {
-        $manifestPath = if (
-            [System.IO.Path]::IsPathRooted($ExecutionManifest)
-        ) {
-            [System.IO.Path]::GetFullPath($ExecutionManifest)
-        } else {
-            [System.IO.Path]::GetFullPath(
-                (Join-Path $repoRoot $ExecutionManifest))
-        }
-        $manifestParent = Split-Path -Parent $manifestPath
-        if ($manifestParent) {
-            New-Item -ItemType Directory -Path $manifestParent -Force |
-                Out-Null
-        }
-        @($executedConfigurations | Sort-Object) |
-            ConvertTo-Json |
-            Set-Content -LiteralPath $manifestPath -Encoding utf8
+        Write-MirClobberManifest $ExecutionManifest @($executedConfigurations) $repoRoot
     }
     Write-Host "MIR emission-clobber regressions passed " `
         "$($executedConfigurations.Count) target configurations" `
