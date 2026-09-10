@@ -88,9 +88,19 @@ now reject during side-effect-free preflight; valid direct and indirect
 controls plus empty-output, label-rollback, and byte-identical retry assertions
 pass under normal and ASan/UBSan host builds.
 
-Latest integrated totals: 4,359/4,359 functions, 177,180/189,980 lines
-(93.26%), 91,064/144,530 native branch outcomes (63.01%), and
-159,134/169,883 regions (93.67%). The raw uncovered ledger is 53,219.
+The following wave raises the exact inventory to 5,420 configurations and
+finds four additional correctness gaps: late homed parameter rejection
+perturbed retry state, the aliased byte-sum schedule no longer matched current
+MIR, constant do-while loads and unary byte-sum conversions were under-proven,
+and active integer folding accepted non-integer operands and failed to
+normalize `_Bool`. The fixes retain generic fallbacks and improve `tbcregno`
+cycles by 15–20% without moving its baseline. Static classification validates
+287 mixed-AST functions and no new test executes the excluded strict-fold or
+legacy emitter path.
+
+Latest integrated totals: 4,361/4,361 functions, 177,375/190,064 lines
+(93.32%), 91,264/144,656 native branch outcomes (63.09%), and
+159,452/170,020 regions (93.78%). The raw uncovered ledger is 53,145.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -102,7 +112,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `3ca20abb` (`Reject nameless aggregate MIR calls`).
+  `6be3462c` (`Keep AST fold coverage on active path`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -117,7 +127,12 @@ parallel-wave summary for the current measurement.
   - `2964a774` / `08b7e938` / `149dcabb` — matrix-store, symbol-insert,
     and compound-runner proofs; and
   - `4661c228` / `3ca20abb` — transactional direct and aggregate call
-    preflight.
+    preflight;
+  - `34dc1706` / `d1fba9e7` — hardened constant do-while proofs;
+  - `7a710e7f` / `2b5993b9` — transactional homed parameter preflight;
+  - `4ac605f3` / `9e2e7d84` — aliased/direct byte-sum proof restoration; and
+  - `059d6fee` through `6be3462c` — active-only integer and `_Bool` fold
+    correctness.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -66,14 +66,22 @@ It also fixes malformed-MIR fallback transactions: nameless direct and
 aggregate calls are now rejected before emitting text, recording externals, or
 consuming labels, and repaired retries are byte-identical to clean controls.
 
+The next integrated wave executes 5,420 exact leaf configurations. It restores
+the aliased signed-byte sum schedule with complete alias, width, PHI and unary
+proofs; hardens the constant do-while matcher; moves homed parameter validation
+before candidate side effects; and fixes active scalar constant folding for
+non-integer operands and `_Bool` normalization. The two new maintained helpers
+are explicitly classified as active, while `ast_const_fold_strict` and the
+legacy emitter path remain excluded and unexecuted.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,359 / 4,359 | 100.00% |
-| Lines | 177,180 / 189,980 | 93.26% |
-| Native branch outcomes | 91,064 / 144,530 | 63.01% |
-| Regions | 159,134 / 169,883 | 93.67% |
+| Functions | 4,361 / 4,361 | 100.00% |
+| Lines | 177,375 / 190,064 | 93.32% |
+| Native branch outcomes | 91,264 / 144,656 | 63.09% |
+| Regions | 159,452 / 170,020 | 93.78% |
 
-The raw ledger has 53,219 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,145 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload
