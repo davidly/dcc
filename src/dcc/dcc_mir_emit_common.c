@@ -592,13 +592,32 @@ static int mir_scalar_dag_type_is_emittable(int type)
     int width = type_size(type);
 
     return width >= 1 && width <= 2 &&
+           type_ptr_depth(type) == 0 &&
            !type_is_float(type) && !type_is_struct_object(type);
+}
+
+static int mir_scalar_parameter_is_emittable(
+    const struct MirInsn *definition)
+{
+    const struct MirObject *object;
+    long offset;
+    int width;
+
+    if (definition->object < 0 || definition->object >= mir.object_count)
+        return 0;
+    object = &mir.objects[definition->object];
+    if (object->storage != SC_PARAM ||
+        object->type != definition->type ||
+        !mir_scalar_dag_type_is_emittable(object->type))
+        return 0;
+    offset = object->offset;
+    width = type_size(object->type);
+    return offset >= -128 && offset + width - 1 <= 127;
 }
 
 static int mir_scalar_value_is_emittable(int value, int depth)
 {
     const struct MirInsn *definition;
-    const struct MirObject *object;
 
     if (depth > 256)
         return 0;
@@ -608,11 +627,7 @@ static int mir_scalar_value_is_emittable(int value, int depth)
         return 0;
     switch (definition->opcode) {
     case MIR_PARAM:
-        if (definition->object < 0 || definition->object >= mir.object_count)
-            return 0;
-        object = &mir.objects[definition->object];
-        return object->storage == SC_PARAM &&
-               mir_scalar_dag_type_is_emittable(object->type);
+        return mir_scalar_parameter_is_emittable(definition);
     case MIR_CONST:
         return 1;
     case MIR_UNARY:
@@ -632,6 +647,9 @@ static int mir_scalar_value_is_emittable(int value, int depth)
         default:
             return 0;
         }
+        if (!mir_scalar_dag_type_is_emittable(
+                definition->secondary_offset))
+            return 0;
         return mir_scalar_value_is_emittable(
                    definition->src1, depth + 1) &&
                mir_scalar_value_is_emittable(
@@ -655,11 +673,9 @@ static int mir_emit_scalar_value(MirStream *out, int value, int depth)
         return 0;
     switch (definition->opcode) {
     case MIR_PARAM:
-        if (definition->object < 0 || definition->object >= mir.object_count)
+        if (!mir_scalar_parameter_is_emittable(definition))
             return 0;
         object = &mir.objects[definition->object];
-        if (object->storage != SC_PARAM || type_size(object->type) > 2)
-            return 0;
         if (type_size(object->type) == 1) {
             mir_stream_printf(out, "\tld l,(ix%+d)\n", object->offset);
             if (type_is_bool(object->type)) {
@@ -682,7 +698,14 @@ static int mir_emit_scalar_value(MirStream *out, int value, int depth)
     case MIR_UNARY:
         if (!mir_emit_scalar_value(out, definition->src1, depth + 1))
             return 0;
-        if (definition->immediate == 0 || definition->immediate == '+')
+        if (definition->immediate == 0) {
+            const struct MirInsn *source =
+                mir_definition(definition->src1);
+
+            return source != NULL &&
+                   mir_emit_cast(out, source->type, definition->type);
+        }
+        if (definition->immediate == '+')
             return 1;
         if (definition->immediate == '-') {
             mir_stream_puts("\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n", out);
@@ -826,7 +849,8 @@ int mir_try_emit_scalar_dag(MirStream *out)
     const struct MirInsn *return_insn = NULL;
     int i;
 
-    if ((mir.return_type & 15) != TYPE_INT || type_size(mir.return_type) > 2)
+    if ((mir.return_type & 15) != TYPE_INT ||
+        !mir_scalar_dag_type_is_emittable(mir.return_type))
         return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
