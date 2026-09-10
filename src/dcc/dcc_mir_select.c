@@ -1362,6 +1362,7 @@ static int mir_try_selector(MirStream *out, int (*selector)(MirStream *))
     MirStream *candidate = mir_stream_open();
     int accepted;
     int character;
+    int label_base = label_id;
 
     if (candidate == NULL)
         fatal("cannot create MIR selector stream");
@@ -1371,7 +1372,8 @@ static int mir_try_selector(MirStream *out, int (*selector)(MirStream *))
         mir_stream_rewind(candidate);
         while ((character = mir_stream_getc(candidate)) != EOF)
             mir_stream_putc(character, out);
-    }
+    } else
+        label_id = label_base;
     mir_stream_close(candidate);
     return accepted;
 }

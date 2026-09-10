@@ -121,6 +121,13 @@ if(DCC_BUILD_MIR_TESTS)
         ../../tests/host/mir_scalar_dag.c ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
         mir-scalar-dag-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    set(DCC_MIR_SELECTOR_TEST_SOURCES ${DCC_MIR_TEST_SOURCES})
+    list(REMOVE_ITEM DCC_MIR_SELECTOR_TEST_SOURCES dcc_mir_select.c)
+    add_executable(mir-selector-isolation-test
+        ../../tests/host/mir_selector_isolation.c
+        ${DCC_MIR_SELECTOR_TEST_SOURCES})
+    target_include_directories(
+        mir-selector-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     if(DCC_ENABLE_COVERAGE)
         target_compile_options(mir-verify-test PRIVATE
             -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
@@ -130,7 +137,13 @@ if(DCC_BUILD_MIR_TESTS)
             -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
         set_property(TARGET mir-scalar-dag-test APPEND_STRING PROPERTY
             LINK_FLAGS " -fprofile-instr-generate")
+        target_compile_options(mir-selector-isolation-test PRIVATE
+            -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+        set_property(TARGET mir-selector-isolation-test APPEND_STRING PROPERTY
+            LINK_FLAGS " -fprofile-instr-generate")
     endif()
     add_test(NAME mir-verify COMMAND mir-verify-test)
     add_test(NAME mir-scalar-dag COMMAND mir-scalar-dag-test)
+    add_test(
+        NAME mir-selector-isolation COMMAND mir-selector-isolation-test)
 endif()
