@@ -32,7 +32,9 @@ It also directly exercises MIR stream block I/O, cursor-relative/end seeks,
 short reads, copying, file transfer, hashing, zero-sized operations, invalid
 seeks, and null close behavior. These are candidate-isolation primitives, so
 their tests assert exact bytes and cursor state rather than merely executing
-the helpers.
+the helpers. Seeks before the start or beyond the high-water mark, including
+overflowing offsets, must reject without moving the cursor. A repaired
+same-state retry must produce bytes identical to a clean valid operation.
 
 Small verified MIRs also assert cross-module query defaults and reversible
 state scopes: affine constants, PHI/candidate counters, CSE/value-numbering

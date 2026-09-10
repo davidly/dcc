@@ -606,6 +606,72 @@ static void verify_mir_stream_io(void)
     mir_stream_close(NULL);
 }
 
+static int mir_stream_seek_rejected_without_moving(
+    MirStream *stream, long offset, int whence)
+{
+    long position = mir_stream_tell(stream);
+    int result = mir_stream_seek(stream, offset, whence);
+    long after = mir_stream_tell(stream);
+
+    if (after != position)
+        mir_stream_seek(stream, position, SEEK_SET);
+    return result != 0 && after == position;
+}
+
+static void verify_mir_stream_seek_transaction(void)
+{
+    MirStream *control = mir_stream_open();
+    MirStream *retry = mir_stream_open();
+    char control_text[4];
+    char retry_text[4];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int ok = 1;
+
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL MIR stream seek transaction allocation\n");
+        ++failures;
+        mir_stream_close(control);
+        mir_stream_close(retry);
+        return;
+    }
+    mir_stream_puts("abc", control);
+    mir_stream_puts("abc", retry);
+    ok = ok && mir_stream_seek(control, 1, SEEK_SET) == 0;
+    ok = ok && mir_stream_seek(retry, 1, SEEK_SET) == 0;
+    ok = ok && mir_stream_seek_rejected_without_moving(
+        retry, 4, SEEK_SET);
+    ok = ok && mir_stream_seek_rejected_without_moving(
+        retry, 3, SEEK_CUR);
+    ok = ok && mir_stream_seek_rejected_without_moving(
+        retry, 1, SEEK_END);
+    ok = ok && mir_stream_seek_rejected_without_moving(
+        retry, LONG_MAX, SEEK_CUR);
+    ok = ok && mir_stream_seek_rejected_without_moving(
+        retry, LONG_MIN, SEEK_END);
+    ok = ok && mir_stream_seek(control, 1, SEEK_CUR) == 0;
+    ok = ok && mir_stream_seek(retry, 1, SEEK_CUR) == 0;
+    ok = ok && mir_stream_putc('Z', control) == 'Z';
+    ok = ok && mir_stream_putc('Z', retry) == 'Z';
+    ok = ok && mir_stream_tell(control) == 3;
+    ok = ok && mir_stream_tell(retry) == 3;
+    mir_stream_rewind(control);
+    mir_stream_rewind(retry);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && control_bytes == 3 && retry_bytes == 3;
+    ok = ok && memcmp(control_text, "abZ", 3) == 0;
+    ok = ok && memcmp(control_text, retry_text, 3) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL MIR stream rejected seek transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    mir_stream_close(retry);
+}
+
 static void verify_ast_kind_names(void)
 {
     static const char *names[] = {
@@ -1478,6 +1544,7 @@ int main(void)
     verify_immediate_phi_consumer_forwarding();
     verify_call_argument_liveness();
     verify_mir_stream_io();
+    verify_mir_stream_seek_transaction();
     verify_ast_kind_names();
     verify_simple_mir_feature_queries();
     verify_parameter_emitters();
