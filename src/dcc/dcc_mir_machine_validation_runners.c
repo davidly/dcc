@@ -11,6 +11,8 @@
  * mir_try_emit_validation_runners().
  */
 
+#include <stdint.h>
+
 #include "dcc_mir_machine_internal.h"
 
 struct MirFixedCallCheckRunner {
@@ -10153,6 +10155,173 @@ static int mir_scope_function_types(
     return 1;
 }
 
+static void mir_scope_hash_value(
+    unsigned long long *first,
+    unsigned long long *second,
+    unsigned long long value)
+{
+    *first ^= value;
+    *first *= 1099511628211ULL;
+    *second ^= value + 0x9e3779b97f4a7c15ULL +
+        (*second << 6) + (*second >> 2);
+}
+
+static int mir_scope_block_payload(void)
+{
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int declared;
+    int instruction;
+    int object;
+
+    if (mir.declared_count < 0 ||
+        mir.declared_count > MAX_LOCALS ||
+        mir.alias_count < 0 ||
+        mir.alias_count > MAX_LOCALS)
+        goto mismatch;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(uint32_t)insn->opcode,
+            (unsigned long long)(uint32_t)insn->dst,
+            (unsigned long long)(uint32_t)insn->src1,
+            (unsigned long long)(uint32_t)insn->src2,
+            (unsigned long long)(uint32_t)insn->type,
+            (unsigned long long)(uint32_t)insn->immediate,
+            (unsigned long long)(uint32_t)insn->label,
+            (unsigned long long)(uint32_t)insn->phi_pred1,
+            (unsigned long long)(uint32_t)insn->phi_pred2,
+            (unsigned long long)(uint32_t)insn->successors[0],
+            (unsigned long long)(uint32_t)insn->successors[1],
+            (unsigned long long)(uint32_t)insn->successor_count,
+            (unsigned long long)(uint32_t)insn->object,
+            (unsigned long long)(uint32_t)insn->memory_size,
+            (unsigned long long)(uint32_t)insn->memory_flags,
+            (unsigned long long)(uint32_t)insn->pointee_volatile_mask,
+            (unsigned long long)(uint32_t)insn->has_pointer_qualifiers,
+            (unsigned long long)(uint32_t)insn->bit_width,
+            (unsigned long long)(uint32_t)insn->bit_shift,
+            (unsigned long long)(uint32_t)insn->bit_mask,
+            (unsigned long long)(uint32_t)insn->secondary_offset,
+            (unsigned long long)(uint32_t)insn->inline_temp_id,
+            (unsigned long long)(uint32_t)insn->divmod_cast_types
+        };
+        size_t value;
+
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value)
+            mir_scope_hash_value(&first, &second, values[value]);
+    }
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+
+        mir_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->storage);
+        mir_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->type);
+        mir_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->offset);
+        mir_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->entry_value);
+        mir_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->is_register);
+    }
+    mir_scope_hash_value(
+        &first, &second,
+        (unsigned long long)(uint32_t)mir.has_declared_register_object);
+    mir_scope_hash_value(
+        &first, &second,
+        (unsigned long long)(uint32_t)mir.declared_count);
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        unsigned long long values[] = {
+            (unsigned long long)(uint32_t)mir.declared_types[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_type_unstable[declared],
+            (unsigned long long)(uint32_t)mir.declared_storage[declared],
+            (unsigned long long)(uint32_t)mir.declared_offsets[declared],
+            (unsigned long long)(uint32_t)mir.declared_sizes[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_dim_counts[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_elem_sizes[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_vla_size_offsets[declared],
+            (unsigned long long)(uint32_t)mir.declared_is_vla[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_is_array[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_is_volatile[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_pointee_is_volatile[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_pointee_volatile_masks[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_dynamic_strides[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_is_const[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_const_values[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_is_funcptr[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_funcptr_return_types[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_has_proto[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_proto_nargs[declared],
+            (unsigned long long)(uint32_t)
+                mir.declared_proto_variadic[declared]
+        };
+        int dimension;
+        int parameter;
+        size_t value;
+
+        if (mir.declared_dim_counts[declared] < 0 ||
+            mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+            mir.declared_proto_nargs[declared] < 0 ||
+            mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+            goto mismatch;
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value)
+            mir_scope_hash_value(&first, &second, values[value]);
+        for (dimension = 0;
+             dimension < mir.declared_dim_counts[declared]; ++dimension)
+            mir_scope_hash_value(
+                &first, &second,
+                (unsigned long long)(uint32_t)
+                    mir.declared_dims[declared][dimension]);
+        for (parameter = 0;
+             parameter < mir.declared_proto_nargs[declared]; ++parameter)
+            mir_scope_hash_value(
+                &first, &second,
+                (unsigned long long)(uint32_t)
+                    mir.declared_proto_types[declared][parameter]);
+    }
+    mir_scope_hash_value(
+        &first, &second,
+        (unsigned long long)(uint32_t)mir.alias_count);
+    for (declared = 0; declared < mir.alias_count; ++declared)
+        mir_scope_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)
+                mir.alias_declaration_indices[declared]);
+    if (first == 0x614b85838de27af3ULL &&
+        second == 0x73f910628ba3dd60ULL)
+        return 1;
+mismatch:
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s template=scope-block-runner "
+                "reject=semantic-payload fingerprint=%016llx:%016llx\n",
+                mir.name, first, second);
+    return 0;
+}
+
 static int mir_scope_block_instruction(int profile_instruction)
 {
     int instruction;
@@ -10163,40 +10332,14 @@ static int mir_scope_block_instruction(int profile_instruction)
         instruction = profile_instruction - 2;
     else
         instruction = profile_instruction - 4;
-    if (mir.count == 698 && instruction >= 600)
+    if (instruction >= 600)
         --instruction;
-    if (mir.count != 715)
-        return instruction;
-    if (instruction < 153)
-        return instruction;
-    if (instruction < 197)
-        return instruction + 1;
-    if (instruction < 322)
-        return instruction + 2;
-    if (instruction < 483)
-        return instruction + 3;
-    if (instruction < 493)
-        return instruction + 7;
-    if (instruction < 579)
-        return instruction + 11;
-    if (instruction == 579)
-        return 614;
-    if (instruction == 598)
-        return 615;
-    return instruction + 16;
+    return instruction;
 }
 
 static int mir_match_scope_block_runner(
     struct MirScopeBlockRunner *plan)
 {
-    static const char expected_opcodes[] =
-        "LNNNNNCSNCSNGCGTGKNNGCGTGKNNNNNNNNNNCSNCSNNBNSNNCSNNBNSNNGCGTGKNNNNNNNNCSNCSNCSNGCGTGKNNGCGTGKNNGCGT"
-        "GKNNNNNNCSNCSNGCGTGKNNGCGTGKNNNNNNNNNNCSNCSLNNNNNNNNNPPNNCBFNCSNNBNSNLNCBSJLNGCGTGKNNNNNNNNCSNCSLNNN"
-        "NNNNNNNNNNPNNCBFNCSNCBFDCBSLNLNCBSJLDGCGTGKNCGKUGCGTGKNNNNNCSNCBFNCSNGCGTGKNLNGCGTGKNNNNNNNNNNNCSNCS"
-        "NNCSLNNNNNNNNNNNNNNNNNPNPNNCBFNNSNNBNSNCBSNLJLNGCGTGKNGCGTGKNNNNNNNNCSNCSNCBFJLJLNCSNNSNJNLNCNSNLPGC"
-        "GTGKNNNNNNNNNNCSNCSNNBNSNNCSNNBNSNNGCGTGKNNNNNNNNNNCSNCSLNNNNNNNNNNNNNNNNNNNNNNNNNNPNNCBFNCSLNNNNNNN"
-        "NNNNNNNNNNNNNNNNNNNNNDCBFDDBNSLDCBSJLLNCBSJLDGCGTGKNNNNNNNNNCSNNCSNCSLNNNNNNNNNPNNNNNNNNNNNNNNNNNNPN"
-        "NCBFNNBNSLNCBSJLNGCGTGKNGCGTGKNKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKDCBFLTGKJLTGDGKLDCBE";
     static const int constant_instructions[79] = {
         6, 9, 13, 21, 36, 39, 48, 58, 71, 74, 77, 81, 89, 97, 108, 111, 115,
         123, 138, 141, 157, 161, 171, 178, 191, 194, 213, 217, 220, 224, 231,
@@ -10259,9 +10402,6 @@ static int mir_match_scope_block_runner(
     static const unsigned char phi_types[9] = {
         4, 2, 2, 2, 4, 2, 2, 4, 2
     };
-    static const unsigned char phi_objects[9] = {
-        9, 10, 13, 17, 19, 22, 26, 9, 29
-    };
     static const int branches[10][3] = {
         {159, 158, 175}, {215, 214, 235},
         {222, 221, 227}, {264, 263, 276},
@@ -10273,14 +10413,6 @@ static int mir_match_scope_block_runner(
         {174, 143}, {234, 196}, {344, 304}, {377, 380},
         {379, 390}, {388, 396}, {535, 492}, {542, 456},
         {616, 571}, {691, 698}
-    };
-    static const int object_types[30] = {
-        TYPE_INT, TYPE_INT, TYPE_LONG, TYPE_INT, TYPE_INT,
-        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_LONG, TYPE_LONG,
-        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_LONG,
-        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_LONG,
-        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_LONG,
-        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT
     };
     static const int stores[][4] = {
         {7, 0, 6, 2}, {10, 1, 9, 2}, {37, 2, 36, 4},
@@ -10347,30 +10479,19 @@ static int mir_match_scope_block_runner(
         22, 24, 26, 28, 30, 32
     };
     int arguments[3];
-    int instruction;
     int item;
     int previous;
 
     memset(plan, 0, sizeof(*plan));
-    if ((mir.count != 698 && mir.count != 699 && mir.count != 715) ||
+    if (mir.count != 698 ||
         mir_cfg_block_count() != 28 ||
         mir.sink_purpose != EMIT_SINK_FINAL ||
         mir.has_vla || mir.local_bytes != 84 ||
         mir.aggregate_temp_bytes != 0 ||
-        (mir.object_count != 29 && mir.object_count != 30 &&
-         mir.object_count != 35) ||
-        !mir_abort_runner_word_type(mir.return_type) ||
-        (mir.count == 699 &&
-         strlen(expected_opcodes) != (size_t)mir.count))
+        mir.object_count != 29 ||
+        !mir_abort_runner_word_type(mir.return_type))
         return mir_machine_reject(
             "scope-block-runner", "shape");
-    if (mir.count == 699)
-        for (instruction = 0; instruction < mir.count; ++instruction)
-            if (mir_gnarly_opcode_code(
-                    mir.insns[instruction].opcode) !=
-                    expected_opcodes[instruction])
-                return mir_machine_reject(
-                    "scope-block-runner", "opcode");
     for (item = 0; item < 79; ++item) {
         int constant =
             mir_scope_block_instruction(
@@ -10396,7 +10517,7 @@ static int mir_match_scope_block_runner(
             (mir.insns[mir_scope_block_instruction(
                  binaries[item][0])].secondary_offset !=
                  binary_widths[item] &&
-             !(mir.count != 699 && item == 13 &&
+             !(item == 13 &&
                mir.insns[mir_scope_block_instruction(
                    binaries[item][0])].secondary_offset == TYPE_INT)))
                 return mir_machine_reject(
@@ -10423,13 +10544,7 @@ static int mir_match_scope_block_runner(
                 mir_scope_block_instruction(phis[item][3]),
                 mir_scope_block_instruction(phis[item][4])) ||
             mir.insns[mir_scope_block_instruction(
-                phis[item][0])].type != phi_types[item] ||
-            ((mir.count == 699 &&
-              mir.insns[mir_scope_block_instruction(
-                  phis[item][0])].object != phi_objects[item]) ||
-             (mir.count == 715 &&
-              mir.insns[mir_scope_block_instruction(
-                  phis[item][0])].object < 0)))
+                phis[item][0])].type != phi_types[item])
                 return mir_machine_reject(
                     "scope-block-runner", "phi");
     for (item = 0; item < 10; ++item)
@@ -10446,10 +10561,7 @@ static int mir_match_scope_block_runner(
 
     for (item = 0; item < mir.object_count; ++item)
         if (mir.objects[item].storage != SC_LOCAL ||
-            (mir.count == 699 &&
-             mir.objects[item].type != object_types[item]) ||
-            (mir.count != 699 &&
-             !mir_scope_long_type(mir.objects[item].type) &&
+            (!mir_scope_long_type(mir.objects[item].type) &&
              !mir_abort_runner_word_type(mir.objects[item].type)) ||
             mir.objects[item].is_register)
             return mir_machine_reject(
@@ -10462,8 +10574,7 @@ static int mir_match_scope_block_runner(
                 stores[item][0])];
 
         if (store->opcode != MIR_STORE ||
-            ((mir.count == 699 && store->object != stores[item][1]) ||
-             (mir.count != 699 && store->object < 0)) ||
+            store->object < 0 ||
             !mir_gnarly_value_from(
                 store->src1,
                 mir_scope_block_instruction(
@@ -10482,10 +10593,7 @@ static int mir_match_scope_block_runner(
                 loads[item][0])];
 
         if (load->opcode != MIR_LOAD ||
-            ((mir.count == 699 && load->object != loads[item][1]) ||
-             (mir.count != 699 && load->object < 0)) ||
-            (mir.count == 699 && load->type !=
-                object_types[loads[item][1]]) ||
+            load->object < 0 ||
             !mir_machine_named_nonvolatile(load))
             return mir_machine_reject(
                 "scope-block-runner", "load");
@@ -10648,7 +10756,7 @@ static int mir_match_scope_block_runner(
             mir.insns[mir_scope_block_instruction(701)].dst)
         return mir_machine_reject(
             "scope-block-runner", "result-flow");
-    return 1;
+    return mir_scope_block_payload();
 }
 
 static void mir_comma_array_address(MirStream *out)
@@ -13485,6 +13593,7 @@ int mir_try_emit_validation_runners(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_scope_block_runner(&scope_plan)) {
+            mir_machine_accept("scope-block-runner");
             mir_emit_scope_block_runner(out, &scope_plan);
             return 1;
         }
