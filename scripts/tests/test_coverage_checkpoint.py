@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -159,6 +161,49 @@ class CoverageCheckpointTests(unittest.TestCase):
         checkpoint.start_collection(self.root, self.build)
         with self.assertRaisesRegex(checkpoint.CheckpointError, "missing coverage checkpoint"):
             checkpoint.check_collection(self.root, self.build)
+
+
+@unittest.skipUnless(shutil.which("sh"), "POSIX coverage entry point requires sh")
+class CoverageStageShellTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.build = Path(self.temp.name) / "coverage"
+        self.script = Path(__file__).resolve().parents[1] / "compiler-coverage.sh"
+
+    def run_stage(self, **overrides):
+        environment = dict(os.environ, DCC_COVERAGE_BUILD_DIR=str(self.build),
+                           CC="dcc-test-missing-compiler", DCC_COVERAGE_JOBS="1",
+                           DCC_COVERAGE_STAGE="all")
+        environment.update(overrides)
+        return subprocess.run(["sh", str(self.script)], env=environment,
+                              text=True, capture_output=True, timeout=10)
+
+    def test_invalid_stage(self):
+        result = self.run_stage(DCC_COVERAGE_STAGE="typo")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("stage must be", result.stderr)
+
+    def test_invalid_job_budget(self):
+        for jobs in ("0", "-1", "1.5", "junk"):
+            with self.subTest(jobs=jobs):
+                result = self.run_stage(DCC_COVERAGE_JOBS=jobs)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("positive integer", result.stderr)
+
+    def test_failure_releases_lock(self):
+        result = self.run_stage()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("clang compiler not found", result.stderr)
+        self.assertFalse((self.build / ".coverage-lock").exists())
+
+    def test_existing_lock_is_not_removed(self):
+        lock = self.build / ".coverage-lock"
+        lock.mkdir(parents=True)
+        result = self.run_stage()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("already in use", result.stderr)
+        self.assertTrue(lock.exists())
 
 
 if __name__ == "__main__":
