@@ -1,0 +1,14 @@
+[
+  {
+    "Name": "derefnar",
+    "Group": "assign-deref-wave6",
+    "Sources": ["tests/mir-clobber/derefnar.c"],
+    "Defines": [],
+    "Expected": [
+      "deref float=3,253,-3,259,1",
+      "deref bool zero=0"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false]
+  }
+]

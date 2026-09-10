@@ -567,12 +567,13 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                 return 0;
             if (ast_is_plain_int_type(deref_type) &&
                 (type_size(deref_type) == 1 || type_size(deref_type) == 2)) {
-                /* Plain assignment narrows a long rhs by storing its low byte
-                 * or word.  gen_assign_lvalue_expr_ast already emits exactly
-                 * that truncating tail; admit it here just as identifier
-                 * lvalues do.  This covers `*--p = '0' + value % 10`, where
-                 * value is unsigned long. */
-                if (n->op == '=' && ast_value_is_long_word(n->b))
+                /* Plain assignment converts a float rhs or narrows a long rhs
+                 * to the pointed-to integer type.  The general lvalue store
+                 * tail already performs both conversions, matching identifier,
+                 * member, and indexed lvalues. */
+                if (n->op == '=' &&
+                    (ast_value_is_long_word(n->b) ||
+                     ast_value_is_float_word(n->b)))
                     return 1;
                 return ast_value_is_plain_int(n->b);
             }
