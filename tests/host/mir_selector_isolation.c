@@ -33,6 +33,124 @@ static size_t read_stream(MirStream *stream, char *text, size_t capacity)
     return bytes;
 }
 
+static void setup_affine_return(void)
+{
+    int instruction;
+
+    mir_begin_function(
+        "selector_affine", "_selector_affine", EMIT_SINK_FINAL, 0, 0, 0);
+    mir.count = 5;
+    mir.next_value = 3;
+    mir.next_label = 1;
+    mir.object_count = 2;
+    if (mir.allocation_capacity < mir.next_value) {
+        int *colors = (int *)realloc(
+            mir.allocation_colors,
+            (size_t)mir.next_value * sizeof(*mir.allocation_colors));
+        int *spills = (int *)realloc(
+            mir.allocation_spills,
+            (size_t)mir.next_value * sizeof(*mir.allocation_spills));
+
+        if (colors == NULL || spills == NULL)
+            fatal("cannot allocate affine selector homes");
+        mir.allocation_colors = colors;
+        mir.allocation_spills = spills;
+        mir.allocation_capacity = mir.next_value;
+    }
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    memset(&mir.objects[1], 0, sizeof(mir.objects[1]));
+    mir.objects[0].storage = SC_PARAM;
+    mir.objects[0].type = TYPE_INT;
+    mir.objects[0].offset = 4;
+    mir.objects[1].storage = SC_PARAM;
+    mir.objects[1].type = TYPE_INT;
+    mir.objects[1].offset = 6;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *insn = &mir.insns[instruction];
+
+        memset(insn, 0, sizeof(*insn));
+        insn->opcode = MIR_NOP;
+        insn->src1 = -1;
+        insn->src2 = -1;
+        insn->dst = -1;
+        insn->object = -1;
+        insn->label = -1;
+        insn->phi_pred1 = -1;
+        insn->phi_pred2 = -1;
+        insn->type = TYPE_INT;
+    }
+    mir.insns[0].opcode = MIR_LABEL;
+    mir.insns[0].label = 0;
+    mir.insns[1].opcode = MIR_PARAM;
+    mir.insns[1].dst = 0;
+    mir.insns[1].object = 0;
+    mir.insns[2].opcode = MIR_PARAM;
+    mir.insns[2].dst = 1;
+    mir.insns[2].object = 1;
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].immediate = '-';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[4].opcode = MIR_RETURN;
+    mir.insns[4].src1 = 2;
+    for (instruction = 0; instruction < mir.next_value; ++instruction) {
+        mir.allocation_colors[instruction] = MIR_COLOR_HL;
+        mir.allocation_spills[instruction] = -1;
+    }
+}
+
+static void clear_affine_liveness(void)
+{
+    free(mir.live_in);
+    free(mir.live_out);
+    mir.live_in = NULL;
+    mir.live_out = NULL;
+}
+
+static int verify_affine_return_isolation(void)
+{
+    MirStream *stream = mir_stream_open();
+    char text[512];
+    size_t bytes;
+    int accepted;
+    int saved_stack_check = opt_stack_check;
+    int ok = stream != NULL;
+
+    if (!ok)
+        fatal("cannot create affine selector isolation stream");
+    opt_stack_check = 1;
+    label_id = 73;
+    mir_stream_puts("prefix\n", stream);
+    setup_affine_return();
+    if (!mir_verify_and_dump())
+        fatal("valid affine selector fixture did not verify");
+    mir.insns[2].object = 2;
+    accepted = mir_try_emit_z80(stream);
+    ok = ok && accepted == 0;
+    ok = ok && mir_stream_size(stream) == 7 && label_id == 73;
+    clear_affine_liveness();
+
+    setup_affine_return();
+    if (!mir_verify_and_dump())
+        fatal("valid affine selector retry fixture did not verify");
+    accepted = mir_try_selector(stream, mir_try_emit_affine_return);
+    ok = ok && accepted == 1;
+    bytes = read_stream(stream, text, sizeof(text));
+    ok = ok && bytes > 7 && !memcmp(text, "prefix\n", 7);
+    ok = ok &&
+         strstr(text, "\textrn __stchk\n\tcall __stchk\n") != NULL &&
+         strstr(text, "\tld l,(ix+4)\n\tld h,(ix+5)\n") != NULL &&
+         strstr(text, "\tld e,(ix+6)\n\tld d,(ix+7)\n") != NULL &&
+         strstr(text, "\tor a\n\tsbc hl,de\n") != NULL &&
+         strstr(text, "\tld sp,ix\n\tpop ix\n\tret\n") != NULL;
+    clear_affine_liveness();
+    opt_stack_check = saved_stack_check;
+    mir_stream_close(stream);
+    return ok;
+}
+
 int main(void)
 {
     MirStream *control = mir_stream_open();
@@ -71,6 +189,7 @@ int main(void)
     ok = ok && !memcmp(retry_text, "prefix\n", 7);
     ok = ok && !memcmp(
         retry_text + 7, control_text, control_bytes);
+    ok = ok && verify_affine_return_isolation();
 
     mir_stream_close(retry);
     mir_stream_close(control);

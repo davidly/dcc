@@ -3415,7 +3415,9 @@ static int mir_has_bool_value(void)
     return 0;
 }
 
-static int mir_try_emit_z80(MirStream *out)
+/* Parameter-home validation happens after the prologue, so callers must run
+ * this fallback through mir_try_selector(). */
+static int mir_try_emit_affine_return(MirStream *out)
 {
     const struct MirInsn *return_insn = NULL;
     const struct MirInsn *parameter;
@@ -3426,28 +3428,6 @@ static int mir_try_emit_z80(MirStream *out)
     int two_parameters = 0;
     int two_parameter_operation = 0;
     int i;
-
-    /* This path is selected only by DCC_MIR_EMIT_FUNCTION. Exercise the
-     * narrow structural diagnostics before the universal generated emitters;
-     * putting homed/spilled first made every later probe unreachable. */
-    if ((mir.return_type & 15) == TYPE_INT) {
-        if (mir_try_selector(out, mir_try_emit_accumulator_loop))
-            return 1;
-        if (mir_try_selector(out, mir_try_emit_unsigned_division_loop))
-            return 1;
-        if (mir_try_selector(out, mir_try_emit_repeated_invariant_add_loop))
-            return 1;
-        if (mir_try_selector(out, mir_try_emit_countdown_loop))
-            return 1;
-        if (mir_try_selector(out, mir_try_emit_comparison_branch))
-            return 1;
-        if (mir_try_selector(out, mir_try_emit_scalar_dag))
-            return 1;
-    }
-    if (mir_try_selector(out, mir_try_emit_homed_scalar_cfg))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_spilled_scalar_cfg))
-        return 1;
 
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
@@ -3502,6 +3482,32 @@ static int mir_try_emit_z80(MirStream *out)
         mir_stream_printf(out, "\tld de,%ld\n\tadd hl,de\n", constant);
     mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
     return 1;
+}
+
+static int mir_try_emit_z80(MirStream *out)
+{
+    /* This path is selected only by DCC_MIR_EMIT_FUNCTION. Exercise the
+     * narrow structural diagnostics before the universal generated emitters;
+     * putting homed/spilled first made every later probe unreachable. */
+    if ((mir.return_type & 15) == TYPE_INT) {
+        if (mir_try_selector(out, mir_try_emit_accumulator_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_unsigned_division_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_repeated_invariant_add_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_countdown_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_comparison_branch))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_scalar_dag))
+            return 1;
+    }
+    if (mir_try_selector(out, mir_try_emit_homed_scalar_cfg))
+        return 1;
+    if (mir_try_selector(out, mir_try_emit_spilled_scalar_cfg))
+        return 1;
+    return mir_try_selector(out, mir_try_emit_affine_return);
 }
 
 static int mir_try_generated_candidate(
