@@ -503,16 +503,6 @@ static struct Sym *mir_long_index_global_address(int instruction)
     return symbol;
 }
 
-static struct Sym *mir_long_index_call_function(int instruction)
-{
-    const struct MirInsn *call = &mir.insns[instruction];
-
-    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
-        (call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0)
-        return NULL;
-    return find_global(call->name);
-}
-
 static int mir_long_index_signed_long_type(int type)
 {
     return type_ptr_depth(type) == 0 &&
@@ -525,7 +515,153 @@ static int mir_long_index_char_pointer_type(int type)
 {
     return type_ptr_depth(type) == 1 &&
         (type & 15) == TYPE_CHAR &&
+        (type & TYPE_UNSIGNED) == 0 &&
         type_size(type) == 2;
+}
+
+static int mir_long_index_signed_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        (type & 15) == TYPE_INT &&
+        (type & TYPE_UNSIGNED) == 0 &&
+        type_size(type) == 2;
+}
+
+static int mir_long_index_unsigned_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        (type & 15) == TYPE_INT &&
+        (type & TYPE_UNSIGNED) != 0 &&
+        type_size(type) == 2;
+}
+
+static int mir_long_index_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        (type & 15) == TYPE_INT &&
+        type_size(type) == 2;
+}
+
+static int mir_long_index_unsigned_byte_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        (type & 15) == TYPE_CHAR &&
+        (type & TYPE_UNSIGNED) != 0 &&
+        type_size(type) == 1;
+}
+
+static int mir_long_index_void_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        (type & 15) == TYPE_VOID &&
+        type_size(type) == 0;
+}
+
+static int mir_long_index_signed_word_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+        (type & 15) == TYPE_INT &&
+        (type & TYPE_UNSIGNED) == 0 &&
+        type_size(type) == 2;
+}
+
+enum MirLongIndexTypeKind {
+    MIR_LONG_INDEX_CHAR_POINTER,
+    MIR_LONG_INDEX_SIGNED_WORD,
+    MIR_LONG_INDEX_UNSIGNED_WORD,
+    MIR_LONG_INDEX_SIGNED_LONG,
+    MIR_LONG_INDEX_VOID,
+    MIR_LONG_INDEX_SIGNED_WORD_POINTER
+};
+
+static int mir_long_index_type_matches(
+    int type, enum MirLongIndexTypeKind kind)
+{
+    switch (kind) {
+    case MIR_LONG_INDEX_CHAR_POINTER:
+        return mir_long_index_char_pointer_type(type);
+    case MIR_LONG_INDEX_SIGNED_WORD:
+        return mir_long_index_signed_word_type(type);
+    case MIR_LONG_INDEX_UNSIGNED_WORD:
+        return mir_long_index_unsigned_word_type(type);
+    case MIR_LONG_INDEX_SIGNED_LONG:
+        return mir_long_index_signed_long_type(type);
+    case MIR_LONG_INDEX_VOID:
+        return mir_long_index_void_type(type);
+    case MIR_LONG_INDEX_SIGNED_WORD_POINTER:
+        return mir_long_index_signed_word_pointer_type(type);
+    }
+    return 0;
+}
+
+static struct Sym *mir_long_index_call_contract(
+    int instruction, int variadic, int argument_count,
+    enum MirLongIndexTypeKind return_kind,
+    const enum MirLongIndexTypeKind *argument_kinds,
+    int allow_fastcall)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    const char *assembly_name;
+    int argument;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->secondary_offset < 0 ||
+        call->memory_flags !=
+            (variadic ? MIR_CALL_FLAG_VARIADIC : 0) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC ||
+        function->is_funcptr ||
+        function->is_noreturn ||
+        (!allow_fastcall && function->is_fastcall) ||
+        !function->has_proto ||
+        function->proto_variadic != variadic ||
+        function->proto_nargs != argument_count ||
+        call->type != function->type ||
+        !mir_long_index_type_matches(
+            function->type, return_kind))
+        return NULL;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return NULL;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (!mir_long_index_type_matches(
+                function->proto_types[argument],
+                argument_kinds[argument]))
+            return NULL;
+    return function;
+}
+
+static int mir_long_index_argument(
+    int instruction, int call_instruction, int index,
+    int value, enum MirLongIndexTypeKind kind)
+{
+    const struct MirInsn *argument = &mir.insns[instruction];
+    const struct MirInsn *call = &mir.insns[call_instruction];
+
+    return argument->opcode == MIR_ARG &&
+        argument->secondary_offset == call->secondary_offset &&
+        argument->immediate == index &&
+        argument->src1 == value &&
+        mir_long_index_type_matches(argument->type, kind);
+}
+
+static int mir_long_index_array_layout(
+    struct Sym *symbol, int base_type, int element_size,
+    int minimum_elements)
+{
+    return symbol != NULL &&
+        symbol->is_array && !symbol->is_vla &&
+        !symbol->is_volatile &&
+        type_ptr_depth(symbol->type) == 0 &&
+        (symbol->type & 15) == base_type &&
+        (symbol->type & TYPE_UNSIGNED) == 0 &&
+        symbol->array_len >= minimum_elements &&
+        symbol->elem_size == element_size &&
+        symbol->size >= symbol->array_len * element_size &&
+        symbol->dim_count == 1 &&
+        symbol->dims[0] == symbol->array_len;
 }
 
 static int mir_long_index_sum_call(
@@ -552,6 +688,7 @@ static int mir_long_index_sum_call(
         function->storage != SC_FUNC ||
         function->is_funcptr ||
         function->is_noreturn ||
+        function->is_fastcall ||
         !function->has_proto ||
         function->proto_variadic ||
         function->proto_nargs != 2 ||
@@ -559,14 +696,10 @@ static int mir_long_index_sum_call(
         type_ptr_depth(function->type) != 0 ||
         (function->type & 15) != TYPE_INT ||
         type_size(function->type) != 2 ||
-        type_ptr_depth(function->proto_types[0]) != 1 ||
-        (function->proto_types[0] & 15) != TYPE_INT ||
-        (function->proto_types[0] & TYPE_UNSIGNED) != 0 ||
-        type_size(function->proto_types[0]) != 2 ||
-        type_ptr_depth(function->proto_types[1]) != 0 ||
-        (function->proto_types[1] & 15) != TYPE_INT ||
-        (function->proto_types[1] & TYPE_UNSIGNED) != 0 ||
-        type_size(function->proto_types[1]) != 2 ||
+        !mir_long_index_signed_word_pointer_type(
+            function->proto_types[0]) ||
+        !mir_long_index_signed_word_type(
+            function->proto_types[1]) ||
         !mir_machine_two_call_arguments(call, arguments) ||
         first_arg->opcode != MIR_ARG ||
         first_arg->secondary_offset != call->secondary_offset ||
@@ -611,6 +744,7 @@ static int mir_long_index_check_call(
         function->storage != SC_FUNC ||
         function->is_funcptr ||
         function->is_noreturn ||
+        function->is_fastcall ||
         !function->has_proto ||
         function->proto_variadic ||
         function->proto_nargs != 3 ||
@@ -3495,6 +3629,19 @@ static int mir_match_for_increment_runner(
 static int mir_match_long_index_call_runner(
     struct MirLongIndexCallRunner *plan)
 {
+    static const enum MirLongIndexTypeKind copy_string_arguments[2] = {
+        MIR_LONG_INDEX_CHAR_POINTER, MIR_LONG_INDEX_CHAR_POINTER
+    };
+    static const enum MirLongIndexTypeKind pointer_argument[1] = {
+        MIR_LONG_INDEX_CHAR_POINTER
+    };
+    static const enum MirLongIndexTypeKind string_check_arguments[3] = {
+        MIR_LONG_INDEX_CHAR_POINTER, MIR_LONG_INDEX_CHAR_POINTER,
+        MIR_LONG_INDEX_CHAR_POINTER
+    };
+    static const enum MirLongIndexTypeKind print_argument[1] = {
+        MIR_LONG_INDEX_CHAR_POINTER
+    };
     static const int long_check_calls[5] = {
         17, 42, 88, 104, 113
     };
@@ -3609,16 +3756,21 @@ static int mir_match_long_index_call_runner(
                     "long-index-call-runner", "inline-root");
     }
 
-    plan->copy_string_function =
-        mir_long_index_call_function(5);
-    plan->count_function =
-        mir_long_index_call_function(8);
-    plan->length_function =
-        mir_long_index_call_function(12);
-    plan->copy_function =
-        mir_long_index_call_function(20);
-    plan->string_check_function =
-        mir_long_index_call_function(27);
+    plan->copy_string_function = mir_long_index_call_contract(
+        5, 0, 2, MIR_LONG_INDEX_CHAR_POINTER,
+        copy_string_arguments, 1);
+    plan->count_function = mir_long_index_call_contract(
+        8, 0, 1, MIR_LONG_INDEX_SIGNED_LONG,
+        pointer_argument, 0);
+    plan->length_function = mir_long_index_call_contract(
+        12, 0, 1, MIR_LONG_INDEX_UNSIGNED_WORD,
+        pointer_argument, 1);
+    plan->copy_function = mir_long_index_call_contract(
+        20, 0, 1, MIR_LONG_INDEX_VOID,
+        pointer_argument, 0);
+    plan->string_check_function = mir_long_index_call_contract(
+        27, 0, 3, MIR_LONG_INDEX_VOID,
+        string_check_arguments, 0);
     for (item = 0; item < 5; ++item)
         if (!mir_long_index_check_call(
                 long_check_calls[item],
@@ -3637,7 +3789,9 @@ static int mir_match_long_index_call_runner(
             &plan->unsafe_sum_unsigned))
         return mir_machine_reject(
             "long-index-call-runner", "sum-contract");
-    plan->print_function = find_global(mir.insns[120].name);
+    plan->print_function = mir_long_index_call_contract(
+        120, 1, 1, MIR_LONG_INDEX_SIGNED_WORD,
+        print_argument, 0);
     if (plan->copy_string_function == NULL ||
         plan->count_function == NULL ||
         plan->length_function == NULL ||
@@ -3647,25 +3801,25 @@ static int mir_match_long_index_call_runner(
         plan->safe_sum_function == NULL ||
         plan->unsafe_sum_function == NULL ||
         plan->print_function == NULL ||
-        mir_long_index_call_function(32) !=
+        mir_long_index_call_contract(
+            32, 0, 2, MIR_LONG_INDEX_CHAR_POINTER,
+            copy_string_arguments, 1) !=
             plan->copy_string_function ||
-        mir_long_index_call_function(35) !=
+        mir_long_index_call_contract(
+            35, 0, 1, MIR_LONG_INDEX_SIGNED_LONG,
+            pointer_argument, 0) !=
             plan->count_function ||
-        mir_long_index_call_function(42) !=
-            plan->long_check_function ||
-        mir_long_index_call_function(45) !=
+        mir_long_index_call_contract(
+            45, 0, 1, MIR_LONG_INDEX_VOID,
+            pointer_argument, 0) !=
             plan->copy_function ||
-        mir_long_index_call_function(52) !=
+        mir_long_index_call_contract(
+            52, 0, 3, MIR_LONG_INDEX_VOID,
+            string_check_arguments, 0) !=
             plan->string_check_function ||
-        mir_long_index_call_function(88) !=
-            plan->long_check_function ||
-        mir_long_index_call_function(104) !=
-            plan->long_check_function ||
-        mir_long_index_call_function(113) !=
-            plan->long_check_function ||
-        mir.insns[136].opcode != MIR_CALL ||
-        find_global(mir.insns[136].name) !=
-            plan->print_function ||
+        mir_long_index_call_contract(
+            136, 1, 1, MIR_LONG_INDEX_SIGNED_WORD,
+            print_argument, 0) != plan->print_function ||
         plan->safe_sum_function == plan->unsafe_sum_function)
         return mir_machine_reject(
             "long-index-call-runner", "call-family");
@@ -3674,40 +3828,77 @@ static int mir_match_long_index_call_runner(
             &mir.insns[5], arguments) ||
         arguments[0] != mir.insns[1].dst ||
         arguments[1] != mir.insns[3].dst ||
+        !mir_long_index_argument(
+            2, 5, 0, mir.insns[1].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
+        !mir_long_index_argument(
+            4, 5, 1, mir.insns[3].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
         !mir_machine_single_call_argument(
             &mir.insns[8], &call_argument) ||
         call_argument != mir.insns[6].dst ||
+        !mir_long_index_argument(
+            7, 8, 0, mir.insns[6].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
         !mir_machine_single_call_argument(
             &mir.insns[12], &call_argument) ||
         call_argument != mir.insns[10].dst ||
+        !mir_long_index_argument(
+            11, 12, 0, mir.insns[10].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
         !mir_machine_three_call_arguments(
             &mir.insns[17], arguments) ||
         arguments[0] != mir.insns[8].dst ||
         arguments[1] != mir.insns[13].dst ||
         arguments[2] != mir.insns[15].dst ||
         mir.insns[13].src1 != mir.insns[12].dst ||
-        type_size(mir.insns[8].type) != 4 ||
-        type_size(mir.insns[12].type) != 2 ||
-        type_size(mir.insns[13].type) != 4)
+        mir.insns[13].immediate != 0 ||
+        !mir_long_index_signed_long_type(
+            mir.insns[8].type) ||
+        !mir_long_index_unsigned_word_type(
+            mir.insns[12].type) ||
+        !mir_long_index_signed_long_type(
+            mir.insns[13].type))
         return mir_machine_reject(
-            "long-index-call-runner", "first-count");
+            "long-index-call-runner", "wide-count-flow");
     if (!mir_machine_single_call_argument(
             &mir.insns[20], &call_argument) ||
         call_argument != mir.insns[18].dst ||
+        !mir_long_index_argument(
+            19, 20, 0, mir.insns[18].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
         !mir_machine_three_call_arguments(
             &mir.insns[27], arguments) ||
         arguments[0] != mir.insns[21].dst ||
         arguments[1] != mir.insns[23].dst ||
-        arguments[2] != mir.insns[25].dst)
+        arguments[2] != mir.insns[25].dst ||
+        !mir_long_index_argument(
+            22, 27, 0, mir.insns[21].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
+        !mir_long_index_argument(
+            24, 27, 1, mir.insns[23].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
+        !mir_long_index_argument(
+            26, 27, 2, mir.insns[25].dst,
+            MIR_LONG_INDEX_CHAR_POINTER))
         return mir_machine_reject(
             "long-index-call-runner", "first-copy");
     if (!mir_machine_two_call_arguments(
             &mir.insns[32], arguments) ||
         arguments[0] != mir.insns[28].dst ||
         arguments[1] != mir.insns[30].dst ||
+        !mir_long_index_argument(
+            29, 32, 0, mir.insns[28].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
+        !mir_long_index_argument(
+            31, 32, 1, mir.insns[30].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
         !mir_machine_single_call_argument(
             &mir.insns[35], &call_argument) ||
         call_argument != mir.insns[33].dst ||
+        !mir_long_index_argument(
+            34, 35, 0, mir.insns[33].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
         !mir_machine_three_call_arguments(
             &mir.insns[42], arguments) ||
         arguments[0] != mir.insns[35].dst ||
@@ -3718,35 +3909,82 @@ static int mir_match_long_index_call_runner(
     if (!mir_machine_single_call_argument(
             &mir.insns[45], &call_argument) ||
         call_argument != mir.insns[43].dst ||
+        !mir_long_index_argument(
+            44, 45, 0, mir.insns[43].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
         !mir_machine_three_call_arguments(
             &mir.insns[52], arguments) ||
         arguments[0] != mir.insns[46].dst ||
         arguments[1] != mir.insns[48].dst ||
         arguments[2] != mir.insns[50].dst ||
+        !mir_long_index_argument(
+            47, 52, 0, mir.insns[46].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
+        !mir_long_index_argument(
+            49, 52, 1, mir.insns[48].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
+        !mir_long_index_argument(
+            51, 52, 2, mir.insns[50].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
         mir.insns[48].immediate != mir.insns[30].immediate)
         return mir_machine_reject(
             "long-index-call-runner", "second-copy");
 
     if (!mir_machine_constant_equals(mir.insns[54].dst, 0) ||
+        !mir_long_index_unsigned_byte_type(
+            mir.insns[54].type) ||
         !mir_machine_unobservable_local_store(&mir.insns[55]) ||
+        mir.insns[55].src1 != mir.insns[54].dst ||
+        mir.insns[55].memory_size != 1 ||
         mir.insns[57].src1 != mir.insns[54].dst ||
         mir.insns[57].src2 != mir.insns[72].dst ||
         mir.insns[57].phi_pred1 != mir.insns[0].label ||
         mir.insns[57].phi_pred2 != mir.insns[69].label ||
+        !mir_long_index_unsigned_byte_type(
+            mir.insns[57].type) ||
+        mir.insns[56].label == mir.insns[69].label ||
+        mir.insns[56].label == mir.insns[75].label ||
+        mir.insns[69].label == mir.insns[75].label ||
+        mir.insns[60].src1 != mir.insns[57].dst ||
+        mir.insns[60].immediate != 0 ||
+        !mir_long_index_signed_word_type(
+            mir.insns[60].type) ||
+        !mir_long_index_signed_word_type(
+            mir.insns[59].type) ||
         mir.insns[61].opcode != MIR_BINARY ||
         mir.insns[61].immediate != '<' ||
         mir.insns[61].src1 != mir.insns[60].dst ||
         mir.insns[61].src2 != mir.insns[59].dst ||
+        !mir_long_index_signed_word_type(
+            mir.insns[61].type) ||
+        mir.insns[62].src1 != mir.insns[61].dst ||
         mir.insns[62].label != mir.insns[75].label ||
         mir.insns[65].src1 != mir.insns[63].dst ||
         mir.insns[65].src2 != mir.insns[57].dst ||
         mir.insns[65].immediate != 2 ||
+        mir.insns[65].memory_size != 2 ||
+        !mir_long_index_signed_word_pointer_type(
+            mir.insns[65].type) ||
+        mir.insns[67].src1 != mir.insns[57].dst ||
+        mir.insns[67].immediate != 0 ||
+        !mir_long_index_signed_word_type(
+            mir.insns[67].type) ||
         mir.insns[68].src1 != mir.insns[65].dst ||
         mir.insns[68].src2 != mir.insns[67].dst ||
         mir.insns[68].memory_size != 2 ||
         mir.insns[72].immediate != '+' ||
+        mir.insns[72].src1 != mir.insns[57].dst ||
+        mir.insns[72].src2 != mir.insns[71].dst ||
+        !mir_long_index_unsigned_byte_type(
+            mir.insns[71].type) ||
+        !mir_long_index_unsigned_byte_type(
+            mir.insns[72].type) ||
         !mir_machine_constant_equals(mir.insns[71].dst, 1) ||
         !mir_machine_unobservable_local_store(&mir.insns[73]) ||
+        mir.insns[73].src1 != mir.insns[72].dst ||
+        mir.insns[73].memory_size != 1 ||
+        !mir_machine_same_location(
+            &mir.insns[55], &mir.insns[73]) ||
         mir.insns[74].label != mir.insns[56].label ||
         !mir_long_index_constant(59, &plan->inline_bound) ||
         plan->inline_bound <= 0 ||
@@ -3764,6 +4002,11 @@ static int mir_match_long_index_call_runner(
         arguments[1] != mir.insns[84].dst ||
         arguments[2] != mir.insns[86].dst ||
         mir.insns[81].src1 != mir.insns[80].dst ||
+        mir.insns[81].immediate != 0 ||
+        !mir_long_index_word_type(
+            mir.insns[80].type) ||
+        !mir_long_index_signed_long_type(
+            mir.insns[81].type) ||
         !mir_machine_two_call_arguments(
             &mir.insns[96], arguments) ||
         arguments[0] != mir.insns[92].dst ||
@@ -3774,25 +4017,40 @@ static int mir_match_long_index_call_runner(
         arguments[1] != mir.insns[100].dst ||
         arguments[2] != mir.insns[102].dst ||
         mir.insns[97].src1 != mir.insns[96].dst ||
+        mir.insns[97].immediate != 0 ||
+        !mir_long_index_word_type(
+            mir.insns[96].type) ||
+        !mir_long_index_signed_long_type(
+            mir.insns[97].type) ||
         !mir_machine_three_call_arguments(
             &mir.insns[113], arguments) ||
         arguments[0] != mir.insns[106].dst ||
         arguments[1] != mir.insns[109].dst ||
         arguments[2] != mir.insns[111].dst ||
-        mir.insns[106].src1 != mir.insns[105].dst)
+        mir.insns[106].src1 != mir.insns[105].dst ||
+        mir.insns[106].immediate != 0 ||
+        !mir_long_index_signed_word_type(
+            mir.insns[105].type) ||
+        !mir_long_index_signed_long_type(
+            mir.insns[106].type))
         return mir_machine_reject(
-            "long-index-call-runner", "inline-calls");
+            "long-index-call-runner", "inline-wide-flow");
 
     plan->unsafe_call_count =
         find_global(mir.insns[91].name);
     if (plan->unsafe_call_count == NULL ||
         plan->unsafe_call_count->is_volatile ||
+        !mir_long_index_signed_word_type(
+            plan->unsafe_call_count->type) ||
         mir.insns[91].src1 != mir.insns[89].dst ||
         mir.insns[91].memory_size != 2 ||
+        !mir_long_index_signed_word_type(
+            mir.insns[89].type) ||
         !mir_machine_constant_equals(mir.insns[89].dst, 0) ||
         find_global(mir.insns[105].name) !=
             plan->unsafe_call_count ||
-        type_size(mir.insns[105].type) != 2)
+        !mir_long_index_signed_word_type(
+            mir.insns[105].type))
         return mir_machine_reject(
             "long-index-call-runner", "unsafe-count");
 
@@ -3801,35 +4059,85 @@ static int mir_match_long_index_call_runner(
     if (plan->checks == NULL || plan->failures == NULL ||
         plan->checks == plan->failures ||
         plan->checks->is_volatile || plan->failures->is_volatile ||
+        plan->checks->is_array || plan->failures->is_array ||
+        !mir_long_index_signed_word_type(plan->checks->type) ||
+        !mir_long_index_signed_word_type(plan->failures->type) ||
         !mir_machine_three_call_arguments(
             &mir.insns[120], arguments) ||
         arguments[0] != mir.insns[114].dst ||
         arguments[1] != mir.insns[116].dst ||
         arguments[2] != mir.insns[118].dst ||
+        !mir_long_index_argument(
+            115, 120, 0, mir.insns[114].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
+        !mir_long_index_argument(
+            117, 120, 1, mir.insns[116].dst,
+            MIR_LONG_INDEX_SIGNED_WORD) ||
+        !mir_long_index_argument(
+            119, 120, 2, mir.insns[118].dst,
+            MIR_LONG_INDEX_SIGNED_WORD) ||
+        !mir_long_index_signed_word_type(
+            mir.insns[116].type) ||
+        !mir_long_index_signed_word_type(
+            mir.insns[118].type) ||
         find_global(mir.insns[123].name) != plan->failures ||
+        !mir_long_index_signed_word_type(
+            mir.insns[123].type) ||
         mir.insns[125].opcode != MIR_BINARY ||
         mir.insns[125].immediate != TOK_EQ ||
         mir.insns[125].src1 != mir.insns[123].dst ||
+        mir.insns[125].src2 != mir.insns[124].dst ||
+        !mir_long_index_signed_word_type(
+            mir.insns[124].type) ||
+        !mir_long_index_signed_word_type(
+            mir.insns[125].type) ||
         !mir_machine_constant_equals(mir.insns[124].dst, 0) ||
+        mir.insns[126].src1 != mir.insns[125].dst ||
         mir.insns[126].label != mir.insns[130].label ||
+        mir.insns[128].label == mir.insns[130].label ||
         mir.insns[129].label != mir.insns[133].label ||
         mir.insns[134].src1 != mir.insns[127].dst ||
         mir.insns[134].src2 != mir.insns[131].dst ||
         mir.insns[134].phi_pred1 != mir.insns[128].label ||
         mir.insns[134].phi_pred2 != mir.insns[132].label ||
+        !mir_long_index_char_pointer_type(
+            mir.insns[127].type) ||
+        !mir_long_index_char_pointer_type(
+            mir.insns[131].type) ||
+        !mir_long_index_char_pointer_type(
+            mir.insns[134].type) ||
         !mir_machine_two_call_arguments(
             &mir.insns[136], arguments) ||
         arguments[0] != mir.insns[121].dst ||
         arguments[1] != mir.insns[134].dst ||
+        !mir_long_index_argument(
+            122, 136, 0, mir.insns[121].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
+        !mir_long_index_argument(
+            135, 136, 1, mir.insns[134].dst,
+            MIR_LONG_INDEX_CHAR_POINTER) ||
         find_global(mir.insns[137].name) != plan->failures ||
+        !mir_long_index_signed_word_type(
+            mir.insns[137].type) ||
+        mir.insns[138].src1 != mir.insns[137].dst ||
         mir.insns[138].label != mir.insns[142].label ||
+        mir.insns[140].label == mir.insns[142].label ||
+        !mir_long_index_signed_word_type(
+            mir.insns[139].type) ||
         !mir_machine_constant_equals(mir.insns[139].dst, 1) ||
+        mir.insns[141].label != mir.insns[145].label ||
+        !mir_long_index_signed_word_type(
+            mir.insns[143].type) ||
         !mir_machine_constant_equals(mir.insns[143].dst, 0) ||
         mir.insns[146].src1 != mir.insns[139].dst ||
         mir.insns[146].src2 != mir.insns[143].dst ||
+        mir.insns[146].phi_pred1 != mir.insns[140].label ||
+        mir.insns[146].phi_pred2 != mir.insns[144].label ||
+        !mir_long_index_signed_word_type(
+            mir.insns[146].type) ||
         mir.insns[147].src1 != mir.insns[146].dst)
         return mir_machine_reject(
-            "long-index-call-runner", "final");
+            "long-index-call-runner", "report-return-flow");
 
     if (!mir_long_index_constant(
             38, &plan->second_count_expected) ||
@@ -3841,6 +4149,20 @@ static int mir_match_long_index_call_runner(
             109, &plan->unsafe_calls_expected))
         return mir_machine_reject(
             "long-index-call-runner", "constants");
+    if (!mir_long_index_signed_long_type(
+            mir.insns[38].type) ||
+        !mir_long_index_signed_word_type(
+            mir.insns[78].type) ||
+        !mir_long_index_signed_long_type(
+            mir.insns[84].type) ||
+        !mir_long_index_signed_word_type(
+            mir.insns[94].type) ||
+        !mir_long_index_signed_long_type(
+            mir.insns[100].type) ||
+        !mir_long_index_signed_long_type(
+            mir.insns[109].type))
+        return mir_machine_reject(
+            "long-index-call-runner", "constant-types");
 
     plan->first_source_string_id =
         (int)mir.insns[3].immediate;
@@ -3868,6 +4190,26 @@ static int mir_match_long_index_call_runner(
         (int)mir.insns[127].immediate;
     plan->nonzero_result_string_id =
         (int)mir.insns[131].immediate;
+
+    if (plan->first_source_string_id < 0 ||
+        plan->first_source_string_id >= nstrings ||
+        plan->second_source_string_id < 0 ||
+        plan->second_source_string_id >= nstrings ||
+        !mir_long_index_array_layout(
+            plan->source_buffer, TYPE_CHAR, 1,
+            string_len[plan->first_source_string_id] + 1) ||
+        plan->source_buffer->array_len <
+            string_len[plan->second_source_string_id] + 1 ||
+        !mir_long_index_array_layout(
+            plan->output_buffer, TYPE_CHAR, 1,
+            string_len[plan->first_source_string_id] + 1) ||
+        plan->output_buffer->array_len <
+            string_len[plan->second_source_string_id] + 1 ||
+        !mir_long_index_array_layout(
+            plan->inline_values, TYPE_INT, 2,
+            plan->inline_bound))
+        return mir_machine_reject(
+            "long-index-call-runner", "array-layout");
 
     plan->copy_fastcall = mir_call_is_de_hl_fastcall(
         5, &runtime_name, &fast_arg0, &fast_arg1);
@@ -13031,6 +13373,7 @@ int mir_try_emit_validation_runners(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_long_index_call_runner(&long_index_plan)) {
+            mir_machine_accept("long-index-call-runner");
             mir_emit_long_index_call_runner(
                 out, &long_index_plan);
             return 1;
