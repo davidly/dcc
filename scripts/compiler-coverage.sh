@@ -145,6 +145,7 @@ fi
 "$llvm_profdata" merge -sparse "$raw_dir"/*.profraw -o "$build_dir/dcc.profdata"
 "$llvm_cov" report "$binary_dir/dcc" \
     -object "$build_dir/cmake/mir-verify-test" \
+    -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$repo_root"/src/dcc/*.c >"$report_dir/summary.txt"
@@ -157,11 +158,13 @@ EOF
 printf '%s\n' "$@" >"$report_dir/ast-mir-sources.txt"
 "$llvm_cov" report "$binary_dir/dcc" \
     -object "$build_dir/cmake/mir-verify-test" \
+    -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$@" >"$report_dir/ast-mir-summary.txt"
 "$llvm_cov" export "$binary_dir/dcc" \
     -object "$build_dir/cmake/mir-verify-test" \
+    -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$@" >"$report_dir/ast-mir-coverage.json"
@@ -170,6 +173,7 @@ python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
     --allowlist "$report_dir/ast-mir-functions.txt"
 "$llvm_cov" report "$binary_dir/dcc" \
     -object "$build_dir/cmake/mir-verify-test" \
+    -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     -name-allowlist="$report_dir/ast-mir-functions.txt" -show-functions \
@@ -188,6 +192,7 @@ python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
     >"$report_dir/ast-mir-function-summary.txt"
 "$llvm_cov" show "$binary_dir/dcc" \
     -object "$build_dir/cmake/mir-verify-test" \
+    -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     -format=html \
