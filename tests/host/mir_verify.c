@@ -90,6 +90,18 @@ static int ast_assignment_probe(
     return ast_gen_supported(assign);
 }
 
+static int expect_ast_assignment_support(
+    const char *name, struct AstNode *assign, struct AstNode *lhs,
+    struct AstNode *rhs, int op, int expected)
+{
+    int actual = ast_assignment_probe(assign, lhs, rhs, op);
+    if (actual == expected)
+        return 1;
+    fprintf(stderr, "FAIL AST assignment support %s: got %d expected %d\n",
+            name, actual, expected);
+    return 0;
+}
+
 static void check_ast_binary_fold(
     const char *name, int op,
     int left_type, long left_value,
@@ -227,6 +239,7 @@ static void verify_ast_assignment_support(void)
     struct AstNode address;
     struct AstNode member;
     struct AstNode owner;
+    struct AstNode pointer_rhs;
     struct Sym *symbol;
     int saved_dead = expr_result_dead;
     int item;
@@ -244,6 +257,7 @@ static void verify_ast_assignment_support(void)
     memset(&address, 0, sizeof(address));
     memset(&member, 0, sizeof(member));
     memset(&owner, 0, sizeof(owner));
+    memset(&pointer_rhs, 0, sizeof(pointer_rhs));
     lhs.kind = AST_IDENT;
     integer.kind = AST_INT_LIT;
     integer.type = TYPE_INT;
@@ -345,6 +359,13 @@ static void verify_ast_assignment_support(void)
         &assign, &lhs, &integer, '=');
 
     symbol = add_global(
+        "verify_assignment_pointer_rhs", type_add_ptr(TYPE_INT), SC_GLOBAL);
+    pointer_rhs.kind = AST_IDENT;
+    pointer_rhs.type = symbol->type;
+    pointer_rhs.sval = symbol->name;
+    pointer_rhs.sym = symbol;
+
+    symbol = add_global(
         "verify_assignment_pointer_array", type_add_ptr(TYPE_INT), SC_GLOBAL);
     symbol->is_array = 1;
     symbol->dim_count = 1;
@@ -360,9 +381,22 @@ static void verify_ast_assignment_support(void)
     index.type = symbol->type;
     integer.ival = 0;
     ok = ok && ast_assignment_probe(
-        &assign, &index, &integer, '=') &&
-         !ast_assignment_probe(
-             &assign, &index, &integer, TOK_ADDEQ);
+        &assign, &index, &integer, '=');
+    ok = expect_ast_assignment_support(
+        "pointer array +=", &assign, &index, &integer, TOK_ADDEQ, 1) && ok;
+    ok = expect_ast_assignment_support(
+        "pointer array -=", &assign, &index, &integer, TOK_SUBEQ, 1) && ok;
+    ok = expect_ast_assignment_support(
+        "pointer array invalid operator", &assign, &index, &integer,
+        TOK_MULEQ, 0) && ok;
+    ok = expect_ast_assignment_support(
+        "pointer array invalid pointer rhs", &assign, &index, &pointer_rhs,
+        TOK_ADDEQ, 0) && ok;
+    expr_result_dead = 0;
+    ok = expect_ast_assignment_support(
+        "pointer array live result", &assign, &index, &integer,
+        TOK_ADDEQ, 0) && ok;
+    expr_result_dead = 1;
     integer.ival = 3;
     ok = ok && !ast_assignment_probe(
         &assign, &index, &integer, '=');
@@ -397,9 +431,13 @@ static void verify_ast_assignment_support(void)
     index.type = type_add_ptr(TYPE_INT);
     integer.ival = 0;
     ok = ok && ast_assignment_probe(
-        &assign, &index, &integer, '=') &&
-         !ast_assignment_probe(
-             &assign, &index, &integer, TOK_ADDEQ);
+        &assign, &index, &integer, '=');
+    ok = expect_ast_assignment_support(
+        "dereferenced pointer row +=", &assign, &index, &integer,
+        TOK_ADDEQ, 1) && ok;
+    ok = expect_ast_assignment_support(
+        "dereferenced pointer row -=", &assign, &index, &integer,
+        TOK_SUBEQ, 1) && ok;
     integer.ival = 3;
     ok = ok && !ast_assignment_probe(
         &assign, &index, &integer, '=');
@@ -432,9 +470,13 @@ static void verify_ast_assignment_support(void)
     index.type = symbol->type;
     integer.ival = 0;
     ok = ok && ast_assignment_probe(
-        &assign, &index, &integer, '=') &&
-         !ast_assignment_probe(
-             &assign, &index, &integer, TOK_ADDEQ);
+        &assign, &index, &integer, '=');
+    ok = expect_ast_assignment_support(
+        "pointer expression index +=", &assign, &index, &integer,
+        TOK_ADDEQ, 1) && ok;
+    ok = expect_ast_assignment_support(
+        "pointer expression index -=", &assign, &index, &integer,
+        TOK_SUBEQ, 1) && ok;
     integer.ival = 3;
     ok = ok && !ast_assignment_probe(
         &assign, &index, &integer, '=');
@@ -458,15 +500,47 @@ static void verify_ast_assignment_support(void)
     index.type = symbol->type;
     integer.ival = 0;
     ok = ok && ast_assignment_probe(
-        &assign, &index, &integer, '=') &&
-         !ast_assignment_probe(
-             &assign, &index, &integer, TOK_ADDEQ);
+        &assign, &index, &integer, '=');
+    ok = expect_ast_assignment_support(
+        "multidimensional pointer index +=", &assign, &index, &integer,
+        TOK_ADDEQ, 1) && ok;
+    ok = expect_ast_assignment_support(
+        "multidimensional pointer index -=", &assign, &index, &integer,
+        TOK_SUBEQ, 1) && ok;
     integer.ival = 3;
     ok = ok && !ast_assignment_probe(
         &assign, &index, &integer, '=');
     expr_result_dead = 0;
-    ok = ok && !ast_assignment_probe(
-        &assign, &index, &integer, TOK_ADDEQ);
+    ok = expect_ast_assignment_support(
+        "multidimensional pointer index live result", &assign, &index,
+        &integer, TOK_ADDEQ, 0) && ok;
+    expr_result_dead = 1;
+
+    symbol = add_global(
+        "verify_assignment_dereferenced_pointer",
+        type_add_ptr(type_add_ptr(TYPE_INT)), SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    dereference.a = &lhs;
+    dereference.type = type_add_ptr(TYPE_INT);
+    integer.ival = 1;
+    ok = expect_ast_assignment_support(
+        "dereferenced pointer +=", &assign, &dereference, &integer,
+        TOK_ADDEQ, 1) && ok;
+    ok = expect_ast_assignment_support(
+        "dereferenced pointer -=", &assign, &dereference, &integer,
+        TOK_SUBEQ, 1) && ok;
+    ok = expect_ast_assignment_support(
+        "dereferenced pointer invalid operator", &assign, &dereference,
+        &integer, TOK_SHLEQ, 0) && ok;
+    ok = expect_ast_assignment_support(
+        "dereferenced pointer invalid pointer rhs", &assign, &dereference,
+        &pointer_rhs, TOK_SUBEQ, 0) && ok;
+    expr_result_dead = 0;
+    ok = expect_ast_assignment_support(
+        "dereferenced pointer live result", &assign, &dereference, &integer,
+        TOK_SUBEQ, 0) && ok;
     expr_result_dead = 1;
 
     symbol = add_global(
@@ -536,9 +610,16 @@ static void verify_ast_assignment_support(void)
         index.type = type_decay_ptr(field->type);
         integer.ival = 0;
         ok = ok && ast_assignment_probe(
-            &assign, &index, &integer, '=') &&
-             !ast_assignment_probe(
-                 &assign, &index, &integer, TOK_ADDEQ);
+            &assign, &index, &integer, '=');
+        ok = expect_ast_assignment_support(
+            "member pointer index +=", &assign, &index, &integer,
+            TOK_ADDEQ, 1) && ok;
+        ok = expect_ast_assignment_support(
+            "member pointer index -=", &assign, &index, &integer,
+            TOK_SUBEQ, 1) && ok;
+        ok = expect_ast_assignment_support(
+            "member pointer index invalid rhs", &assign, &index, &pointer_rhs,
+            TOK_ADDEQ, 0) && ok;
         integer.ival = 3;
     } else {
         ok = 0;

@@ -378,6 +378,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                         return type_size(elem) == 2 &&
                                ast_pointer_assign_rhs_supported(n->b);
                     return type_size(elem) == 2 &&
+                           expr_result_dead &&
                            (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
                            ast_gen_supported(n->b) &&
                            ast_value_is_plain_int(n->b);
@@ -590,6 +591,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                     return type_size(deref_type) == 2 &&
                            ast_pointer_assign_rhs_supported(n->b);
                 return type_size(deref_type) == 2 &&
+                       expr_result_dead &&
                        (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
                        ast_gen_supported(n->b) &&
                        ast_value_is_plain_int(n->b);
