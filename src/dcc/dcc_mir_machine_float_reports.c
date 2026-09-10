@@ -2076,16 +2076,24 @@ static void mir_emit_raw_conversion_check_schedule(
 
 static int mir_float_normalization_type(int type)
 {
-    return type_ptr_depth(type) == 0 &&
-        type_is_float(type) && type_size(type) == 4;
+    return type == TYPE_FLOAT;
 }
 
 static int mir_float_normalization_parameter_load(
     const struct MirInsn *load, const struct MirInsn *parameter)
 {
     return load->opcode == MIR_LOAD &&
+        load->type == parameter->type &&
         mir_machine_named_nonvolatile(load) &&
         mir_machine_same_location(load, parameter);
+}
+
+static int mir_float_normalization_integer_constant(
+    int instruction, long value)
+{
+    return mir.insns[instruction].opcode == MIR_CONST &&
+        mir.insns[instruction].type == TYPE_INT &&
+        mir.insns[instruction].immediate == value;
 }
 
 static int mir_float_log_float_constant(int instruction,
@@ -2406,19 +2414,17 @@ static int mir_match_float_normalization_schedule(
             if (mir.insns[label_indices[left]].label ==
                 mir.insns[label_indices[right]].label)
                 return 0;
-    if (!mir_float_normalization_type(value->type) ||
-        type_ptr_depth(exponent->type) != 1 ||
-        (exponent->type & 15) != TYPE_INT ||
+    if (value->type != TYPE_FLOAT ||
+        exponent->type != type_add_ptr(TYPE_INT) ||
         mir_machine_pointee_is_volatile(exponent) ||
         !mir_scalar_memory_location(
             value, &value_type, &value_storage, &value_offset) ||
         value_storage != SC_PARAM ||
-        !mir_float_normalization_type(value_type) ||
+        value_type != TYPE_FLOAT ||
         !mir_scalar_memory_location(
             exponent, &exponent_type, &exponent_storage, &exponent_offset) ||
         exponent_storage != SC_PARAM ||
-        type_ptr_depth(exponent_type) != 1 ||
-        (exponent_type & 15) != TYPE_INT ||
+        exponent_type != type_add_ptr(TYPE_INT) ||
         value_offset != 4 || exponent_offset != 8)
         return 0;
     for (instruction = 0; instruction < 7; ++instruction)
@@ -2430,10 +2436,11 @@ static int mir_match_float_normalization_schedule(
                 &mir.insns[exponent_load_indices[instruction]], exponent))
             return 0;
 
-    if (!mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+    if (!mir_float_normalization_integer_constant(4, 0) ||
         mir.insns[5].src1 != mir.insns[3].dst ||
         mir.insns[5].src2 != mir.insns[4].dst ||
         mir.insns[5].memory_size != 2 ||
+        mir.insns[5].memory_flags != 0 ||
         ((unsigned long)mir.insns[7].immediate & 0xffffffffUL) != 0 ||
         !mir_float_normalization_type(mir.insns[7].type) ||
         mir.insns[8].immediate != TOK_EQ ||
@@ -2463,6 +2470,10 @@ static int mir_match_float_normalization_schedule(
         !mir_float_report_call_arguments(call, 2, arguments) ||
         arguments[0] != mir.insns[19].dst ||
         arguments[1] != mir.insns[21].dst ||
+        mir.insns[20].type != TYPE_FLOAT ||
+        mir.insns[20].memory_flags != 0 ||
+        mir.insns[22].type != type_add_ptr(TYPE_INT) ||
+        mir.insns[22].memory_flags != 0 ||
         mir.insns[24].immediate != '-' ||
         mir.insns[24].src1 != call->dst ||
         !mir_float_normalization_type(mir.insns[24].type) ||
@@ -2490,17 +2501,21 @@ static int mir_match_float_normalization_schedule(
         !mir_machine_same_location(&mir.insns[39], value) ||
         mir.insns[39].src1 != mir.insns[37].dst ||
         mir.insns[39].memory_size != 4 ||
+        mir.insns[39].memory_flags != 0 ||
         mir.insns[41].src1 != mir.insns[40].dst ||
         mir.insns[41].memory_size != 2 ||
-        !mir_match_final_call_integer_type(mir.insns[41].type, 2) ||
-        !mir_machine_constant_equals(mir.insns[42].dst, 1) ||
+        mir.insns[41].memory_flags != 0 ||
+        mir.insns[41].type != TYPE_INT ||
+        !mir_float_normalization_integer_constant(42, 1) ||
         mir.insns[43].immediate != '+' ||
+        mir.insns[43].secondary_offset != TYPE_INT ||
         mir.insns[43].src1 != mir.insns[41].dst ||
         mir.insns[43].src2 != mir.insns[42].dst ||
-        !mir_match_final_call_integer_type(mir.insns[43].type, 2) ||
+        mir.insns[43].type != TYPE_INT ||
         mir.insns[44].src1 != mir.insns[40].dst ||
         mir.insns[44].src2 != mir.insns[43].dst ||
         mir.insns[44].memory_size != 2 ||
+        mir.insns[44].memory_flags != 0 ||
         mir.insns[47].label != mir.insns[28].label)
         return 0;
 
@@ -2525,17 +2540,21 @@ static int mir_match_float_normalization_schedule(
         !mir_machine_same_location(&mir.insns[60], value) ||
         mir.insns[60].src1 != mir.insns[58].dst ||
         mir.insns[60].memory_size != 4 ||
+        mir.insns[60].memory_flags != 0 ||
         mir.insns[62].src1 != mir.insns[61].dst ||
         mir.insns[62].memory_size != 2 ||
-        !mir_match_final_call_integer_type(mir.insns[62].type, 2) ||
-        !mir_machine_constant_equals(mir.insns[63].dst, 1) ||
+        mir.insns[62].memory_flags != 0 ||
+        mir.insns[62].type != TYPE_INT ||
+        !mir_float_normalization_integer_constant(63, 1) ||
         mir.insns[64].immediate != '-' ||
+        mir.insns[64].secondary_offset != TYPE_INT ||
         mir.insns[64].src1 != mir.insns[62].dst ||
         mir.insns[64].src2 != mir.insns[63].dst ||
-        !mir_match_final_call_integer_type(mir.insns[64].type, 2) ||
+        mir.insns[64].type != TYPE_INT ||
         mir.insns[65].src1 != mir.insns[61].dst ||
         mir.insns[65].src2 != mir.insns[64].dst ||
         mir.insns[65].memory_size != 2 ||
+        mir.insns[65].memory_flags != 0 ||
         mir.insns[68].label != mir.insns[49].label ||
         mir.insns[71].src1 != mir.insns[70].dst)
         return 0;
@@ -2546,12 +2565,12 @@ static int mir_match_float_normalization_schedule(
         !plan->function->has_proto ||
         plan->function->proto_nargs != 2 ||
         plan->function->proto_variadic ||
-        !mir_float_normalization_type(plan->function->proto_types[0]) ||
-        type_ptr_depth(plan->function->proto_types[1]) != 1 ||
-        (plan->function->proto_types[1] & 15) != TYPE_INT ||
+        plan->function->type != TYPE_FLOAT ||
+        plan->function->proto_types[0] != TYPE_FLOAT ||
+        plan->function->proto_types[1] != type_add_ptr(TYPE_INT) ||
         strcmp(call->name, mir.name) ||
         call->memory_flags != 0 ||
-        !mir_float_normalization_type(call->type) ||
+        call->type != TYPE_FLOAT ||
         !mir_match_math_symbol_target(call, plan->function))
         return 0;
     plan->value_frame_offset = value_offset;
@@ -5280,10 +5299,12 @@ int mir_try_emit_float_reports(MirStream *out)
     }
     if (mir_match_float_normalization_schedule(
             &float_normalization_schedule)) {
+        mir_machine_accept("float-normalization-schedule");
         mir_emit_float_normalization_schedule(
             out, &float_normalization_schedule);
         return 1;
     }
+    mir_machine_reject("float-normalization-schedule", "shape");
     if (mir_match_float_log_series_schedule(
             &float_log_series_schedule)) {
         mir_emit_float_log_series_schedule(
