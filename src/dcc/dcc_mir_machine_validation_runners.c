@@ -10608,7 +10608,8 @@ static struct Sym *mir_directory_function(
 
 static int mir_directory_call(
     int instruction, struct Sym *function, int ordinal,
-    int argument_count, const int *definitions)
+    int argument_count, const int *argument_instructions,
+    const int *definitions, const int *variadic_types)
 {
     const struct MirInsn *call = &mir.insns[instruction];
     const char *assembly_name;
@@ -10630,10 +10631,22 @@ static int mir_directory_call(
     if (call->base_name[0] != 0 &&
         strcmp(call->base_name, assembly_name))
         return 0;
-    for (argument = 0; argument < argument_count; ++argument)
-        if (arguments[argument] !=
-            mir.insns[definitions[argument]].dst)
+    for (argument = 0; argument < argument_count; ++argument) {
+        const struct MirInsn *arg =
+            &mir.insns[argument_instructions[argument]];
+        int expected_type = argument < function->proto_nargs
+            ? function->proto_types[argument]
+            : variadic_types[argument];
+
+        if (expected_type == 0 ||
+            arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset ||
+            arg->immediate != argument ||
+            arg->src1 != arguments[argument] ||
+            arg->src1 != mir.insns[definitions[argument]].dst ||
+            arg->type != expected_type)
             return 0;
+    }
     return 1;
 }
 
@@ -10795,19 +10808,33 @@ static int mir_match_directory_enumeration_runner(
         int instruction;
         int function;
         int argument_count;
+        int arguments[5];
         int definitions[5];
+        int variadic_types[5];
     } calls[11] = {
-        {12, 0, 2, {7, 10, 0, 0, 0}},
-        {23, 1, 2, {18, 20, 0, 0, 0}},
-        {187, 2, 1, {185, 0, 0, 0, 0}},
-        {204, 1, 2, {199, 201, 0, 0, 0}},
-        {219, 5, 2, {215, 217, 0, 0, 0}},
-        {234, 3, 4, {224, 227, 229, 232, 0}},
-        {248, 4, 5, {235, 238, 241, 243, 246}},
-        {260, 5, 2, {255, 258, 0, 0, 0}},
-        {281, 6, 1, {279, 0, 0, 0, 0}},
-        {299, 5, 4, {287, 270, 294, 281, 0}},
-        {307, 7, 1, {304, 0, 0, 0, 0}}
+        {12, 0, 2, {9, 11, 0, 0, 0}, {7, 10, 0, 0, 0},
+         {0, 0, 0, 0, 0}},
+        {23, 1, 2, {19, 22, 0, 0, 0}, {18, 20, 0, 0, 0},
+         {0, 0, 0, 0, 0}},
+        {187, 2, 1, {186, 0, 0, 0, 0}, {185, 0, 0, 0, 0},
+         {0, 0, 0, 0, 0}},
+        {204, 1, 2, {200, 203, 0, 0, 0}, {199, 201, 0, 0, 0},
+         {0, 0, 0, 0, 0}},
+        {219, 5, 2, {216, 218, 0, 0, 0}, {215, 217, 0, 0, 0},
+         {0, TYPE_INT, 0, 0, 0}},
+        {234, 3, 4, {226, 228, 231, 233, 0},
+         {224, 227, 229, 232, 0}, {0, 0, 0, 0, 0}},
+        {248, 4, 5, {237, 240, 242, 245, 247},
+         {235, 238, 241, 243, 246}, {0, 0, 0, 0, 0}},
+        {260, 5, 2, {256, 259, 0, 0, 0}, {255, 258, 0, 0, 0},
+         {0, TYPE_CHAR | TYPE_PTR, 0, 0, 0}},
+        {281, 6, 1, {280, 0, 0, 0, 0}, {279, 0, 0, 0, 0},
+         {0, 0, 0, 0, 0}},
+        {299, 5, 4, {288, 290, 295, 298, 0},
+         {287, 270, 294, 281, 0},
+         {0, TYPE_INT, TYPE_CHAR | TYPE_PTR, TYPE_LONG, 0}},
+        {307, 7, 1, {306, 0, 0, 0, 0}, {304, 0, 0, 0, 0},
+         {0, 0, 0, 0, 0}}
     };
     static const int fcb_addresses[3] = {7, 20, 201};
     static const int file_addresses[5] = {80, 114, 146, 173, 185};
@@ -11256,7 +11283,9 @@ static int mir_match_directory_enumeration_runner(
                 calls[item].instruction,
                 functions[calls[item].function],
                 item, calls[item].argument_count,
-                calls[item].definitions))
+                calls[item].arguments,
+                calls[item].definitions,
+                calls[item].variadic_types))
             return mir_machine_reject(
                 "directory-enumeration-runner", "call");
 
