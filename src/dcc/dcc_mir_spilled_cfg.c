@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 #include "dcc.h"
 #include "dcc_ast.h"
 #include "dcc_mir.h"
@@ -31199,6 +31200,29 @@ static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
     return 0;
 }
 
+static int mir_spilled_dimensions_valid(void)
+{
+    int64_t effective_local_bytes;
+    int64_t base_frame_bytes;
+
+    if (mir.count < 0 || mir.count > mir.capacity ||
+        mir.next_value < 0 || mir.next_label < 0 ||
+        mir.object_count < 0 ||
+        mir.object_count >
+            (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        (mir.count > 0 && mir.insns == NULL) ||
+        (size_t)mir.next_value > SIZE_MAX / sizeof(int) ||
+        (size_t)mir.next_label > SIZE_MAX / sizeof(int) ||
+        mir.next_value > (INT_MAX - 2 * mir.object_count) / 2)
+        return 0;
+    effective_local_bytes =
+        (int64_t)mir.local_bytes - mir.dead_local_suffix_bytes;
+    base_frame_bytes = effective_local_bytes + mir.aggregate_temp_bytes;
+    return effective_local_bytes >= 0 &&
+           mir.aggregate_temp_bytes >= 0 &&
+           base_frame_bytes >= 0 && base_frame_bytes <= 30000;
+}
+
 /*
  * Slot construction and emission assume that each supported opcode carries
  * the value operands its semantics require. Candidate probes can be retried
@@ -31286,6 +31310,31 @@ static int mir_spilled_value_operands_valid(int *invalid_instruction)
                 *invalid_instruction = instruction;
             return 0;
         }
+    }
+    return 1;
+}
+
+static int mir_spilled_cfg_metadata_valid(int *invalid_instruction)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int successor;
+
+        if (insn->object < -1 || insn->object >= mir.object_count ||
+            insn->successor_count < 0 || insn->successor_count > 2) {
+            if (invalid_instruction != NULL)
+                *invalid_instruction = instruction;
+            return 0;
+        }
+        for (successor = 0; successor < insn->successor_count; ++successor)
+            if (insn->successors[successor] < 0 ||
+                insn->successors[successor] >= mir.count) {
+                if (invalid_instruction != NULL)
+                    *invalid_instruction = instruction;
+                return 0;
+            }
     }
     return 1;
 }
@@ -31691,12 +31740,17 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     {
         int invalid_instruction;
 
+        if (!mir_spilled_dimensions_valid())
+            return mir_scalar_cfg_preflight_reject("dimensions", -1);
         if (!mir_spilled_value_operands_valid(&invalid_instruction))
             return mir_scalar_cfg_preflight_reject(
                 "value-operand", invalid_instruction);
         if (!mir_spilled_branch_targets_valid(&invalid_instruction))
             return mir_scalar_cfg_preflight_reject(
                 "branch-target", invalid_instruction);
+        if (!mir_spilled_cfg_metadata_valid(&invalid_instruction))
+            return mir_scalar_cfg_preflight_reject(
+                "cfg-metadata", invalid_instruction);
     }
     if ((!type_is_struct_object(mir.return_type) &&
             (mir.return_type & 15) != TYPE_VOID &&
@@ -31704,29 +31758,11 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         (type_is_struct_object(mir.return_type) &&
          (type_size(mir.return_type) <= 0 || type_size(mir.return_type) > 1024)))
         return mir_scalar_cfg_preflight_reject("return-type", -1);
-    mir_fuse_report_fused_count = 0;
-    mir_fuse_report_materialized_count = 0;
-    mir_backend_slots_skip_fused_comparisons = 1;
-    mir_planned_stack_handoffs_enabled = 1;
-    frame_bytes = mir_current_frame_bytes();
-    mir_planned_stack_handoffs_enabled = 0;
-    mir_backend_slots_skip_fused_comparisons = 0;
-    mir_report_constant_absolute_addresses();
-    if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
-        fprintf(stderr,
-                "; MIR scalar-cfg frame function=%s locals=%d original-locals=%d"
-                " slots=%d bytes=%d\n",
-                mir.name,
-                mir_effective_local_bytes() + mir.aggregate_temp_bytes,
-                mir.local_bytes + mir.aggregate_temp_bytes,
-                mir.backend_slot_count, frame_bytes);
-    if (frame_bytes < 0 || frame_bytes > 30000)
-        return mir_scalar_cfg_preflight_reject("frame-size", -1);
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
-                if (insn->dst >= 0 && type_size(insn->type) > 4 &&
-                        !(insn->opcode == MIR_PARAM &&
-                            type_is_struct_object(insn->type)))
+        if (insn->dst >= 0 && type_size(insn->type) > 4 &&
+            !(insn->opcode == MIR_PARAM &&
+              type_is_struct_object(insn->type)))
             return mir_scalar_cfg_preflight_reject("wide-value", i);
         switch (insn->opcode) {
         case MIR_NOP: case MIR_PARAM: case MIR_CONST: case MIR_FLOAT_CONST:
@@ -31764,8 +31800,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 return mir_scalar_cfg_preflight_reject("memory-location", i);
             }
         }
-           if ((insn->opcode == MIR_LOAD_INDIRECT ||
-               insn->opcode == MIR_STORE_INDIRECT) &&
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
             (insn->memory_size <= 0 ||
              (insn->memory_size != 1 && insn->memory_size != 2 &&
               insn->memory_size != 4) ||
@@ -31785,7 +31821,30 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             (insn->immediate < -128 || insn->immediate > 126 ||
              (insn->secondary_offset != 2 && insn->secondary_offset != 4)))
             return mir_scalar_cfg_preflight_reject("va-arg", i);
+        if ((insn->opcode == MIR_VLA_SIZE ||
+             insn->opcode == MIR_VA_START ||
+             insn->opcode == MIR_VA_END) &&
+            (insn->immediate < -128 || insn->immediate > 126))
+            return mir_scalar_cfg_preflight_reject("frame-offset", i);
     }
+    mir_fuse_report_fused_count = 0;
+    mir_fuse_report_materialized_count = 0;
+    mir_backend_slots_skip_fused_comparisons = 1;
+    mir_planned_stack_handoffs_enabled = 1;
+    frame_bytes = mir_current_frame_bytes();
+    mir_planned_stack_handoffs_enabled = 0;
+    mir_backend_slots_skip_fused_comparisons = 0;
+    mir_report_constant_absolute_addresses();
+    if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR scalar-cfg frame function=%s locals=%d original-locals=%d"
+                " slots=%d bytes=%d\n",
+                mir.name,
+                mir_effective_local_bytes() + mir.aggregate_temp_bytes,
+                mir.local_bytes + mir.aggregate_temp_bytes,
+                mir.backend_slot_count, frame_bytes);
+    if (frame_bytes < 0 || frame_bytes > 30000)
+        return mir_scalar_cfg_preflight_reject("frame-size", -1);
     if ((getenv("DCC_MIR_UNUSED_SLOT_REPORT") != NULL ||
          getenv("DCC_MIR_SLOT_ACCESS_REPORT") != NULL) &&
         mir.next_value > 0) {
@@ -35861,6 +35920,8 @@ int mir_try_emit_spilled_scalar_cfg(MirStream *out)
 
     mir_phi_argument_stack_handoff_enabled = 0;
     /* Let the candidate reset its full per-attempt state and report rejection. */
+    if (!mir_spilled_dimensions_valid())
+        return mir_emit_spilled_scalar_cfg_candidate(out);
     if (!mir_spilled_value_operands_valid(NULL))
         return mir_emit_spilled_scalar_cfg_candidate(out);
     if (!mir_has_phi_first_call_argument_candidate())

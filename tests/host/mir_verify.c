@@ -2079,6 +2079,14 @@ static void verify_spilled_preflight_rejection(void)
     mir.local_bytes = 30001;
     expect_spilled_candidate("oversized frame rejection", 0);
 
+    setup(3, 1, 1);
+    mir.aggregate_temp_bytes = INT_MAX;
+    expect_spilled_candidate("overflowing aggregate frame rejection", 0);
+
+    setup(3, 1, 1);
+    mir.dead_local_suffix_bytes = INT_MIN;
+    expect_spilled_candidate("overflowing effective frame rejection", 0);
+
     sid = add_struct_def("verify_spilled_invalid_return");
     struct_defs[sid - 1].size = 0;
     setup(3, 1, 1);
@@ -2790,6 +2798,157 @@ static void verify_spilled_branch_target_preflight_transaction(void)
     clear_liveness();
 }
 
+static void verify_spilled_cfg_metadata_preflight_transaction(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    int ok = 1;
+
+    setup(6, 2, 2);
+    mir.insns[2].opcode = MIR_BINARY;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].src2 = 0;
+    mir.insns[2].immediate = '+';
+    mir.insns[2].secondary_offset = TYPE_INT;
+    mir.insns[3].opcode = MIR_BRANCH_FALSE;
+    mir.insns[3].src1 = 1;
+    mir.insns[3].label = 1;
+    mir.insns[4].opcode = MIR_LABEL;
+    mir.insns[4].label = 1;
+    mir.insns[5].src1 = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL spilled CFG metadata verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL spilled CFG metadata stream allocation\n");
+        ++failures;
+        mir_stream_close(control);
+        mir_stream_close(retry);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0 &&
+         !mir_spilled_cfg_uses_exact_semantic_kernel();
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    label_id = first_label;
+    mir.insns[3].successor_count = 3;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 0 &&
+         mir_stream_tell(retry) == 0 && mir_stream_size(retry) == 0 &&
+         label_id == first_label &&
+         mir_spilled_cfg_emitted_frame_bytes() == 0;
+
+    mir.insns[3].successor_count = 2;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 1;
+    mir_stream_rewind(retry);
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text) &&
+         retry_bytes == control_bytes &&
+         memcmp(retry_text, control_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL spilled CFG metadata preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    mir_stream_close(retry);
+    clear_liveness();
+}
+
+static void verify_spilled_vla_size_preflight_transaction(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    int ok = 1;
+
+    setup(4, 2, 1);
+    mir.insns[2].opcode = MIR_VLA_SIZE;
+    mir.insns[2].dst = 1;
+    mir.insns[2].immediate = -2;
+    mir.insns[3].src1 = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL spilled VLA-size verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL spilled VLA-size stream allocation\n");
+        ++failures;
+        mir_stream_close(control);
+        mir_stream_close(retry);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0 &&
+         !mir_spilled_cfg_uses_exact_semantic_kernel();
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    label_id = first_label;
+    mir.insns[2].immediate = 127;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 0 &&
+         mir_stream_tell(retry) == 0 && mir_stream_size(retry) == 0 &&
+         label_id == first_label &&
+         mir_spilled_cfg_emitted_frame_bytes() == 0;
+
+    mir.insns[2].immediate = -2;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 1;
+    mir_stream_rewind(retry);
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text) &&
+         retry_bytes == control_bytes &&
+         memcmp(retry_text, control_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL spilled VLA-size preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    mir_stream_close(retry);
+    clear_liveness();
+}
+
 static void verify_immediate_phi_return_forwarding(void)
 {
     setup(11, 4, 4);
@@ -3211,6 +3370,8 @@ int main(void)
     verify_direct_call_name_preflight();
     verify_aggregate_call_name_preflight();
     verify_spilled_branch_target_preflight_transaction();
+    verify_spilled_cfg_metadata_preflight_transaction();
+    verify_spilled_vla_size_preflight_transaction();
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
     verify_scalar_dag_emission();
