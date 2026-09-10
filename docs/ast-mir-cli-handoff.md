@@ -84,7 +84,14 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest continuation implementation:
-  `dc0c59c5` (`test: complete attention matcher sweep`).
+  `568302dd` (`Use shared idempotent shard cleanup directly`).
+- Parallel-wave implementation checkpoints:
+  - `3c85d83d` — allocation-lifetime matcher coverage;
+  - `3d109f26` — accepted/rejected sliding-maximum controls;
+  - `ac0cb97c` — overflow-safe generic `va_arg` offset preflight;
+  - `37c2dc4d` / `83805f4f` — exact, profile-safe clobber sharding;
+  - `b384aa19` — isolated bounded compiler-mutant workers; and
+  - `d6ad345c` through `568302dd` — bounded shared process-tree supervision.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
