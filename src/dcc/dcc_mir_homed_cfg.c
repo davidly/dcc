@@ -700,6 +700,27 @@ static int mir_homed_value_has_unique_definition(
     return definition == expected;
 }
 
+/*
+ * Representation-identity casts may be removed before selection while their
+ * consumer retains the converted type. Mirror that optimizer contract here:
+ * only equal-width, non-floating scalar casts of 2 or 4 bytes are identities.
+ */
+static int mir_homed_argument_source_type_valid(
+    int source_type, int argument_type)
+{
+    int size;
+
+    if (source_type == argument_type)
+        return 1;
+    if (type_is_struct_object(source_type) ||
+        type_is_struct_object(argument_type) ||
+        type_is_float(source_type) ||
+        type_is_float(argument_type))
+        return 0;
+    size = type_size(source_type);
+    return size == type_size(argument_type) && (size == 2 || size == 4);
+}
+
 static int mir_homed_call_valid(
     int call_instruction, const int *labels,
     int *work, unsigned char *visited)
@@ -745,7 +766,8 @@ static int mir_homed_call_valid(
         definition = mir_definition(argument->src1);
         if (definition == NULL ||
             definition >= argument ||
-            definition->type != argument->type ||
+            !mir_homed_argument_source_type_valid(
+                definition->type, argument->type) ||
             !mir_homed_instruction_dominates(
                 instruction, call_instruction,
                 labels, work, visited) ||
