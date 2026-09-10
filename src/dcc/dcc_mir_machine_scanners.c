@@ -7306,7 +7306,8 @@ static int mir_match_square_grid_line_sum_schedule(
         mir.has_vla || mir.local_bytes != 5 ||
         mir.aggregate_temp_bytes != 0 ||
         !mir_grid_signed_word_type(mir.return_type))
-        return 0;
+        return mir_machine_reject(
+            "square-grid-line-sum-schedule", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
             expected_opcodes[instruction])
@@ -14000,6 +14001,7 @@ int mir_try_emit_scanner_kernels(MirStream *out, int late)
                 &square_grid_line_sum_schedule)) {
             mir_emit_square_grid_line_sum_schedule(
                 out, &square_grid_line_sum_schedule);
+            mir_machine_accept("square-grid-line-sum-schedule");
             return 1;
         }
         if (mir_match_vla_constant_fill_sum_schedule(
