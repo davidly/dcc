@@ -1,0 +1,226 @@
+[
+  {
+    "Name": "csmw17-exact", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireExact": true
+  },
+  {
+    "Name": "csmw17-debug", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false], "DebugModes": ["true"]
+  },
+  {
+    "Name": "csmw17-debug-lines", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false], "DebugModes": ["lines"]
+  },
+  {
+    "Name": "csmw17-local-callee", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"],
+    "Defines": ["CALLW17_LOCAL_CALLEE"],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireExact": true
+  },
+  {
+    "Name": "csmw17-alias-callee", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"],
+    "Defines": ["CALLW17_ALIAS_CALLEE"],
+    "Expected": ["CALLW17 positive=104 zero=0 negative=0 oracle=1768"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireExact": true
+  },
+  {
+    "Name": "csmw17-call-abi", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"],
+    "Defines": ["CALLW17_UNSIGNED_ARG"],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "RequiredGenericFunction": "callw17_member_sum",
+    "RequiredSelectorFunction": "callw17_member_sum",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "csmw17-volatile", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"],
+    "Defines": ["CALLW17_VOLATILE_RECORD"],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "RequiredSelectorFunction": "callw17_member_sum",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "csmw17-cfg-bypass", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"],
+    "Defines": ["CALLW17_BRANCH_BYPASS"],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "RequiredGenericFunction": "callw17_member_sum",
+    "RequiredSelectorFunction": "callw17_member_sum",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "csmw17-pointer-type", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "1:type:18",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-constant-type", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "3:type:1",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-store-width", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "4:memory_size:1",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-condition-type", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "15:type:1",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-condition-op", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "15:immediate:61",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-member-type", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "19:type:2",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-member-width", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "19:memory_size:1",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-call-identity", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "22:identity:120",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-call-arg-type", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "21:type:34",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-call-arg-value", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "21:src1:22",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-call-extra-use", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "22:src2:0",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-call-result-flow", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "23:src2:23",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-phi-flow", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "11:src2:44",
+    "MachineMutationFunction": "callw17_member_sum"
+  },
+  {
+    "Name": "csmw17-return-flow", "Group": "call-safe-member-wave17",
+    "Sources": ["tests/mir-clobber/callw17.c"], "Defines": [],
+    "Expected": ["CALLW17 positive=88 zero=0 negative=0 oracle=1496"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "call-safe-member-sum-schedule",
+    "ExactFunction": "callw17_member_sum", "RequireRejected": true,
+    "RequiredGenericFunction": "callw17_member_sum",
+    "MachineMutation": "68:src1:8",
+    "MachineMutationFunction": "callw17_member_sum"
+  }
+]

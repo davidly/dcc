@@ -4704,11 +4704,36 @@ static int mir_call_safe_word_pointer_type(int type)
         type_size(type) == 2;
 }
 
+static int mir_call_safe_signed_word_pointer_type(int type)
+{
+    return mir_call_safe_word_pointer_type(type) &&
+        mir_call_safe_signed_word_type(type_decay_ptr(type));
+}
+
+static int mir_call_safe_struct_pointer_type(int type)
+{
+    return mir_call_safe_word_pointer_type(type) &&
+        type_is_struct_object(type_decay_ptr(type));
+}
+
 static int mir_call_safe_bool_type(int type)
 {
     return type_ptr_depth(type) == 0 &&
         (type & 15) == TYPE_BOOL &&
         type_size(type) == 1;
+}
+
+static int mir_call_safe_unique_result(const struct MirInsn *call)
+{
+    int definitions = 0;
+    int instruction;
+
+    if (call->dst < 0 || mir_definition(call->dst) != call)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].dst == call->dst)
+            ++definitions;
+    return definitions == 1;
 }
 
 static int mir_call_safe_direct_function(
@@ -4722,8 +4747,11 @@ static int mir_call_safe_direct_function(
 
     if (call->opcode != MIR_CALL ||
         call->src1 >= 0 ||
+        call->src2 >= 0 ||
         call->secondary_offset < 0 ||
+        call->secondary_offset >= mir.next_call_id ||
         call->memory_flags != 0 ||
+        !mir_call_safe_unique_result(call) ||
         arg->opcode != MIR_ARG ||
         arg->secondary_offset != call->secondary_offset ||
         arg->immediate != 0 ||
@@ -4926,11 +4954,12 @@ static int mir_call_safe_member_load(
         member->src1 == base &&
         member->immediate == offset &&
         member->memory_size == 2 &&
-        (member->memory_flags & (1 | 8)) == 0 &&
+        member->memory_flags == 0 &&
+        mir_call_safe_signed_word_pointer_type(member->type) &&
         load->opcode == MIR_LOAD_INDIRECT &&
         load->src1 == member->dst &&
         load->memory_size == 2 &&
-        (load->memory_flags & (1 | 8)) == 0 &&
+        load->memory_flags == 0 &&
         mir_call_safe_signed_word_type(load->type);
 }
 
@@ -4965,9 +4994,11 @@ static int mir_match_call_safe_member_sum_schedule(
     const struct MirInsn *index_store = &mir.insns[7];
     const struct MirInsn *total_phi = &mir.insns[11];
     const struct MirInsn *index_phi = &mir.insns[12];
+    static const int labels[4] = { 0, 8, 60, 66 };
     struct Sym *call_function = NULL;
     int member;
     int instruction;
+    int other;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 69 || mir_cfg_block_count() != 4 ||
@@ -4979,12 +5010,37 @@ static int mir_match_call_safe_member_sum_schedule(
                 expected_opcodes[instruction])
             return mir_machine_reject(
                 "call-safe-member-sum-schedule", "opcodes");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if ((insn->opcode == MIR_CONST ||
+             insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_ARG ||
+             insn->opcode == MIR_CALL) &&
+            !mir_call_safe_signed_word_type(insn->type))
+            return mir_machine_reject(
+                "call-safe-member-sum-schedule", "types-widths");
+        if (insn->opcode == MIR_STORE && insn->memory_size != 2)
+            return mir_machine_reject(
+                "call-safe-member-sum-schedule", "types-widths");
+        if (insn->opcode == MIR_BINARY && instruction != 15 &&
+            (!mir_call_safe_signed_word_type(insn->type) ||
+             insn->secondary_offset != TYPE_INT))
+            return mir_machine_reject(
+                "call-safe-member-sum-schedule", "types-widths");
+    }
+    for (instruction = 0; instruction < 4; ++instruction)
+        for (other = instruction + 1; other < 4; ++other)
+            if (mir.insns[labels[instruction]].label ==
+                mir.insns[labels[other]].label)
+                return mir_machine_reject(
+                    "call-safe-member-sum-schedule", "cfg-labels");
     if (!mir_machine_parameter_value_offset(
             pointer->dst, &plan->first_stack_offset) ||
         !mir_machine_parameter_value_offset(
             count->dst, &plan->second_stack_offset) ||
         plan->second_stack_offset != plan->first_stack_offset + 2 ||
-        !mir_call_safe_word_pointer_type(pointer->type) ||
+        !mir_call_safe_struct_pointer_type(pointer->type) ||
         !mir_call_safe_signed_word_type(count->type) ||
         !mir_machine_named_nonvolatile(pointer) ||
         !mir_machine_named_nonvolatile(count) ||
@@ -5025,6 +5081,8 @@ static int mir_match_call_safe_member_sum_schedule(
     if (mir.insns[15].src1 != index_phi->dst ||
         mir.insns[15].src2 != count->dst ||
         mir.insns[15].immediate != '<' ||
+        mir.insns[15].secondary_offset != TYPE_INT ||
+        !mir_call_safe_signed_word_type(mir.insns[15].type) ||
         mir.insns[16].src1 != mir.insns[15].dst ||
         mir.insns[16].label != mir.insns[66].label)
         return mir_machine_reject(
@@ -12369,6 +12427,10 @@ int mir_try_emit_call_runners(MirStream *out)
                 &call_safe_loop) ||
             mir_match_call_safe_member_sum_schedule(
                 &call_safe_loop)) {
+            mir_machine_accept(
+                call_safe_loop.kind == MIR_CALL_SAFE_COUNTDOWN_SUM
+                    ? "call-safe-countdown-sum-schedule"
+                    : "call-safe-member-sum-schedule");
             mir_emit_call_safe_word_loop_schedule(
                 out, &call_safe_loop);
             return 1;
