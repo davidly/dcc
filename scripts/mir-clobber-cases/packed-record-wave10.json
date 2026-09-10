@@ -1,0 +1,142 @@
+[
+  {
+    "Name": "pr10layout",
+    "Group": "packed-record-wave10",
+    "Sources": ["tests/mir-clobber/pr6rec.c"],
+    "Defines": [],
+    "Expected": [
+      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "packed-record-runner",
+    "ExactFunction": "test_many",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "test_many",
+    "RequiredSelectorFunction": "test_many",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "39:immediate:1",
+    "MachineMutationFunction": "test_many"
+  },
+  {
+    "Name": "pr10loopw",
+    "Group": "packed-record-wave10",
+    "Sources": ["tests/mir-clobber/pr6rec.c"],
+    "Defines": [],
+    "Expected": [
+      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "packed-record-runner",
+    "ExactFunction": "test_many",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "test_many",
+    "RequiredSelectorFunction": "test_many",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "305:type:4",
+    "MachineMutationFunction": "test_many"
+  },
+  {
+    "Name": "pr10msabi",
+    "Group": "packed-record-wave10",
+    "Sources": ["tests/mir-clobber/pr6rec.c"],
+    "Defines": [],
+    "Expected": [
+      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "packed-record-runner",
+    "ExactFunction": "test_many",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "test_many",
+    "RequiredSelectorFunction": "test_many",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "3:type:2",
+    "MachineMutationFunction": "test_many"
+  },
+  {
+    "Name": "pr10msret",
+    "Group": "packed-record-wave10",
+    "Sources": ["tests/mir-clobber/pr6rec.c"],
+    "Defines": [],
+    "Expected": [
+      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "packed-record-runner",
+    "ExactFunction": "test_many",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "test_many",
+    "RequiredSelectorFunction": "test_many",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "9:type:4",
+    "MachineMutationFunction": "test_many"
+  },
+  {
+    "Name": "pr10prret",
+    "Group": "packed-record-wave10",
+    "Sources": ["tests/mir-clobber/pr6rec.c"],
+    "Defines": [],
+    "Expected": [
+      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "packed-record-runner",
+    "ExactFunction": "test_many",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "test_many",
+    "RequiredSelectorFunction": "test_many",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "159:type:4",
+    "MachineMutationFunction": "test_many"
+  },
+  {
+    "Name": "pr10prwid",
+    "Group": "packed-record-wave10",
+    "Sources": ["tests/mir-clobber/pr6rec.c"],
+    "Defines": [],
+    "Expected": [
+      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "packed-record-runner",
+    "ExactFunction": "test_many",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "test_many",
+    "RequiredSelectorFunction": "test_many",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "155:type:2",
+    "MachineMutationFunction": "test_many"
+  },
+  {
+    "Name": "pr10dmabi",
+    "Group": "packed-record-wave10",
+    "Sources": ["tests/mir-clobber/pr6rec.c"],
+    "Defines": [],
+    "Expected": [
+      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "packed-record-runner",
+    "ExactFunction": "test_many",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "test_many",
+    "RequiredSelectorFunction": "test_many",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "311:type:2",
+    "MachineMutationFunction": "test_many"
+  }
+]

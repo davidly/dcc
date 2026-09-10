@@ -2078,20 +2078,53 @@ static int mir_packed_call_arguments(
     return found == count;
 }
 
+static int mir_packed_call_argument_types(
+    const struct MirInsn *call, int count, const int *types)
+{
+    int found = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= count ||
+            arg->type != types[index])
+            return 0;
+        ++found;
+    }
+    return found == count;
+}
+
 static struct Sym *mir_packed_global_array(
     int instruction, int count, int stride)
 {
     const struct MirInsn *address;
     struct Sym *symbol;
+    int memory_type;
+    int storage;
+    int offset;
 
     if (instruction < 0 || instruction >= mir.count)
         return NULL;
     address = &mir.insns[instruction];
-    if (address->opcode != MIR_ADDRESS ||
-        type_ptr_depth(address->type) != 1)
-        return NULL;
     symbol = find_global(address->name);
-    if (symbol == NULL || !symbol->is_defined || symbol->is_volatile ||
+    if (address->opcode != MIR_ADDRESS || symbol == NULL ||
+        type_ptr_depth(address->type) != 1 ||
+        !mir_scalar_memory_location(
+            address, &memory_type, &storage, &offset) ||
+        memory_type != symbol->type ||
+        storage != SC_GLOBAL || offset != 0 ||
+        address->memory_size != 0 ||
+        address->memory_flags != 0 ||
+        address->bit_width != 0)
+        return NULL;
+    if (!symbol->is_defined || symbol->is_volatile ||
+        symbol->pointee_is_volatile ||
         symbol->storage != SC_GLOBAL || !symbol->is_array ||
         symbol->is_vla || symbol->has_init || symbol->init_count != 0 ||
         symbol->dim_count != 1 || symbol->dims[0] != count ||
@@ -2105,11 +2138,21 @@ static int mir_packed_same_global(
     int instruction, struct Sym *symbol)
 {
     const struct MirInsn *address;
+    int memory_type;
+    int storage;
+    int offset;
 
     if (instruction < 0 || instruction >= mir.count)
         return 0;
     address = &mir.insns[instruction];
     return address->opcode == MIR_ADDRESS &&
+           mir_scalar_memory_location(
+               address, &memory_type, &storage, &offset) &&
+           memory_type == symbol->type &&
+           storage == SC_GLOBAL && offset == 0 &&
+           address->memory_size == 0 &&
+           address->memory_flags == 0 &&
+           address->bit_width == 0 &&
            find_global(address->name) == symbol;
 }
 
@@ -3417,6 +3460,13 @@ static int mir_match_packed_record_runner(
             destination != mir.insns[root_index].dst ||
             fill != mir.insns[zero_index].dst ||
             count != mir.insns[size_index].dst ||
+            !function->has_proto ||
+            function->proto_variadic ||
+            function->proto_nargs != 3 ||
+            mir.insns[call_index].type != function->type ||
+            !mir_packed_call_argument_types(
+                &mir.insns[call_index], 3,
+                function->proto_types) ||
             (item != 0 && function != memset_function))
             return mir_machine_reject(
                 "packed-record-runner", "memset-calls");
@@ -3468,6 +3518,18 @@ static int mir_match_packed_record_runner(
         mir.insns[305].src1 != mir.insns[127].dst ||
         mir.insns[305].src2 != mir.insns[304].dst ||
         mir.insns[305].immediate != '+' ||
+        (mir.insns[91].type != 0 &&
+         !mir_packed_scalar_type(
+             mir.insns[91].type, TYPE_INT, 0, 0)) ||
+        (mir.insns[92].type != 0 &&
+         !mir_packed_scalar_type(
+             mir.insns[92].type, TYPE_INT, 0, 0)) ||
+        (mir.insns[304].type != 0 &&
+         !mir_packed_scalar_type(
+             mir.insns[304].type, TYPE_INT, 0, 0)) ||
+        (mir.insns[305].type != 0 &&
+         !mir_packed_scalar_type(
+             mir.insns[305].type, TYPE_INT, 0, 0)) ||
         !mir_packed_jump(307, 125))
         return mir_machine_reject(
             "packed-record-runner", "loops");
@@ -3617,13 +3679,21 @@ static int mir_match_packed_record_runner(
     for (item = 0; item < 6; ++item) {
         const struct MirInsn *call = &mir.insns[print_calls[item]];
         const char *call_name;
+        int argument_types[4];
         struct Sym *function;
 
+        argument_types[0] = mir.insns[print_strings[item]].type;
+        argument_types[1] = TYPE_INT;
+        argument_types[2] = mir.insns[print_expected[item]].type;
+        argument_types[3] = mir.insns[print_expected[item]].type;
         if (!mir_packed_direct_function(
                 print_calls[item], &function) ||
             call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
             call->src1 >= 0 ||
+            call->type != function->type ||
             !mir_packed_call_arguments(call, 4, arguments) ||
+            !mir_packed_call_argument_types(
+                call, 4, argument_types) ||
             arguments[0] != mir.insns[print_strings[item]].dst ||
             arguments[1] != mir.insns[127].dst ||
             arguments[2] != mir.insns[print_actuals[item]].dst ||
@@ -3658,6 +3728,7 @@ static int mir_match_packed_record_runner(
             (int)mir.insns[print_strings[item]].immediate;
     }
     if (!print_function->has_proto ||
+        print_function->is_fastcall ||
         !print_function->proto_variadic ||
         print_function->proto_nargs != 1 ||
         !mir_packed_scalar_type(
@@ -3683,6 +3754,9 @@ static int mir_match_packed_record_runner(
         dump_function->proto_variadic ||
         dump_function->proto_nargs != 3 ||
         mir.insns[318].type != dump_function->type ||
+        !mir_packed_call_argument_types(
+            &mir.insns[318], 3,
+            dump_function->proto_types) ||
         (dump_function->type & 15) != TYPE_VOID ||
         type_ptr_depth(dump_function->type) != 0 ||
         !mir_packed_scalar_type(
@@ -3690,7 +3764,10 @@ static int mir_match_packed_record_runner(
         !mir_packed_scalar_type(
             dump_function->proto_types[1], TYPE_INT, 1, 0) ||
         !mir_packed_scalar_type(
-            dump_function->proto_types[2], TYPE_INT, 1, 0))
+            dump_function->proto_types[2], TYPE_INT, 1, 0) ||
+        (mir.insns[318].base_name[0] != 0 &&
+         strcmp(mir.insns[318].base_name,
+                asm_name_for(sym_asm_name(dump_function)))))
         return mir_machine_reject(
             "packed-record-runner", "dump-call");
     plan->dump_function = dump_function;
