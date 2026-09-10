@@ -581,6 +581,36 @@ static void verify_homed_scalar_dag_preflight(void)
     mir.insns[3].src2 = mir.insns[3].src1;
     expect_homed_output("shared BC operand", "\tadd hl,de\n");
 
+    setup_homed_scalar_dag();
+    mir.insns[3].src2 = mir.insns[3].src1;
+    mir.allocation_colors[0] = MIR_COLOR_DE;
+    mir.allocation_colors[1] = MIR_COLOR_BC;
+    mir.allocation_colors[2] = MIR_COLOR_DE;
+    expect_homed_output(
+        "shared DE operand",
+        "\tpush de\n\tpop hl\n\tadd hl,de\n\tex de,hl\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[5].opcode = MIR_UNARY;
+    mir.insns[5].src1 = 0;
+    mir.insns[5].immediate = '+';
+    mir.allocation_colors[0] = MIR_COLOR_DE;
+    mir.allocation_colors[1] = MIR_COLOR_BC;
+    expect_homed_output(
+        "live DE binary left",
+        "\tpush de\n\tpush de\n\tpop hl\n\tld d,b\n\tld e,c\n"
+        "\tadd hl,de\n\tpop de\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[5].opcode = MIR_UNARY;
+    mir.insns[5].src1 = 2;
+    mir.insns[5].immediate = '+';
+    mir.insns[5].type = TYPE_INT;
+    mir.allocation_colors[2] = MIR_COLOR_DE;
+    expect_homed_output(
+        "live DE unary source",
+        "\tpush hl\n\tpush de\n\tpop hl\n\tld a,h\n");
+
     opt_stack_check = 0;
     setup_homed_scalar_dag();
     expect_homed_output("no stack check", "\tret\n");
@@ -704,6 +734,12 @@ static void verify_homed_scalar_dag_preflight(void)
 
     label_id = first_label;
     setup_homed_scalar_dag();
+    mir.allocation_colors[1] = MIR_COLOR_HL;
+    expect_declined_retry(
+        "HL right operand", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
     mir.insns[3].src1 = mir.next_value;
     expect_declined_retry(
         "source value bound", control_text, control_bytes, first_label);
@@ -738,20 +774,14 @@ static void verify_homed_scalar_dag_preflight(void)
     label_id = first_label;
     setup_homed_scalar_dag();
     mir.insns[5].opcode = MIR_UNARY;
-    mir.insns[5].src1 = 2;
+    mir.insns[5].src1 = 0;
     mir.insns[5].immediate = '+';
-    mir.insns[5].type = TYPE_INT;
-    mir.allocation_colors[2] = MIR_COLOR_DE;
+    mir.allocation_colors[0] = MIR_COLOR_HL;
+    mir.allocation_colors[1] = MIR_COLOR_BC;
+    mir.allocation_colors[2] = MIR_COLOR_IY;
     expect_declined_retry(
-        "destructive shared DE source",
+        "live HL binary left",
         control_text, control_bytes, first_label);
-
-    label_id = first_label;
-    setup_homed_scalar_dag();
-    mir.insns[3].src2 = mir.insns[3].src1;
-    mir.allocation_colors[0] = MIR_COLOR_DE;
-    expect_declined_retry(
-        "shared DE operand", control_text, control_bytes, first_label);
 
     label_id = first_label;
     setup_homed_scalar_dag();

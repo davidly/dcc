@@ -2828,9 +2828,7 @@ static int mir_homed_scalar_dag_preflight(int *uses_iy_out,
                 common_type |= TYPE_UNSIGNED;
             if (insn->secondary_offset != common_type ||
                 insn->type != common_type ||
-                mir.allocation_colors[insn->src2] == MIR_COLOR_HL ||
-                (insn->src1 == insn->src2 &&
-                 mir.allocation_colors[insn->src1] <= MIR_COLOR_DE))
+                mir.allocation_colors[insn->src2] == MIR_COLOR_HL)
                 return 0;
             last_uses[insn->src1] = i;
             last_uses[insn->src2] = i;
@@ -2875,11 +2873,13 @@ static int mir_homed_scalar_dag_preflight(int *uses_iy_out,
             if (owners[color] >= 0 &&
                 last_uses[owners[color]] < i)
                 owners[color] = -1;
+        /* DE-to-HL is a push/pop copy, and binary emission separately saves
+         * DE before loading a distinct right operand. Only a live HL source
+         * is destructively consumed by these direct operations. */
         if ((insn->opcode == MIR_UNARY ||
              insn->opcode == MIR_BINARY) &&
             last_uses[insn->src1] > i &&
-            (mir.allocation_colors[insn->src1] == MIR_COLOR_HL ||
-             mir.allocation_colors[insn->src1] == MIR_COLOR_DE))
+            mir.allocation_colors[insn->src1] == MIR_COLOR_HL)
             return 0;
         if (insn->dst >= 0) {
             color = mir.allocation_colors[insn->dst] - MIR_COLOR_HL;
