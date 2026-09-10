@@ -70,9 +70,19 @@ partial text, or consumed labels; same-stream recovery matches a clean valid
 candidate. Strict release gates, frozen performance comparison, sanitizer,
 debugger and all nine clean compiler-mutant controls passed.
 
-Latest integrated totals: 4,359/4,359 functions, 177,052/189,948 lines
-(93.21%), 90,987/144,518 native branch outcomes (62.96%), and
-159,060/169,867 regions (93.64%). The raw uncovered ledger is 53,284.
+The next two integrated waves raise the exact execution inventory to 5,196
+unique configurations. They add accepted and generic-rejection proofs for
+symbol-find, softmax, matrix-product-add, and directory-enumeration schedules;
+make MIR stream seeks overflow-safe, bounded, and transactional; and add two
+target-aware allocation matcher compiler mutants. The combined tree passed
+both strict 506-app release modes, canonical and independent builds, an exact
+stack/no-stack frozen-parent census comparison, ASan/UBSan host and compiler
+probes, 10 debugger-host and two line-debug tests, all 11 compiler mutants,
+120 repository script tests, and the full instrumented collection.
+
+Latest integrated totals: 4,359/4,359 functions, 177,120/189,962 lines
+(93.24%), 91,025/144,524 native branch outcomes (62.98%), and
+159,098/169,876 regions (93.66%). The raw uncovered ledger is 53,252.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -83,15 +93,19 @@ parallel-wave summary for the current measurement.
 - Continuation PR: <https://github.com/davidly/dcc/pull/194>.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
-- Latest continuation implementation:
-  `568302dd` (`Use shared idempotent shard cleanup directly`).
+- Latest validated continuation implementation:
+  `e583976a` (`test: cover directory enumeration schedule`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
   - `ac0cb97c` — overflow-safe generic `va_arg` offset preflight;
   - `37c2dc4d` / `83805f4f` — exact, profile-safe clobber sharding;
   - `b384aa19` — isolated bounded compiler-mutant workers; and
-  - `d6ad345c` through `568302dd` — bounded shared process-tree supervision.
+  - `d6ad345c` through `568302dd` — bounded shared process-tree supervision;
+  - `aa2e1bb9` — transactional bounded MIR stream seeking;
+  - `20afc983` / `d9052b2f` — symbol-find and softmax matcher proofs;
+  - `15e1807c` — target-aware allocation compiler mutants; and
+  - `41c7c62e` / `e583976a` — matrix-add and directory-enumeration proofs.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

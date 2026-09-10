@@ -52,14 +52,22 @@ overflowing `offset + 1` at `LONG_MAX`. Boundary assertions verify rejection
 does not write output or consume labels and that retrying the valid candidate
 without resetting state produces identical output.
 
+The next two integrated waves execute 5,196 exact leaf configurations. They
+add accepted and rejected controls for symbol-find, softmax, matrix-product-add
+and directory-enumeration schedules, plus an overflow-safe transactional MIR
+stream seek invariant. Two target-aware allocation matcher compiler mutants
+raise the clean-build mutation set from nine to eleven. The execution manifest
+contains 5,196 unique keys and exactly matches the independently enumerated
+inventory.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
 | Functions | 4,359 / 4,359 | 100.00% |
-| Lines | 177,052 / 189,948 | 93.21% |
-| Native branch outcomes | 90,987 / 144,518 | 62.96% |
-| Regions | 159,060 / 169,867 | 93.64% |
+| Lines | 177,120 / 189,962 | 93.24% |
+| Native branch outcomes | 91,025 / 144,524 | 62.98% |
+| Regions | 159,098 / 169,876 | 93.66% |
 
-The raw ledger has 53,284 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,252 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload
