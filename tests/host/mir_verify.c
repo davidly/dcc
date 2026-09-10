@@ -1400,13 +1400,54 @@ static void verify_homed_parameter_preflight_transaction(void)
 
 static void verify_homed_value_operand_preflight_transaction(void)
 {
+    struct OperandMutation {
+        int opcode;
+        int field;
+        int invalid_value;
+    };
+    static const struct OperandMutation mutations[] = {
+        { MIR_PARAM, 0, -1 },
+        { MIR_CONST, 0, -1 },
+        { MIR_FLOAT_CONST, 0, -1 },
+        { MIR_STRING_ADDRESS, 0, -1 },
+        { MIR_ADDRESS, 0, -1 },
+        { MIR_INDEX_ADDRESS, 0, -1 },
+        { MIR_INDEX_ADDRESS, 1, -1 },
+        { MIR_INDEX_ADDRESS, 2, -1 },
+        { MIR_MEMBER_ADDRESS, 0, -1 },
+        { MIR_MEMBER_ADDRESS, 1, -1 },
+        { MIR_LOAD, 0, -1 },
+        { MIR_LOAD_INDIRECT, 0, -1 },
+        { MIR_LOAD_INDIRECT, 1, -1 },
+        { MIR_STORE, 1, -1 },
+        { MIR_STORE_INDIRECT, 1, -1 },
+        { MIR_STORE_INDIRECT, 2, -1 },
+        { MIR_COPY_AGGREGATE, 1, -1 },
+        { MIR_COPY_AGGREGATE, 2, -1 },
+        { MIR_UNARY, 0, -1 },
+        { MIR_UNARY, 1, -1 },
+        { MIR_BINARY, 0, -1 },
+        { MIR_BINARY, 1, -1 },
+        { MIR_BINARY, 2, -1 },
+        { MIR_ARG, 1, -1 },
+        { MIR_CALL, 0, -1 },
+        { MIR_BRANCH_FALSE, 1, -1 },
+        { MIR_PHI, 0, -1 },
+        { MIR_PHI, 1, -1 },
+        { MIR_PHI, 2, -1 },
+        { MIR_RETURN, 1, -1 },
+        { MIR_BINARY, 0, 3 },
+        { MIR_BINARY, 1, 3 },
+        { MIR_BINARY, 2, 3 },
+        { MIR_BINARY, 1, -2 }
+    };
     MirStream *control;
     char control_text[2048];
     char retry_text[2048];
     size_t control_bytes;
     size_t retry_bytes;
     int first_label;
-    int mutation;
+    size_t mutation;
     int result;
     int ok = 1;
 
@@ -1444,12 +1485,15 @@ static void verify_homed_value_operand_preflight_transaction(void)
         control_text, 1, sizeof(control_text), control);
     ok = ok && control_bytes < sizeof(control_text);
 
-    for (mutation = 0; mutation < 4; ++mutation) {
+    for (mutation = 0;
+         mutation < sizeof(mutations) / sizeof(mutations[0]);
+         ++mutation) {
         MirStream *retry = mir_stream_open();
         int *operand =
-            mutation == 0 ? &mir.insns[3].dst :
-            mutation == 1 || mutation == 3 ? &mir.insns[3].src1 :
+            mutations[mutation].field == 0 ? &mir.insns[3].dst :
+            mutations[mutation].field == 1 ? &mir.insns[3].src1 :
                                              &mir.insns[3].src2;
+        int original_opcode = mir.insns[3].opcode;
         int original = *operand;
 
         if (retry == NULL) {
@@ -1457,7 +1501,8 @@ static void verify_homed_value_operand_preflight_transaction(void)
             break;
         }
         label_id = first_label;
-        *operand = mutation == 3 ? -2 : mir.next_value;
+        mir.insns[3].opcode = mutations[mutation].opcode;
+        *operand = mutations[mutation].invalid_value;
         mir_extrn_begin_attempt();
         result = mir_try_emit_homed_scalar_cfg(retry);
         ok = ok && result == 0;
@@ -1465,6 +1510,7 @@ static void verify_homed_value_operand_preflight_transaction(void)
              mir_stream_size(retry) == 0;
         ok = ok && label_id == first_label;
 
+        mir.insns[3].opcode = original_opcode;
         *operand = original;
         mir_extrn_begin_attempt();
         result = mir_try_emit_homed_scalar_cfg(retry);
@@ -1482,6 +1528,49 @@ static void verify_homed_value_operand_preflight_transaction(void)
         ++failures;
     }
     mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_unused_value_operands(void)
+{
+    struct Sym *callee;
+    MirStream *stream;
+    int result;
+    int ok = 1;
+
+    callee = add_global("verify_homed_void_call", TYPE_VOID, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 0;
+    setup(3, 0, 1);
+    mir.return_type = TYPE_VOID;
+    mir.next_call_id = 1;
+    mir.insns[1].opcode = MIR_CALL;
+    mir.insns[1].dst = -1;
+    mir.insns[1].type = TYPE_VOID;
+    mir.insns[1].secondary_offset = 0;
+    strcpy(mir.insns[1].name, callee->name);
+    mir.insns[2].src1 = -1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed unused operand verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    stream = mir_stream_open();
+    if (stream == NULL) {
+        fprintf(stderr, "FAIL homed unused operand stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(stream);
+    ok = ok && result == 1 && mir_stream_size(stream) > 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL homed legitimate unused value operands\n");
+        ++failures;
+    }
+    mir_stream_close(stream);
     clear_liveness();
 }
 
@@ -2368,6 +2457,7 @@ int main(void)
     verify_spilled_feature_defaults();
     verify_homed_parameter_preflight_transaction();
     verify_homed_value_operand_preflight_transaction();
+    verify_homed_unused_value_operands();
     verify_spilled_preflight_rejection();
     verify_spilled_slot_operand_preflight_transaction();
     verify_va_arg_offset_preflight();

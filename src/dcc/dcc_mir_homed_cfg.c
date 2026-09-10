@@ -576,10 +576,61 @@ static int mir_homed_value_operands_valid(void)
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
+        int require_src1 = 0;
+        int require_src2 = 0;
+        int require_dst = 0;
 
         if (insn->src1 < -1 || insn->src1 >= mir.next_value ||
             insn->src2 < -1 || insn->src2 >= mir.next_value ||
             insn->dst < -1 || insn->dst >= mir.next_value)
+            return 0;
+        switch (insn->opcode) {
+        case MIR_PARAM:
+        case MIR_CONST:
+        case MIR_FLOAT_CONST:
+        case MIR_STRING_ADDRESS:
+        case MIR_ADDRESS:
+        case MIR_LOAD:
+            require_dst = 1;
+            break;
+        case MIR_MEMBER_ADDRESS:
+        case MIR_LOAD_INDIRECT:
+        case MIR_UNARY:
+            require_src1 = 1;
+            require_dst = 1;
+            break;
+        case MIR_INDEX_ADDRESS:
+        case MIR_PHI:
+        case MIR_BINARY:
+            require_src1 = 1;
+            require_src2 = 1;
+            require_dst = 1;
+            break;
+        case MIR_STORE:
+        case MIR_ARG:
+        case MIR_BRANCH_FALSE:
+            require_src1 = 1;
+            break;
+        case MIR_STORE_INDIRECT:
+        case MIR_COPY_AGGREGATE:
+            require_src1 = 1;
+            require_src2 = 1;
+            break;
+        case MIR_CALL:
+            require_src1 = strcmp(insn->name, "<indirect>") == 0;
+            require_dst = type_ptr_depth(insn->type) > 0 ||
+                          (insn->type & 15) != TYPE_VOID;
+            break;
+        case MIR_RETURN:
+            require_src1 = type_ptr_depth(mir.return_type) > 0 ||
+                           (mir.return_type & 15) != TYPE_VOID;
+            break;
+        default:
+            break;
+        }
+        if ((require_src1 && insn->src1 < 0) ||
+            (require_src2 && insn->src2 < 0) ||
+            (require_dst && insn->dst < 0))
             return 0;
     }
     return 1;
