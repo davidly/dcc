@@ -2514,6 +2514,22 @@ static int mir_compound_binary_operator(int assignment_operator)
     }
 }
 
+static int mir_call_ast_is_complete(const struct AstNode *node)
+{
+    int argument;
+
+    if (node == NULL || node->kind != AST_CALL || node->a == NULL ||
+        node->list_len < 0 || node->list_cap < 0 ||
+        node->list_len > node->list_cap ||
+        (node->list_len > 0 && node->list == NULL) ||
+        (node->a->kind == AST_IDENT && node->a->sval == NULL))
+        return 0;
+    for (argument = 0; argument < node->list_len; ++argument)
+        if (node->list[argument] == NULL)
+            return 0;
+    return 1;
+}
+
 static int mir_lower_expr(const struct AstNode *node)
 {
     struct MirInsn *insn;
@@ -3259,28 +3275,34 @@ static int mir_lower_expr(const struct AstNode *node)
         {
         int *argument_types = NULL;
         int *argument_values = NULL;
-        int call_id = mir.next_call_id++;
+        int call_id;
         int callee_value = -1;
         int reverse_conditional_arguments = 0;
-        const char *syntactic_name = node->a != NULL &&
-                                     node->a->kind == AST_IDENT
+        const char *syntactic_name;
+        const char *call_name;
+        struct Sym *callee_identifier;
+        int function_pointer_call;
+        struct Sym *function_symbol;
+        struct Sym *call_prototype;
+
+        if (!mir_call_ast_is_complete(node))
+            break;
+        call_id = mir.next_call_id++;
+        syntactic_name = node->a->kind == AST_IDENT
             ? node->a->sval : "<indirect>";
-        const char *call_name = syntactic_name;
-        struct Sym *callee_identifier = node->a != NULL &&
-                                        node->a->kind == AST_IDENT
+        call_name = syntactic_name;
+        callee_identifier = node->a->kind == AST_IDENT
             ? mir_ident_symbol(node->a) : NULL;
-        int function_pointer_call = callee_identifier != NULL &&
-                                    callee_identifier->is_funcptr;
-        struct Sym *function_symbol = node->a != NULL &&
-                                      node->a->kind == AST_IDENT
+        function_pointer_call = callee_identifier != NULL &&
+                                callee_identifier->is_funcptr;
+        function_symbol = node->a->kind == AST_IDENT
             ? (callee_identifier != NULL &&
                callee_identifier->storage == SC_FUNC
                 ? callee_identifier : find_global(call_name))
             : NULL;
-        struct Sym *call_prototype = function_symbol;
+        call_prototype = function_symbol;
         if ((function_symbol == NULL || function_symbol->storage != SC_FUNC) &&
-            (node->a == NULL || node->a->kind != AST_IDENT ||
-             function_pointer_call)) {
+            (node->a->kind != AST_IDENT || function_pointer_call)) {
             call_name = "<indirect>";
             function_symbol = NULL;
         } else if (function_symbol != NULL &&

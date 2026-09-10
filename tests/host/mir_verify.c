@@ -632,6 +632,78 @@ static void verify_ast_assignment_support(void)
     }
 }
 
+static void verify_call_lowering_preflight(void)
+{
+    struct AstNode call;
+    struct AstNode callee;
+    struct AstNode argument;
+    struct AstNode *arguments[1];
+    int call_id;
+    int case_index;
+    int instruction;
+    int value;
+
+    memset(&call, 0, sizeof(call));
+    memset(&callee, 0, sizeof(callee));
+    memset(&argument, 0, sizeof(argument));
+    call.kind = AST_CALL;
+    call.type = TYPE_INT;
+    callee.kind = AST_IDENT;
+    callee.type = TYPE_INT;
+    callee.sval = "verify_missing_callee";
+    argument.kind = AST_INT_LIT;
+    argument.type = TYPE_INT;
+    for (case_index = 0; case_index < 5; ++case_index) {
+        callee.sval = case_index == 3 ? NULL : "verify_missing_callee";
+        call.a = case_index == 0 ? NULL : &callee;
+        call.list_len =
+            case_index == 1 || case_index == 2 || case_index == 4 ? 1 : 0;
+        call.list_cap = case_index == 1 || case_index == 2 ? 1 : 0;
+        arguments[0] = case_index == 4 ? &argument : NULL;
+        call.list = case_index == 2 || case_index == 4 ? arguments : NULL;
+        mir_begin_function(
+            "verify_malformed_call", "_verify_malformed_call",
+            EMIT_SINK_FINAL, 0, 0, 0);
+        instruction = mir.count;
+        value = mir.next_value;
+        call_id = mir.next_call_id;
+        mir_capture_discarded_expr(&call);
+        if (mir.count != instruction + 1 || mir.next_value != value + 1 ||
+            mir.next_call_id != call_id ||
+            mir.insns[instruction].opcode != MIR_OPAQUE ||
+            mir.insns[instruction].dst != value ||
+            mir.insns[instruction].type != TYPE_INT ||
+            mir.insns[instruction].immediate != AST_CALL) {
+            fprintf(stderr,
+                    "FAIL malformed call lowering transaction case %d\n",
+                    case_index);
+            ++failures;
+        }
+    }
+
+    callee.sval = "verify_implicit_call";
+    call.a = &callee;
+    call.list_len = 0;
+    call.list_cap = 0;
+    call.list = NULL;
+    mir_begin_function(
+        "verify_valid_call", "_verify_valid_call",
+        EMIT_SINK_FINAL, 0, 0, 0);
+    instruction = mir.count;
+    value = mir.next_value;
+    call_id = mir.next_call_id;
+    mir_capture_discarded_expr(&call);
+    if (mir.count != instruction + 1 || mir.next_value != value + 1 ||
+        mir.next_call_id != call_id + 1 ||
+        mir.insns[instruction].opcode != MIR_CALL ||
+        mir.insns[instruction].dst != value ||
+        mir.insns[instruction].secondary_offset != call_id ||
+        strcmp(mir.insns[instruction].name, callee.sval) != 0) {
+        fprintf(stderr, "FAIL valid call lowering control\n");
+        ++failures;
+    }
+}
+
 static void diamond(void);
 
 static void verify_diamond_edge_liveness(void)
@@ -2899,6 +2971,7 @@ int main(void)
     verify_diamond_mutations();
     verify_ast_binary_folds();
     verify_ast_assignment_support();
+    verify_call_lowering_preflight();
     verify_diamond_edge_liveness();
     verify_immediate_phi_consumer_forwarding();
     verify_call_argument_liveness();
