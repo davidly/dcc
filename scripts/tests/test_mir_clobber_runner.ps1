@@ -198,8 +198,30 @@ if ($Behavior -eq "swapped") {
     $keys = @(Get-MirClobberShard @("a", "b", "c", "d") (1 - $ShardIndex) $ShardCount)
 }
 Write-Host "worker-pid=$PID"
+Write-Host "worker-dcc=$env:DCC"
 Write-Host "worker-profile=$env:LLVM_PROFILE_FILE"
 Write-MirClobberManifest $ExecutionManifest $keys $Scratch
+if ($Behavior -in @("orphan-pipe", "timeout")) {
+    $readyPath = Join-Path $Scratch "descendant-$ShardIndex.ready"
+    $descendantCode = "Set-Content -LiteralPath '" + $readyPath.Replace("'", "''") +
+        "' -Value ready; Start-Sleep -Seconds 30"
+    $start = [System.Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = Join-Path $PSHOME $(if ($IsWindows) { "pwsh.exe" } else { "pwsh" })
+    $start.UseShellExecute = $false
+    foreach ($argument in @("-NoProfile", "-NonInteractive", "-EncodedCommand",
+        [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($descendantCode)))) {
+        $start.ArgumentList.Add($argument)
+    }
+    $descendant = [System.Diagnostics.Process]::Start($start)
+    Set-Content -LiteralPath (Join-Path $Scratch "descendant-$ShardIndex.pid") -Value $descendant.Id
+    Set-Content -LiteralPath (Join-Path $Scratch "leader-$ShardIndex.pid") -Value $PID
+    $readyClock = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not (Test-Path -LiteralPath $readyPath)) {
+        if ($readyClock.Elapsed.TotalSeconds -ge 10) { throw "descendant failed to start" }
+        Start-Sleep -Milliseconds 10
+    }
+    if ($Behavior -eq "timeout") { Start-Sleep -Seconds 30 }
+}
 '@ | Set-Content -LiteralPath $worker
     $childParameters = @{
         Helper = (Join-Path $repoRoot "scripts/mir-clobber-runner.ps1")
@@ -207,9 +229,11 @@ Write-MirClobberManifest $ExecutionManifest $keys $Scratch
     }
     $old = [Environment]::GetEnvironmentVariable("MIR_CLOBBER_PROCESS_TEST", "Process")
     $oldProfile = [Environment]::GetEnvironmentVariable("LLVM_PROFILE_FILE", "Process")
+    $oldDcc = [Environment]::GetEnvironmentVariable("DCC", "Process")
     try {
         $env:MIR_CLOBBER_PROCESS_TEST = "parent"
         $env:LLVM_PROFILE_FILE = "$root/raw/dcc-%8m.profraw"
+        $env:DCC = "$root/instrumented-dcc"
         $actual = @(Invoke-MirClobberShards $worker $childParameters 2 `
             @("a", "b", "c", "d") $root $repoRoot @{ MIR_CLOBBER_PROCESS_TEST = "child" })
         Assert-MirClobberManifest @("a", "b", "c", "d") $actual
@@ -233,6 +257,11 @@ Write-MirClobberManifest $ExecutionManifest $keys $Scratch
         }
         Assert-True ($env:LLVM_PROFILE_FILE -eq "$root/raw/dcc-%8m.profraw") `
             "Shards changed parent profile configuration"
+        foreach ($index in 0..1) {
+            $childDcc = [regex]::Match((Get-Content "$root/shard-$index.log" -Raw),
+                'worker-dcc=([^\r\n]+)').Groups[1].Value
+            Assert-True ($childDcc -eq $env:DCC) "Shard changed inherited DCC"
+        }
         foreach ($behavior in @(
             "duplicate", "missing", "unexpected", "error", "no-manifest", "malformed", "swapped"
         )) {
@@ -243,9 +272,43 @@ Write-MirClobberManifest $ExecutionManifest $keys $Scratch
                     @("a", "b", "c", "d") $root $repoRoot @{ MIR_CLOBBER_PROCESS_TEST = "child" }
             } "."
         }
+        foreach ($behavior in @("orphan-pipe", "timeout")) {
+            $childParameters.Behavior = $behavior
+            $watch = [System.Diagnostics.Stopwatch]::StartNew()
+            Assert-Throws {
+                Invoke-MirClobberShards $worker $childParameters 2 `
+                    @("a", "b", "c", "d") $root $repoRoot `
+                    @{ MIR_CLOBBER_PROCESS_TEST = "child" } `
+                    -TimeoutSeconds $(if ($behavior -eq "timeout") { 5 } else { 20 })
+            } "timed out"
+            Assert-True ($watch.Elapsed.TotalSeconds -lt 12) `
+                "Clobber coordinator did not bound $behavior supervision"
+            $pidPaths = @(Get-ChildItem -LiteralPath $root -Filter "*.pid")
+            $survivors = @()
+            foreach ($pidPath in $pidPaths) {
+                $childPid = [int](Get-Content -LiteralPath $pidPath.FullName -Raw)
+                $live = Get-Process -Id $childPid -ErrorAction SilentlyContinue
+                try {
+                    if ($null -ne $live -and -not $live.HasExited) {
+                        $survivors += $childPid
+                    }
+                } finally {
+                    if ($null -ne $live) {
+                        if (-not $live.HasExited) { $live.Kill($true) }
+                        $live.Dispose()
+                    }
+                }
+                Remove-Item -LiteralPath $pidPath.FullName
+            }
+            Remove-Item "$root/descendant-*.ready" -ErrorAction SilentlyContinue
+            Assert-True ($pidPaths.Count -eq 4) "Lifecycle fixture did not start both process trees"
+            Assert-True ($survivors.Count -eq 0) `
+                "Clobber coordinator left $behavior processes alive: $survivors"
+        }
     } finally {
         [Environment]::SetEnvironmentVariable("MIR_CLOBBER_PROCESS_TEST", $old, "Process")
         [Environment]::SetEnvironmentVariable("LLVM_PROFILE_FILE", $oldProfile, "Process")
+        [Environment]::SetEnvironmentVariable("DCC", $oldDcc, "Process")
     }
     Write-Host "MIR clobber runner harness passed $checks checks"
 } finally {

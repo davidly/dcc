@@ -224,8 +224,10 @@ function Write-MirClobberManifest([string]$Path, [string[]]$Keys, [string]$RepoR
 function Invoke-MirClobberShards(
     [string]$ScriptPath, [hashtable]$Parameters, [int]$Jobs,
     [string[]]$Expected, [string]$WorkRoot, [string]$RepoRoot,
-    [hashtable]$Environment
+    [hashtable]$Environment,
+    [ValidateRange(0, 2147483647)][double]$TimeoutSeconds = 0
 ) {
+    Import-Module (Join-Path $PSScriptRoot "process-supervision.psm1")
     $children = [System.Collections.Generic.List[object]]::new()
     $actual = [System.Collections.Generic.List[string]]::new()
     try {
@@ -242,49 +244,61 @@ function Invoke-MirClobberShards(
                 $parameterPath.Replace("'", "''") +
                 "' -Raw | ConvertFrom-Json -AsHashtable; & '" +
                 $ScriptPath.Replace("'", "''") + "' @parameters"
-            $start = [System.Diagnostics.ProcessStartInfo]::new()
-            $start.FileName = Join-Path $PSHOME $(if ($IsWindows) { "pwsh.exe" } else { "pwsh" })
-            $start.WorkingDirectory = $RepoRoot
-            $start.UseShellExecute = $false
-            $start.RedirectStandardOutput = $true
-            $start.RedirectStandardError = $true
-            foreach ($argument in @("-NoProfile", "-NonInteractive", "-EncodedCommand",
-                [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command)))) {
-                $start.ArgumentList.Add($argument)
-            }
+            $executable = Join-Path $PSHOME $(if ($IsWindows) { "pwsh.exe" } else { "pwsh" })
+            $arguments = @("-NoProfile", "-NonInteractive", "-EncodedCommand",
+                [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command)))
+            $childEnvironment = @{}
+            $removeEnvironment = [System.Collections.Generic.List[string]]::new()
             foreach ($name in $Environment.Keys) {
                 if ($null -eq $Environment[$name]) {
-                    [void]$start.Environment.Remove($name)
+                    $removeEnvironment.Add($name)
                 } else {
-                    $start.Environment[$name] = $Environment[$name]
+                    $childEnvironment[$name] = $Environment[$name]
                 }
             }
-            $profile = $start.Environment["LLVM_PROFILE_FILE"]
+            $profile = if ($Environment.ContainsKey("LLVM_PROFILE_FILE")) {
+                $Environment["LLVM_PROFILE_FILE"]
+            } else {
+                [Environment]::GetEnvironmentVariable("LLVM_PROFILE_FILE", "Process")
+            }
             if ($profile) {
                 $profileName = [System.IO.Path]::GetFileNameWithoutExtension($profile) +
                     "-clobber-$PID-$index" + [System.IO.Path]::GetExtension($profile)
-                $start.Environment["LLVM_PROFILE_FILE"] = [System.IO.Path]::Combine(
+                $childEnvironment["LLVM_PROFILE_FILE"] = [System.IO.Path]::Combine(
                     [System.IO.Path]::GetDirectoryName($profile), $profileName)
             }
-            $process = [System.Diagnostics.Process]::new()
-            $process.StartInfo = $start
-            if (-not $process.Start()) { throw "Failed to start MIR clobber shard $index" }
+            $logPath = Join-Path $WorkRoot "shard-$index.log"
+            $runTimeout = if ($Parameters.ContainsKey("RunTimeout")) {
+                [Math]::Max(1.0, [double]$Parameters.RunTimeout)
+            } else { 30.0 }
+            $budget = if ($TimeoutSeconds -gt 0) { $TimeoutSeconds } else {
+                1200.0 + @(Get-MirClobberShard $Expected $index $Jobs).Count * (60.0 + $runTimeout)
+            }
+            $supervised = Start-SupervisedProcess -FilePath $executable `
+                -Arguments $arguments -WorkingDirectory $RepoRoot -LogPath $logPath `
+                -Environment $childEnvironment -RemoveEnvironment $removeEnvironment.ToArray() `
+                -ParentScope $env:DCC_PROCESS_SCOPE -DrainTimeoutSeconds 1
             $children.Add([pscustomobject]@{
-                Process = $process; Index = $index; Manifest = $manifest
-                Stdout = $process.StandardOutput.ReadToEndAsync()
-                Stderr = $process.StandardError.ReadToEndAsync()
+                Command = $supervised; Index = $index; Manifest = $manifest
+                Budget = $budget; Consumed = $false
             })
         }
         $pending = @($children)
         while ($pending.Count) {
             foreach ($child in @($pending)) {
-                if (-not $child.Process.HasExited) { continue }
-                $child.Process.WaitForExit()
-                $output = $child.Stdout.GetAwaiter().GetResult() +
-                    $child.Stderr.GetAwaiter().GetResult()
-                Set-Content -LiteralPath (Join-Path $WorkRoot "shard-$($child.Index).log") `
-                    -Value $output -Encoding utf8
-                if ($child.Process.ExitCode -ne 0) {
+                $supervised = $child.Command
+                if (-not (Test-SupervisedProcessComplete $supervised $child.Budget)) { continue }
+                $remaining = [Math]::Max(0, $child.Budget - $supervised.Clock.Elapsed.TotalSeconds)
+                try {
+                    $result = Complete-SupervisedProcess $supervised -TimeoutSeconds $remaining
+                } finally {
+                    $child.Consumed = $true
+                }
+                $output = $result.Output
+                if ($result.TimedOut) {
+                    throw "MIR clobber shard $($child.Index) timed out (exit or output drain):`n$output"
+                }
+                if ($result.ExitCode -ne 0) {
                     throw "MIR clobber shard $($child.Index) failed:`n$output"
                 }
                 $keys = ConvertFrom-Json -InputObject (
@@ -304,11 +318,9 @@ function Invoke-MirClobberShards(
         $actual.ToArray()
     } finally {
         foreach ($child in $children) {
-            if (-not $child.Process.HasExited) {
-                $child.Process.Kill($true)
-                $child.Process.WaitForExit()
+            if (-not $child.Consumed) {
+                Stop-SupervisedProcess $child.Command
             }
-            $child.Process.Dispose()
         }
     }
 }

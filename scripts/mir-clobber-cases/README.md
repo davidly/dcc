@@ -73,6 +73,11 @@ shard zero. Generated sources are created only by shards that need them.
 When `LLVM_PROFILE_FILE` is inherited, each child adds a parent-PID/shard suffix
 to its filename, preserving the directory, extension, and LLVM merge pattern.
 Profiles stay directly under the inherited raw directory for `*.profraw` merging.
+The shared `process-supervision.psm1` helper owns process-group/job cleanup.
+Shard watchdogs cover launch through output drain; the automatic budget includes
+shared setup plus each assigned leaf's build and emulator timeout. After a shard
+leader exits, pipes held open by descendants receive only a one-second drain
+grace before the run fails and its supervised descendants are stopped.
 
 Every completed shard must match its exact expected keys. The parent also
 checks the exact union: duplicate, missing, unexpected, malformed, or failed
