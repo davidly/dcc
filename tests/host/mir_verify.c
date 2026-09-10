@@ -1514,6 +1514,95 @@ static void verify_spilled_preflight_rejection(void)
     expect_spilled_candidate("va_arg width rejection", 0);
 }
 
+static void verify_spilled_slot_operand_preflight_transaction(void)
+{
+    MirStream *control;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int mutation;
+    int result;
+    int ok = 1;
+
+    setup(6, 3, 1);
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].immediate = '+';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[4].opcode = MIR_NOP;
+    mir.insns[5].src1 = 2;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL spilled slot operand verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    if (control == NULL) {
+        fprintf(stderr, "FAIL spilled slot operand stream allocation\n");
+        ++failures;
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    for (mutation = 0; mutation < 4; ++mutation) {
+        MirStream *retry = mir_stream_open();
+        int *operand =
+            mutation == 0 ? &mir.insns[3].dst :
+            mutation == 1 || mutation == 3 ? &mir.insns[3].src1 :
+                                             &mir.insns[3].src2;
+        int original = *operand;
+
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        label_id = first_label;
+        *operand = mutation == 3 ? -2 : mir.next_value;
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_spilled_scalar_cfg(retry);
+        ok = ok && result == 0;
+        ok = ok && mir_stream_tell(retry) == 0 &&
+             mir_stream_size(retry) == 0;
+        ok = ok && label_id == first_label;
+        ok = ok && mir_spilled_cfg_emitted_frame_bytes() == 0;
+        ok = ok && !mir_spilled_cfg_depends_on_promoted_local_slot_reuse();
+
+        *operand = original;
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_spilled_scalar_cfg(retry);
+        ok = ok && result == 1;
+        mir_stream_rewind(retry);
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        ok = ok && retry_bytes < sizeof(retry_text);
+        ok = ok && control_bytes == retry_bytes;
+        ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+        mir_stream_close(retry);
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL spilled slot operand preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
 static void verify_va_arg_offset_preflight(void)
 {
     static const long invalid_offsets[] = { LONG_MIN, -129, 127, LONG_MAX };
@@ -2192,6 +2281,7 @@ int main(void)
     verify_spilled_feature_defaults();
     verify_homed_parameter_preflight_transaction();
     verify_spilled_preflight_rejection();
+    verify_spilled_slot_operand_preflight_transaction();
     verify_va_arg_offset_preflight();
     verify_direct_call_name_preflight();
     verify_aggregate_call_name_preflight();

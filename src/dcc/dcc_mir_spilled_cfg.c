@@ -31199,6 +31199,32 @@ static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
     return 0;
 }
 
+/*
+ * Slot interval construction indexes first[], last[], and backend_slots[]
+ * directly by every MIR value reference. Candidate probes can be retried
+ * after a caller mutates an otherwise verified function, so reject invalid
+ * references before any slot matcher or reservation pass can observe them.
+ * The candidate repeats the check after resetting its per-attempt state so an
+ * invalid probe remains transactional.
+ */
+static int mir_backend_slot_operands_valid(int *invalid_instruction)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src1 < -1 || insn->src1 >= mir.next_value ||
+            insn->src2 < -1 || insn->src2 >= mir.next_value ||
+            insn->dst < -1 || insn->dst >= mir.next_value) {
+            if (invalid_instruction != NULL)
+                *invalid_instruction = instruction;
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* Item 86: single shared frame-size accounting predicate. Calls
  * mir_prepare_backend_slots() (which has the side effect of assigning
  * backend slots), so call it exactly once per candidate emitter, same as
@@ -31560,6 +31586,13 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     mir_boolean_phi_true_labels = NULL;
     mir_boolean_phi_eliminated = NULL;
     mir_boolean_phi_candidate_count = -1;
+    {
+        int invalid_instruction;
+
+        if (!mir_backend_slot_operands_valid(&invalid_instruction))
+            return mir_scalar_cfg_preflight_reject(
+                "value-operand", invalid_instruction);
+    }
     if ((!type_is_struct_object(mir.return_type) &&
             (mir.return_type & 15) != TYPE_VOID &&
          type_size(mir.return_type) > 4) ||
@@ -35722,6 +35755,9 @@ int mir_try_emit_spilled_scalar_cfg(MirStream *out)
     int phi_instructions;
 
     mir_phi_argument_stack_handoff_enabled = 0;
+    /* Let the candidate reset its full per-attempt state and report rejection. */
+    if (!mir_backend_slot_operands_valid(NULL))
+        return mir_emit_spilled_scalar_cfg_candidate(out);
     if (!mir_has_phi_first_call_argument_candidate())
         return mir_emit_spilled_scalar_cfg_candidate(out);
     baseline = mir_stream_open();
