@@ -1043,6 +1043,99 @@ static void expect_spilled_candidate(const char *name, int expected)
     }
 }
 
+static void verify_homed_parameter_preflight_transaction(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int saved_color;
+    int saved_spill;
+    int saved_spill_count;
+    int sid;
+    int result;
+    int ok = 1;
+
+    setup(5, 1, 2);
+    mir.return_type = TYPE_INT;
+    mir.object_count = 1;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    mir.objects[0].storage = SC_PARAM;
+    mir.objects[0].type = TYPE_INT;
+    mir.objects[0].offset = 4;
+    strcpy(mir.objects[0].name, "verify_homed_parameter");
+    mir.insns[1].opcode = MIR_PARAM;
+    mir.insns[1].object = 0;
+    strcpy(mir.insns[1].name, mir.objects[0].name);
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].dst = -1;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].dst = -1;
+    mir.insns[3].label = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed parameter preflight verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL homed parameter preflight stream allocation\n");
+        ++failures;
+        mir_stream_close(control);
+        mir_stream_close(retry);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    saved_color = mir.allocation_colors[0];
+    saved_spill = mir.allocation_spills[0];
+    saved_spill_count = mir.allocation_spill_count;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+
+    label_id = first_label;
+    sid = add_struct_def("verify_homed_invalid_parameter");
+    struct_defs[sid - 1].size = 6;
+    mir.objects[0].type = make_struct_type(sid);
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(retry);
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == 0 && mir_stream_size(retry) == 0;
+    ok = ok && label_id == first_label;
+    ok = ok && mir.allocation_colors[0] == saved_color;
+    ok = ok && mir.allocation_spills[0] == saved_spill;
+    ok = ok && mir.allocation_spill_count == saved_spill_count;
+
+    mir.objects[0].type = TYPE_INT;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(retry);
+    ok = ok && result == 1;
+    mir_stream_rewind(control);
+    mir_stream_rewind(retry);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && control_bytes < sizeof(control_text);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL homed parameter preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    mir_stream_close(retry);
+    clear_liveness();
+}
+
 static void verify_spilled_preflight_rejection(void)
 {
     int sid;
@@ -1737,6 +1830,7 @@ int main(void)
     verify_member_metadata_and_address();
     verify_five_call_arguments();
     verify_spilled_feature_defaults();
+    verify_homed_parameter_preflight_transaction();
     verify_spilled_preflight_rejection();
     verify_va_arg_offset_preflight();
     verify_direct_call_name_preflight();

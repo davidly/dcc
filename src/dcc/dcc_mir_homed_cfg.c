@@ -1621,9 +1621,18 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
             return mir_homed_reject("uncolored-value");
         }
         switch (insn->opcode) {
-        case MIR_NOP: case MIR_LABEL: case MIR_PARAM: case MIR_CONST:
+        case MIR_NOP: case MIR_LABEL: case MIR_CONST:
         case MIR_FLOAT_CONST:
         case MIR_PHI: case MIR_JUMP: case MIR_BRANCH_FALSE:
+            break;
+        case MIR_PARAM:
+            if ((mir_value_has_use(insn->dst) ||
+                 !mir_regional_home_plan_is_active()) &&
+                (insn->object < 0 ||
+                 (type_size(mir.objects[insn->object].type) != 1 &&
+                  type_size(mir.objects[insn->object].type) != 2 &&
+                  type_size(mir.objects[insn->object].type) != 4)))
+                return mir_homed_reject("parameter-type");
             break;
         case MIR_STORE:
             if (!mir_object_is_fully_promoted(insn->object) ||
@@ -2020,17 +2029,6 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
     frameless = !uses_iy && mir_effective_local_bytes() == 0 &&
                 mir.allocation_spill_count == 0 &&
                 !mir_homed_requires_ix_frame();
-    for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_PARAM &&
-            (mir_value_has_use(mir.insns[i].dst) ||
-             !mir_regional_home_plan_is_active()) &&
-            (mir.insns[i].object < 0 ||
-             (type_size(mir.objects[mir.insns[i].object].type) != 1 &&
-              type_size(mir.objects[mir.insns[i].object].type) != 2 &&
-              type_size(mir.objects[mir.insns[i].object].type) != 4))) {
-            free(labels);
-            return 0;
-        }
     /* mir-text-size Item T14: mirror dcc_mir_spilled_cfg.c's shared-
      * epilogue optimization - a function with more than one MIR_RETURN
      * only needs the real epilogue text once; every other return can
