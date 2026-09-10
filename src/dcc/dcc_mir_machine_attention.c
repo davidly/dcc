@@ -3307,6 +3307,8 @@ int mir_try_emit_attention_kernels(MirStream *out)
             &matrix_product_schedule)) {
         mir_emit_matrix_product_schedule(
             out, &matrix_product_schedule);
+        if (matrix_product_schedule.kind == MIR_MATRIX_PRODUCT_ADD)
+            mir_machine_accept("matrix-product-add-schedule");
         return 1;
     }
     if (mir_match_vector_maximum_schedule(
