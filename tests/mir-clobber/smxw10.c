@@ -172,9 +172,12 @@ int main(void)
         11, 3, -5, -13, -21, -29, -37, -45
     };
 #ifndef SMXW10_SHORT_TABLE
-    static const model_value_t clamped[] = {32767, -32768};
+    static const model_value_t clamped[] = {2048, 0};
 #endif
 
+#ifdef SMXW10_LONG_TABLE
+    exponential_table[256] = 1234;
+#endif
     run_case(singleton, 1);
     run_case(equal, 8);
     run_case(stepped, 8);

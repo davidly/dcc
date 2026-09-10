@@ -1394,6 +1394,17 @@ static int mir_match_softmax_local_store(
     return mir_match_matrix_product_pointer_type(memory_type);
 }
 
+static int mir_match_softmax_argument(
+    const struct MirInsn *call, const struct MirInsn *argument,
+    int ordinal, int value, int type)
+{
+    return argument->opcode == MIR_ARG &&
+           argument->src1 == value &&
+           argument->type == type &&
+           argument->immediate == ordinal &&
+           argument->secondary_offset == call->secondary_offset;
+}
+
 static int mir_match_fixed_softmax_schedule(
     struct MirFixedSoftmaxSchedule *plan)
 {
@@ -1577,6 +1588,18 @@ static int mir_match_softmax_schedule(
         !mir_match_matrix_product_count_type(
             plan->maximum_function->proto_types[1]) ||
         !mir_match_matrix_product_pointer_type(
+            plan->maximum_function->proto_types[2]) ||
+        !mir_match_softmax_argument(
+            &mir.insns[10], &mir.insns[4], 0,
+            mir.insns[3].dst,
+            plan->maximum_function->proto_types[0]) ||
+        !mir_match_softmax_argument(
+            &mir.insns[10], &mir.insns[6], 1,
+            mir.insns[2].dst,
+            plan->maximum_function->proto_types[1]) ||
+        !mir_match_softmax_argument(
+            &mir.insns[10], &mir.insns[9], 2,
+            mir.insns[7].dst,
             plan->maximum_function->proto_types[2]) ||
         !mir_match_softmax_local_store(
             &mir.insns[12], MIR_SOFTMAX_LOCAL_WORD) ||
@@ -1876,6 +1899,10 @@ static int mir_match_softmax_schedule(
         !mir_match_softmax_call(
             &mir.insns[119], 1, &plan->clamp_function) ||
         !mir_match_matrix_product_long_type(
+            plan->clamp_function->proto_types[0]) ||
+        !mir_match_softmax_argument(
+            &mir.insns[119], &mir.insns[118], 0,
+            mir.insns[117].dst,
             plan->clamp_function->proto_types[0]) ||
         mir.insns[120].src1 != mir.insns[107].dst ||
         mir.insns[120].src2 != mir.insns[119].dst ||

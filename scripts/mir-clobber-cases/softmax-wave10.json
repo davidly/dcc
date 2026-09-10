@@ -2,7 +2,7 @@
   {
     "Name": "smxw10-exact", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireExact": true
@@ -11,7 +11,7 @@
     "Name": "smxw10-long-table", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"],
     "Defines": ["SMXW10_LONG_TABLE"],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireExact": true
@@ -31,7 +31,7 @@
   {
     "Name": "smxw10-vector-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -44,7 +44,7 @@
   {
     "Name": "smxw10-maximum-output-abi", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -55,9 +55,48 @@
     "MachineMutationFunction": "softmax_wave10"
   },
   {
+    "Name": "smxw10-maximum-vector-arg-type", "Group": "softmax-wave10",
+    "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [false],
+    "ExactTemplate": "softmax-schedule",
+    "ExactFunction": "softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "softmax_wave10",
+    "RequiredSelectorFunction": "softmax_wave10",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "4:type:50",
+    "MachineMutationFunction": "softmax_wave10"
+  },
+  {
+    "Name": "smxw10-maximum-length-arg-type", "Group": "softmax-wave10",
+    "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [false],
+    "ExactTemplate": "softmax-schedule",
+    "ExactFunction": "softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "softmax_wave10",
+    "RequiredSelectorFunction": "softmax_wave10",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "6:type:1",
+    "MachineMutationFunction": "softmax_wave10"
+  },
+  {
+    "Name": "smxw10-maximum-index-arg-type", "Group": "softmax-wave10",
+    "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [false],
+    "ExactTemplate": "softmax-schedule",
+    "ExactFunction": "softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "softmax_wave10",
+    "RequiredSelectorFunction": "softmax_wave10",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "9:type:50",
+    "MachineMutationFunction": "softmax_wave10"
+  },
+  {
     "Name": "smxw10-maximum-width", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -70,7 +109,7 @@
   {
     "Name": "smxw10-sum-signedness", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -83,7 +122,7 @@
   {
     "Name": "smxw10-first-phi-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -96,7 +135,7 @@
   {
     "Name": "smxw10-index-width", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -109,7 +148,7 @@
   {
     "Name": "smxw10-output-state-width", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -122,7 +161,7 @@
   {
     "Name": "smxw10-first-loop-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -135,7 +174,7 @@
   {
     "Name": "smxw10-difference-width", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -148,7 +187,7 @@
   {
     "Name": "smxw10-table-address-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -161,7 +200,7 @@
   {
     "Name": "smxw10-table-index-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -174,7 +213,7 @@
   {
     "Name": "smxw10-first-output-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -187,7 +226,7 @@
   {
     "Name": "smxw10-sum-load-signedness", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -200,7 +239,7 @@
   {
     "Name": "smxw10-first-stride-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -213,7 +252,7 @@
   {
     "Name": "smxw10-second-phi-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -226,7 +265,7 @@
   {
     "Name": "smxw10-second-loop-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -239,7 +278,7 @@
   {
     "Name": "smxw10-second-output-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -252,7 +291,7 @@
   {
     "Name": "smxw10-normalization-width", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -265,7 +304,7 @@
   {
     "Name": "smxw10-normalization-signedness", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
@@ -276,9 +315,22 @@
     "MachineMutationFunction": "softmax_wave10"
   },
   {
+    "Name": "smxw10-normalization-arg-type", "Group": "softmax-wave10",
+    "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [false],
+    "ExactTemplate": "softmax-schedule",
+    "ExactFunction": "softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "softmax_wave10",
+    "RequiredSelectorFunction": "softmax_wave10",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "118:type:36",
+    "MachineMutationFunction": "softmax_wave10"
+  },
+  {
     "Name": "smxw10-second-stride-type", "Group": "softmax-wave10",
     "Sources": ["tests/mir-clobber/smxw10.c"], "Defines": [],
-    "Expected": ["SMXW10 failures=0 checks=102 hash=3853398201"],
+    "Expected": ["SMXW10 failures=0 checks=102 hash=3257411513"],
     "Exit": 0, "StackBytes": 512, "StackModes": [false],
     "ExactTemplate": "softmax-schedule",
     "ExactFunction": "softmax_wave10", "RequireRejected": true,
