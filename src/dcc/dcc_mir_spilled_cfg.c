@@ -31200,23 +31200,88 @@ static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
 }
 
 /*
- * Slot interval construction indexes first[], last[], and backend_slots[]
- * directly by every MIR value reference. Candidate probes can be retried
- * after a caller mutates an otherwise verified function, so reject invalid
- * references before any slot matcher or reservation pass can observe them.
- * The candidate repeats the check after resetting its per-attempt state so an
- * invalid probe remains transactional.
+ * Slot construction and emission assume that each supported opcode carries
+ * the value operands its semantics require. Candidate probes can be retried
+ * after a caller mutates an otherwise verified function, so reject missing or
+ * out-of-range references before any slot matcher or reservation pass can
+ * observe them. The candidate repeats the check after resetting its
+ * per-attempt state so an invalid probe remains transactional.
  */
-static int mir_backend_slot_operands_valid(int *invalid_instruction)
+static int mir_spilled_value_operands_valid(int *invalid_instruction)
 {
     int instruction;
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
+        int require_src1 = 0;
+        int require_src2 = 0;
+        int require_dst = 0;
 
         if (insn->src1 < -1 || insn->src1 >= mir.next_value ||
             insn->src2 < -1 || insn->src2 >= mir.next_value ||
             insn->dst < -1 || insn->dst >= mir.next_value) {
+            if (invalid_instruction != NULL)
+                *invalid_instruction = instruction;
+            return 0;
+        }
+        switch (insn->opcode) {
+        case MIR_PARAM:
+        case MIR_CONST:
+        case MIR_FLOAT_CONST:
+        case MIR_STRING_ADDRESS:
+        case MIR_ADDRESS:
+        case MIR_COMPOUND_ADDRESS:
+        case MIR_VLA_SIZE:
+        case MIR_LOAD:
+        case MIR_VA_START:
+        case MIR_VA_END:
+        case MIR_VA_ARG:
+            require_dst = 1;
+            break;
+        case MIR_MEMBER_ADDRESS:
+        case MIR_LOAD_INDIRECT:
+        case MIR_UNARY:
+            require_src1 = 1;
+            require_dst = 1;
+            break;
+        case MIR_INDEX_ADDRESS:
+        case MIR_PHI:
+        case MIR_BINARY:
+            require_src1 = 1;
+            require_src2 = 1;
+            require_dst = 1;
+            break;
+        case MIR_STORE:
+        case MIR_VLA_ALLOC:
+        case MIR_ARG:
+        case MIR_BRANCH_FALSE:
+            require_src1 = 1;
+            break;
+        case MIR_STORE_INDIRECT:
+        case MIR_COPY_AGGREGATE:
+            require_src1 = 1;
+            require_src2 = 1;
+            break;
+        case MIR_CALL:
+            require_src1 = strcmp(insn->name, "<indirect>") == 0;
+            require_dst = type_ptr_depth(insn->type) > 0 ||
+                          (insn->type & 15) != TYPE_VOID;
+            break;
+        case MIR_CALL_AGGREGATE:
+            require_src1 =
+                insn->immediate == MIR_AGGREGATE_VALUE_DEST_OFFSET;
+            require_dst = 1;
+            break;
+        case MIR_RETURN:
+            require_src1 = type_ptr_depth(mir.return_type) > 0 ||
+                           (mir.return_type & 15) != TYPE_VOID;
+            break;
+        default:
+            break;
+        }
+        if ((require_src1 && insn->src1 < 0) ||
+            (require_src2 && insn->src2 < 0) ||
+            (require_dst && insn->dst < 0)) {
             if (invalid_instruction != NULL)
                 *invalid_instruction = instruction;
             return 0;
@@ -31589,7 +31654,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     {
         int invalid_instruction;
 
-        if (!mir_backend_slot_operands_valid(&invalid_instruction))
+        if (!mir_spilled_value_operands_valid(&invalid_instruction))
             return mir_scalar_cfg_preflight_reject(
                 "value-operand", invalid_instruction);
     }
@@ -35756,7 +35821,7 @@ int mir_try_emit_spilled_scalar_cfg(MirStream *out)
 
     mir_phi_argument_stack_handoff_enabled = 0;
     /* Let the candidate reset its full per-attempt state and report rejection. */
-    if (!mir_backend_slot_operands_valid(NULL))
+    if (!mir_spilled_value_operands_valid(NULL))
         return mir_emit_spilled_scalar_cfg_candidate(out);
     if (!mir_has_phi_first_call_argument_candidate())
         return mir_emit_spilled_scalar_cfg_candidate(out);

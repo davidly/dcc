@@ -1690,19 +1690,78 @@ static void verify_spilled_preflight_rejection(void)
     expect_spilled_candidate("va_arg width rejection", 0);
 }
 
-static void verify_spilled_slot_operand_preflight_transaction(void)
+static void verify_spilled_value_operand_preflight_transaction(void)
 {
+    struct OperandMutation {
+        int opcode;
+        int field;
+        int invalid_value;
+        int indirect_call;
+        int aggregate_value_destination;
+    };
+    static const struct OperandMutation mutations[] = {
+        { MIR_PARAM, 0, -1, 0, 0 },
+        { MIR_CONST, 0, -1, 0, 0 },
+        { MIR_FLOAT_CONST, 0, -1, 0, 0 },
+        { MIR_STRING_ADDRESS, 0, -1, 0, 0 },
+        { MIR_ADDRESS, 0, -1, 0, 0 },
+        { MIR_COMPOUND_ADDRESS, 0, -1, 0, 0 },
+        { MIR_INDEX_ADDRESS, 0, -1, 0, 0 },
+        { MIR_INDEX_ADDRESS, 1, -1, 0, 0 },
+        { MIR_INDEX_ADDRESS, 2, -1, 0, 0 },
+        { MIR_MEMBER_ADDRESS, 0, -1, 0, 0 },
+        { MIR_MEMBER_ADDRESS, 1, -1, 0, 0 },
+        { MIR_VLA_SIZE, 0, -1, 0, 0 },
+        { MIR_LOAD, 0, -1, 0, 0 },
+        { MIR_LOAD_INDIRECT, 0, -1, 0, 0 },
+        { MIR_LOAD_INDIRECT, 1, -1, 0, 0 },
+        { MIR_STORE, 1, -1, 0, 0 },
+        { MIR_STORE_INDIRECT, 1, -1, 0, 0 },
+        { MIR_STORE_INDIRECT, 2, -1, 0, 0 },
+        { MIR_COPY_AGGREGATE, 1, -1, 0, 0 },
+        { MIR_COPY_AGGREGATE, 2, -1, 0, 0 },
+        { MIR_VLA_ALLOC, 1, -1, 0, 0 },
+        { MIR_UNARY, 0, -1, 0, 0 },
+        { MIR_UNARY, 1, -1, 0, 0 },
+        { MIR_BINARY, 0, -1, 0, 0 },
+        { MIR_BINARY, 1, -1, 0, 0 },
+        { MIR_BINARY, 2, -1, 0, 0 },
+        { MIR_ARG, 1, -1, 0, 0 },
+        { MIR_CALL, 0, -1, 0, 0 },
+        { MIR_CALL, 1, -1, 1, 0 },
+        { MIR_CALL_AGGREGATE, 0, -1, 0, 0 },
+        { MIR_CALL_AGGREGATE, 1, -1, 0, 1 },
+        { MIR_VA_START, 0, -1, 0, 0 },
+        { MIR_VA_END, 0, -1, 0, 0 },
+        { MIR_VA_ARG, 0, -1, 0, 0 },
+        { MIR_BRANCH_FALSE, 1, -1, 0, 0 },
+        { MIR_PHI, 0, -1, 0, 0 },
+        { MIR_PHI, 1, -1, 0, 0 },
+        { MIR_PHI, 2, -1, 0, 0 },
+        { MIR_RETURN, 1, -1, 0, 0 },
+        { MIR_BINARY, 0, 3, 0, 0 },
+        { MIR_BINARY, 1, 3, 0, 0 },
+        { MIR_BINARY, 2, 3, 0, 0 },
+        { MIR_BINARY, 1, -2, 0, 0 }
+    };
     MirStream *control;
     char control_text[2048];
     char retry_text[2048];
     size_t control_bytes;
     size_t retry_bytes;
     int first_label;
-    int mutation;
+    size_t mutation;
     int result;
     int ok = 1;
 
     setup(6, 3, 1);
+    mir.local_bytes = 2;
+    mir.object_count = 1;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    mir.objects[0].storage = SC_LOCAL;
+    mir.objects[0].type = TYPE_INT;
+    mir.objects[0].offset = -2;
+    strcpy(mir.objects[0].name, "verify_spilled_operand");
     mir.insns[2].opcode = MIR_CONST;
     mir.insns[2].dst = 1;
     mir.insns[3].opcode = MIR_BINARY;
@@ -1714,14 +1773,14 @@ static void verify_spilled_slot_operand_preflight_transaction(void)
     mir.insns[4].opcode = MIR_NOP;
     mir.insns[5].src1 = 2;
     if (!mir_verify_and_dump()) {
-        fprintf(stderr, "FAIL spilled slot operand verification control\n");
+        fprintf(stderr, "FAIL spilled value operand verification control\n");
         ++failures;
         clear_liveness();
         return;
     }
     control = mir_stream_open();
     if (control == NULL) {
-        fprintf(stderr, "FAIL spilled slot operand stream allocation\n");
+        fprintf(stderr, "FAIL spilled value operand stream allocation\n");
         ++failures;
         mir_stream_close(control);
         clear_liveness();
@@ -1736,46 +1795,133 @@ static void verify_spilled_slot_operand_preflight_transaction(void)
         control_text, 1, sizeof(control_text), control);
     ok = ok && control_bytes < sizeof(control_text);
 
-    for (mutation = 0; mutation < 4; ++mutation) {
+    for (mutation = 0;
+         mutation < sizeof(mutations) / sizeof(mutations[0]);
+         ++mutation) {
         MirStream *retry = mir_stream_open();
         int *operand =
-            mutation == 0 ? &mir.insns[3].dst :
-            mutation == 1 || mutation == 3 ? &mir.insns[3].src1 :
+            mutations[mutation].field == 0 ? &mir.insns[3].dst :
+            mutations[mutation].field == 1 ? &mir.insns[3].src1 :
                                              &mir.insns[3].src2;
-        int original = *operand;
+        struct MirInsn original = mir.insns[3];
+        int original_next_call_id = mir.next_call_id;
+        int mutation_ok = 1;
 
         if (retry == NULL) {
             ok = 0;
             break;
         }
         label_id = first_label;
-        *operand = mutation == 3 ? -2 : mir.next_value;
+        mir.insns[3].opcode = mutations[mutation].opcode;
+        mir.insns[3].object = 0;
+        mir.insns[3].memory_size = 2;
+        strcpy(mir.insns[3].name, mir.objects[0].name);
+        if (mutations[mutation].opcode == MIR_BRANCH_FALSE)
+            mir.insns[3].label = 0;
+        if (mutations[mutation].opcode == MIR_CALL ||
+            mutations[mutation].opcode == MIR_CALL_AGGREGATE) {
+            mir.next_call_id = 1;
+            mir.insns[3].secondary_offset = 0;
+            strcpy(mir.insns[3].name, "verify_spilled_operand_call");
+        }
+        if (mutations[mutation].opcode == MIR_CALL_AGGREGATE) {
+            mir.insns[3].type = type_add_ptr(TYPE_INT);
+            mir.insns[3].immediate = 0;
+        }
+        if (mutations[mutation].opcode == MIR_VA_ARG) {
+            mir.insns[3].immediate = -2;
+            mir.insns[3].secondary_offset = 2;
+        }
+        if (mutations[mutation].indirect_call)
+            strcpy(mir.insns[3].name, "<indirect>");
+        if (mutations[mutation].aggregate_value_destination)
+            mir.insns[3].immediate = MIR_AGGREGATE_VALUE_DEST_OFFSET;
+        *operand = mutations[mutation].invalid_value;
         mir_extrn_begin_attempt();
         result = mir_try_emit_spilled_scalar_cfg(retry);
-        ok = ok && result == 0;
-        ok = ok && mir_stream_tell(retry) == 0 &&
-             mir_stream_size(retry) == 0;
-        ok = ok && label_id == first_label;
-        ok = ok && mir_spilled_cfg_emitted_frame_bytes() == 0;
-        ok = ok && !mir_spilled_cfg_depends_on_promoted_local_slot_reuse();
+        mutation_ok = mutation_ok && result == 0;
+        mutation_ok = mutation_ok && mir_stream_tell(retry) == 0 &&
+                      mir_stream_size(retry) == 0;
+        mutation_ok = mutation_ok && label_id == first_label;
+        mutation_ok =
+            mutation_ok && mir_spilled_cfg_emitted_frame_bytes() == 0;
+        mutation_ok = mutation_ok &&
+            !mir_spilled_cfg_depends_on_promoted_local_slot_reuse();
 
-        *operand = original;
+        mir.insns[3] = original;
+        mir.next_call_id = original_next_call_id;
         mir_extrn_begin_attempt();
         result = mir_try_emit_spilled_scalar_cfg(retry);
-        ok = ok && result == 1;
+        mutation_ok = mutation_ok && result == 1;
         mir_stream_rewind(retry);
         retry_bytes = mir_stream_read(
             retry_text, 1, sizeof(retry_text), retry);
-        ok = ok && retry_bytes < sizeof(retry_text);
-        ok = ok && control_bytes == retry_bytes;
-        ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text);
+        mutation_ok = mutation_ok && control_bytes == retry_bytes;
+        mutation_ok = mutation_ok &&
+            memcmp(control_text, retry_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr,
+                    "FAIL spilled operand opcode=%s field=%d value=%d\n",
+                    mir_opcode_name(mutations[mutation].opcode),
+                    mutations[mutation].field,
+                    mutations[mutation].invalid_value);
+        ok = ok && mutation_ok;
         mir_stream_close(retry);
     }
     if (!ok) {
-        fprintf(stderr, "FAIL spilled slot operand preflight transaction\n");
+        fprintf(stderr, "FAIL spilled value operand preflight transaction\n");
         ++failures;
     }
     mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_spilled_unused_value_operands(void)
+{
+    struct Sym *callee;
+    MirStream *stream;
+    int result;
+    int ok = 1;
+
+    callee = add_global("verify_spilled_void_call", TYPE_VOID, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 0;
+    setup(6, 0, 2);
+    mir.return_type = TYPE_VOID;
+    mir.next_call_id = 1;
+    mir.insns[1].opcode = MIR_CALL;
+    mir.insns[1].dst = -1;
+    mir.insns[1].type = TYPE_VOID;
+    mir.insns[1].secondary_offset = 0;
+    strcpy(mir.insns[1].name, callee->name);
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_NOP;
+    mir.insns[4].opcode = MIR_LABEL;
+    mir.insns[4].label = 1;
+    mir.insns[5].src1 = -1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL spilled unused operand verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    stream = mir_stream_open();
+    if (stream == NULL) {
+        fprintf(stderr, "FAIL spilled unused operand stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(stream);
+    ok = ok && result == 1 && mir_stream_size(stream) > 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL spilled legitimate unused value operands\n");
+        ++failures;
+    }
+    mir_stream_close(stream);
     clear_liveness();
 }
 
@@ -2459,7 +2605,8 @@ int main(void)
     verify_homed_value_operand_preflight_transaction();
     verify_homed_unused_value_operands();
     verify_spilled_preflight_rejection();
-    verify_spilled_slot_operand_preflight_transaction();
+    verify_spilled_value_operand_preflight_transaction();
+    verify_spilled_unused_value_operands();
     verify_va_arg_offset_preflight();
     verify_direct_call_name_preflight();
     verify_aggregate_call_name_preflight();
