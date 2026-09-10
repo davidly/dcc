@@ -94,7 +94,7 @@ jobs:
         run: |
           cmake -S src/dcc -B build/mir-tests -DDCC_BUILD_MIR_TESTS=ON -DCMAKE_BUILD_TYPE=Release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build/mir-tests --target mir-verify-test --config Release --parallel
+          cmake --build build/mir-tests --config Release --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir build/mir-tests -C Release --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
