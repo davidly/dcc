@@ -3169,6 +3169,7 @@ static int mir_match_packed_record_runner(
     int item;
     int first_zero;
     int second_zero;
+    int record_pointer_type;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 319 || mir.next_value != 235 ||
@@ -3240,12 +3241,19 @@ static int mir_match_packed_record_runner(
         plan->guards[0] == plan->guards[1] ||
         plan->guards[0] == plan->records ||
         plan->guards[1] == plan->records ||
+        mir.insns[1].type != mir.insns[10].type ||
+        mir.insns[1].type != mir.insns[39].type ||
+        mir.insns[1].type != mir.insns[96].type ||
+        mir.insns[1].type != mir.insns[105].type ||
+        mir.insns[1].type != mir.insns[135].type ||
+        mir.insns[1].type != mir.insns[309].type ||
         !mir_packed_same_global(96, plan->guards[0]) ||
         !mir_packed_same_global(105, plan->guards[1]) ||
         !mir_packed_same_global(135, plan->records) ||
         !mir_packed_same_global(309, plan->records))
         return mir_machine_reject(
             "packed-record-runner", "arrays");
+    record_pointer_type = mir.insns[39].type;
 
     for (item = 0; item < 4; ++item) {
         int call_index = item == 0 ? 9 : item == 1 ? 18 :
@@ -3259,6 +3267,7 @@ static int mir_match_packed_record_runner(
         struct Sym *function;
 
         if (!mir_packed_direct_function(call_index, &function) ||
+            mir.insns[call_index].src1 >= 0 ||
             !mir_call_is_memset_fastcall(
                 call_index, &destination, &fill, &count) ||
             destination != mir.insns[root_index].dst ||
@@ -3284,6 +3293,18 @@ static int mir_match_packed_record_runner(
             &mir.insns[124], &mir.insns[306]) ||
         mir_machine_same_location(
             &mir.insns[29], &mir.insns[124]) ||
+        mir.insns[29].memory_size != 2 ||
+        mir.insns[29].memory_flags != 0 ||
+        mir.insns[29].bit_width != 0 ||
+        mir.insns[93].memory_size != 2 ||
+        mir.insns[93].memory_flags != 0 ||
+        mir.insns[93].bit_width != 0 ||
+        mir.insns[124].memory_size != 2 ||
+        mir.insns[124].memory_flags != 0 ||
+        mir.insns[124].bit_width != 0 ||
+        mir.insns[306].memory_size != 2 ||
+        mir.insns[306].memory_flags != 0 ||
+        mir.insns[306].bit_width != 0 ||
         mir.insns[29].src1 != mir.insns[first_zero].dst ||
         mir.insns[93].src1 != mir.insns[92].dst ||
         mir.insns[124].src1 != mir.insns[second_zero].dst ||
@@ -3311,6 +3332,7 @@ static int mir_match_packed_record_runner(
         mir.insns[41].src2 != mir.insns[31].dst ||
         mir.insns[41].immediate != plan->record_stride ||
         mir.insns[41].memory_size != plan->record_stride ||
+        mir.insns[41].type != record_pointer_type ||
         mir.insns[42].src1 != mir.insns[41].dst ||
         mir.insns[42].memory_size != 2 ||
         mir.insns[42].memory_flags != 0 ||
@@ -3318,6 +3340,7 @@ static int mir_match_packed_record_runner(
         mir.insns[137].src2 != mir.insns[127].dst ||
         mir.insns[137].immediate != plan->record_stride ||
         mir.insns[137].memory_size != plan->record_stride ||
+        mir.insns[137].type != record_pointer_type ||
         mir.insns[138].src1 != mir.insns[137].dst ||
         mir.insns[138].memory_size != 2 ||
         mir.insns[138].memory_flags != 0)
@@ -3326,11 +3349,17 @@ static int mir_match_packed_record_runner(
     for (item = 0; item < 6; ++item) {
         const struct MirInsn *member =
             &mir.insns[first_member_addresses[item]];
+        const struct MirInsn *base =
+            &mir.insns[first_member_bases[item]];
 
         plan->member_offsets[item] = (int)member->immediate;
-        if (!mir_machine_same_location(
+        if (base->type != record_pointer_type ||
+            base->memory_size != 0 ||
+            base->memory_flags != 0 ||
+            base->bit_width != 0 ||
+            !mir_machine_same_location(
                 &mir.insns[42],
-                &mir.insns[first_member_bases[item]]) ||
+                base) ||
             !mir_packed_member(
                 first_member_addresses[item],
                 first_member_bases[item],
@@ -3370,10 +3399,16 @@ static int mir_match_packed_record_runner(
 
     for (item = 0; item < 12; ++item) {
         int member = second_members[item];
+        const struct MirInsn *base =
+            &mir.insns[second_member_bases[item]];
 
-        if (!mir_machine_same_location(
+        if (base->type != record_pointer_type ||
+            base->memory_size != 0 ||
+            base->memory_flags != 0 ||
+            base->bit_width != 0 ||
+            !mir_machine_same_location(
                 &mir.insns[138],
-                &mir.insns[second_member_bases[item]]) ||
+                base) ||
             !mir_packed_member(
                 second_member_addresses[item],
                 second_member_bases[item],
@@ -3414,6 +3449,26 @@ static int mir_match_packed_record_runner(
         !mir_packed_branch(281, 280, 300))
         return mir_machine_reject(
             "packed-record-runner", "checks");
+
+    if (!mir_packed_unary(154, 153, 0, TYPE_LONG, 1) ||
+        !mir_packed_unary(157, 127, 0, TYPE_LONG, 1) ||
+        !mir_packed_unary(179, 178, 0, TYPE_LONG, 1) ||
+        !mir_packed_unary(182, 127, 0, TYPE_LONG, 1) ||
+        !mir_packed_binary(185, 182, 184, '*', TYPE_LONG, 1) ||
+        !mir_packed_unary(210, 127, 0, TYPE_LONG, 1) ||
+        !mir_packed_binary(213, 210, 212, '*', TYPE_LONG, 1) ||
+        !mir_packed_unary(234, 233, 0, TYPE_LONG, 0) ||
+        !mir_packed_unary(237, 127, 0, TYPE_LONG, 0) ||
+        !mir_packed_unary(238, 237, '-', TYPE_LONG, 0) ||
+        !mir_packed_unary(260, 259, 0, TYPE_LONG, 0) ||
+        !mir_packed_unary(263, 127, 0, TYPE_LONG, 0) ||
+        !mir_packed_unary(264, 263, '-', TYPE_LONG, 0) ||
+        !mir_packed_binary(267, 264, 266, '*', TYPE_LONG, 0) ||
+        !mir_packed_unary(293, 127, 0, TYPE_LONG, 0) ||
+        !mir_packed_unary(294, 293, '-', TYPE_LONG, 0) ||
+        !mir_packed_binary(297, 294, 296, '*', TYPE_LONG, 0))
+        return mir_machine_reject(
+            "packed-record-runner", "print-dataflow");
 
     for (item = 0; item < 6; ++item) {
         const struct MirInsn *call = &mir.insns[print_calls[item]];
@@ -3472,6 +3527,7 @@ static int mir_match_packed_record_runner(
     if (!mir_packed_direct_function(318, &dump_function) ||
         dump_function == memset_function ||
         dump_function == print_function ||
+        mir.insns[318].src1 >= 0 ||
         mir.insns[318].memory_flags != 0 ||
         !mir_packed_call_arguments(
             &mir.insns[318], 3, arguments) ||
@@ -14053,6 +14109,7 @@ int mir_try_emit_aggregate_checks(MirStream *out)
         return 1;
     }
     if (mir_match_packed_record_runner(&packed_record)) {
+        mir_machine_accept("packed-record-runner");
         mir_emit_packed_record_runner(out, &packed_record);
         return 1;
     }
