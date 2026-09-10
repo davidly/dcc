@@ -9104,10 +9104,27 @@ static int mir_minimax_unsigned_long_type(int type)
         (type & TYPE_UNSIGNED) != 0;
 }
 
+static int mir_minimax_unsigned_byte_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+        !type_is_float(type) &&
+        (type & 15) == TYPE_CHAR &&
+        type_size(type) == 2 &&
+        (type & TYPE_UNSIGNED) != 0;
+}
+
 static int mir_minimax_value_defined_by(int value, int instruction)
 {
     return value >= 0 &&
         mir_definition(value) == &mir.insns[instruction];
+}
+
+static int mir_minimax_branch_condition(int branch, int condition)
+{
+    const struct MirInsn *insn = &mir.insns[branch];
+
+    return insn->opcode == MIR_BRANCH_FALSE &&
+        mir_minimax_value_defined_by(insn->src1, condition);
 }
 
 static int mir_minimax_byte_location(
@@ -9518,6 +9535,14 @@ static int mir_match_recursive_byte_minimax_schedule(
         {210, 238}, {215, 236}, {221, 224}, {230, 234},
         {249, 77}
     };
+    static const int branch_conditions[][2] = {
+        {13, 12}, {25, 24}, {30, 29}, {44, 43}, {55, 54},
+        {89, 88}, {97, 96}, {128, 127}, {131, 130},
+        {136, 135}, {144, 143}, {154, 153}, {159, 158},
+        {165, 164}, {174, 173}, {187, 186}, {192, 191},
+        {200, 199}, {210, 209}, {215, 214}, {221, 220},
+        {230, 229}
+    };
     static const int recursive_arguments[4] = {104, 106, 112, 114};
     static const int no_arguments[1] = {-1};
     struct Sym *moves;
@@ -9564,6 +9589,16 @@ static int mir_match_recursive_byte_minimax_schedule(
             mir.insns[control_edges[edge][1]].label)
             return mir_machine_reject(
                 "recursive-byte-minimax-schedule", "control-flow");
+    for (edge = 0;
+         edge < (int)(sizeof(branch_conditions) /
+                      sizeof(branch_conditions[0]));
+         ++edge)
+        if (!mir_minimax_branch_condition(
+                branch_conditions[edge][0],
+                branch_conditions[edge][1]))
+            return mir_machine_reject(
+                "recursive-byte-minimax-schedule",
+                "branch-dataflow");
 
     if (!mir_minimax_byte_location(
             alpha, MIR_PARAM, SC_PARAM,
@@ -9600,7 +9635,9 @@ static int mir_match_recursive_byte_minimax_schedule(
     }
 
     self = find_global(mir.name);
-    if (self == NULL || !self->is_defined ||
+    if (self == NULL || self->storage != SC_FUNC ||
+        !self->is_defined || self->is_funcptr ||
+        self->is_noreturn || self->is_fastcall ||
         !self->has_proto || self->proto_nargs != 4 ||
         self->proto_variadic ||
         !mir_minimax_unsigned_byte_type(self->type))
@@ -9608,7 +9645,9 @@ static int mir_match_recursive_byte_minimax_schedule(
             "recursive-byte-minimax-schedule", "signature");
     for (argument = 0; argument < 4; ++argument)
         if (!mir_minimax_unsigned_byte_type(
-                self->proto_types[argument]))
+                self->proto_types[argument]) ||
+            self->proto_types[argument] !=
+                mir.insns[argument + 1].type)
             return mir_machine_reject(
                 "recursive-byte-minimax-schedule",
                 "argument-types");
@@ -9748,6 +9787,12 @@ static int mir_match_recursive_byte_minimax_schedule(
         !winner_table->is_array || winner_table->is_vla ||
         winner_table->is_volatile ||
         winner_table->pointee_is_volatile ||
+        !winner_table->is_funcptr ||
+        !winner_table->has_proto ||
+        winner_table->proto_nargs != 0 ||
+        winner_table->proto_variadic ||
+        !mir_minimax_unsigned_byte_type(
+            winner_table->funcptr_return_type) ||
         winner_table->elem_size != 2 ||
         winner_table->array_len != plan->loop_bound)
         return mir_machine_reject(
@@ -9755,6 +9800,7 @@ static int mir_match_recursive_byte_minimax_schedule(
             "winner-table");
     if (mir.insns[16].src1 != mir.insns[14].dst ||
         mir.insns[16].src2 != move->dst ||
+        mir.insns[16].type != mir.insns[14].type ||
         mir.insns[16].immediate != 2 ||
         mir.insns[16].memory_size != 2 ||
         (mir.insns[16].memory_flags & (1 | 8)) != 0)
@@ -9762,6 +9808,9 @@ static int mir_match_recursive_byte_minimax_schedule(
             "recursive-byte-minimax-schedule",
             "winner-index");
     if (mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].type != winner_table->type ||
+        !mir_minimax_unsigned_byte_pointer_type(
+            mir.insns[17].type) ||
         mir.insns[17].memory_size != 2 ||
         (mir.insns[17].memory_flags & (1 | 8)) != 0)
         return mir_machine_reject(
@@ -9863,7 +9912,10 @@ static int mir_match_recursive_byte_minimax_schedule(
         board->is_volatile || board->pointee_is_volatile ||
         board->elem_size != 1 ||
         board->array_len != plan->loop_bound ||
-        !mir_minimax_unsigned_byte_type(board->type))
+        !mir_minimax_unsigned_byte_type(board->type) ||
+        !mir_minimax_unsigned_byte_pointer_type(
+            mir.insns[91].type) ||
+        board == winner_table || board == moves)
         return mir_machine_reject(
             "recursive-byte-minimax-schedule", "board");
     {
@@ -9872,13 +9924,16 @@ static int mir_match_recursive_byte_minimax_schedule(
 
         if (!mir_minimax_global_address(98, &second_board) ||
             !mir_minimax_global_address(118, &third_board) ||
-            second_board != board || third_board != board)
+            second_board != board || third_board != board ||
+            mir.insns[98].type != mir.insns[91].type ||
+            mir.insns[118].type != mir.insns[91].type)
             return mir_machine_reject(
                 "recursive-byte-minimax-schedule",
                 "board-roots");
     }
     if (mir.insns[93].src1 != mir.insns[91].dst ||
         mir.insns[93].src2 != mir.insns[82].dst ||
+        mir.insns[93].type != mir.insns[91].type ||
         mir.insns[93].immediate != 1 ||
         mir.insns[93].memory_size != 1 ||
         (mir.insns[93].memory_flags & (1 | 8)) != 0 ||
@@ -9890,6 +9945,7 @@ static int mir_match_recursive_byte_minimax_schedule(
         !mir_minimax_word_binary(96, 90, 95, TOK_EQ) ||
         mir.insns[100].src1 != mir.insns[98].dst ||
         mir.insns[100].src2 != mir.insns[82].dst ||
+        mir.insns[100].type != mir.insns[98].type ||
         mir.insns[100].immediate != 1 ||
         mir.insns[100].memory_size != 1 ||
         !mir_minimax_same_byte_location(
@@ -9901,6 +9957,7 @@ static int mir_match_recursive_byte_minimax_schedule(
         (mir.insns[102].memory_flags & (1 | 8)) != 0 ||
         mir.insns[120].src1 != mir.insns[118].dst ||
         mir.insns[120].src2 != mir.insns[82].dst ||
+        mir.insns[120].type != mir.insns[118].type ||
         mir.insns[120].immediate != 1 ||
         mir.insns[120].memory_size != 1 ||
         mir.insns[123].src1 != mir.insns[120].dst ||
@@ -9929,7 +9986,7 @@ static int mir_match_recursive_byte_minimax_schedule(
         mir.insns[114].src1 != mir.insns[82].dst ||
         strcmp(mir.insns[115].name, mir.name) != 0 ||
         find_global(mir.insns[115].name) != self ||
-        !mir_minimax_unsigned_byte_type(mir.insns[115].type) ||
+        mir.insns[115].type != self->type ||
         !mir_minimax_call_arguments(
             &mir.insns[115], 4, recursive_arguments) ||
         mir.insns[117].src1 != mir.insns[115].dst ||
