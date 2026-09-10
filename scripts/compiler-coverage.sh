@@ -83,7 +83,9 @@ cmake -S "$repo_root/src/dcc" -B "$build_dir/cmake" \
     -DDCC_RUNTIME_OUTPUT_DIRECTORY="$binary_dir"
 cmake --build "$build_dir/cmake" --parallel "$jobs"
 python3 "$checkpoint" built --build-dir "$build_dir" \
-    --tool "dcc=$binary_dir/dcc" --tool "host=$build_dir/cmake/mir-verify-test"
+    --tool "dcc=$binary_dir/dcc" \
+    --tool "host=$build_dir/cmake/mir-verify-test" \
+    --tool "host-scalar-dag=$build_dir/cmake/mir-scalar-dag-test"
 fi
 if [ "$stage" = build ]; then
     echo "Coverage build checkpoint: $build_dir/build.json"
