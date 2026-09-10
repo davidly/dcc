@@ -122,6 +122,10 @@ cd "$repo_root"
 python3 scripts/endgame-scope-wave18-campaign.py --jobs "$jobs"
 python3 scripts/directory-wave19-campaign.py --jobs "$jobs" --skip-runtime
 python3 scripts/softmax-wave19-campaign.py --jobs "$jobs"
+# Compile-only mutation audit; byte-math runtime controls already ran through
+# run-mir-clobber-tests.ps1 above.
+python3 scripts/byte-math-wave19-audit.py --jobs 2 \
+    --output-dir "$build_dir/byte-math-wave19-audit"
 env -u DCC_MIR_MACHINE_MUTATE DCC_MIR_MACHINE_MUTATE_FUNCTION=main \
     "$DCC" -c "$repo_root/tests/mir-clobber/logserie.c" \
     -o "$build_dir/no-machine-mutation.MAC"
