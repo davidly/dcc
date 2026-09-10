@@ -8814,6 +8814,25 @@ static int mir_match_fixed_array_reduction(
            (int)(return_insn - mir.insns);
 }
 
+static int mir_fixed_array_affine_fill_integer_type(
+    int type, int minimum_width, int maximum_width)
+{
+    int width = type_size(type);
+    int base = type & 15;
+
+    return type_ptr_depth(type) == 0 &&
+        !type_is_float(type) &&
+        (type & TYPE_STRUCT) == 0 &&
+        (base == TYPE_CHAR || base == TYPE_INT ||
+         base == TYPE_LONG) &&
+        width >= minimum_width && width <= maximum_width;
+}
+
+static int mir_fixed_array_affine_fill_reject(const char *reason)
+{
+    return mir_machine_reject("fixed-array-affine-fill", reason);
+}
+
 static int mir_match_fixed_array_affine_fill(
     struct MirFixedArrayAffineFill *plan)
 {
@@ -8833,6 +8852,7 @@ static int mir_match_fixed_array_affine_fill(
     int init_values[6];
     int increment_values[6];
     int arguments[6];
+    const struct MirInsn *argument_insns[6];
     int parameter_count = 0;
     int label_count = 0;
     int phi_count = 0;
@@ -8858,6 +8878,7 @@ static int mir_match_fixed_array_affine_fill(
         header_labels[loop] = -1;
         init_values[loop] = -1;
         increment_values[loop] = -1;
+        argument_insns[loop] = NULL;
     }
     if (mir.has_vla || mir_cfg_block_count() != 19 ||
         (mir.return_type & 15) != TYPE_VOID ||
@@ -8865,7 +8886,7 @@ static int mir_match_fixed_array_affine_fill(
         mir.insns[0].opcode != MIR_LABEL ||
         mir.insns[1].opcode != MIR_PARAM ||
         mir.insns[2].opcode != MIR_PARAM)
-        return 0;
+        return mir_fixed_array_affine_fill_reject("shape");
     pointer = &mir.insns[1];
     base = &mir.insns[2];
     for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -8881,27 +8902,44 @@ static int mir_match_fixed_array_affine_fill(
             ++parameter_count;
             break;
         case MIR_CONST:
-            if (insn->immediate < 0 || insn->immediate > 2)
-                return 0;
+            if (insn->immediate < 0 || insn->immediate > 2 ||
+                !mir_fixed_array_affine_fill_integer_type(
+                    insn->type, 1, 2))
+                return mir_fixed_array_affine_fill_reject(
+                    "constant");
             break;
         case MIR_LOAD:
-            if (!mir_machine_named_nonvolatile(insn))
-                return 0;
+            if (!mir_machine_named_nonvolatile(insn) ||
+                !mir_fixed_array_affine_fill_integer_type(
+                    insn->type, 1, 2))
+                return mir_fixed_array_affine_fill_reject(
+                    "load");
             break;
         case MIR_STORE:
             if (!mir_machine_unobservable_local_store(insn))
-                return 0;
+                return mir_fixed_array_affine_fill_reject(
+                    "local-store");
             ++store_count;
             break;
         case MIR_PHI:
+            if (!mir_fixed_array_affine_fill_integer_type(
+                    insn->type, 1, 2))
+                return mir_fixed_array_affine_fill_reject("phi-type");
             outer_phi = insn;
             ++phi_count;
             break;
         case MIR_UNARY:
-            if (insn->immediate != 0)
-                return 0;
+            if (insn->immediate != 0 ||
+                !mir_fixed_array_affine_fill_integer_type(
+                    insn->type, 1, 4))
+                return mir_fixed_array_affine_fill_reject(
+                    "conversion");
             break;
         case MIR_BINARY:
+            if (!mir_fixed_array_affine_fill_integer_type(
+                    insn->type, 1, 4))
+                return mir_fixed_array_affine_fill_reject(
+                    "binary-type");
             ++binary_count;
             break;
         case MIR_BRANCH_FALSE:
@@ -8912,19 +8950,27 @@ static int mir_match_fixed_array_affine_fill(
             break;
         case MIR_INDEX_ADDRESS:
             if (index_count >= 6 ||
+                insn->memory_flags != 0 ||
+                insn->bit_width != 0 ||
                 (index_count == 0
                      ? insn->src1 != pointer->dst
                      : previous_index == NULL ||
                        insn->src1 != previous_index->dst))
-                return 0;
+                return mir_fixed_array_affine_fill_reject(
+                    "index-dataflow");
             index_objects[index_count] =
                 mir_machine_value_object(insn->src2);
             if (index_objects[index_count] < 0)
-                return 0;
+                return mir_fixed_array_affine_fill_reject(
+                    "index-value");
             previous_index = insn;
             ++index_count;
             break;
         case MIR_ARG:
+            if (!mir_fixed_array_affine_fill_integer_type(
+                    insn->type, 1, 2))
+                return mir_fixed_array_affine_fill_reject(
+                    "argument-type");
             ++argument_count;
             break;
         case MIR_CALL:
@@ -8933,13 +8979,14 @@ static int mir_match_fixed_array_affine_fill(
             break;
         case MIR_STORE_INDIRECT:
             if (insn->bit_width != 0 ||
-                (insn->memory_flags & (1 | 8)) != 0)
-                return 0;
+                insn->memory_flags != 0)
+                return mir_fixed_array_affine_fill_reject(
+                    "destination-store");
             store_indirect = insn;
             ++store_indirect_count;
             break;
         default:
-            return 0;
+            return mir_fixed_array_affine_fill_reject("opcode");
         }
     }
     if (parameter_count != 2 || label_count != 19 ||
@@ -8951,31 +8998,35 @@ static int mir_match_fixed_array_affine_fill(
         call == NULL || store_indirect == NULL ||
         outer_phi == NULL || previous_index == NULL ||
         type_ptr_depth(pointer->type) != 1 ||
+        (pointer->type & TYPE_STRUCT) != 0 ||
         mir_machine_pointee_is_volatile(pointer) ||
         type_ptr_depth(base->type) != 0 ||
-        type_is_float(base->type) ||
-        type_ptr_depth(call->type) != 0 ||
-        type_size(call->type) != 2 ||
-        type_is_float(call->type) ||
+        !mir_fixed_array_affine_fill_integer_type(
+            call->type, 2, 2) ||
         (call->type & TYPE_UNSIGNED) != 0 ||
-        (call->memory_flags &
-         (MIR_CALL_FLAG_VARIADIC |
-          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        call->memory_flags != 0 ||
         store_indirect->src1 != previous_index->dst ||
         (store_indirect->memory_size != 1 &&
          store_indirect->memory_size != 2 &&
          store_indirect->memory_size != 4))
-        return 0;
+        return mir_fixed_array_affine_fill_reject("counts-and-types");
     plan->element_width = store_indirect->memory_size;
     if ((pointer->type & 15) !=
             (plan->element_width == 1
                  ? TYPE_CHAR
                  : plan->element_width == 2
                        ? TYPE_INT : TYPE_LONG) ||
-        type_size(base->type) !=
-            (plan->element_width == 4 ? 4 : 2) ||
+        !mir_fixed_array_affine_fill_integer_type(
+            base->type, plan->element_width == 4 ? 4 : 2,
+            plan->element_width == 4 ? 4 : 2) ||
         (base->type & TYPE_UNSIGNED) != 0)
-        return 0;
+        return mir_fixed_array_affine_fill_reject("parameters");
+    if (!mir_fixed_array_affine_fill_integer_type(
+            store_indirect->type, plan->element_width,
+            plan->element_width) ||
+        (store_indirect->type & 15) != (pointer->type & 15))
+        return mir_fixed_array_affine_fill_reject(
+            "destination-type");
     previous_index = NULL;
     index_count = 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -8986,19 +9037,63 @@ static int mir_match_fixed_array_affine_fill(
         if (insn->src1 !=
                 (previous_index == NULL
                      ? pointer->dst : previous_index->dst) ||
+            insn->type != pointer->type ||
             insn->immediate !=
                 plan->element_width * (1 << (5 - index_count)) ||
             insn->memory_size != plan->element_width)
-            return 0;
+            return mir_fixed_array_affine_fill_reject(
+                "index-layout");
         previous_index = insn;
         ++index_count;
     }
+    plan->function = find_global(call->name);
+    if (plan->function == NULL ||
+        !plan->function->is_defined ||
+        plan->function->storage != SC_FUNC ||
+        plan->function->is_funcptr ||
+        plan->function->is_fastcall ||
+        plan->function->is_noreturn ||
+        !mir_fixed_array_affine_fill_integer_type(
+            plan->function->type, 2, 2) ||
+        (plan->function->type & TYPE_UNSIGNED) != 0 ||
+        (plan->function->has_proto &&
+         (plan->function->proto_nargs != 6 ||
+          plan->function->proto_variadic)) ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(
+                    sym_asm_name(plan->function)))))
+        return mir_fixed_array_affine_fill_reject("call-abi");
+    if (plan->function->has_proto)
+        for (loop = 0; loop < 6; ++loop)
+            if (!mir_fixed_array_affine_fill_integer_type(
+                    plan->function->proto_types[loop], 1, 2))
+                return mir_fixed_array_affine_fill_reject(
+                    "call-prototype");
     if (!mir_machine_six_call_arguments(call, arguments))
-        return 0;
+        return mir_fixed_array_affine_fill_reject(
+            "call-arguments");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int argument;
+
+        if (insn->opcode != MIR_ARG ||
+            insn->secondary_offset != call->secondary_offset)
+            continue;
+        argument = (int)insn->immediate;
+        if (argument < 0 || argument >= 6 ||
+            argument_insns[argument] != NULL ||
+            instruction >= (int)(call - mir.insns))
+            return mir_fixed_array_affine_fill_reject(
+                "call-order");
+        argument_insns[argument] = insn;
+    }
     for (loop = 0; loop < 6; ++loop)
-        if (mir_machine_value_object(arguments[loop]) !=
-            index_objects[loop])
-            return 0;
+        if (argument_insns[loop] == NULL ||
+            mir_machine_value_object(arguments[loop]) !=
+                index_objects[loop])
+            return mir_fixed_array_affine_fill_reject(
+                "argument-dataflow");
     {
         const struct MirInsn *stored =
             mir_definition(store_indirect->src2);
@@ -9008,17 +9103,22 @@ static int mir_match_fixed_array_affine_fill(
         if (plan->element_width == 1) {
             if (stored == NULL || stored->opcode != MIR_UNARY ||
                 stored->immediate != 0 ||
-                type_size(stored->type) != 1)
-                return 0;
+                !mir_fixed_array_affine_fill_integer_type(
+                    stored->type, 1, 1))
+                return mir_fixed_array_affine_fill_reject(
+                    "stored-conversion");
             addition = mir_definition(stored->src1);
         } else {
             addition = stored;
         }
         if (addition == NULL || addition->opcode != MIR_BINARY ||
             addition->immediate != '+' ||
-            type_size(addition->type) !=
-                (plan->element_width == 4 ? 4 : 2))
-            return 0;
+            !mir_fixed_array_affine_fill_integer_type(
+                addition->type,
+                plan->element_width == 4 ? 4 : 2,
+                plan->element_width == 4 ? 4 : 2))
+            return mir_fixed_array_affine_fill_reject(
+                "stored-addition");
         if (plan->element_width == 4) {
             int call_value;
 
@@ -9027,7 +9127,8 @@ static int mir_match_fixed_array_affine_fill(
             else if (addition->src2 == base->dst)
                 call_value = addition->src1;
             else
-                return 0;
+                return mir_fixed_array_affine_fill_reject(
+                    "long-addition-dataflow");
             converted_call = mir_definition(call_value);
             if (converted_call == NULL ||
                 converted_call->opcode != MIR_UNARY ||
@@ -9036,31 +9137,29 @@ static int mir_match_fixed_array_affine_fill(
                 type_size(converted_call->type) != 4 ||
                 type_is_float(converted_call->type) ||
                 (converted_call->type & TYPE_UNSIGNED) != 0)
-                return 0;
+                return mir_fixed_array_affine_fill_reject(
+                    "long-call-conversion");
         } else if (!((addition->src1 == base->dst &&
                       addition->src2 == call->dst) ||
                      (addition->src2 == base->dst &&
                       addition->src1 == call->dst))) {
-            return 0;
+            return mir_fixed_array_affine_fill_reject(
+                "addition-dataflow");
         }
     }
-    plan->function = find_global(call->name);
-    if (plan->function == NULL ||
-        !plan->function->is_defined ||
-        (call->base_name[0] != 0 &&
-         strcmp(call->base_name,
-                asm_name_for(
-                    sym_asm_name(plan->function)))) ||
-        !mir_machine_parameter_value_offset(
+    if (!mir_machine_parameter_value_offset(
             pointer->dst, &plan->pointer_stack_offset))
-        return 0;
+        return mir_fixed_array_affine_fill_reject(
+            "pointer-location");
     if (plan->element_width == 4) {
         if (!mir_machine_wide_parameter_offset(
                 base->dst, &plan->base_stack_offset))
-            return 0;
+            return mir_fixed_array_affine_fill_reject(
+                "base-location");
     } else if (!mir_machine_parameter_value_offset(
                    base->dst, &plan->base_stack_offset)) {
-        return 0;
+        return mir_fixed_array_affine_fill_reject(
+            "base-location");
     }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -9068,50 +9167,83 @@ static int mir_match_fixed_array_affine_fill(
         if (insn->opcode == MIR_STORE) {
             const struct MirInsn *value = mir_definition(insn->src1);
             int object_loop = -1;
+            int memory_type;
+            int memory_storage;
+            int memory_offset;
+
+            if (!mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                memory_storage != SC_LOCAL ||
+                !mir_fixed_array_affine_fill_integer_type(
+                    memory_type, 1, 2) ||
+                insn->memory_size != type_size(memory_type) ||
+                value == NULL || value->type != memory_type)
+                return mir_fixed_array_affine_fill_reject(
+                    "loop-store-type");
 
             for (loop = 0; loop < 6; ++loop)
                 if (index_objects[loop] == insn->object)
                     object_loop = loop;
             if (object_loop < 0)
-                return 0;
+                return mir_fixed_array_affine_fill_reject(
+                    "loop-store-object");
             if (mir_machine_constant_equals(insn->src1, 0)) {
                 if (init_positions[object_loop] >= 0)
-                    return 0;
+                    return mir_fixed_array_affine_fill_reject(
+                        "duplicate-loop-init");
                 init_positions[object_loop] = instruction;
                 init_values[object_loop] = insn->src1;
             } else {
                 if (increment_positions[object_loop] >= 0 ||
                     value == NULL || value->opcode != MIR_BINARY ||
                     value->immediate != '+' ||
+                    !mir_fixed_array_affine_fill_integer_type(
+                        value->type, 1, 2) ||
                     mir_machine_value_object(value->src1) !=
                         insn->object ||
-                    !mir_machine_constant_equals(value->src2, 1))
-                    return 0;
+                    !mir_machine_constant_equals(value->src2, 1) ||
+                    mir_definition(value->src2) == NULL ||
+                    mir_definition(value->src2)->type != value->type)
+                    return mir_fixed_array_affine_fill_reject(
+                        "loop-increment");
                 increment_positions[object_loop] = instruction;
                 increment_values[object_loop] = value->dst;
             }
         } else if (insn->opcode == MIR_BINARY &&
                    insn->immediate == '<') {
             int object = mir_machine_value_object(insn->src1);
+            const struct MirInsn *left =
+                mir_definition(insn->src1);
+            const struct MirInsn *right =
+                mir_definition(insn->src2);
 
             for (loop = 0; loop < 6; ++loop)
                 if (index_objects[loop] == object)
                     break;
-            if (loop == 6 || compare_positions[loop] >= 0 ||
+            if (insn->type != TYPE_INT ||
+                left == NULL || left->type != TYPE_INT ||
+                right == NULL || right->type != TYPE_INT ||
+                loop == 6 || compare_positions[loop] >= 0 ||
                 !mir_machine_constant_equals(insn->src2, 2) ||
                 !mir_machine_find_branch_for_value(
                     insn->dst, &branch_positions[loop]) ||
                 !mir_machine_find_header_before(
                     instruction, &header_labels[loop]))
-                return 0;
+                return mir_fixed_array_affine_fill_reject(
+                    "loop-compare");
             compare_positions[loop] = instruction;
         }
     }
     if (outer_phi->object != index_objects[0] ||
         outer_phi->src1 != init_values[0] ||
         outer_phi->src2 != increment_values[0] ||
-        outer_phi->phi_pred1 != mir.insns[0].label)
-        return 0;
+        outer_phi->phi_pred1 != mir.insns[0].label ||
+        mir_definition(outer_phi->src1) == NULL ||
+        mir_definition(outer_phi->src2) == NULL ||
+        outer_phi->type != mir_definition(outer_phi->src1)->type ||
+        outer_phi->type != mir_definition(outer_phi->src2)->type)
+        return mir_fixed_array_affine_fill_reject("outer-phi");
     for (loop = 0; loop < 6; ++loop) {
         int jump;
 
@@ -9119,25 +9251,48 @@ static int mir_match_fixed_array_affine_fill(
             compare_positions[loop] < 0 ||
             branch_positions[loop] != compare_positions[loop] + 1 ||
             increment_positions[loop] < 0)
-            return 0;
+            return mir_fixed_array_affine_fill_reject(
+                "loop-positions");
         jump = increment_positions[loop] + 1;
         if (jump >= mir.count ||
             mir.insns[jump].opcode != MIR_JUMP ||
             mir.insns[jump].label != header_labels[loop])
-            return 0;
+            return mir_fixed_array_affine_fill_reject(
+                "loop-backedge");
         exit_positions[loop] =
             mir_find_label(mir.insns[branch_positions[loop]].label);
         if (exit_positions[loop] <= jump)
-            return 0;
+            return mir_fixed_array_affine_fill_reject(
+                "loop-exit");
         if (loop == 0) {
             if (init_positions[loop] >= compare_positions[loop])
-                return 0;
+                return mir_fixed_array_affine_fill_reject(
+                    "outer-loop-order");
         } else if (branch_positions[loop - 1] >=
                        init_positions[loop] ||
                    init_positions[loop] >=
                        compare_positions[loop]) {
-            return 0;
+            return mir_fixed_array_affine_fill_reject(
+                "nested-loop-order");
         }
+    }
+    {
+        int outer_backedge_label;
+
+        if (!mir_machine_find_header_before(
+                increment_positions[0], &outer_backedge_label) ||
+            outer_phi->phi_pred2 != outer_backedge_label)
+            return mir_fixed_array_affine_fill_reject(
+                "outer-phi-predecessor");
+    }
+    for (loop = 0; loop < 6; ++loop) {
+        int other;
+
+        for (other = loop + 1; other < 6; ++other)
+            if (header_labels[loop] == header_labels[other] ||
+                exit_positions[loop] == exit_positions[other])
+                return mir_fixed_array_affine_fill_reject(
+                    "loop-labels");
     }
     if (branch_positions[5] >=
             (int)(call - mir.insns) ||
@@ -9145,11 +9300,15 @@ static int mir_match_fixed_array_affine_fill(
             (int)(store_indirect - mir.insns) ||
         (int)(store_indirect - mir.insns) >=
             increment_positions[5])
-        return 0;
+        return mir_fixed_array_affine_fill_reject(
+            "body-order");
     for (loop = 5; loop > 0; --loop)
         if (exit_positions[loop] >=
             increment_positions[loop - 1])
-            return 0;
+            return mir_fixed_array_affine_fill_reject(
+                "exit-order");
+    if (exit_positions[0] != mir.count - 1)
+        return mir_fixed_array_affine_fill_reject("return-flow");
     return 1;
 }
 
@@ -10976,6 +11135,7 @@ int mir_try_emit_container_kernels(MirStream *out)
     }
     if (mir_match_fixed_array_affine_fill(
             &fixed_array_affine_fill)) {
+        mir_machine_accept("fixed-array-affine-fill");
         mir_emit_fixed_array_affine_fill(
             out, &fixed_array_affine_fill);
         return 1;
