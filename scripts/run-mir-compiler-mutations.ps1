@@ -1,92 +1,119 @@
 #Requires -Version 7
-param([string]$OutputDirectory = "build/mir-compiler-mutations")
+param(
+    [string]$OutputDirectory = "build/mir-compiler-mutations",
+    [ValidateRange(1, 1024)][int]$Jobs = 1,
+    [ValidateRange(1, 1024)][int]$BuildJobs = 2
+)
 
 $ErrorActionPreference = "Stop"
+Import-Module (Join-Path $PSScriptRoot "mir-compiler-mutations.psm1") -Force
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
-$workspace = Join-Path ([System.IO.Path]::GetTempPath()) ("dcc-mutants-" + [guid]::NewGuid())
-$output = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDirectory))
-$results = [System.Collections.Generic.List[object]]::new()
-$savedCacheVerify = [Environment]::GetEnvironmentVariable("DCC_MIR_CACHE_VERIFY", "Process")
-$mutants = @(
-    @{ Name = "dominance"; Before = 'errors != 0 || !mir_verify_dominance()'; After = 'errors != 0 || 0'; ExpectedFailure = 'FAIL branch value cannot escape join' },
-    @{ Name = "argument-abi"; Before = 'target_type != 0 && insn->type != target_type'; After = '0 && target_type != 0 && insn->type != target_type'; ExpectedFailure = 'FAIL incorrect prototype argument type' },
-    @{ Name = "call-arity"; Before = '(!prototype.variadic &&'; After = '(0 && !prototype.variadic &&'; ExpectedFailure = 'FAIL nonvariadic call rejects extra argument' },
-    @{ Name = "indirect-callee"; Before = '!strcmp(insn->name, "<indirect>") && insn->src1 < 0'; After = '0 && !strcmp(insn->name, "<indirect>") && insn->src1 < 0'; ExpectedFailure = 'FAIL indirect call requires a callee value' },
-    @{ Name = "callback-identity"; Before = 'if (declared >= 0) {'; After = 'if (0 && declared >= 0) {'; ExpectedFailure = 'FAIL unprototyped local callback ignores same-named global prototype' },
-    @{ Name = "phi-edge-liveness"; Before = 'value == phi->src1'; After = 'value == phi->src2'; ExpectedFailure = 'FAIL PHI values must be live only on their own edges' },
-    @{ Name = "call-argument-liveness"; Before = 'insn_is_call && mir_call_uses_value(insn, value)'; After = '0 && insn_is_call && mir_call_uses_value(insn, value)'; ExpectedFailure = 'FAIL argument must remain live through its matching call' },
-    @{ Name = "phi-consumer-value"; Before = 'phi_value = phi->dst;'; After = 'phi_value = -1;'; ExpectedFailure = 'FAIL immediate PHI consumer forwarding' },
-    @{ Name = "promotion-cache"; CompileProbe = $true }
-)
+$output = [System.IO.Path]::GetFullPath($OutputDirectory, $repoRoot)
+New-Item -ItemType Directory -Path $output -Force | Out-Null
+# Do not let two invocations overwrite each other's evidence.
+$lock = [System.IO.File]::Open(
+    (Join-Path $output ".lock"), [System.IO.FileMode]::OpenOrCreate,
+    [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+$workspace = Join-Path $output ("work-" + [guid]::NewGuid())
+$cases = @(Get-MirCompilerMutations)
+$results = @($cases | ForEach-Object {
+    [pscustomobject][ordered]@{
+        mutation = $_.Name; outcome = "invalid"; phase = "not-run"
+        exitCode = $null; detail = "Baseline must pass before mutants run"
+    }
+})
+$active = [System.Collections.Generic.List[object]]::new()
+$next = 0
+$baselinePassed = $false
+$pwsh = (Get-Process -Id $PID).Path
+$worker = Join-Path $PSScriptRoot "run-mir-compiler-mutation-worker.ps1"
 try {
-    New-Item -ItemType Directory -Path "$workspace/src", "$workspace/tests/host", $output -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repoRoot "src/dcc") -Destination "$workspace/src/dcc" -Recurse
-    Copy-Item -LiteralPath (Join-Path $repoRoot "tests/host/mir_verify.c") -Destination "$workspace/tests/host/mir_verify.c"
-    $sourcePath = "$workspace/src/dcc/dcc_mir.c"
-    $original = [System.IO.File]::ReadAllText($sourcePath)
-    & (Join-Path $PSScriptRoot "new-mir-fuzz-source.ps1") -OutputPath "$workspace/probe.c" -Seed 23117 -Programs 1
-    & cmake -S "$workspace/src/dcc" -B "$workspace/cmake" -DDCC_BUILD_MIR_TESTS=ON -DCMAKE_BUILD_TYPE=Debug "-DDCC_RUNTIME_OUTPUT_DIRECTORY=$workspace/bin" *> "$output/configure.log"
-    if ($LASTEXITCODE -ne 0) { throw "Mutation configure failed: $output/configure.log" }
-    foreach ($mutant in @(@{ Name = "baseline" }) + $mutants) {
-        $text = $original
-        if ($mutant.Before) {
-            if ([regex]::Matches($text, [regex]::Escape($mutant.Before)).Count -ne 1) {
-                throw "Mutation anchor changed: $($mutant.Name)"
-            }
-            $text = $text.Replace($mutant.Before, $mutant.After)
+    New-Item -ItemType Directory -Path $workspace | Out-Null
+    foreach ($case in $cases) {
+        $caseOutput = Join-Path $output $case.Name
+        if (Test-Path -LiteralPath $caseOutput) {
+            Remove-Item -LiteralPath $caseOutput -Recurse -Force
         }
-        if ($mutant.CompileProbe) {
-            $start = $text.IndexOf('static int mir_promote_objects(void)')
-            $end = $text.IndexOf('struct MirAllocationSummary', $start)
-            if ($start -lt 0 -or $end -le $start) { throw "Promotion mutation boundaries changed" }
-            $body = $text.Substring($start, $end - $start)
-            if ([regex]::Matches($body, 'mir_invalidate_use_cache\(\);').Count -ne 3) {
-                throw "Promotion invalidation mutation inventory changed"
-            }
-            $text = $text.Substring(0, $start) + $body.Replace('mir_invalidate_use_cache();', '(void)0;') + $text.Substring($end)
-        }
-        [System.IO.File]::WriteAllText($sourcePath, $text)
-        & cmake --build "$workspace/cmake" --target mir-verify-test dcc --config Debug --clean-first --parallel *> "$output/$($mutant.Name)-build.log"
-        if ($LASTEXITCODE -ne 0) { throw "Invalid mutant (build failure): $($mutant.Name)" }
-        if ($mutant.CompileProbe -or $mutant.Name -eq "baseline") {
-            $compiler = @("$workspace/bin/dcc", "$workspace/bin/Debug/dcc.exe", "$workspace/bin/dcc.exe") |
-                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-            if (-not $compiler) { throw "Mutation compiler was not built" }
-            [Environment]::SetEnvironmentVariable("DCC_MIR_CACHE_VERIFY", "1", "Process")
-            & $compiler -I $repoRoot -fstack-check -c "$workspace/probe.c" -o "$workspace/PROBE.MAC" *> "$output/$($mutant.Name)-compile.log"
-            $compileExit = $LASTEXITCODE
-            $compileLog = [System.IO.File]::ReadAllText("$output/$($mutant.Name)-compile.log")
-            if ($mutant.Name -eq "baseline" -and $compileExit -ne 0) { throw "Unmutated cache probe failed" }
-            if ($mutant.CompileProbe) {
-                $outcome = if ($compileExit -ne 0 -and $compileLog -match 'MIR CACHE MISMATCH mir_definition') {
-                    "killed"
-                } elseif ($compileExit -eq 0) { "survived" } else { "invalid" }
-                $results.Add(@{ mutation = $mutant.Name; outcome = $outcome })
-                continue
-            }
-        }
-        & ctest --test-dir "$workspace/cmake" -C Debug -R '^mir-verify$' --timeout 60 --output-on-failure *> "$output/$($mutant.Name)-test.log"
-        $exitCode = $LASTEXITCODE
-        $log = [System.IO.File]::ReadAllText("$output/$($mutant.Name)-test.log")
-        if ($mutant.Name -eq "baseline") {
-            if ($exitCode -ne 0) { throw "Unmutated verifier tests failed" }
-            $outcome = "passed"
-        } elseif ($exitCode -ne 0 -and $log.Contains($mutant.ExpectedFailure) -and $log -match 'MIR verifier failures=[1-9]') {
-            $outcome = "killed"
-        } elseif ($exitCode -eq 0) {
-            $outcome = "survived"
-        } else {
-            $outcome = "invalid"
-        }
-        $results.Add(@{ mutation = $mutant.Name; outcome = $outcome })
     }
-    $results | ConvertTo-Json | Set-Content -LiteralPath "$output/results.json"
-    if (@($results | Where-Object { $_.outcome -in @("survived", "invalid") }).Count -gt 0) {
-        throw "Compiler mutation checks failed: $output/results.json"
+    while ($next -lt $cases.Count -or $active.Count -gt 0) {
+        while ($next -lt $cases.Count -and $active.Count -lt $Jobs -and
+               ($next -eq 0 -or $baselinePassed)) {
+            $case = $cases[$next]
+            $caseOutput = Join-Path $output $case.Name
+            New-Item -ItemType Directory -Path $caseOutput -Force | Out-Null
+            $resultPath = Join-Path $caseOutput "result.json"
+            # Overwrite old results before launch, including on a failed launch.
+            $results[$next].detail = "Worker did not complete"
+            $results[$next] | ConvertTo-Json |
+                Set-Content -LiteralPath $resultPath
+            $command = Start-MirMutationProcess $pwsh @(
+                "-NoLogo", "-NoProfile", "-NonInteractive", "-File", $worker,
+                "-RepoRoot", $repoRoot,
+                "-Workspace", (Join-Path $workspace $case.Name),
+                "-OutputDirectory", $caseOutput,
+                "-Name", $case.Name, "-BuildJobs", "$BuildJobs"
+            ) $caseOutput (Join-Path $caseOutput "worker.log")
+            $active.Add([pscustomobject]@{
+                Index = $next; Command = $command; ResultPath = $resultPath
+            })
+            ++$next
+        }
+        if ($active.Count -eq 0) { break }
+        $completed = @($active | Where-Object { $_.Command.Process.HasExited })
+        if ($completed.Count -eq 0) {
+            Start-Sleep -Milliseconds 100
+            continue
+        }
+        foreach ($item in $completed) {
+            [void]$active.Remove($item)
+            $execution = Complete-MirMutationProcess $item.Command
+            $result = $null
+            if (Test-Path -LiteralPath $item.ResultPath -PathType Leaf) {
+                try {
+                    $result = Get-Content -LiteralPath $item.ResultPath -Raw | ConvertFrom-Json
+                } catch [System.ArgumentException] {
+                    # A truncated result is a worker error, not a reason to lose
+                    # the remaining workers' outcomes.
+                    $result = $null
+                }
+            }
+            if ($null -eq $result -or $execution.ExitCode -ne 0 -or $execution.TimedOut -or
+                $result.mutation -ne $cases[$item.Index].Name -or
+                $result.outcome -notin @("passed", "killed", "survived", "invalid") -or
+                ($item.Index -gt 0 -and $result.outcome -eq "passed")) {
+                $results[$item.Index].phase = "worker"
+                $results[$item.Index].exitCode = $execution.ExitCode
+                $results[$item.Index].detail = "Worker failed; see worker.log"
+            } else {
+                $results[$item.Index] = $result
+            }
+            if ($item.Index -eq 0) {
+                $baselinePassed = $results[0].outcome -eq "passed"
+                if ($baselinePassed) {
+                    foreach ($pending in $results | Select-Object -Skip 1) {
+                        $pending.detail = "Worker was not scheduled"
+                    }
+                }
+            }
+        }
     }
-    Write-Host "Compiler mutation controls: baseline passed, $($mutants.Count) mutants killed"
 } finally {
-    [Environment]::SetEnvironmentVariable("DCC_MIR_CACHE_VERIFY", $savedCacheVerify, "Process")
-    Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+    foreach ($item in $active) {
+        Stop-MirMutationProcess $item.Command
+    }
+    try {
+        ConvertTo-Json -InputObject $results -Depth 4 |
+            Set-Content -LiteralPath (Join-Path $output "results.json")
+        if (Test-Path -LiteralPath $workspace) {
+            Remove-Item -LiteralPath $workspace -Recurse -Force
+        }
+    } finally {
+        $lock.Dispose()
+    }
 }
+if (-not $baselinePassed -or
+    @($results | Where-Object { $_.outcome -in @("survived", "invalid") }).Count -gt 0) {
+    throw "Compiler mutation checks failed: $output/results.json"
+}
+Write-Host "Compiler mutation controls: baseline passed, $($cases.Count - 1) mutants killed"
 exit 0

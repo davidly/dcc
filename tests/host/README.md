@@ -226,6 +226,7 @@ pwsh scripts/run-mir-clobber-tests.ps1 -Cases fuzz -FuzzSeeds 23117
 pwsh scripts/new-mir-fuzz-source.ps1 -OutputPath build/replay.c -Seed 23117 -Programs 1
 pwsh scripts/test-mir-fuzz-source.ps1
 pwsh scripts/run-mir-compiler-mutations.ps1
+pwsh scripts/run-mir-compiler-mutations.ps1 -Jobs 2 -BuildJobs 2 -OutputDirectory build/mir-mutations-parallel
 ```
 
 Three default seeds generate 12 functions each, mixing six arithmetic steps,
@@ -263,12 +264,38 @@ call-argument-liveness, or PHI-consumer-value checks disabled, or promotion
 cache invalidations removed. It first requires unmutated host tests and a one-
 function seed-23117 compilation to pass. Verifier mutants must produce explicit
 host-test assertion failures; the cache mutant must produce the specific
-`mir_definition` cache mismatch. Build errors, crashes, and survivors are not
-counted as kills. Every mutant uses a clean rebuild, so rapid source rewrites
-cannot reuse a preceding mutant's objects due to timestamp resolution. Verifier
-kills must contain the mutation-specific assertion failure. Logs and JSON
-results are retained under `build/mir-compiler-mutations`. These nine controls
-do not establish a general compiler mutation score.
+`mir_definition` cache mismatch and fatal diagnostic. Both kinds of kill require
+exit code 1; verifier kills require the exact mutation-specific assertion line
+and a nonzero failure summary. The runner invokes the same host executable as
+CTest directly, preserving its exit code rather than treating CTest's aggregate
+failure code as proof of a kill. Build errors, crashes, timeouts, unrelated
+diagnostics, and survivors are not counted as kills.
+
+`-Jobs` defaults to 1 and bounds independent mutant worker processes; the
+unmutated host and compile controls must both pass before any mutant starts.
+`-BuildJobs` defaults to 2 and bounds each worker's CMake build separately.
+Every worker copies its own source, headers, host fixture, build/cache, binary,
+and output trees. Each initial build is clean without reusing baseline objects
+or compilers. Workers clear inherited `DCC_*` controls and isolate
+`LLVM_PROFILE_FILE`; mutant profiles never enter normal compiler coverage.
+Both host tests and compile probes explicitly enable `DCC_MIR_CACHE_VERIFY=1`.
+The parent process environment is unchanged.
+
+Logs, per-worker artifacts, and inventory-ordered `results.json` are retained
+under `build/mir-compiler-mutations` (or `-OutputDirectory`, relative to the
+repository root or absolute). Source/build workspaces are removed on completion.
+Every inventory entry is recorded even on failure; a failed baseline leaves all
+nine mutants invalid/not-run. Worker failures do not cancel other scheduled
+mutants, and any invalid result or survivor fails the command. Concurrent runs
+must use distinct output directories. These nine controls do not establish a
+general compiler mutation score.
+
+Focused runner tests use tiny synthetic compiler fixtures rather than rebuilding
+the production compiler:
+
+```sh
+python3 -m unittest discover -s scripts/tests -p 'test_mir_compiler_mutations.py'
+```
 
 `run-mir-clobber-tests.ps1` records each successful target configuration in an
 optional JSON execution manifest and verifies the exact expected count for
