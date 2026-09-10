@@ -135,7 +135,9 @@ static int mir_machine_fold_integer_binary(
     unsigned long long rhs;
     unsigned long long bits;
 
-    if (width != 1 && width != 2 && width != 4)
+    if (type_ptr_depth(type) != 0 || type_is_float(type) ||
+        (type & 15) == TYPE_BOOL ||
+        (width != 1 && width != 2 && width != 4))
         return 0;
     mask = width == 1 ? 0xffULL :
            width == 2 ? 0xffffULL : 0xffffffffULL;
@@ -179,6 +181,8 @@ static int mir_machine_fold_integer_binary(
             ? (long long)(lhs - modulus) : (long long)lhs;
         long long signed_rhs = (rhs & sign) != 0
             ? (long long)(rhs - modulus) : (long long)rhs;
+        long long minimum = -(long long)sign;
+        long long maximum = (long long)(sign - 1ULL);
         long long signed_value;
 
         switch (operation) {
@@ -202,6 +206,9 @@ static int mir_machine_fold_integer_binary(
         default:
             return 0;
         }
+        if ((operation == '+' || operation == '-' || operation == '*') &&
+            (signed_value < minimum || signed_value > maximum))
+            return 0;
         bits = (unsigned long long)signed_value;
     }
 convert_result:
@@ -357,19 +364,40 @@ static int mir_machine_fold_constant_comparison(
 {
     int operand_type = insn->secondary_offset != 0
         ? insn->secondary_offset : insn->type;
+    int width = type_size(operand_type);
+    int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
+    unsigned long long mask;
+    unsigned long long unsigned_lhs;
+    unsigned long long unsigned_rhs;
     long lhs;
     long rhs;
 
     if (!mir_machine_convert_integer(left, operand_type, &lhs) ||
         !mir_machine_convert_integer(right, operand_type, &rhs))
         return 0;
+    mask = width == 1 ? 0xffULL :
+           width == 2 ? 0xffffULL : 0xffffffffULL;
+    unsigned_lhs = (unsigned long long)(unsigned long)lhs & mask;
+    unsigned_rhs = (unsigned long long)(unsigned long)rhs & mask;
     switch (insn->immediate) {
-    case TOK_EQ: *result = lhs == rhs; return 1;
-    case TOK_NE: *result = lhs != rhs; return 1;
-    case '<': *result = lhs < rhs; return 1;
-    case '>': *result = lhs > rhs; return 1;
-    case TOK_LE: *result = lhs <= rhs; return 1;
-    case TOK_GE: *result = lhs >= rhs; return 1;
+    case TOK_EQ:
+        *result = unsigned_lhs == unsigned_rhs;
+        return 1;
+    case TOK_NE:
+        *result = unsigned_lhs != unsigned_rhs;
+        return 1;
+    case '<':
+        *result = is_unsigned ? unsigned_lhs < unsigned_rhs : lhs < rhs;
+        return 1;
+    case '>':
+        *result = is_unsigned ? unsigned_lhs > unsigned_rhs : lhs > rhs;
+        return 1;
+    case TOK_LE:
+        *result = is_unsigned ? unsigned_lhs <= unsigned_rhs : lhs <= rhs;
+        return 1;
+    case TOK_GE:
+        *result = is_unsigned ? unsigned_lhs >= unsigned_rhs : lhs >= rhs;
+        return 1;
     default: return 0;
     }
 }
@@ -827,7 +855,8 @@ static int mir_machine_evaluate_constant_function(int *result)
         (mir.return_type & 15) != TYPE_INT ||
         type_size(mir.return_type) != 2 ||
         mir_cfg_block_count() < 2)
-        return 0;
+        return mir_machine_reject(
+            "constant-function-evaluator", "eligibility");
     values = (long *)calloc((size_t)value_capacity, sizeof(*values));
     objects = (long *)calloc((size_t)object_capacity, sizeof(*objects));
     value_known = (unsigned char *)calloc(
@@ -1051,6 +1080,10 @@ done:
     free(value_known);
     free(objects);
     free(values);
+    if (!ok)
+        mir_machine_reject(
+            "constant-function-evaluator",
+            steps >= 100000 ? "step-limit" : "evaluation");
     return ok;
 }
 
@@ -2368,6 +2401,7 @@ int mir_try_emit_constant_folding_kernels(MirStream *out)
     }
     if (mir_machine_evaluate_constant_function(
             &constant_function_result)) {
+        mir_machine_accept("constant-function-evaluator");
         mir_emit_constant_function(
             out, constant_function_result);
         return 1;
