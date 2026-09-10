@@ -550,11 +550,15 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                 return 0;
             }
             if (!ast_value_is_plain_int(n->b)) {
-                /* A long-word rhs narrows to a size-2 plain-int field by
-                 * storing only its low word - the same fallback the plain
-                 * identifier lvalue case below already applies. */
-                if (!(n->op == '=' && type_size(field_type) == 2 &&
-                      ast_value_is_long_word(n->b)))
+                /* Plain assignment converts float values and narrows long
+                 * values to byte- and word-sized integer fields.  This is the
+                 * same defined scalar conversion already admitted for
+                 * identifier, indexed, dereferenced, and bit-field lvalues. */
+                if (!(n->op == '=' &&
+                      (type_size(field_type) == 1 ||
+                       type_size(field_type) == 2) &&
+                      (ast_value_is_long_word(n->b) ||
+                       ast_value_is_float_word(n->b))))
                     return 0;
                 return 1;
             }
