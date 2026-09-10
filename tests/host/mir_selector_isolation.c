@@ -33,6 +33,20 @@ static size_t read_stream(MirStream *stream, char *text, size_t capacity)
     return bytes;
 }
 
+static void initialize_selector_instruction(struct MirInsn *insn)
+{
+    memset(insn, 0, sizeof(*insn));
+    insn->opcode = MIR_NOP;
+    insn->src1 = -1;
+    insn->src2 = -1;
+    insn->dst = -1;
+    insn->object = -1;
+    insn->label = -1;
+    insn->phi_pred1 = -1;
+    insn->phi_pred2 = -1;
+    insn->type = TYPE_INT;
+}
+
 static void setup_affine_return(void)
 {
     int instruction;
@@ -243,6 +257,9 @@ static void setup_repeated_invariant_add(void)
     mir.declared_types[0] = TYPE_INT;
     mir.declared_types[1] = TYPE_INT;
     mir.declared_types[2] = TYPE_INT;
+    mir.declared_is_volatile[0] = 0;
+    mir.declared_is_volatile[1] = 0;
+    mir.declared_is_volatile[2] = 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         struct MirInsn *insn = &mir.insns[instruction];
 
@@ -524,14 +541,36 @@ static void setup_comparison_branch(int right_offset)
     mir.next_value = 5;
     mir.next_label = 2;
     mir.object_count = 2;
+    mir.return_type = TYPE_INT;
+    mir.declared_count = 2;
+    if (mir.allocation_capacity < 6) {
+        int *colors = (int *)realloc(
+            mir.allocation_colors, (size_t)6 * sizeof(*colors));
+        int *spills = (int *)realloc(
+            mir.allocation_spills, (size_t)6 * sizeof(*spills));
+
+        if (colors == NULL || spills == NULL)
+            fatal("cannot allocate comparison selector homes");
+        mir.allocation_colors = colors;
+        mir.allocation_spills = spills;
+        mir.allocation_capacity = 6;
+    }
     memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
     memset(&mir.objects[1], 0, sizeof(mir.objects[1]));
+    strcpy(mir.objects[0].name, "left");
     mir.objects[0].storage = SC_PARAM;
     mir.objects[0].type = TYPE_INT;
     mir.objects[0].offset = -128;
+    strcpy(mir.objects[1].name, "right");
     mir.objects[1].storage = SC_PARAM;
     mir.objects[1].type = TYPE_INT;
     mir.objects[1].offset = right_offset;
+    strcpy(mir.declared_names[0], "left");
+    strcpy(mir.declared_names[1], "right");
+    mir.declared_types[0] = TYPE_INT;
+    mir.declared_types[1] = TYPE_INT;
+    mir.declared_is_volatile[0] = 0;
+    mir.declared_is_volatile[1] = 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         struct MirInsn *insn = &mir.insns[instruction];
 
@@ -551,9 +590,11 @@ static void setup_comparison_branch(int right_offset)
     mir.insns[1].opcode = MIR_PARAM;
     mir.insns[1].dst = 0;
     mir.insns[1].object = 0;
+    strcpy(mir.insns[1].name, "left");
     mir.insns[2].opcode = MIR_PARAM;
     mir.insns[2].dst = 1;
     mir.insns[2].object = 1;
+    strcpy(mir.insns[2].name, "right");
     mir.insns[3].opcode = MIR_BINARY;
     mir.insns[3].dst = 2;
     mir.insns[3].src1 = 0;
@@ -575,6 +616,8 @@ static void setup_comparison_branch(int right_offset)
     mir.insns[8].immediate = 22;
     mir.insns[9].opcode = MIR_RETURN;
     mir.insns[9].src1 = 4;
+    mir.allocation_colors[5] = MIR_COLOR_HL;
+    mir.allocation_spills[5] = -1;
 }
 
 static int verify_comparison_offset_isolation(void)
@@ -642,6 +685,527 @@ static int verify_comparison_offset_isolation(void)
     return ok;
 }
 
+enum ComparisonMutation {
+    COMPARISON_LEFT_PARAM_TYPE,
+    COMPARISON_LEFT_OBJECT_TYPE,
+    COMPARISON_RIGHT_PARAM_TYPE,
+    COMPARISON_RIGHT_OBJECT_TYPE,
+    COMPARISON_RESULT_TYPE,
+    COMPARISON_OPERAND_TYPE,
+    COMPARISON_LEFT_UNSIGNED_MISMATCH,
+    COMPARISON_RIGHT_UNSIGNED_MISMATCH,
+    COMPARISON_TRUE_CONSTANT_TYPE,
+    COMPARISON_FALSE_CONSTANT_TYPE,
+    COMPARISON_RETURN_TYPE,
+    COMPARISON_LEFT_VOLATILE_INSN,
+    COMPARISON_RIGHT_VOLATILE_INSN,
+    COMPARISON_LEFT_VOLATILE_DECL,
+    COMPARISON_RIGHT_VOLATILE_DECL,
+    COMPARISON_OVERLAPPING_PARAMETERS,
+    COMPARISON_EARLY_TRUE_RETURN,
+    COMPARISON_BRANCH_TRUTH_SOURCE,
+    COMPARISON_LATE_COMPARE,
+    COMPARISON_LATE_PARAMETER,
+    COMPARISON_VLA_STATE,
+    COMPARISON_LOCAL_FRAME,
+    COMPARISON_AGGREGATE_FRAME,
+    COMPARISON_MUTATION_COUNT
+};
+
+static const char *comparison_mutation_name(int mutation)
+{
+    static const char *names[COMPARISON_MUTATION_COUNT] = {
+        "left parameter type", "left object type",
+        "right parameter type", "right object type",
+        "comparison result type", "comparison operand type",
+        "left signedness mismatch", "right signedness mismatch",
+        "true constant type", "false constant type", "return type",
+        "left volatile instruction", "right volatile instruction",
+        "left volatile declaration", "right volatile declaration",
+        "overlapping parameters", "early true return",
+        "branch truth source", "late comparison", "late parameter",
+        "VLA state", "local frame", "aggregate frame"
+    };
+
+    return names[mutation];
+}
+
+static void mutate_comparison_branch(int mutation)
+{
+    switch (mutation) {
+    case COMPARISON_LEFT_PARAM_TYPE:
+        mir.insns[1].type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case COMPARISON_LEFT_OBJECT_TYPE:
+        mir.objects[0].type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case COMPARISON_RIGHT_PARAM_TYPE:
+        mir.insns[2].type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case COMPARISON_RIGHT_OBJECT_TYPE:
+        mir.objects[1].type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case COMPARISON_RESULT_TYPE:
+        mir.insns[3].type = TYPE_CHAR;
+        break;
+    case COMPARISON_OPERAND_TYPE:
+        mir.insns[3].secondary_offset = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case COMPARISON_LEFT_UNSIGNED_MISMATCH:
+        mir.insns[1].type = TYPE_INT | TYPE_UNSIGNED;
+        mir.objects[0].type = TYPE_INT | TYPE_UNSIGNED;
+        mir.declared_types[0] = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case COMPARISON_RIGHT_UNSIGNED_MISMATCH:
+        mir.insns[2].type = TYPE_INT | TYPE_UNSIGNED;
+        mir.objects[1].type = TYPE_INT | TYPE_UNSIGNED;
+        mir.declared_types[1] = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case COMPARISON_TRUE_CONSTANT_TYPE:
+        mir.insns[5].type = TYPE_CHAR;
+        break;
+    case COMPARISON_FALSE_CONSTANT_TYPE:
+        mir.insns[8].type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case COMPARISON_RETURN_TYPE:
+        mir.return_type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case COMPARISON_LEFT_VOLATILE_INSN:
+        mir.insns[1].memory_flags = 1;
+        break;
+    case COMPARISON_RIGHT_VOLATILE_INSN:
+        mir.insns[2].memory_flags = 1;
+        break;
+    case COMPARISON_LEFT_VOLATILE_DECL:
+        mir.declared_is_volatile[0] = 1;
+        break;
+    case COMPARISON_RIGHT_VOLATILE_DECL:
+        mir.declared_is_volatile[1] = 1;
+        break;
+    case COMPARISON_OVERLAPPING_PARAMETERS:
+        mir.objects[1].offset = -128;
+        break;
+    case COMPARISON_EARLY_TRUE_RETURN:
+        memmove(&mir.insns[7], &mir.insns[5],
+                (size_t)5 * sizeof(mir.insns[0]));
+        mir.count = 12;
+        mir.next_value = 6;
+        initialize_selector_instruction(&mir.insns[5]);
+        mir.insns[5].opcode = MIR_CONST;
+        mir.insns[5].dst = 5;
+        mir.insns[5].immediate = 99;
+        initialize_selector_instruction(&mir.insns[6]);
+        mir.insns[6].opcode = MIR_RETURN;
+        mir.insns[6].src1 = 5;
+        break;
+    case COMPARISON_BRANCH_TRUTH_SOURCE:
+        mir.insns[4].src1 = 0;
+        break;
+    case COMPARISON_LATE_COMPARE:
+    {
+        struct MirInsn temporary = mir.insns[3];
+        mir.insns[3] = mir.insns[5];
+        mir.insns[5] = temporary;
+        break;
+    }
+    case COMPARISON_LATE_PARAMETER:
+    {
+        struct MirInsn temporary = mir.insns[2];
+        mir.insns[2] = mir.insns[5];
+        mir.insns[5] = temporary;
+        break;
+    }
+    case COMPARISON_VLA_STATE:
+        mir.has_vla = 1;
+        break;
+    case COMPARISON_LOCAL_FRAME:
+        mir.local_bytes = 2;
+        break;
+    case COMPARISON_AGGREGATE_FRAME:
+        mir.aggregate_temp_bytes = 2;
+        break;
+    }
+}
+
+static int emit_comparison_general(MirStream *out)
+{
+    int accepted = mir_try_selector(out, mir_try_emit_homed_scalar_cfg);
+
+    if (!accepted)
+        accepted = mir_try_selector(out, mir_try_emit_spilled_scalar_cfg);
+    return accepted;
+}
+
+static void set_comparison_operand_type(int type)
+{
+    int width = type_size(type);
+
+    mir.insns[1].type = type;
+    mir.insns[2].type = type;
+    mir.insns[3].secondary_offset = type;
+    mir.objects[0].type = type;
+    mir.objects[1].type = type;
+    mir.objects[1].offset = 128 - width;
+    mir.declared_types[0] = type;
+    mir.declared_types[1] = type;
+}
+
+static int comparison_control_uses_specialized(int type, int operation)
+{
+    MirStream *fallback = mir_stream_open();
+    MirStream *specialized = mir_stream_open();
+    char fallback_text[4096];
+    char specialized_text[4096];
+    size_t fallback_bytes;
+    size_t specialized_bytes;
+    int fallback_label_after;
+    int specialized_label_after;
+    int accepted;
+    int ok;
+
+    if (fallback == NULL || specialized == NULL)
+        fatal("cannot create comparison control streams");
+    label_id = 151;
+    setup_comparison_branch(6);
+    set_comparison_operand_type(type);
+    mir.insns[3].immediate = operation;
+    accepted = emit_comparison_general(fallback);
+    fallback_label_after = label_id;
+    fallback_bytes = read_stream(
+        fallback, fallback_text, sizeof(fallback_text));
+    clear_selector_liveness();
+    ok = accepted != 0;
+
+    label_id = 151;
+    setup_comparison_branch(6);
+    set_comparison_operand_type(type);
+    mir.insns[3].immediate = operation;
+    accepted = mir_try_emit_z80(specialized);
+    specialized_label_after = label_id;
+    specialized_bytes = read_stream(
+        specialized, specialized_text, sizeof(specialized_text));
+    clear_selector_liveness();
+    ok = ok && accepted != 0 &&
+         (specialized_label_after != fallback_label_after ||
+          specialized_bytes != fallback_bytes ||
+          memcmp(specialized_text, fallback_text, fallback_bytes));
+    mir_stream_close(specialized);
+    mir_stream_close(fallback);
+    return ok;
+}
+
+static void setup_truthiness_branch(int type)
+{
+    int instruction;
+
+    mir_begin_function(
+        "selector_truth", "_selector_truth", EMIT_SINK_FINAL, 0, 0, 0);
+    mir.count = 8;
+    mir.next_value = 4;
+    mir.next_label = 2;
+    mir.object_count = 1;
+    mir.return_type = TYPE_INT;
+    mir.declared_count = 1;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    strcpy(mir.objects[0].name, "value");
+    mir.objects[0].storage = SC_PARAM;
+    mir.objects[0].type = type;
+    mir.objects[0].offset = -128;
+    strcpy(mir.declared_names[0], "value");
+    mir.declared_types[0] = type;
+    mir.declared_is_volatile[0] = 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        initialize_selector_instruction(&mir.insns[instruction]);
+    mir.insns[0].opcode = MIR_LABEL;
+    mir.insns[0].label = 0;
+    mir.insns[1].opcode = MIR_PARAM;
+    mir.insns[1].dst = 0;
+    mir.insns[1].object = 0;
+    mir.insns[1].type = type;
+    strcpy(mir.insns[1].name, "value");
+    mir.insns[2].opcode = MIR_BRANCH_FALSE;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_CONST;
+    mir.insns[3].dst = 1;
+    mir.insns[3].immediate = 11;
+    mir.insns[4].opcode = MIR_RETURN;
+    mir.insns[4].src1 = 1;
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 1;
+    mir.insns[6].opcode = MIR_CONST;
+    mir.insns[6].dst = 2;
+    mir.insns[6].immediate = 22;
+    mir.insns[7].opcode = MIR_RETURN;
+    mir.insns[7].src1 = 2;
+}
+
+static int truth_control_uses_specialized(int type)
+{
+    MirStream *fallback = mir_stream_open();
+    MirStream *specialized = mir_stream_open();
+    char fallback_text[4096];
+    char specialized_text[4096];
+    size_t fallback_bytes;
+    size_t specialized_bytes;
+    int fallback_label_after;
+    int specialized_label_after;
+    int accepted;
+    int ok;
+
+    if (fallback == NULL || specialized == NULL)
+        fatal("cannot create truthiness control streams");
+    label_id = 171;
+    setup_truthiness_branch(type);
+    accepted = emit_comparison_general(fallback);
+    fallback_label_after = label_id;
+    fallback_bytes = read_stream(
+        fallback, fallback_text, sizeof(fallback_text));
+    clear_selector_liveness();
+    ok = accepted != 0;
+
+    label_id = 171;
+    setup_truthiness_branch(type);
+    accepted = mir_try_emit_z80(specialized);
+    specialized_label_after = label_id;
+    specialized_bytes = read_stream(
+        specialized, specialized_text, sizeof(specialized_text));
+    clear_selector_liveness();
+    ok = ok && accepted != 0 &&
+         (specialized_label_after != fallback_label_after ||
+          specialized_bytes != fallback_bytes ||
+          memcmp(specialized_text, fallback_text, fallback_bytes));
+    mir_stream_close(specialized);
+    mir_stream_close(fallback);
+    return ok;
+}
+
+static int verify_comparison_valid_controls(void)
+{
+    static const int operations[] = {
+        TOK_EQ, TOK_NE, '<', TOK_GE, '>', TOK_LE
+    };
+    static const int operand_types[] = {
+        TYPE_INT, TYPE_INT | TYPE_UNSIGNED
+    };
+    static const int truth_types[] = {
+        TYPE_INT, TYPE_INT | TYPE_UNSIGNED,
+        TYPE_INT | TYPE_PTR
+    };
+    int item;
+    int operation;
+    int ok = 1;
+
+    for (item = 0;
+         item < (int)(sizeof(operand_types) / sizeof(operand_types[0]));
+         ++item)
+        for (operation = 0;
+             operation < (int)(sizeof(operations) / sizeof(operations[0]));
+             ++operation)
+            if (!comparison_control_uses_specialized(
+                    operand_types[item], operations[operation])) {
+                fprintf(stderr,
+                        "comparison control rejected type=%d operation=%d\n",
+                        operand_types[item], operations[operation]);
+                ok = 0;
+            }
+    for (item = 0;
+         item < (int)(sizeof(truth_types) / sizeof(truth_types[0]));
+         ++item)
+        if (!truth_control_uses_specialized(truth_types[item])) {
+            fprintf(stderr, "truthiness control rejected type=%d\n",
+                    truth_types[item]);
+            ok = 0;
+        }
+    return ok;
+}
+
+enum TruthMutation {
+    TRUTH_PARAM_TYPE,
+    TRUTH_OBJECT_TYPE,
+    TRUTH_TRUE_CONSTANT_TYPE,
+    TRUTH_FALSE_CONSTANT_TYPE,
+    TRUTH_RETURN_TYPE,
+    TRUTH_VOLATILE_INSN,
+    TRUTH_VOLATILE_DECL,
+    TRUTH_VLA_STATE,
+    TRUTH_LOCAL_FRAME,
+    TRUTH_AGGREGATE_FRAME,
+    TRUTH_MUTATION_COUNT
+};
+
+static const char *truth_mutation_name(int mutation)
+{
+    static const char *names[TRUTH_MUTATION_COUNT] = {
+        "parameter type", "object type",
+        "true constant type", "false constant type", "return type",
+        "volatile instruction", "volatile declaration",
+        "VLA state", "local frame", "aggregate frame"
+    };
+
+    return names[mutation];
+}
+
+static void mutate_truthiness_branch(int mutation)
+{
+    switch (mutation) {
+    case TRUTH_PARAM_TYPE:
+        mir.insns[1].type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case TRUTH_OBJECT_TYPE:
+        mir.objects[0].type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case TRUTH_TRUE_CONSTANT_TYPE:
+        mir.insns[3].type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case TRUTH_FALSE_CONSTANT_TYPE:
+        mir.insns[6].type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case TRUTH_RETURN_TYPE:
+        mir.return_type = TYPE_INT | TYPE_UNSIGNED;
+        break;
+    case TRUTH_VOLATILE_INSN:
+        mir.insns[1].memory_flags = 1;
+        break;
+    case TRUTH_VOLATILE_DECL:
+        mir.declared_is_volatile[0] = 1;
+        break;
+    case TRUTH_VLA_STATE:
+        mir.has_vla = 1;
+        break;
+    case TRUTH_LOCAL_FRAME:
+        mir.local_bytes = 2;
+        break;
+    case TRUTH_AGGREGATE_FRAME:
+        mir.aggregate_temp_bytes = 2;
+        break;
+    }
+}
+
+static int verify_truth_mutation_isolation(void)
+{
+    int mutation;
+    int survivors = 0;
+    int ok = 1;
+
+    for (mutation = 0; mutation < TRUTH_MUTATION_COUNT; ++mutation) {
+        MirStream *fallback = mir_stream_open();
+        MirStream *retry = mir_stream_open();
+        char fallback_text[4096];
+        char retry_text[4096];
+        size_t fallback_bytes;
+        size_t retry_bytes;
+        int fallback_label_after;
+        int accepted;
+
+        if (fallback == NULL || retry == NULL)
+            fatal("cannot create truthiness mutation streams");
+        label_id = 181;
+        setup_truthiness_branch(TYPE_INT);
+        mutate_truthiness_branch(mutation);
+        accepted = emit_comparison_general(fallback);
+        fallback_label_after = label_id;
+        fallback_bytes = read_stream(
+            fallback, fallback_text, sizeof(fallback_text));
+        clear_selector_liveness();
+        if (!accepted) {
+            fprintf(stderr, "truthiness general control rejected %s\n",
+                    truth_mutation_name(mutation));
+            ok = 0;
+            mir_stream_close(retry);
+            mir_stream_close(fallback);
+            continue;
+        }
+
+        label_id = 181;
+        mir_stream_puts("prefix\n", retry);
+        setup_truthiness_branch(TYPE_INT);
+        mutate_truthiness_branch(mutation);
+        accepted = mir_try_emit_z80(retry);
+        retry_bytes = read_stream(retry, retry_text, sizeof(retry_text));
+        clear_selector_liveness();
+        if (!accepted) {
+            fprintf(stderr, "truthiness retry rejected %s\n",
+                    truth_mutation_name(mutation));
+            ok = 0;
+        } else if (retry_bytes != fallback_bytes + 7 ||
+                   label_id != fallback_label_after ||
+                   memcmp(retry_text, "prefix\n", 7) ||
+                   memcmp(retry_text + 7, fallback_text, fallback_bytes)) {
+            ++survivors;
+            fprintf(stderr, "SURVIVED truthiness %s\n",
+                    truth_mutation_name(mutation));
+        }
+        mir_stream_close(retry);
+        mir_stream_close(fallback);
+    }
+    fprintf(stderr, "truthiness mutation survivors=%d/%d\n",
+            survivors, TRUTH_MUTATION_COUNT);
+    return ok && survivors == 0;
+}
+
+static int verify_comparison_mutation_isolation(void)
+{
+    int mutation;
+    int survivors = 0;
+    int ok = 1;
+
+    for (mutation = 0; mutation < COMPARISON_MUTATION_COUNT; ++mutation) {
+        MirStream *fallback = mir_stream_open();
+        MirStream *retry = mir_stream_open();
+        char fallback_text[4096];
+        char retry_text[4096];
+        size_t fallback_bytes;
+        size_t retry_bytes;
+        int fallback_label_after;
+        int accepted;
+
+        if (fallback == NULL || retry == NULL)
+            fatal("cannot create comparison mutation streams");
+        label_id = 131;
+        setup_comparison_branch(6);
+        mutate_comparison_branch(mutation);
+        accepted = emit_comparison_general(fallback);
+        fallback_label_after = label_id;
+        fallback_bytes = read_stream(
+            fallback, fallback_text, sizeof(fallback_text));
+        clear_selector_liveness();
+        if (!accepted) {
+            fprintf(stderr, "comparison general control rejected %s\n",
+                    comparison_mutation_name(mutation));
+            ok = 0;
+            mir_stream_close(retry);
+            mir_stream_close(fallback);
+            continue;
+        }
+
+        label_id = 131;
+        mir_stream_puts("prefix\n", retry);
+        setup_comparison_branch(6);
+        mutate_comparison_branch(mutation);
+        accepted = mir_try_emit_z80(retry);
+        retry_bytes = read_stream(retry, retry_text, sizeof(retry_text));
+        clear_selector_liveness();
+        if (!accepted) {
+            fprintf(stderr, "comparison retry rejected %s\n",
+                    comparison_mutation_name(mutation));
+            ok = 0;
+        } else if (retry_bytes != fallback_bytes + 7 ||
+                   label_id != fallback_label_after ||
+                   memcmp(retry_text, "prefix\n", 7) ||
+                   memcmp(retry_text + 7, fallback_text, fallback_bytes)) {
+            ++survivors;
+            fprintf(stderr, "SURVIVED comparison %s\n",
+                    comparison_mutation_name(mutation));
+        }
+        mir_stream_close(retry);
+        mir_stream_close(fallback);
+    }
+    fprintf(stderr, "comparison mutation survivors=%d/%d\n",
+            survivors, COMPARISON_MUTATION_COUNT);
+    return ok && survivors == 0;
+}
+
 int main(void)
 {
     MirStream *control = mir_stream_open();
@@ -682,6 +1246,12 @@ int main(void)
         retry_text + 7, control_text, control_bytes);
     ok = ok && verify_affine_return_isolation();
     ok = ok && verify_comparison_offset_isolation();
+    if (!verify_comparison_valid_controls())
+        ok = 0;
+    if (!verify_comparison_mutation_isolation())
+        ok = 0;
+    if (!verify_truth_mutation_isolation())
+        ok = 0;
     ok = ok && verify_repeated_add_mutation_isolation();
 
     mir_stream_close(retry);

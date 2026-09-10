@@ -1230,19 +1230,49 @@ int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
 }
 
 static int mir_comparison_param_fits(
-    const struct MirInsn *parameter, int width)
+    const struct MirInsn *parameter, int type)
 {
     const struct MirObject *object;
+    int width = type_size(type);
 
     if (parameter == NULL || parameter->opcode != MIR_PARAM ||
         parameter->object < 0 || parameter->object >= mir.object_count ||
+        parameter->type != type ||
         (width != 2 && width != 4))
         return 0;
     object = &mir.objects[parameter->object];
     return object->storage == SC_PARAM &&
-           type_size(object->type) == width &&
+           object->type == type &&
+           mir_machine_named_nonvolatile(parameter) &&
            object->offset >= -128 &&
            object->offset <= 128 - width;
+}
+
+static int mir_comparison_operand_type_supported(int type)
+{
+    if (type_ptr_depth(type) > 0)
+        return type_size(type) == 2;
+    return type == TYPE_INT ||
+           type == (TYPE_INT | TYPE_UNSIGNED) ||
+           type == TYPE_LONG ||
+           type == (TYPE_LONG | TYPE_UNSIGNED) ||
+           type == TYPE_FLOAT;
+}
+
+static int mir_comparison_semantic_instructions(
+    int *indices, int capacity)
+{
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir.insns[instruction].opcode == MIR_NOP)
+            continue;
+        if (count >= capacity)
+            return -1;
+        indices[count++] = instruction;
+    }
+    return count;
 }
 
 /* Strict first CFG selector:
@@ -1253,77 +1283,92 @@ static int mir_comparison_param_fits(
  * multiple exits without claiming general relational/comparison support. */
 static int mir_try_emit_comparison_branch(MirStream *out)
 {
-    const struct MirInsn *branch = NULL;
+    const struct MirInsn *branch;
     const struct MirInsn *compare;
     const struct MirInsn *left;
     const struct MirInsn *right;
-    const struct MirInsn *true_return = NULL;
-    const struct MirInsn *false_return = NULL;
+    const struct MirInsn *true_return;
+    const struct MirInsn *false_return;
     const struct MirInsn *true_value;
     const struct MirInsn *false_value;
-    int branch_index = -1;
-    int target_index;
+    int semantic[10];
+    int semantic_count;
+    int operand_type;
+    int operand_width;
     int false_label;
     int operation;
     int unsigned_compare;
     int i;
 
-    for (i = 0; i < mir.count; ++i) {
-        if (mir.insns[i].opcode == MIR_BRANCH_FALSE) {
-            if (branch != NULL)
-                return 0;
-            branch = &mir.insns[i];
-            branch_index = i;
-        }
-    }
-    if (branch == NULL)
+    if (mir.has_vla || mir.local_bytes != 0 ||
+        mir.aggregate_temp_bytes != 0 ||
+        mir_cfg_block_count() != 2 ||
+        (mir.return_type != TYPE_INT &&
+         mir.return_type != (TYPE_INT | TYPE_UNSIGNED)))
         return 0;
-    target_index = mir_find_label(branch->label);
-    if (target_index <= branch_index)
+    semantic_count = mir_comparison_semantic_instructions(semantic, 10);
+    if (semantic_count != 8 && semantic_count != 10)
         return 0;
-    compare = mir_definition(branch->src1);
-    if (compare == NULL)
+    if (mir.insns[semantic[0]].opcode != MIR_LABEL ||
+        mir.insns[semantic[semantic_count - 3]].opcode != MIR_LABEL ||
+        mir.insns[semantic[semantic_count - 2]].opcode != MIR_CONST ||
+        mir.insns[semantic[semantic_count - 1]].opcode != MIR_RETURN ||
+        mir.insns[semantic[semantic_count - 5]].opcode != MIR_CONST ||
+        mir.insns[semantic[semantic_count - 4]].opcode != MIR_RETURN ||
+        mir.insns[semantic[0]].label ==
+            mir.insns[semantic[semantic_count - 3]].label)
         return 0;
-    if (compare->opcode == MIR_PARAM) {
+    true_value = &mir.insns[semantic[semantic_count - 5]];
+    true_return = &mir.insns[semantic[semantic_count - 4]];
+    false_value = &mir.insns[semantic[semantic_count - 2]];
+    false_return = &mir.insns[semantic[semantic_count - 1]];
+    if (true_return->src1 != true_value->dst ||
+        false_return->src1 != false_value->dst ||
+        true_value->type != mir.return_type ||
+        false_value->type != mir.return_type)
+        return 0;
+
+    if (semantic_count == 8) {
+        if (mir.insns[semantic[1]].opcode != MIR_PARAM ||
+            mir.insns[semantic[2]].opcode != MIR_BRANCH_FALSE)
+            return 0;
+        left = &mir.insns[semantic[1]];
+        right = NULL;
+        compare = left;
+        branch = &mir.insns[semantic[2]];
+        if (branch->src1 != left->dst)
+            return 0;
         /* Item T72 (mir-text-size-plan.md): `if (param) return A;
          * return B;` - a bare truthiness test with no explicit
          * comparison instruction at all (the branch tests the
          * parameter's value directly), found via tests/tctxflt.c's
          * `truth_if(float f) { if (f) return 1; return 0; }`. `right`
          * has no counterpart in this shape. */
-        left = compare;
-        right = NULL;
-    } else if (compare->opcode == MIR_BINARY &&
-               (compare->immediate == TOK_EQ || compare->immediate == TOK_NE ||
-                compare->immediate == '<' || compare->immediate == TOK_GE ||
-                compare->immediate == '>' || compare->immediate == TOK_LE)) {
-        left = mir_definition(compare->src1);
-        right = mir_definition(compare->src2);
-        if (left == NULL || right == NULL || left->opcode != MIR_PARAM ||
-            right->opcode != MIR_PARAM)
-            return 0;
     } else {
-        return 0;
+        if (mir.insns[semantic[1]].opcode != MIR_PARAM ||
+            mir.insns[semantic[2]].opcode != MIR_PARAM ||
+            mir.insns[semantic[3]].opcode != MIR_BINARY ||
+            mir.insns[semantic[4]].opcode != MIR_BRANCH_FALSE)
+            return 0;
+        left = &mir.insns[semantic[1]];
+        right = &mir.insns[semantic[2]];
+        compare = &mir.insns[semantic[3]];
+        branch = &mir.insns[semantic[4]];
+        if ((compare->immediate != TOK_EQ &&
+             compare->immediate != TOK_NE &&
+             compare->immediate != '<' &&
+             compare->immediate != TOK_GE &&
+             compare->immediate != '>' &&
+             compare->immediate != TOK_LE) ||
+            compare->src1 != left->dst ||
+            compare->src2 != right->dst ||
+            compare->type != TYPE_INT ||
+            branch->src1 != compare->dst)
+            return 0;
     }
-    if (left->object < 0 || left->object >= mir.object_count)
+    if (branch->label !=
+            mir.insns[semantic[semantic_count - 3]].label)
         return 0;
-    for (i = branch_index + 1; i < target_index; ++i)
-        if (mir.insns[i].opcode == MIR_RETURN)
-            true_return = &mir.insns[i];
-    for (i = target_index + 1; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_RETURN) {
-            false_return = &mir.insns[i];
-            break;
-        }
-    if (true_return == NULL || false_return == NULL)
-        return 0;
-    true_value = mir_definition(true_return->src1);
-    false_value = mir_definition(false_return->src1);
-    if (true_value == NULL || false_value == NULL ||
-        true_value->opcode != MIR_CONST || false_value->opcode != MIR_CONST)
-        return 0;
-
-    /* Reject any operation outside this exact graph shape. */
     for (i = 0; i < mir.count; ++i) {
         int opcode = mir.insns[i].opcode;
         if (opcode != MIR_PARAM && opcode != MIR_NOP && opcode != MIR_CONST &&
@@ -1345,11 +1390,15 @@ static int mir_try_emit_comparison_branch(MirStream *out)
      * unexpected width falls back to the general selector instead of
      * emitting nothing. */
     if (compare->opcode == MIR_PARAM) {
-        int width = type_size(mir.objects[left->object].type);
-        int is_float = type_is_float(mir.objects[left->object].type);
+        int width;
+        int is_float;
 
-        if (!mir_comparison_param_fits(left, width))
+        operand_type = left->type;
+        if (!mir_comparison_operand_type_supported(operand_type) ||
+            !mir_comparison_param_fits(left, operand_type))
             return 0;
+        width = type_size(operand_type);
+        is_float = operand_type == TYPE_FLOAT;
         false_label = new_label();
         mir_emit_prologue(out);
         if (width == 4) {
@@ -1387,9 +1436,21 @@ static int mir_try_emit_comparison_branch(MirStream *out)
      * needed (unlike the narrow path's sign-bias trick below, which
      * only exists to reuse a single unsigned 16-bit `sbc`). Left/right
      * are used exactly as `compare` originally defined them - no swap. */
-    if (type_size(compare->secondary_offset) == 4) {
-        if (!mir_comparison_param_fits(left, 4) ||
-            !mir_comparison_param_fits(right, 4))
+    operand_type = compare->secondary_offset;
+    if (!mir_comparison_operand_type_supported(operand_type) ||
+        !mir_comparison_param_fits(left, operand_type) ||
+        !mir_comparison_param_fits(right, operand_type) ||
+        left->object == right->object)
+        return 0;
+    operand_width = type_size(operand_type);
+    if (mir.objects[left->object].offset <
+            mir.objects[right->object].offset + operand_width &&
+        mir.objects[right->object].offset <
+            mir.objects[left->object].offset + operand_width)
+        return 0;
+
+    if (operand_width == 4) {
+        if (type_ptr_depth(operand_type) != 0)
             return 0;
         false_label = new_label();
         mir_emit_prologue(out);
@@ -1426,12 +1487,11 @@ static int mir_try_emit_comparison_branch(MirStream *out)
         right = temporary;
         operation = TOK_GE;
     }
-    if (!mir_comparison_param_fits(left, 2) ||
-        !mir_comparison_param_fits(right, 2))
+    if (operand_width != 2)
         return 0;
     unsigned_compare =
-        (mir.objects[left->object].type & TYPE_UNSIGNED) != 0 ||
-        type_ptr_depth(mir.objects[left->object].type) > 0;
+        (operand_type & TYPE_UNSIGNED) != 0 ||
+        type_ptr_depth(operand_type) > 0;
 
     false_label = new_label();
     mir_emit_prologue(out);
