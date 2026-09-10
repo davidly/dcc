@@ -10152,6 +10152,17 @@ static int mir_byte_sum_pointer_type(int type)
 {
     return type_ptr_depth(type) == 1 &&
         !type_is_float(type) &&
+        (type & 15) == TYPE_CHAR &&
+        (type & TYPE_UNSIGNED) == 0 &&
+        type_size(type) == 2;
+}
+
+static int mir_byte_sum_pointer_alias_type(int type)
+{
+    return type_ptr_depth(type) == 2 &&
+        !type_is_float(type) &&
+        (type & 15) == TYPE_CHAR &&
+        (type & TYPE_UNSIGNED) == 0 &&
         type_size(type) == 2;
 }
 
@@ -10280,14 +10291,14 @@ static int mir_match_direct_byte_sum_loop_schedule(
 static int mir_match_aliased_byte_sum_loop_schedule(
     struct MirByteSumLoopSchedule *plan)
 {
-    static const int expected_opcodes[38] = {
+    static const int expected_opcodes[39] = {
         MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_ADDRESS, MIR_NOP, MIR_STORE,
         MIR_CONST, MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE,
         MIR_LABEL, MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP,
         MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_LOAD, MIR_LOAD_INDIRECT,
-        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
-        MIR_UNARY, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
-        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_RETURN
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_RETURN
     };
     const struct MirInsn *pointer = &mir.insns[1];
     const struct MirInsn *count = &mir.insns[2];
@@ -10299,7 +10310,7 @@ static int mir_match_aliased_byte_sum_loop_schedule(
     int instruction;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 38 || mir_cfg_block_count() != 4 ||
+    if (mir.count != 39 || mir_cfg_block_count() != 4 ||
         mir.has_vla ||
         !mir_byte_sum_signed_word_type(mir.return_type))
         return 0;
@@ -10321,17 +10332,22 @@ static int mir_match_aliased_byte_sum_loop_schedule(
         count->object < 0 ||
         mir.insns[13].object != count->object ||
         mir.insns[17].object != count->object ||
-        !mir_machine_same_location(&mir.insns[3], pointer))
+        !mir_machine_same_location(&mir.insns[3], pointer) ||
+        type_ptr_depth(mir.insns[3].type) != 2 ||
+        type_size(mir.insns[3].type) != 2)
         return mir_machine_reject(
             "byte-sum-loop-schedule", "alias-parameters");
     if (!mir_machine_unobservable_local_store(pointer_alias_store) ||
         pointer_alias_store->src1 != mir.insns[3].dst ||
+        pointer_alias_store->memory_size != 2 ||
         !mir_machine_constant_equals(mir.insns[6].dst, 0) ||
         !mir_machine_constant_equals(mir.insns[9].dst, 0) ||
         !mir_machine_unobservable_local_store(total_store) ||
         !mir_machine_unobservable_local_store(index_store) ||
         total_store->src1 != mir.insns[6].dst ||
         index_store->src1 != mir.insns[9].dst ||
+        total_store->memory_size != 2 ||
+        index_store->memory_size != 2 ||
         total_store->object < 0 || index_store->object < 0 ||
         total_store->object == index_store->object ||
         total_phi->object != total_store->object ||
@@ -10341,20 +10357,32 @@ static int mir_match_aliased_byte_sum_loop_schedule(
         total_phi->src1 != mir.insns[6].dst ||
         total_phi->src2 != mir.insns[27].dst ||
         index_phi->src1 != mir.insns[9].dst ||
-        index_phi->src2 != mir.insns[32].dst ||
+        index_phi->src2 != mir.insns[33].dst ||
         total_phi->phi_pred1 != mir.insns[0].label ||
-        total_phi->phi_pred2 != mir.insns[29].label ||
+        total_phi->phi_pred2 != mir.insns[30].label ||
         index_phi->phi_pred1 != mir.insns[0].label ||
-        index_phi->phi_pred2 != mir.insns[29].label)
+        index_phi->phi_pred2 != mir.insns[30].label ||
+        !mir_machine_same_location(
+            &mir.insns[4], pointer_alias_store) ||
+        !mir_machine_same_location(&mir.insns[7], total_store) ||
+        !mir_machine_same_location(&mir.insns[10], index_store) ||
+        !mir_machine_same_location(&mir.insns[16], index_store) ||
+        !mir_byte_sum_signed_word_type(total_phi->type) ||
+        !mir_byte_sum_signed_word_type(index_phi->type))
         return mir_machine_reject(
             "byte-sum-loop-schedule", "alias-state");
     if (mir.insns[18].src1 != index_phi->dst ||
         mir.insns[18].src2 != count->dst ||
         mir.insns[18].immediate != '<' ||
+        !mir_byte_sum_signed_word_type(mir.insns[18].type) ||
+        !mir_byte_sum_signed_word_type(
+            mir.insns[18].secondary_offset) ||
         mir.insns[19].src1 != mir.insns[18].dst ||
-        mir.insns[19].label != mir.insns[35].label ||
+        mir.insns[19].label != mir.insns[36].label ||
+        !mir_machine_same_location(&mir.insns[20], total_store) ||
         !mir_machine_same_location(
             &mir.insns[21], pointer_alias_store) ||
+        !mir_byte_sum_pointer_alias_type(mir.insns[21].type) ||
         mir.insns[22].src1 != mir.insns[21].dst ||
         mir.insns[22].memory_size != 2 ||
         !mir_byte_sum_pointer_type(mir.insns[22].type) ||
@@ -10363,29 +10391,45 @@ static int mir_match_aliased_byte_sum_loop_schedule(
         mir.insns[24].src2 != index_phi->dst ||
         mir.insns[24].immediate != 1 ||
         mir.insns[24].memory_size != 1 ||
+        !mir_byte_sum_pointer_type(mir.insns[24].type) ||
+        (mir.insns[24].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_same_location(&mir.insns[23], index_store) ||
         mir.insns[25].src1 != mir.insns[24].dst ||
         mir.insns[25].memory_size != 1 ||
         !mir_byte_sum_signed_byte_type(mir.insns[25].type) ||
         (mir.insns[25].memory_flags & (1 | 8)) != 0)
         return mir_machine_reject(
             "byte-sum-loop-schedule", "alias-load");
-    if (mir.insns[26].immediate != '+' ||
-        !((mir.insns[26].src1 == total_phi->dst &&
-           mir.insns[26].src2 == mir.insns[25].dst) ||
-          (mir.insns[26].src2 == total_phi->dst &&
-           mir.insns[26].src1 == mir.insns[25].dst)) ||
-        mir.insns[27].src1 != mir.insns[26].dst ||
+    if (mir.insns[26].src1 != mir.insns[25].dst ||
+        mir.insns[26].immediate != 0 ||
+        !mir_byte_sum_signed_word_type(mir.insns[26].type) ||
+        mir.insns[27].immediate != '+' ||
+        !((mir.insns[27].src1 == total_phi->dst &&
+           mir.insns[27].src2 == mir.insns[26].dst) ||
+          (mir.insns[27].src2 == total_phi->dst &&
+           mir.insns[27].src1 == mir.insns[26].dst)) ||
         !mir_byte_sum_signed_word_type(mir.insns[27].type) ||
+        !mir_byte_sum_signed_word_type(
+            mir.insns[27].secondary_offset) ||
         !mir_machine_same_location(&mir.insns[28], total_store) ||
-        mir.insns[28].src1 != mir.insns[27].dst ||
-        !mir_machine_constant_equals(mir.insns[31].dst, 1) ||
-        mir.insns[32].src1 != index_phi->dst ||
-        mir.insns[32].src2 != mir.insns[31].dst ||
-        mir.insns[32].immediate != '+' ||
-        !mir_machine_same_location(&mir.insns[33], index_store) ||
-        mir.insns[33].src1 != mir.insns[32].dst ||
-        mir.insns[34].label != mir.insns[12].label ||
-        mir.insns[37].src1 != total_phi->dst)
+        !mir_machine_same_location(&mir.insns[29], total_store) ||
+        mir.insns[29].src1 != mir.insns[27].dst ||
+        mir.insns[29].memory_size != 2 ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 1) ||
+        !mir_byte_sum_signed_word_type(mir.insns[32].type) ||
+        !mir_machine_same_location(&mir.insns[31], index_store) ||
+        mir.insns[33].src1 != index_phi->dst ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        mir.insns[33].immediate != '+' ||
+        !mir_byte_sum_signed_word_type(mir.insns[33].type) ||
+        !mir_byte_sum_signed_word_type(
+            mir.insns[33].secondary_offset) ||
+        !mir_machine_same_location(&mir.insns[34], index_store) ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[34].memory_size != 2 ||
+        mir.insns[35].label != mir.insns[12].label ||
+        !mir_machine_same_location(&mir.insns[37], total_store) ||
+        mir.insns[38].src1 != total_phi->dst)
         return mir_machine_reject(
             "byte-sum-loop-schedule", "alias-accumulate");
     plan->skip_zero = 0;
@@ -13958,6 +14002,7 @@ int mir_try_emit_aggregate_checks(MirStream *out)
     }
     if (mir_match_direct_byte_sum_loop_schedule(&byte_sum) ||
         mir_match_aliased_byte_sum_loop_schedule(&byte_sum)) {
+        mir_machine_accept("byte-sum-loop-schedule");
         mir_emit_byte_sum_loop_schedule(out, &byte_sum);
         return 1;
     }

@@ -1,0 +1,283 @@
+[
+  {
+    "Name": "als5ok",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "alias-full got=19 ref=19 want=19 guards=91,-87",
+      "alias-sub got=122 ref=122 want=122 guards=-128,63",
+      "alias-zero got=0 ref=0 want=0 guards=0,1",
+      "alias-negative got=0 ref=0 want=0 guards=2,126",
+      "alias-min got=-128 ref=-128 want=-128 guards=91,-7",
+      "bounds-positive got=36 ref=36 want=36 guards=73,-74",
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireExact": true
+  },
+  {
+    "Name": "als5alias",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "21:identity:120",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5pwid",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "22:memory_size:1",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5strd",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "24:immediate:2",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5bwid",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "25:memory_size:2",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5loop",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "18:immediate:999",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5phi",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "14:src2:25",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5data",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "27:src2:10",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5inc",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "33:immediate:45",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5ret",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "38:src1:10",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5idxn",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "16:identity:120",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5alty",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "21:type:17",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5ixnm",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "23:identity:120",
+    "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "als5ptyp",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/alsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "ALSUM5 oracle hash=49592 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "alias_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "alias_sum",
+    "RequiredSelectorFunction": "alias_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "24:type:18",
+    "MachineMutationFunction": "alias_sum"
+  }
+]
