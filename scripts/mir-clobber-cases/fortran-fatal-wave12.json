@@ -16,6 +16,38 @@
     "RequireExact": true
   },
   {
+    "Name": "ff12sprt",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_STATIC_PRINT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireExact": true
+  },
+  {
+    "Name": "ff12sext",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_STATIC_EXIT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireExact": true
+  },
+  {
     "Name": "ff12fmt",
     "Group": "fortran-fatal-wave12",
     "Sources": ["tests/mir-clobber/ffatal12.c"],

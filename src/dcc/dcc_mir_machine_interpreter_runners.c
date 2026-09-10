@@ -350,6 +350,7 @@ struct MirFortranFatalSchedule {
     struct Sym *program_counter;
     struct Sym *statement_count;
     struct Sym *print_function;
+    struct Sym *exit_function;
     int message_stack_offset;
     int statement_stride;
     int text_offset;
@@ -6829,10 +6830,19 @@ static int mir_fortran_fatal_call_target(
                     asm_name_for(sym_asm_name(function))));
 }
 
+static void mir_emit_fortran_fatal_symbol_call(
+    MirStream *out, struct Sym *function, const char *name)
+{
+    if ((function->storage == SC_EXTERN || function->needs_extrn) &&
+        mir_extrn_should_emit(function))
+        mir_stream_printf(out, "\textrn %s\n", name);
+    mir_stream_printf(out, "\tcall %s\n", name);
+}
+
 static int mir_match_fortran_fatal_schedule(
     struct MirFortranFatalSchedule *plan)
 {
-    struct Sym *exit_function;
+    const char *print_name;
     const char *exit_name;
     int print_arguments[5];
     int exit_arguments[1];
@@ -6850,7 +6860,7 @@ static int mir_match_fortran_fatal_schedule(
     plan->program_counter = mir_pascal_scan_symbol(11, 2, 0);
     plan->statement_count = mir_pascal_scan_symbol(52, 2, 0);
     plan->print_function = find_global(mir.insns[77].name);
-    exit_function = find_global(mir.insns[80].name);
+    plan->exit_function = find_global(mir.insns[80].name);
     plan->statement_stride = (int)mir.insns[24].immediate;
     plan->text_offset = (int)mir.insns[67].immediate;
     plan->format_string_id = (int)mir.insns[5].immediate;
@@ -6939,12 +6949,12 @@ static int mir_match_fortran_fatal_schedule(
         !mir_fortran_fatal_char_pointer_type(
             plan->print_function->proto_types[1]) ||
         !mir_fortran_fatal_call_target(
-            &mir.insns[80], exit_function, 0, 1, 1) ||
+            &mir.insns[80], plan->exit_function, 0, 1, 1) ||
         !mir_machine_call_arguments(
             &mir.insns[80], 1, exit_arguments) ||
         exit_arguments[0] != mir.insns[78].dst ||
         !mir_fortran_fatal_signed_word_type(
-            exit_function->proto_types[0]))
+            plan->exit_function->proto_types[0]))
         return mir_machine_reject(
             "fortran-fatal-schedule", "calls");
     if (mir.insns[2].opcode != MIR_CONST ||
@@ -7116,25 +7126,21 @@ static int mir_match_fortran_fatal_schedule(
             mir.insns[80].secondary_offset)
         return mir_machine_reject(
             "fortran-fatal-schedule", "semantics");
-    snprintf(
-        plan->print_name, sizeof(plan->print_name), "%s",
-        mir.insns[77].base_name[0] != 0
-            ? mir.insns[77].base_name
-            : asm_name_for(sym_asm_name(plan->print_function)));
-    exit_name = mir.insns[80].base_name[0] != 0
-        ? mir.insns[80].base_name
-        : mir.insns[80].name;
-    if (exit_name[0] == '_')
-        dcc_copy_str(
-            plan->exit_name, sizeof(plan->exit_name), exit_name);
-    else if (strlen(exit_name) + 2 <= sizeof(plan->exit_name)) {
-        plan->exit_name[0] = '_';
-        dcc_copy_str(
-            plan->exit_name + 1,
-            sizeof(plan->exit_name) - 1, exit_name);
-    }
-    return plan->print_name[0] != 0 &&
-           plan->exit_name[0] != 0;
+    print_name =
+        asm_name_for(sym_asm_name(plan->print_function));
+    exit_name =
+        asm_name_for(sym_asm_name(plan->exit_function));
+    if (print_name == NULL || print_name[0] == 0 ||
+        strlen(print_name) >= sizeof(plan->print_name) ||
+        exit_name == NULL || exit_name[0] == 0 ||
+        strlen(exit_name) >= sizeof(plan->exit_name))
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "call-names");
+    dcc_copy_str(
+        plan->print_name, sizeof(plan->print_name), print_name);
+    dcc_copy_str(
+        plan->exit_name, sizeof(plan->exit_name), exit_name);
+    return 1;
 }
 
 static void mir_emit_fortran_fatal_schedule(
@@ -7201,10 +7207,12 @@ static void mir_emit_fortran_fatal_schedule(
             plan->message_stack_offset + 3);
     mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n\tld hl,2\n\tpush hl\n",
             plan->format_string_id);
-    mir_emit_runtime_call(out, plan->print_name);
+    mir_emit_fortran_fatal_symbol_call(
+        out, plan->print_function, plan->print_name);
     mir_interpreter_file_cleanup(out, 5);
     mir_stream_puts("\tld hl,1\n\tpush hl\n", out);
-    mir_emit_runtime_call(out, plan->exit_name);
+    mir_emit_fortran_fatal_symbol_call(
+        out, plan->exit_function, plan->exit_name);
     mir_stream_puts("\tpop bc\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 

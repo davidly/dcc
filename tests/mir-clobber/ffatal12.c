@@ -36,12 +36,26 @@ static int ff12_statement_count;
 #endif
 static struct Ff12Stmt *ff12_program_counter;
 
+#ifdef FF12_STATIC_PRINT
+static int ff12_static_print(FILE *stream, const char *format, ...)
+{
+    return fprintf(stream, format, "boom", 1, "LINE");
+}
+#endif
+
 #ifdef FF12_FIXED_PRINT
 static int ff12_print(
     FILE *stream, const char *format, const char *message,
     int index, const char *text)
 {
     return fprintf(stream, format, message, index, text);
+}
+#endif
+
+#ifdef FF12_STATIC_EXIT
+static _Noreturn void ff12_static_exit(int status)
+{
+    exit(status);
 }
 #endif
 
@@ -63,7 +77,9 @@ _ff12_exit:
 
 static _Noreturn void ff12_die(const char *message)
 {
-#ifdef FF12_FIXED_PRINT
+#ifdef FF12_STATIC_PRINT
+    ff12_static_print(
+#elif defined(FF12_FIXED_PRINT)
     ff12_print(
 #else
     fprintf(
@@ -82,7 +98,9 @@ static _Noreturn void ff12_die(const char *message)
              ff12_program_counter <
                  ff12_statements + ff12_statement_count)
                 ? ff12_program_counter->text : "");
-#ifdef FF12_FAST_EXIT
+#ifdef FF12_STATIC_EXIT
+    ff12_static_exit(1);
+#elif defined(FF12_FAST_EXIT)
     ff12_exit(1);
 #else
     exit(1);
