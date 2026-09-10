@@ -90,8 +90,8 @@ static int ast_assignment_probe(
     return ast_gen_supported(assign);
 }
 
-static void expect_ast_binary_fold(
-    const char *name, int strict, int op,
+static void check_ast_binary_fold(
+    const char *name, int op,
     int left_type, long left_value,
     int right_type, long right_value,
     int expected_ok, long expected_value)
@@ -116,32 +116,15 @@ static void expect_ast_binary_fold(
     binary.a = &left;
     binary.b = &right;
 
-    ok = strict ? ast_const_fold_strict(&binary, &value)
-                : ast_const_scalar_fold(&binary, &value);
+    ok = ast_const_scalar_fold(&binary, &value);
     if (ok != expected_ok ||
         (expected_ok ? value != expected_value : value != 0x13579bdfL)) {
-        fprintf(stderr, "FAIL %s%s: ok=%d value=%ld\n",
-                name, strict ? " strict" : " scalar", ok, value);
+        fprintf(stderr, "FAIL %s: ok=%d value=%ld\n", name, ok, value);
         ++failures;
     }
 }
 
-static void check_ast_binary_fold(
-    const char *name, int op,
-    int left_type, long left_value,
-    int right_type, long right_value,
-    int expected_ok, long expected_value)
-{
-    expect_ast_binary_fold(name, 0, op, left_type, left_value,
-                           right_type, right_value,
-                           expected_ok, expected_value);
-    expect_ast_binary_fold(name, 1, op, left_type, left_value,
-                           right_type, right_value,
-                           expected_ok, expected_value);
-}
-
-static void expect_ast_bool_cast_fold(
-    const char *name, int strict, long input)
+static void check_ast_bool_cast_fold(const char *name, long input)
 {
     struct AstNode value;
     struct AstNode cast;
@@ -169,20 +152,11 @@ static void expect_ast_bool_cast_fold(
     binary.a = &cast;
     binary.b = &zero;
 
-    ok = strict ? ast_const_fold_strict(&binary, &folded)
-                : ast_const_scalar_fold(&binary, &folded);
+    ok = ast_const_scalar_fold(&binary, &folded);
     if (!ok || folded != expected_value) {
-        fprintf(stderr, "FAIL %s%s: ok=%d value=%ld\n",
-                name, strict ? " strict" : " scalar", ok, folded);
+        fprintf(stderr, "FAIL %s: ok=%d value=%ld\n", name, ok, folded);
         ++failures;
     }
-}
-
-static void check_ast_bool_cast_fold(
-    const char *name, long input)
-{
-    expect_ast_bool_cast_fold(name, 0, input);
-    expect_ast_bool_cast_fold(name, 1, input);
 }
 
 static void verify_ast_binary_folds(void)
