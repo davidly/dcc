@@ -1531,6 +1531,130 @@ static void verify_homed_value_operand_preflight_transaction(void)
     clear_liveness();
 }
 
+static void verify_homed_branch_target_preflight_transaction(void)
+{
+    struct TargetMutation {
+        int opcode;
+        int label;
+        int duplicate_definition;
+    };
+    static const struct TargetMutation mutations[] = {
+        { MIR_JUMP, -1, 0 },
+        { MIR_JUMP, 2, 0 },
+        { MIR_JUMP, 3, 0 },
+        { MIR_BRANCH_FALSE, -1, 0 },
+        { MIR_BRANCH_FALSE, 2, 0 },
+        { MIR_BRANCH_FALSE, 3, 0 },
+        { MIR_JUMP, 1, 1 },
+        { MIR_BRANCH_FALSE, 1, 1 }
+    };
+    MirStream *control;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int saved_color;
+    int saved_spill;
+    int saved_spill_count;
+    size_t mutation;
+    int result;
+    int ok = 1;
+
+    setup(6, 1, 3);
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].label = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed branch target verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    if (control == NULL) {
+        fprintf(stderr, "FAIL homed branch target stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    saved_color = mir.allocation_colors[0];
+    saved_spill = mir.allocation_spills[0];
+    saved_spill_count = mir.allocation_spill_count;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    for (mutation = 0;
+         mutation < sizeof(mutations) / sizeof(mutations[0]);
+         ++mutation) {
+        MirStream *retry = mir_stream_open();
+        int mutation_ok = 1;
+
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        label_id = first_label;
+        mir.insns[2].opcode = mutations[mutation].opcode;
+        mir.insns[2].src1 =
+            mutations[mutation].opcode == MIR_BRANCH_FALSE ? 0 : -1;
+        mir.insns[2].label = mutations[mutation].label;
+        if (mutations[mutation].duplicate_definition) {
+            mir.insns[4].opcode = MIR_LABEL;
+            mir.insns[4].label = 1;
+        }
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 0;
+        mutation_ok = mutation_ok && mir_stream_tell(retry) == 0 &&
+                      mir_stream_size(retry) == 0;
+        mutation_ok = mutation_ok && label_id == first_label;
+        mutation_ok =
+            mutation_ok && mir.allocation_colors[0] == saved_color;
+        mutation_ok =
+            mutation_ok && mir.allocation_spills[0] == saved_spill;
+        mutation_ok =
+            mutation_ok && mir.allocation_spill_count == saved_spill_count;
+
+        mir.insns[2].opcode = MIR_JUMP;
+        mir.insns[2].src1 = -1;
+        mir.insns[2].label = 1;
+        mir.insns[4].opcode = MIR_NOP;
+        mir.insns[4].label = -1;
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 1;
+        mir_stream_rewind(retry);
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text);
+        mutation_ok = mutation_ok && control_bytes == retry_bytes;
+        mutation_ok = mutation_ok &&
+            memcmp(control_text, retry_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr,
+                    "FAIL homed branch target opcode=%s label=%d duplicate=%d\n",
+                    mir_opcode_name(mutations[mutation].opcode),
+                    mutations[mutation].label,
+                    mutations[mutation].duplicate_definition);
+        ok = ok && mutation_ok;
+        mir_stream_close(retry);
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL homed branch target preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
 static void verify_homed_unused_value_operands(void)
 {
     struct Sym *callee;
@@ -2708,6 +2832,7 @@ int main(void)
     verify_spilled_feature_defaults();
     verify_homed_parameter_preflight_transaction();
     verify_homed_value_operand_preflight_transaction();
+    verify_homed_branch_target_preflight_transaction();
     verify_homed_unused_value_operands();
     verify_spilled_preflight_rejection();
     verify_spilled_value_operand_preflight_transaction();

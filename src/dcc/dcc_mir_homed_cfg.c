@@ -636,6 +636,42 @@ static int mir_homed_value_operands_valid(void)
     return 1;
 }
 
+static int mir_homed_branch_targets_valid(void)
+{
+    unsigned char *definitions;
+    int instruction;
+    int valid = 1;
+
+    /* A target must name exactly one definition. Unreferenced labels do not
+     * participate in homed CFG planning and retain their existing handling. */
+    definitions = (unsigned char *)calloc(
+        (size_t)(mir.next_label > 0 ? mir.next_label : 1), 1);
+    if (definitions == NULL)
+        fatal("out of memory validating homed MIR branch targets");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_LABEL &&
+            insn->label >= 0 && insn->label < mir.next_label &&
+            definitions[insn->label] < 2)
+            ++definitions[insn->label];
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != MIR_JUMP &&
+            insn->opcode != MIR_BRANCH_FALSE)
+            continue;
+        if (insn->label >= 0 && insn->label < mir.next_label &&
+            definitions[insn->label] == 1)
+            continue;
+        valid = 0;
+        break;
+    }
+    free(definitions);
+    return valid;
+}
+
 int mir_homed_cfg_depends_on_word_store(void)
 {
     int instruction;
@@ -1575,6 +1611,8 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
     mir_homed_cfg_used_unary_not_branch = 0;
     if (!mir_homed_value_operands_valid())
         return mir_homed_reject("value-operand");
+    if (!mir_homed_branch_targets_valid())
+        return mir_homed_reject("branch-target");
     /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
      * zero-spill-fallback survey found "return-type" (base type != int)
      * is by far the single largest homed-scalar-cfg rejection cause
