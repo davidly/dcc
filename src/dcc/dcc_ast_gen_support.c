@@ -373,6 +373,15 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                                ast_value_is_long_word(n->b);
                     return 0;
                 }
+                if (type_ptr_depth(elem) > 0) {
+                    if (n->op == '=')
+                        return type_size(elem) == 2 &&
+                               ast_pointer_assign_rhs_supported(n->b);
+                    return type_size(elem) == 2 &&
+                           (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
+                           ast_gen_supported(n->b) &&
+                           ast_value_is_plain_int(n->b);
+                }
             }
             /* The common lvalue query above already returns for every long
              * and float element, so the shape-specific fallbacks below only
@@ -576,6 +585,15 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
             int deref_type;
             if (!ast_deref_lvalue_type(n->a, &deref_type))
                 return 0;
+            if (type_ptr_depth(deref_type) > 0) {
+                if (n->op == '=')
+                    return type_size(deref_type) == 2 &&
+                           ast_pointer_assign_rhs_supported(n->b);
+                return type_size(deref_type) == 2 &&
+                       (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
+                       ast_gen_supported(n->b) &&
+                       ast_value_is_plain_int(n->b);
+            }
             if (ast_is_plain_int_type(deref_type) &&
                 (type_size(deref_type) == 1 || type_size(deref_type) == 2)) {
                 /* Plain assignment converts a float rhs or narrows a long rhs
