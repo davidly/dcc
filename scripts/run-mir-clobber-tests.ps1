@@ -373,6 +373,7 @@ function Assert-RequestedExecutionCounts {
         return
     }
     $specialCounts = @{
+        allocmut = 476
         attentionmut = 528
         catalanmut = 444
         ctypemut = 132
@@ -394,6 +395,7 @@ function Assert-RequestedExecutionCounts {
         if ($specialCounts.ContainsKey($requested)) {
             $expected = $specialCounts[$requested]
             $patterns = switch ($requested) {
+                "allocmut" { @("^almexact\|", "^am") }
                 "attentionmut" { @("^ax") }
                 "catalanmut" { @("^catexact\|", "^ct") }
                 "ctypemut" { @("^crexact\|", "^cr") }
@@ -2138,6 +2140,69 @@ foreach ($mutation in $attentionMutations) {
     ++$attentionMutationIndex
 }
 
+$allocationMutations = @(
+    "5:immediate:999", "5:src1:999", "6:src1:999", "8:immediate:999",
+    "8:src1:999", "9:src1:999", "14:src1:999", "19:src1:999",
+    "19:src2:999", "19:immediate:999", "22:src1:999", "22:src2:999",
+    "22:memory_size:3", "25:src1:999", "25:src2:999",
+    "25:immediate:999", "28:src1:999", "28:src2:999",
+    "28:memory_size:3", "31:src1:999", "31:src2:999",
+    "31:immediate:999", "32:src1:999", "32:memory_size:3",
+    "33:src1:999", "33:immediate:999", "36:src1:999", "36:src2:999",
+    "36:immediate:999", "37:src1:999", "37:memory_size:3",
+    "38:src1:999", "38:immediate:999", "39:immediate:999",
+    "39:src1:999", "39:src2:999", "41:src1:999", "44:immediate:999",
+    "44:src1:999", "44:src2:999", "45:src1:999", "54:src1:999",
+    "65:immediate:999", "65:src1:999", "66:src1:999",
+    "68:immediate:999", "68:src1:999", "69:src1:999", "74:src1:999",
+    "79:src1:999", "82:src1:999", "82:src2:999", "85:immediate:999",
+    "85:src1:999", "86:immediate:999", "86:src1:999", "86:src2:999",
+    "87:src1:999", "90:src1:999", "90:src2:999", "90:immediate:999",
+    "93:src1:999", "93:src2:999", "93:memory_size:3",
+    "97:immediate:999", "97:src1:999", "97:src2:999", "98:src1:999",
+    "103:src1:999", "103:src2:999", "103:immediate:999",
+    "104:src1:999", "104:memory_size:3", "106:src1:999",
+    "106:immediate:999", "107:immediate:999", "107:src1:999",
+    "107:src2:999", "108:src1:999", "115:src1:999", "115:src2:999",
+    "115:immediate:999", "116:src1:999", "116:memory_size:3",
+    "118:src1:999", "118:immediate:999", "119:immediate:999",
+    "119:src1:999", "119:src2:999", "120:src1:999", "127:src1:999",
+    "127:src2:999", "131:src1:999", "131:src2:999", "132:src1:999",
+    "137:src1:999", "147:immediate:999", "147:src1:999",
+    "148:src1:999", "151:immediate:999", "151:src1:999",
+    "151:src2:999", "152:src1:999", "162:immediate:999",
+    "162:src1:999", "163:src1:999", "166:immediate:999",
+    "166:src1:999", "166:src2:999", "167:src1:999", "172:src1:999",
+    "179:src1:999", "182:immediate:999", "182:src1:999",
+    "182:src2:999", "183:src1:999", "188:src1:999", "199:src1:999"
+)
+$caseDefinitions += [pscustomobject]@{
+    Name = "almexact"
+    Sources = @(Join-Path $repoRoot "tests/tmalloch.c")
+    Defines = @()
+    Expected = @("tmalloch: all tests passed")
+    Exit = 0
+    ExactTemplate = "allocation-lifetime-runner"
+    ExactFunction = "main"
+    RequireExact = $true
+}
+$allocationMutationIndex = 0
+foreach ($mutation in $allocationMutations) {
+    $caseDefinitions += [pscustomobject]@{
+        Name = "am$($allocationMutationIndex.ToString('000'))"
+        Sources = @(Join-Path $repoRoot "tests/tmalloch.c")
+        Defines = @()
+        Expected = @("tmalloch: all tests passed")
+        Exit = 0
+        RequiredGenericFunction = "main"
+        RequiredSelectorFunction = "main"
+        RequiredSelector = "spilled-scalar-cfg"
+        MachineMutation = $mutation
+        MachineMutationFunction = "main"
+    }
+    ++$allocationMutationIndex
+}
+
 try {
     $selectionControl =
         "; MIR machine function=target template=shape reject=operand`n" +
@@ -2152,7 +2217,7 @@ try {
         throw "MIR exact-rejection selection evidence controls failed"
     }
     $knownCases = @($caseDefinitions.Name) + @(
-        "attentionmut", "catalanmut", "ctypemut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes", "primemut",
+        "allocmut", "attentionmut", "catalanmut", "ctypemut", "fuzz", "inlines", "lazywide", "minimax", "minimaxmut", "ndivmut", "oldloops", "pairedbytes", "primemut",
         "vlaend", "vlaok")
     foreach ($requested in $Cases) {
         if ($requested -notin $knownCases) { throw "Unknown MIR clobber case: $requested" }
@@ -2393,6 +2458,8 @@ try {
 
     foreach ($case in $caseDefinitions) {
         if ($Cases.Count -gt 0 -and $case.Name -notin $Cases -and
+            -not (($case.Name -eq "almexact" -or $case.Name.StartsWith("am")) -and
+                "allocmut" -in $Cases) -and
             -not ($case.Name.StartsWith("ax") -and "attentionmut" -in $Cases) -and
             -not (($case.Name -eq "catexact" -or $case.Name.StartsWith("ct")) -and
                 "catalanmut" -in $Cases) -and

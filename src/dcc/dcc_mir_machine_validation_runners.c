@@ -12815,6 +12815,7 @@ int mir_try_emit_validation_runners(MirStream *out, int phase)
         }
         if (mir_match_allocation_lifetime_runner(
                 &allocation_plan)) {
+            mir_machine_accept("allocation-lifetime-runner");
             mir_emit_allocation_lifetime_runner(
                 out, &allocation_plan);
             return 1;
