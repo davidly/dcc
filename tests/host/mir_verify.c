@@ -846,6 +846,7 @@ static void verify_expression_lowering_preflight(void)
     struct AstNode compound_literal;
     struct AstNode conditional;
     struct AstNode index;
+    struct AstNode indirect_cycle[2];
     struct AstNode logical;
     struct AstNode member;
     struct AstNode operand;
@@ -870,6 +871,7 @@ static void verify_expression_lowering_preflight(void)
     memset(&compound_literal, 0, sizeof(compound_literal));
     memset(&conditional, 0, sizeof(conditional));
     memset(&index, 0, sizeof(index));
+    memset(indirect_cycle, 0, sizeof(indirect_cycle));
     memset(&logical, 0, sizeof(logical));
     memset(&member, 0, sizeof(member));
     memset(&operand, 0, sizeof(operand));
@@ -892,6 +894,10 @@ static void verify_expression_lowering_preflight(void)
     unary.op = '-';
     ok = expect_malformed_expr_transaction(
         "verify_missing_unary_operand", &unary) && ok;
+    unary.a = &unary;
+    ok = expect_malformed_expr_transaction(
+        "verify_cyclic_unary_operand", &unary) && ok;
+    unary.a = NULL;
 
     binary.kind = AST_BINARY;
     binary.type = TYPE_INT;
@@ -995,6 +1001,44 @@ static void verify_expression_lowering_preflight(void)
     sizeof_expr.a = &call;
     ok = expect_malformed_expr_transaction(
         "verify_malformed_sizeof_operand", &sizeof_expr) && ok;
+
+    indirect_cycle[0].kind = AST_UNARY;
+    indirect_cycle[0].type = type_add_ptr(TYPE_INT);
+    indirect_cycle[0].op = '*';
+    indirect_cycle[0].a = &indirect_cycle[1];
+    indirect_cycle[1].kind = AST_UNARY;
+    indirect_cycle[1].type = type_add_ptr(TYPE_INT);
+    indirect_cycle[1].op = '*';
+    indirect_cycle[1].a = &indirect_cycle[0];
+    call.a = &indirect_cycle[0];
+    call.list_len = 0;
+    call.list_cap = 0;
+    call.list = NULL;
+    ok = expect_malformed_expr_transaction(
+        "verify_cyclic_indirect_callee", &call) && ok;
+
+    rhs.list_len = 1;
+    rhs.list_cap = 1;
+    rhs.list = NULL;
+    ok = expect_malformed_expr_transaction(
+        "verify_noncall_null_list", &rhs) && ok;
+    rhs.list_len = 0;
+    ok = expect_malformed_expr_transaction(
+        "verify_noncall_capacity_without_list", &rhs) && ok;
+    rhs.list_cap = 0;
+    rhs.list = arguments;
+    ok = expect_malformed_expr_transaction(
+        "verify_noncall_list_without_capacity", &rhs) && ok;
+    rhs.list = NULL;
+
+    call.a = &callee;
+    call.list_cap = 1;
+    ok = expect_malformed_expr_transaction(
+        "verify_call_capacity_without_list", &call) && ok;
+    call.list_cap = 0;
+    call.list = arguments;
+    ok = expect_malformed_expr_transaction(
+        "verify_call_list_without_capacity", &call) && ok;
 
     if (!ok)
         ++failures;
