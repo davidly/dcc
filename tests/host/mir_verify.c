@@ -2064,7 +2064,9 @@ static void verify_homed_call_preflight_transaction(void)
         "direct call second source",
         "undefined argument value",
         "later argument definition",
-        "reversed arguments"
+        "reversed arguments",
+        "missing call result",
+        "call result collision"
     };
     struct Sym *callee;
     struct MirInsn control_insns[9];
@@ -2183,9 +2185,13 @@ static void verify_homed_call_preflight_transaction(void)
             mir.insns[4].src1 = 3;
             mir.insns[5].opcode = MIR_CONST;
             mir.insns[5].dst = 3;
-        } else {
+        } else if (mutation == 14) {
             mir.insns[3].immediate = 1;
             mir.insns[4].immediate = 0;
+        } else if (mutation == 15) {
+            mir.insns[6].dst = -1;
+        } else {
+            mir.insns[6].dst = 1;
         }
 
         mir_invalidate_use_cache();
@@ -2228,6 +2234,151 @@ static void verify_homed_call_preflight_transaction(void)
     }
     if (!ok) {
         fprintf(stderr, "FAIL homed call preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_call_dominance_preflight_transaction(void)
+{
+    static const char *mutations[] = {
+        "argument bypass",
+        "argument source bypass"
+    };
+    struct Sym *callee;
+    struct MirInsn control_insns[10];
+    MirStream *control;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int saved_colors[3];
+    int saved_spills[3];
+    int saved_spill_count;
+    int first_label;
+    size_t mutation;
+    int result;
+    int ok = 1;
+
+    callee = add_global("verify_homed_dominance_target", TYPE_INT, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 1;
+    callee->proto_types[0] = TYPE_INT;
+    setup(10, 3, 3);
+    mir.next_call_id = 1;
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[2].immediate = 7;
+    mir.insns[3].opcode = MIR_BRANCH_FALSE;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].label = 1;
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 1;
+    mir.insns[6].opcode = MIR_ARG;
+    mir.insns[6].src1 = 1;
+    mir.insns[6].immediate = 0;
+    mir.insns[6].secondary_offset = 0;
+    mir.insns[7].opcode = MIR_LABEL;
+    mir.insns[7].label = 2;
+    mir.insns[8].opcode = MIR_CALL;
+    mir.insns[8].dst = 2;
+    mir.insns[8].secondary_offset = 0;
+    strcpy(mir.insns[8].name, callee->name);
+    mir.insns[9].src1 = 2;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed call dominance verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    if (control == NULL) {
+        fprintf(stderr, "FAIL homed call dominance stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    memcpy(saved_colors, mir.allocation_colors, sizeof(saved_colors));
+    memcpy(saved_spills, mir.allocation_spills, sizeof(saved_spills));
+    saved_spill_count = mir.allocation_spill_count;
+    memcpy(control_insns, mir.insns, sizeof(control_insns));
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    for (mutation = 0;
+         mutation < sizeof(mutations) / sizeof(mutations[0]);
+         ++mutation) {
+        MirStream *retry = mir_stream_open();
+        long prefix_end;
+        int mutation_ok = 1;
+
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        mir_stream_puts("; preserved prefix\n", retry);
+        prefix_end = mir_stream_tell(retry);
+        label_id = first_label;
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        if (mutation == 0) {
+            mir.insns[3].label = 2;
+        } else {
+            mir.insns[2].opcode = MIR_BRANCH_FALSE;
+            mir.insns[2].dst = -1;
+            mir.insns[2].src1 = 0;
+            mir.insns[2].label = 1;
+            mir.insns[3].opcode = MIR_CONST;
+            mir.insns[3].dst = 1;
+            mir.insns[3].src1 = -1;
+            mir.insns[3].label = -1;
+            mir.insns[3].immediate = 7;
+        }
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 0;
+        mutation_ok = mutation_ok &&
+            mir_stream_tell(retry) == prefix_end &&
+            mir_stream_size(retry) == prefix_end;
+        mutation_ok = mutation_ok && label_id == first_label;
+        mutation_ok = mutation_ok &&
+            memcmp(mir.allocation_colors, saved_colors,
+                   sizeof(saved_colors)) == 0;
+        mutation_ok = mutation_ok &&
+            memcmp(mir.allocation_spills, saved_spills,
+                   sizeof(saved_spills)) == 0;
+        mutation_ok =
+            mutation_ok && mir.allocation_spill_count == saved_spill_count;
+
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 1;
+        mutation_ok = mutation_ok &&
+            mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text);
+        mutation_ok = mutation_ok && retry_bytes == control_bytes;
+        mutation_ok = mutation_ok &&
+            memcmp(retry_text, control_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr,
+                    "FAIL homed call dominance %s transaction\n",
+                    mutations[mutation]);
+        ok = ok && mutation_ok;
+        mir_stream_close(retry);
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL homed call dominance transaction\n");
         ++failures;
     }
     mir_stream_close(control);
@@ -3723,6 +3874,7 @@ int main(void)
     verify_homed_value_operand_preflight_transaction();
     verify_homed_branch_target_preflight_transaction();
     verify_homed_call_preflight_transaction();
+    verify_homed_call_dominance_preflight_transaction();
     verify_homed_unused_value_operands();
     verify_spilled_preflight_rejection();
     verify_spilled_value_operand_preflight_transaction();

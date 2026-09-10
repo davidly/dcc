@@ -637,8 +637,57 @@ static int mir_homed_value_operands_valid(void)
 }
 
 /* Generic call emission otherwise discovers malformed ARG groups only after
- * writing the function prologue and earlier instructions. */
-static int mir_homed_call_valid(int call_instruction)
+ * writing the function prologue and earlier instructions. Rebuild edges from
+ * instruction fields so direct malformed-MIR probes cannot rely on stale
+ * cached successors. */
+static int mir_homed_instruction_dominates(
+    int dominator, int target, const int *labels,
+    int *work, unsigned char *visited)
+{
+    int work_count = 0;
+
+    if (dominator < 0 || dominator >= mir.count ||
+        target < 0 || target >= mir.count)
+        return 0;
+    if (dominator == target)
+        return 1;
+    memset(visited, 0, (size_t)mir.count);
+    if (dominator == 0)
+        return 1;
+    visited[0] = 1;
+    work[work_count++] = 0;
+    while (work_count > 0) {
+        int instruction = work[--work_count];
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int successors[2];
+        int successor_count = 0;
+        int successor;
+
+        if (instruction == target)
+            return 0;
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE)
+            successors[successor_count++] = labels[insn->label];
+        if (insn->opcode != MIR_JUMP &&
+            insn->opcode != MIR_RETURN &&
+            instruction + 1 < mir.count)
+            successors[successor_count++] = instruction + 1;
+        for (successor = 0; successor < successor_count; ++successor) {
+            int next = successors[successor];
+
+            if (next < 0 || next >= mir.count ||
+                next == dominator || visited[next])
+                continue;
+            visited[next] = 1;
+            work[work_count++] = next;
+        }
+    }
+    return 1;
+}
+
+static int mir_homed_call_valid(
+    int call_instruction, const int *labels,
+    int *work, unsigned char *visited)
 {
     const struct MirInsn *call = &mir.insns[call_instruction];
     struct Sym *callee;
@@ -652,7 +701,8 @@ static int mir_homed_call_valid(int call_instruction)
         call->secondary_offset >= mir.next_call_id ||
         call->src1 >= 0 || call->src2 >= 0 ||
         (!strcmp(call->name, "<indirect>")) ||
-        (returns_value && call->dst < 0))
+        (returns_value &&
+         (call->dst < 0 || mir_definition(call->dst) != call)))
         return 0;
     callee = find_global(call->name);
     if (callee == NULL || callee->storage != SC_FUNC ||
@@ -678,7 +728,13 @@ static int mir_homed_call_valid(int call_instruction)
         definition = mir_definition(argument->src1);
         if (definition == NULL ||
             definition >= argument ||
-            definition->type != argument->type)
+            definition->type != argument->type ||
+            !mir_homed_instruction_dominates(
+                instruction, call_instruction,
+                labels, work, visited) ||
+            !mir_homed_instruction_dominates(
+                (int)(definition - mir.insns), call_instruction,
+                labels, work, visited))
             return 0;
         if (callee->has_proto &&
             argument->immediate < callee->proto_nargs &&
@@ -697,14 +753,50 @@ static int mir_homed_call_valid(int call_instruction)
 
 static int mir_homed_calls_valid(void)
 {
+    int *labels;
+    int *work;
+    unsigned char *visited;
+    int has_calls = 0;
     int instruction;
+    int valid = 1;
 
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL ||
+            mir.insns[instruction].opcode == MIR_ARG) {
+            has_calls = 1;
+            break;
+        }
+    if (!has_calls)
+        return 1;
+    labels = (int *)malloc(
+        (size_t)(mir.next_label > 0 ? mir.next_label : 1) *
+        sizeof(*labels));
+    work = (int *)malloc(
+        (size_t)(mir.count > 0 ? mir.count : 1) * sizeof(*work));
+    visited = (unsigned char *)malloc(
+        (size_t)(mir.count > 0 ? mir.count : 1) * sizeof(*visited));
+    if (labels == NULL || work == NULL || visited == NULL) {
+        free(visited);
+        free(work);
+        free(labels);
+        return 0;
+    }
+    for (instruction = 0; instruction < mir.next_label; ++instruction)
+        labels[instruction] = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_LABEL &&
+            mir.insns[instruction].label >= 0 &&
+            mir.insns[instruction].label < mir.next_label)
+            labels[mir.insns[instruction].label] = instruction;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
         if (insn->opcode == MIR_CALL &&
-            !mir_homed_call_valid(instruction))
-            return 0;
+            !mir_homed_call_valid(
+                instruction, labels, work, visited)) {
+            valid = 0;
+            break;
+        }
         if (insn->opcode == MIR_ARG) {
             int call_count = 0;
             int scan;
@@ -714,11 +806,16 @@ static int mir_homed_calls_valid(void)
                     mir.insns[scan].secondary_offset ==
                         insn->secondary_offset)
                     ++call_count;
-            if (call_count != 1)
-                return 0;
+            if (call_count != 1) {
+                valid = 0;
+                break;
+            }
         }
     }
-    return 1;
+    free(visited);
+    free(work);
+    free(labels);
+    return valid;
 }
 
 static int mir_homed_branch_targets_valid(void)
@@ -1696,10 +1793,10 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
     mir_homed_cfg_used_unary_not_branch = 0;
     if (!mir_homed_value_operands_valid())
         return mir_homed_reject("value-operand");
-    if (!mir_homed_calls_valid())
-        return mir_homed_reject("call");
     if (!mir_homed_branch_targets_valid())
         return mir_homed_reject("branch-target");
+    if (!mir_homed_calls_valid())
+        return mir_homed_reject("call");
     /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
      * zero-spill-fallback survey found "return-type" (base type != int)
      * is by far the single largest homed-scalar-cfg rejection cause
