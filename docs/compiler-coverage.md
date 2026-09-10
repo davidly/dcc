@@ -88,14 +88,22 @@ aligned when deferred metadata inserts MIR instructions. The standalone
 scalar-DAG host binary is part of both CTest and coverage provenance, and
 isolated compiler-mutant workspaces copy every host C source.
 
+The following wave executes 5,856 exact leaf configurations. It adds
+multidimensional-array and recursive MinMax proof campaigns, rejects malformed
+spill-slot operands before interval construction, and restores label state
+after declined selector attempts. The selector isolation test links the normal
+module object; an initial duplicate-translation-unit report was discarded and
+the corrected collection contains no duplicate selector functions or coverage
+exclusions.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,364 / 4,364 | 100.00% |
-| Lines | 177,615 / 190,238 | 93.36% |
-| Native branch outcomes | 91,538 / 144,922 | 63.16% |
-| Regions | 159,782 / 170,300 | 93.82% |
+| Functions | 4,368 / 4,368 | 100.00% |
+| Lines | 177,846 / 190,452 | 93.38% |
+| Native branch outcomes | 91,683 / 145,158 | 63.16% |
+| Regions | 160,119 / 170,626 | 93.84% |
 
-The raw ledger has 53,137 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,228 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload

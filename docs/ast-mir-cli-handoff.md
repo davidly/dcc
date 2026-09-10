@@ -114,9 +114,18 @@ binaries, and compiler-mutant workspaces copy all host C test sources. An
 initial collection was correctly rejected after a concurrent script test
 changed `dccmake`; the clean rerun used an immutable tool bundle.
 
-Latest integrated totals: 4,364/4,364 functions, 177,615/190,238 lines
-(93.36%), 91,538/144,922 native branch outcomes (63.16%), and
-159,782/170,300 regions (93.82%). The raw uncovered ledger is 53,137.
+The next wave raises the exact inventory to 5,856 configurations with
+multidimensional-array and recursive MinMax proof hardening. Malformed virtual
+operands now reject before spill-slot interval indexing, and declined selector
+attempts restore label state before fallback. An initial selector host-test
+integration compiled the selector as a second translation unit and duplicated
+68 maintained functions in the report; that report was discarded. The test
+now links the normal selector object, and LLVM 18 confirms zero duplicate or
+misattributed selector functions without any exclusion.
+
+Latest integrated totals: 4,368/4,368 functions, 177,846/190,452 lines
+(93.38%), 91,683/145,158 native branch outcomes (63.16%), and
+160,119/170,626 regions (93.84%). The raw uncovered ledger is 53,228.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -128,7 +137,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `893bc5bd` (`test: copy all host mutation sources`).
+  `471de8da` (`Link selector isolation test normally`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -158,7 +167,13 @@ parallel-wave summary for the current measurement.
   - `d411dd2a` / `4a85836c` — sliding-maximum and ctype/realloc ABI proofs;
   - `69c94414` — deferred declaration/scope metadata repair; and
   - `e41dea92` / `893bc5bd` — complete host-test provenance and mutation
-    workspace inputs.
+    workspace inputs;
+  - `b62bdb3a` / `471de8da` — transactional selector labels and
+    single-translation-unit coverage;
+  - `0710c912` — spill-slot operand bounds;
+  - `1d29427f` / `0f0a5537` — multidimensional array proofs; and
+  - `5cd36798` through `b6daaa16` — recursive MinMax proofs and standard
+    campaign integration.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
