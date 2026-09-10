@@ -31290,6 +31290,43 @@ static int mir_spilled_value_operands_valid(int *invalid_instruction)
     return 1;
 }
 
+static int mir_spilled_branch_targets_valid(int *invalid_instruction)
+{
+    unsigned char *labels;
+    int instruction;
+    int valid = 1;
+
+    /* Reject malformed probes before frame planning allocates slots or
+     * emission consumes labels and writes a partial candidate stream. */
+    labels = (unsigned char *)calloc(
+        (size_t)(mir.next_label > 0 ? mir.next_label : 1), 1);
+    if (labels == NULL)
+        fatal("out of memory validating MIR branch targets");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_LABEL &&
+            insn->label >= 0 && insn->label < mir.next_label)
+            labels[insn->label] = 1;
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != MIR_JUMP &&
+            insn->opcode != MIR_BRANCH_FALSE)
+            continue;
+        if (insn->label >= 0 && insn->label < mir.next_label &&
+            labels[insn->label])
+            continue;
+        if (invalid_instruction != NULL)
+            *invalid_instruction = instruction;
+        valid = 0;
+        break;
+    }
+    free(labels);
+    return valid;
+}
+
 /* Item 86: single shared frame-size accounting predicate. Calls
  * mir_prepare_backend_slots() (which has the side effect of assigning
  * backend slots), so call it exactly once per candidate emitter, same as
@@ -31657,6 +31694,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         if (!mir_spilled_value_operands_valid(&invalid_instruction))
             return mir_scalar_cfg_preflight_reject(
                 "value-operand", invalid_instruction);
+        if (!mir_spilled_branch_targets_valid(&invalid_instruction))
+            return mir_scalar_cfg_preflight_reject(
+                "branch-target", invalid_instruction);
     }
     if ((!type_is_struct_object(mir.return_type) &&
             (mir.return_type & 15) != TYPE_VOID &&
