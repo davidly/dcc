@@ -121,11 +121,9 @@ if(DCC_BUILD_MIR_TESTS)
         ../../tests/host/mir_scalar_dag.c ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
         mir-scalar-dag-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    set(DCC_MIR_SELECTOR_TEST_SOURCES ${DCC_MIR_TEST_SOURCES})
-    list(REMOVE_ITEM DCC_MIR_SELECTOR_TEST_SOURCES dcc_mir_select.c)
     add_executable(mir-selector-isolation-test
         ../../tests/host/mir_selector_isolation.c
-        ${DCC_MIR_SELECTOR_TEST_SOURCES})
+        ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
         mir-selector-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     if(DCC_ENABLE_COVERAGE)

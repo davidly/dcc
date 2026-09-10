@@ -547,6 +547,7 @@ void mir_extrn_begin_attempt(void);
 int mir_extrn_should_emit(struct Sym *sym);
 int mir_extrn_should_emit_name(const char *name);
 void mir_emit_runtime_call(MirStream *out, const char *name);
+int mir_try_selector(MirStream *out, int (*selector)(MirStream *));
 void mir_clear_debug_events(void);
 void mir_emit_debug_events(MirStream *out, int point);
 void mir_emit_first_debug_location(MirStream *out);

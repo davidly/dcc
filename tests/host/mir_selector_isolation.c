@@ -1,7 +1,6 @@
 #define main dcc_driver_main
 #include "../../src/dcc/dcc.c"
 #undef main
-#include "../../src/dcc/dcc_mir_select.c"
 #include "dcc_mir_internal.h"
 
 static int rejecting_candidate(MirStream *out)

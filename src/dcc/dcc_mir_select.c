@@ -28,7 +28,6 @@ static int mir_cost_regional_candidate_is_validated(void);
 static int mir_cost_regional_candidate_is_diagnostic_validated(void);
 static int mir_large_dense_switch_phi_candidate_is_eligible(void);
 static int mir_boolean_candidate_is_validated(void);
-static int mir_try_selector(MirStream *out, int (*selector)(MirStream *));
 
 static int mir_cost_policy_selects_alternative(void)
 {
@@ -1357,7 +1356,7 @@ void mir_emit_runtime_call(MirStream *out, const char *name)
 
 /* Isolate every selector attempt in its own stream so partial output from a
  * declining candidate cannot contaminate the next generated candidate. */
-static int mir_try_selector(MirStream *out, int (*selector)(MirStream *))
+int mir_try_selector(MirStream *out, int (*selector)(MirStream *))
 {
     MirStream *candidate = mir_stream_open();
     int accepted;
