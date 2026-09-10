@@ -6762,15 +6762,86 @@ static void mir_emit_fortran_grow_schedule(
     mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static int mir_fortran_fatal_signed_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_fortran_fatal_char_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_CHAR &&
+           type_size(type) == 2;
+}
+
+static int mir_fortran_fatal_stream_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           type_size(type) == 2;
+}
+
+static int mir_fortran_fatal_statement_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & TYPE_STRUCT) != 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_fortran_fatal_void_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_VOID &&
+           type_size(type) == 0;
+}
+
+static int mir_fortran_fatal_string_equals(
+    int string_id, const char *expected)
+{
+    size_t length = strlen(expected);
+
+    return string_id >= 0 && string_id < nstrings &&
+           strings[string_id] != NULL &&
+           !string_wide[string_id] &&
+           string_len[string_id] == (int)length &&
+           !memcmp(strings[string_id], expected, length);
+}
+
+static int mir_fortran_fatal_call_target(
+    const struct MirInsn *call, struct Sym *function,
+    int variadic, int fixed_arguments, int noreturn)
+{
+    return call->opcode == MIR_CALL && call->src1 < 0 &&
+           call->memory_flags ==
+               (variadic ? MIR_CALL_FLAG_VARIADIC : 0) &&
+           function != NULL && function->storage == SC_FUNC &&
+           !function->is_funcptr && !function->is_fastcall &&
+           function->is_noreturn == noreturn &&
+           function->has_proto &&
+           function->proto_variadic == variadic &&
+           function->proto_nargs == fixed_arguments &&
+           function->type == call->type &&
+           (call->base_name[0] == 0 ||
+            !strcmp(call->base_name,
+                    asm_name_for(sym_asm_name(function))));
+}
+
 static int mir_match_fortran_fatal_schedule(
     struct MirFortranFatalSchedule *plan)
 {
+    struct Sym *exit_function;
     const char *exit_name;
+    int print_arguments[5];
+    int exit_arguments[1];
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 81 || mir_cfg_block_count() != 18 ||
         mir.has_vla || mir.aggregate_temp_bytes != 0 ||
-        (mir.return_type & 15) != TYPE_VOID ||
+        mir_has_cfg_backedge() ||
+        !mir_fortran_fatal_void_type(mir.return_type) ||
         !mir_machine_parameter_value_offset(
             mir.insns[1].dst, &plan->message_stack_offset))
         return mir_machine_reject(
@@ -6779,6 +6850,7 @@ static int mir_match_fortran_fatal_schedule(
     plan->program_counter = mir_pascal_scan_symbol(11, 2, 0);
     plan->statement_count = mir_pascal_scan_symbol(52, 2, 0);
     plan->print_function = find_global(mir.insns[77].name);
+    exit_function = find_global(mir.insns[80].name);
     plan->statement_stride = (int)mir.insns[24].immediate;
     plan->text_offset = (int)mir.insns[67].immediate;
     plan->format_string_id = (int)mir.insns[5].immediate;
@@ -6788,11 +6860,94 @@ static int mir_match_fortran_fatal_schedule(
         plan->statement_count == NULL ||
         plan->print_function == NULL ||
         plan->statement_stride <= 0 ||
+        plan->statement_stride > 32767 ||
         plan->text_offset < 0 ||
         plan->text_offset + 1 >= plan->statement_stride ||
         plan->format_string_id < 0 ||
-        plan->empty_string_id < 0 ||
-        mir.insns[2].opcode != MIR_CONST ||
+        plan->empty_string_id < 0)
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "symbols");
+    if (!mir_fortran_fatal_string_equals(
+            plan->format_string_id,
+            "forint:%s near pc=%d '%s'\n") ||
+        !mir_fortran_fatal_string_equals(
+            plan->empty_string_id, ""))
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "format");
+    if (!mir_fortran_fatal_char_pointer_type(mir.insns[1].type) ||
+        mir_machine_pointee_is_volatile(&mir.insns[1]) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[2].type) ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[5].type) ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[7].type) ||
+        !mir_fortran_fatal_statement_pointer_type(
+            plan->statements->type) ||
+        plan->program_counter->type != plan->statements->type ||
+        !mir_fortran_fatal_signed_word_type(
+            plan->statement_count->type) ||
+        mir.insns[9].type != plan->statements->type ||
+        mir.insns[11].type != plan->program_counter->type ||
+        mir.insns[21].type != plan->program_counter->type ||
+        mir.insns[22].type != plan->statements->type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[23].type) ||
+        !mir_fortran_fatal_signed_word_type(
+            mir.insns[23].secondary_offset) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[24].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[25].type) ||
+        mir.insns[25].secondary_offset != mir.insns[24].type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[31].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[34].type) ||
+        mir.insns[36].type != plan->statements->type ||
+        mir.insns[38].type != plan->program_counter->type ||
+        mir.insns[39].type != plan->statements->type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[40].type) ||
+        mir.insns[40].secondary_offset != plan->statements->type ||
+        mir.insns[50].type != plan->program_counter->type ||
+        mir.insns[51].type != plan->statements->type ||
+        mir.insns[52].type != plan->statement_count->type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[53].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[54].type) ||
+        mir.insns[55].type != plan->statements->type ||
+        mir.insns[55].secondary_offset != mir.insns[54].type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[56].type) ||
+        mir.insns[56].secondary_offset != plan->statements->type ||
+        mir.insns[66].type != plan->program_counter->type ||
+        type_ptr_depth(mir.insns[67].type) != 2 ||
+        (mir.insns[67].type & 15) != TYPE_CHAR ||
+        mir.insns[67].memory_size != 2 ||
+        mir.insns[67].memory_flags != 0 ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[68].type) ||
+        mir.insns[68].memory_size != 2 ||
+        mir.insns[68].memory_flags != 0 ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[72].type) ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[75].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[77].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[78].type) ||
+        !mir_fortran_fatal_void_type(mir.insns[80].type))
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "types");
+    if (!mir_fortran_fatal_call_target(
+            &mir.insns[77], plan->print_function, 1, 2, 0) ||
+        !mir_machine_call_arguments(
+            &mir.insns[77], 5, print_arguments) ||
+        print_arguments[0] != mir.insns[2].dst ||
+        print_arguments[1] != mir.insns[5].dst ||
+        print_arguments[2] != mir.insns[7].dst ||
+        print_arguments[3] != mir.insns[34].dst ||
+        print_arguments[4] != mir.insns[75].dst ||
+        !mir_fortran_fatal_stream_pointer_type(
+            plan->print_function->proto_types[0]) ||
+        !mir_fortran_fatal_char_pointer_type(
+            plan->print_function->proto_types[1]) ||
+        !mir_fortran_fatal_call_target(
+            &mir.insns[80], exit_function, 0, 1, 1) ||
+        !mir_machine_call_arguments(
+            &mir.insns[80], 1, exit_arguments) ||
+        exit_arguments[0] != mir.insns[78].dst ||
+        !mir_fortran_fatal_signed_word_type(
+            exit_function->proto_types[0]))
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "calls");
+    if (mir.insns[2].opcode != MIR_CONST ||
         !mir_machine_constant_equals(mir.insns[2].dst, 2) ||
         mir.insns[4].opcode != MIR_ARG ||
         mir.insns[4].immediate != 0 ||

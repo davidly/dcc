@@ -1,0 +1,199 @@
+[
+  {
+    "Name": "ff12base",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": [],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireExact": true
+  },
+  {
+    "Name": "ff12fmt",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_ALT_FORMAT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "fortran-alt:boom index=1 text='LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12ucnt",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_UNSIGNED_COUNT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12fixp",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_FIXED_PRINT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12fext",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_FAST_EXIT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12outt",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": [],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "2:type:17",
+    "MachineMutationFunction": "ff12_die"
+  },
+  {
+    "Name": "ff12idx",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": [],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "25:type:17",
+    "MachineMutationFunction": "ff12_die"
+  },
+  {
+    "Name": "ff12rng",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": [],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "56:type:17",
+    "MachineMutationFunction": "ff12_die"
+  },
+  {
+    "Name": "ff12text",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": [],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "68:memory_size:1",
+    "MachineMutationFunction": "ff12_die"
+  },
+  {
+    "Name": "ff12xid",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": [],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "80:identity:120",
+    "MachineMutationFunction": "ff12_die"
+  }
+]
