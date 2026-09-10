@@ -279,5 +279,66 @@
     "RequiredSelector": "spilled-scalar-cfg",
     "MachineMutation": "24:type:18",
     "MachineMutationFunction": "alias_sum"
+  },
+  {
+    "Name": "ds5ok",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/dsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "direct-full got=17 ref=17 want=17 guards=91,-87",
+      "direct-sub got=120 ref=120 want=120 guards=-128,63",
+      "direct-zero got=0 ref=0 want=0 guards=-7,1",
+      "direct-negative got=0 ref=0 want=0 guards=0,126",
+      "direct-min got=-128 ref=-128 want=-128 guards=91,0",
+      "direct-sparse got=15 ref=15 want=15 guards=73,-74",
+      "DSUM5 oracle hash=4033 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "direct_sum",
+    "RequireExact": true
+  },
+  {
+    "Name": "ds5testu",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/dsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "DSUM5 oracle hash=4033 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "direct_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "direct_sum",
+    "RequiredSelectorFunction": "direct_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "23:immediate:45",
+    "MachineMutationFunction": "direct_sum"
+  },
+  {
+    "Name": "ds5addu",
+    "Group": "aliased-sum-wave5",
+    "Sources": ["tests/mir-clobber/dsum5.c"],
+    "Defines": [],
+    "Expected": [
+      "DSUM5 oracle hash=4033 failures=0 guards=91,-87,73,-74"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-sum-loop-schedule",
+    "ExactFunction": "direct_sum",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "direct_sum",
+    "RequiredSelectorFunction": "direct_sum",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "31:immediate:45",
+    "MachineMutationFunction": "direct_sum"
   }
 ]

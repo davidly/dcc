@@ -10247,6 +10247,7 @@ static int mir_match_direct_byte_sum_loop_schedule(
         (mir.insns[21].memory_flags & (1 | 8)) != 0 ||
         !mir_machine_constant_equals(mir.insns[22].dst, 0) ||
         mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].immediate != 0 ||
         !mir_byte_sum_signed_word_type(mir.insns[23].type) ||
         mir.insns[24].src1 != mir.insns[23].dst ||
         mir.insns[24].src2 != mir.insns[22].dst ||
@@ -10265,6 +10266,7 @@ static int mir_match_direct_byte_sum_loop_schedule(
         !mir_byte_sum_signed_byte_type(mir.insns[30].type) ||
         (mir.insns[30].memory_flags & (1 | 8)) != 0 ||
         mir.insns[31].src1 != mir.insns[30].dst ||
+        mir.insns[31].immediate != 0 ||
         !mir_byte_sum_signed_word_type(mir.insns[31].type) ||
         mir.insns[32].immediate != '+' ||
         !((mir.insns[32].src1 == mir.insns[26].dst &&
