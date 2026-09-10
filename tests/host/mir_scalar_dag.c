@@ -2,6 +2,7 @@
 #include "../../src/dcc/dcc.c"
 #undef main
 #include "dcc_mir_internal.h"
+#include <limits.h>
 
 static int failures;
 
@@ -188,7 +189,9 @@ static void expect_declined_retry(
     ok = accepted == 0 &&
          mir_stream_tell(stream) == 0 &&
          mir_stream_size(stream) == 0 &&
-         label_id == first_label;
+         label_id == first_label &&
+         mir_extrn_should_emit_name("__stchk");
+    mir_extrn_begin_attempt();
     clear_liveness();
     setup_homed_scalar_dag();
     accepted = mir_try_emit_homed_scalar_dag(stream);
@@ -198,6 +201,28 @@ static void expect_declined_retry(
          memcmp(retry_text, control_text, control_bytes) == 0;
     if (!ok) {
         fprintf(stderr, "FAIL homed scalar DAG %s transaction\n", name);
+        ++failures;
+    }
+    mir_stream_close(stream);
+    clear_liveness();
+}
+
+static void expect_homed_output(const char *name, const char *needle)
+{
+    MirStream *stream = mir_stream_open();
+    char text[2048];
+    size_t bytes;
+    int ok;
+
+    if (stream == NULL)
+        fatal("cannot create homed scalar DAG stream");
+    mir_extrn_begin_attempt();
+    ok = mir_try_emit_homed_scalar_dag(stream) == 1;
+    bytes = read_stream(stream, text, sizeof(text));
+    ok = ok && bytes > 0 &&
+         (needle == NULL || strstr(text, needle) != NULL);
+    if (!ok) {
+        fprintf(stderr, "FAIL homed scalar DAG %s output\n", name);
         ++failures;
     }
     mir_stream_close(stream);
@@ -473,6 +498,94 @@ static void verify_homed_scalar_dag_preflight(void)
     mir_stream_close(control);
     clear_liveness();
 
+    setup_homed_scalar_dag();
+    mir.objects[0].type = TYPE_CHAR;
+    mir.insns[1].type = TYPE_CHAR;
+    expect_homed_output(
+        "signed byte parameter", "\trlca\n\tsbc a,a\n\tld h,a\n");
+
+    setup_homed_scalar_dag();
+    mir.objects[0].type = TYPE_CHAR | TYPE_UNSIGNED;
+    mir.insns[1].type = TYPE_CHAR | TYPE_UNSIGNED;
+    expect_homed_output("unsigned byte parameter", "\tld h,0\n");
+
+    setup_homed_scalar_dag();
+    mir.objects[0].type = TYPE_BOOL;
+    mir.insns[1].type = TYPE_BOOL;
+    expect_homed_output("boolean parameter", "\tld a,l\n\tor a\n\tld hl,0\n");
+
+    setup_homed_scalar_dag();
+    mir.objects[0].is_register = 1;
+    expect_homed_output("register parameter", "\tret\n");
+
+    setup_homed_scalar_dag();
+    mir.allocation_colors[0] = MIR_COLOR_IY;
+    expect_homed_output("IY home", "\tpush iy\n");
+
+    setup_homed_scalar_dag();
+    mir.local_bytes = 2;
+    expect_homed_output("local frame", "\tld hl,-2\n\tadd hl,sp\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[4].immediate = '-';
+    expect_homed_output("unary negation", "\tsub l\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[4].immediate = '~';
+    expect_homed_output("unary complement", "\tcpl\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[4].immediate = 0;
+    mir.insns[4].type = TYPE_INT | TYPE_UNSIGNED;
+    mir.insns[6].type = TYPE_INT | TYPE_UNSIGNED;
+    mir.insns[6].secondary_offset = TYPE_INT | TYPE_UNSIGNED;
+    expect_homed_output("word signedness conversion", "\tadd hl,de\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[2].type = TYPE_INT | TYPE_UNSIGNED;
+    mir.insns[3].type = TYPE_INT | TYPE_UNSIGNED;
+    mir.insns[3].secondary_offset = TYPE_INT | TYPE_UNSIGNED;
+    expect_homed_output("unsigned binary common type", "\tadd hl,de\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[3].immediate = '-';
+    expect_homed_output("binary subtraction", "\tsbc hl,de\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[3].immediate = '&';
+    expect_homed_output("binary and", "\tand d\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[3].immediate = '|';
+    expect_homed_output("binary or", "\tor d\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[3].immediate = '^';
+    expect_homed_output("binary xor", "\txor d\n");
+
+    setup_homed_scalar_dag();
+    mir.allocation_colors[0] = MIR_COLOR_HL;
+    expect_homed_output("HL parameter home", "\tld a,(hl)\n\tinc hl\n");
+
+    setup_homed_scalar_dag();
+    mir.allocation_colors[0] = MIR_COLOR_DE;
+    mir.allocation_colors[1] = MIR_COLOR_BC;
+    expect_homed_output(
+        "DE parameter home", "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n");
+
+    setup_homed_scalar_dag();
+    mir.allocation_colors[1] = MIR_COLOR_IY;
+    expect_homed_output("IY constant home", "\tpop iy\n");
+
+    setup_homed_scalar_dag();
+    mir.insns[3].src2 = mir.insns[3].src1;
+    expect_homed_output("shared BC operand", "\tadd hl,de\n");
+
+    opt_stack_check = 0;
+    setup_homed_scalar_dag();
+    expect_homed_output("no stack check", "\tret\n");
+    opt_stack_check = 1;
+
     label_id = first_label;
     setup_homed_scalar_dag();
     mir.allocation_colors[4] = MIR_COLOR_HL_DE;
@@ -509,6 +622,329 @@ static void verify_homed_scalar_dag_preflight(void)
     mir.insns[5].type = type_add_ptr(TYPE_INT);
     expect_declined_retry(
         "value type", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[1].type = TYPE_CHAR;
+    expect_declined_retry(
+        "parameter instruction type", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    strcpy(mir.insns[1].name, "other");
+    expect_declined_retry(
+        "parameter name", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[1].name[0] = 0;
+    mir.objects[0].name[0] = 0;
+    expect_declined_retry(
+        "empty parameter name", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    memset(mir.insns[1].name, 'x', sizeof(mir.insns[1].name));
+    expect_declined_retry(
+        "unterminated parameter name",
+        control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.objects[0].entry_value = 1;
+    expect_declined_retry(
+        "parameter entry value", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.declared_count = 1;
+    strcpy(mir.declared_names[0], "value");
+    mir.declared_is_volatile[0] = 1;
+    expect_declined_retry(
+        "volatile parameter", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.declared_count = 1;
+    strcpy(mir.declared_names[0], "value");
+    mir.declared_storage[0] = SC_PARAM;
+    mir.declared_types[0] = TYPE_CHAR;
+    mir.declared_is_volatile[0] = 0;
+    expect_declined_retry(
+        "declared parameter type", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.declared_count = 2;
+    strcpy(mir.declared_names[0], "value");
+    strcpy(mir.declared_names[1], "value");
+    mir.declared_storage[0] = SC_PARAM;
+    mir.declared_storage[1] = SC_PARAM;
+    mir.declared_types[0] = TYPE_INT;
+    mir.declared_types[1] = TYPE_INT;
+    mir.declared_is_volatile[0] = 0;
+    mir.declared_is_volatile[1] = 1;
+    expect_declined_retry(
+        "duplicate volatile declaration",
+        control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.declared_count = 1;
+    memset(mir.declared_names[0], 'x', sizeof(mir.declared_names[0]));
+    expect_declined_retry(
+        "unterminated declaration name",
+        control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[3].src2 = 4;
+    expect_declined_retry(
+        "forward reference", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[3].src1 = mir.next_value;
+    expect_declined_retry(
+        "source value bound", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[2].opcode = MIR_NOP;
+    expect_declined_retry(
+        "missing definition", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[5].dst = 1;
+    expect_declined_retry(
+        "duplicate definition", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[4].src1 = mir.insns[4].dst;
+    expect_declined_retry(
+        "self reference", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[5].opcode = MIR_UNARY;
+    mir.insns[5].src1 = 2;
+    mir.insns[5].immediate = '+';
+    mir.insns[5].type = TYPE_INT;
+    expect_declined_retry(
+        "destructive shared source", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[5].opcode = MIR_UNARY;
+    mir.insns[5].src1 = 2;
+    mir.insns[5].immediate = '+';
+    mir.insns[5].type = TYPE_INT;
+    mir.allocation_colors[2] = MIR_COLOR_DE;
+    expect_declined_retry(
+        "destructive shared DE source",
+        control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[3].src2 = mir.insns[3].src1;
+    mir.allocation_colors[0] = MIR_COLOR_DE;
+    expect_declined_retry(
+        "shared DE operand", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[4].immediate = 0;
+    mir.insns[4].type = TYPE_CHAR;
+    expect_declined_retry(
+        "narrowing cast", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[3].secondary_offset = TYPE_CHAR;
+    expect_declined_retry(
+        "binary common type", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[3].type = TYPE_CHAR;
+    expect_declined_retry(
+        "binary result type", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[4].immediate = '-';
+    mir.insns[4].type = TYPE_CHAR;
+    expect_declined_retry(
+        "unary result type", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[4].type = TYPE_INT | TYPE_UNSIGNED;
+    expect_declined_retry(
+        "logical result type", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[4].immediate = '*';
+    expect_declined_retry(
+        "unary operator", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[3].immediate = '*';
+    expect_declined_retry(
+        "binary operator", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[5].type = TYPE_CHAR | TYPE_UNSIGNED;
+    mir.insns[5].immediate = 0x101;
+    expect_declined_retry(
+        "unnormalized constant", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.allocation_colors[0] = MIR_COLOR_DE;
+    mir.allocation_colors[1] = MIR_COLOR_DE;
+    expect_declined_retry(
+        "overlapping homes", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    {
+        struct MirInsn temporary = mir.insns[6];
+        mir.insns[6] = mir.insns[7];
+        mir.insns[7] = temporary;
+        mir.insns[6].successor_count = 0;
+        mir.insns[7].successor_count = 1;
+        mir.insns[7].successors[0] = 8;
+    }
+    expect_declined_retry(
+        "instruction after return", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[0].label = 1;
+    expect_declined_retry(
+        "entry label", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[0].opcode = MIR_NOP;
+    mir.insns[0].dst = 0;
+    expect_declined_retry(
+        "NOP destination", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.next_label = 2;
+    expect_declined_retry(
+        "label dimension", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[7].successor_count = 1;
+    mir.insns[7].successors[0] = 0;
+    expect_declined_retry(
+        "successor metadata", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[6].opcode = MIR_RETURN;
+    mir.insns[6].src1 = 3;
+    expect_declined_retry(
+        "multiple returns", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.count = 3;
+    mir.next_value = 1;
+    mir.object_count = 0;
+    mir.insns[1].opcode = MIR_CONST;
+    mir.insns[1].dst = 0;
+    mir.insns[1].object = -1;
+    mir.insns[1].immediate = 1;
+    mir.insns[2].opcode = MIR_RETURN;
+    mir.insns[2].dst = -1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].successor_count = 0;
+    expect_declined_retry(
+        "constant-only graph", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[7].type = TYPE_INT | TYPE_UNSIGNED;
+    expect_homed_output("unused return instruction type", "\tret\n");
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.count = mir.capacity + 1;
+    expect_declined_retry(
+        "instruction capacity", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.count = INT_MAX;
+    expect_declined_retry(
+        "extreme instruction count", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.next_value = mir.allocation_capacity + 1;
+    expect_declined_retry(
+        "allocation capacity", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.next_value = INT_MAX;
+    expect_declined_retry(
+        "extreme value count", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.next_label = INT_MAX;
+    expect_declined_retry(
+        "extreme label count", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.objects[0].offset = INT_MAX;
+    expect_declined_retry(
+        "extreme parameter offset",
+        control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.object_count = INT_MAX;
+    expect_declined_retry(
+        "extreme object count", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.local_bytes = INT_MAX;
+    mir.dead_local_suffix_bytes = INT_MIN;
+    expect_declined_retry(
+        "extreme frame dimensions", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[2].opcode = MIR_CALL;
+    expect_declined_retry(
+        "call near match", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[2].opcode = MIR_STORE;
+    expect_declined_retry(
+        "store near match", control_text, control_bytes, first_label);
+
+    label_id = first_label;
+    setup_homed_scalar_dag();
+    mir.insns[2].opcode = MIR_BRANCH_FALSE;
+    expect_declined_retry(
+        "branch near match", control_text, control_bytes, first_label);
 
     opt_stack_check = saved_stack_check;
 }

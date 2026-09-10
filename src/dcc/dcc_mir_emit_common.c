@@ -2618,6 +2618,311 @@ static int mir_homed_scalar_dag_home_is_emittable(int value)
            mir.allocation_colors[value] <= MIR_COLOR_IY;
 }
 
+static int mir_homed_scalar_dag_promoted_type(int type)
+{
+    if (type_size(type) == 1)
+        return TYPE_INT;
+    return TYPE_INT | (type & TYPE_UNSIGNED);
+}
+
+static int mir_homed_scalar_dag_identity_conversion(int source_type,
+                                                    int target_type)
+{
+    if (!mir_scalar_dag_type_is_emittable(source_type) ||
+        !mir_scalar_dag_type_is_emittable(target_type))
+        return 0;
+    if (type_is_bool(target_type))
+        return type_is_bool(source_type);
+    if (type_size(target_type) == 2)
+        return 1;
+    return source_type == target_type;
+}
+
+static int mir_homed_scalar_dag_constant_is_normalized(
+    int type, long value)
+{
+    unsigned long mask = type_size(type) == 1 ? 0xffUL : 0xffffUL;
+    unsigned long bits = (unsigned long)value & mask;
+
+    if (type_is_bool(type))
+        return value == 0 || value == 1;
+    if ((type & TYPE_UNSIGNED) == 0 &&
+        (bits & (type_size(type) == 1 ? 0x80UL : 0x8000UL)) != 0)
+        bits |= ~mask;
+    return (long)bits == value;
+}
+
+static int mir_homed_scalar_dag_name_is_terminated(const char name[64])
+{
+    return memchr(name, 0, 64) != NULL;
+}
+
+static int mir_homed_scalar_dag_parameter_is_volatile(
+    const struct MirObject *object)
+{
+    int declared;
+
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (mir_homed_scalar_dag_name_is_terminated(
+                mir.declared_names[declared]) &&
+            !strcmp(mir.declared_names[declared], object->name) &&
+            mir.declared_is_volatile[declared])
+            return 1;
+    return 0;
+}
+
+static int mir_homed_scalar_dag_preflight(int *uses_iy_out,
+                                          int *frameless_out)
+{
+    /* The only production caller caps general-rollout graphs at 64 MIR
+     * instructions before reaching this dedicated emitter. */
+    enum { MIR_HOMED_SCALAR_DAG_MAX_VALUES = 64 };
+    int definitions[MIR_HOMED_SCALAR_DAG_MAX_VALUES];
+    int last_uses[MIR_HOMED_SCALAR_DAG_MAX_VALUES];
+    int owners[4] = {-1, -1, -1, -1};
+    int parameter_count = 0;
+    int operation_count = 0;
+    int label_count = 0;
+    int return_value = -1;
+    int terminated = 0;
+    int saw_body = 0;
+    int effective_local_bytes;
+    int uses_iy = 0;
+    int frameless;
+    int i;
+
+    if (mir.insns == NULL || mir.count <= 0 ||
+        mir.count > mir.capacity ||
+        mir.count > MIR_HOMED_SCALAR_DAG_MAX_VALUES ||
+        mir.next_value <= 0 || mir.next_value > mir.count ||
+        mir.next_value > mir.allocation_capacity ||
+        mir.next_value > MIR_HOMED_SCALAR_DAG_MAX_VALUES ||
+        mir.next_label != 1 ||
+        mir.object_count < 0 ||
+        mir.object_count > (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.allocation_spill_count != 0 ||
+        mir.allocation_colors == NULL ||
+        mir.aggregate_temp_bytes != 0)
+        return 0;
+    if ((long)mir.local_bytes - (long)mir.dead_local_suffix_bytes < 0 ||
+        (long)mir.local_bytes - (long)mir.dead_local_suffix_bytes > 30000 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        !mir_scalar_dag_type_is_emittable(mir.return_type))
+        return 0;
+    effective_local_bytes = mir.local_bytes - mir.dead_local_suffix_bytes;
+    for (i = 0; i < mir.declared_count; ++i)
+        if (!mir_homed_scalar_dag_name_is_terminated(
+                mir.declared_names[i]))
+            return 0;
+    for (i = 0; i < mir.next_value; ++i) {
+        definitions[i] = -1;
+        last_uses[i] = -1;
+    }
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        const struct MirInsn *source;
+        const struct MirObject *object;
+        int common_type;
+        int declared;
+
+        if ((insn->opcode == MIR_RETURN
+                 ? insn->successor_count != 0
+                 : (insn->successor_count != 1 ||
+                    insn->successors[0] != i + 1)) ||
+            (terminated && insn->opcode != MIR_NOP))
+            return 0;
+        if (insn->dst >= 0 &&
+            (insn->dst >= mir.next_value ||
+             definitions[insn->dst] >= 0 ||
+             type_ptr_depth(insn->type) != 0 ||
+             !mir_scalar_dag_type_is_emittable(insn->type)))
+            return 0;
+        switch (insn->opcode) {
+        case MIR_NOP:
+            if (insn->dst >= 0)
+                return 0;
+            break;
+        case MIR_LABEL:
+            if (insn->dst >= 0 || label_count != 0 || insn->label != 0 ||
+                saw_body)
+                return 0;
+            ++label_count;
+            break;
+        case MIR_PARAM:
+            if (insn->dst < 0 ||
+                insn->object < 0 || insn->object >= mir.object_count)
+                return 0;
+            object = &mir.objects[insn->object];
+            if (object->storage != SC_PARAM ||
+                object->type != insn->type ||
+                object->entry_value != insn->dst ||
+                object->name[0] == 0 ||
+                !mir_homed_scalar_dag_name_is_terminated(object->name) ||
+                !mir_homed_scalar_dag_name_is_terminated(insn->name) ||
+                strcmp(object->name, insn->name) != 0 ||
+                type_ptr_depth(object->type) != 0 ||
+                !mir_scalar_dag_type_is_emittable(object->type) ||
+                object->offset < 2 || object->offset > 32767 ||
+                mir_homed_scalar_dag_parameter_is_volatile(object))
+                return 0;
+            for (declared = 0; declared < mir.declared_count; ++declared)
+                if (!strcmp(mir.declared_names[declared], object->name) &&
+                    (mir.declared_storage[declared] != SC_PARAM ||
+                     mir.declared_types[declared] != object->type))
+                    return 0;
+            ++parameter_count;
+            saw_body = 1;
+            break;
+        case MIR_CONST:
+            if (insn->dst < 0 ||
+                !mir_homed_scalar_dag_constant_is_normalized(
+                    insn->type, insn->immediate))
+                return 0;
+            saw_body = 1;
+            break;
+        case MIR_UNARY:
+            if (insn->dst < 0 || insn->src1 < 0 ||
+                insn->src1 >= mir.next_value ||
+                definitions[insn->src1] < 0)
+                return 0;
+            source = &mir.insns[definitions[insn->src1]];
+            if (insn->immediate == 0) {
+                if (!mir_homed_scalar_dag_identity_conversion(
+                        source->type, insn->type))
+                    return 0;
+            } else if (insn->immediate == '+' ||
+                       insn->immediate == '-' ||
+                       insn->immediate == '~') {
+                if (insn->type !=
+                    mir_homed_scalar_dag_promoted_type(source->type))
+                    return 0;
+            } else if (insn->immediate == '!') {
+                if (insn->type != TYPE_INT)
+                    return 0;
+            } else {
+                return 0;
+            }
+            last_uses[insn->src1] = i;
+            ++operation_count;
+            saw_body = 1;
+            break;
+        case MIR_BINARY:
+            if (insn->dst < 0 ||
+                insn->src1 < 0 || insn->src1 >= mir.next_value ||
+                insn->src2 < 0 || insn->src2 >= mir.next_value ||
+                definitions[insn->src1] < 0 ||
+                definitions[insn->src2] < 0)
+                return 0;
+            if (insn->immediate != '+' && insn->immediate != '-' &&
+                insn->immediate != '&' && insn->immediate != '|' &&
+                insn->immediate != '^')
+                return 0;
+            common_type =
+                mir_homed_scalar_dag_promoted_type(
+                    mir.insns[definitions[insn->src1]].type);
+            if ((mir_homed_scalar_dag_promoted_type(
+                    mir.insns[definitions[insn->src2]].type) &
+                 TYPE_UNSIGNED) != 0)
+                common_type |= TYPE_UNSIGNED;
+            if (insn->secondary_offset != common_type ||
+                insn->type != common_type ||
+                mir.allocation_colors[insn->src2] == MIR_COLOR_HL ||
+                (insn->src1 == insn->src2 &&
+                 mir.allocation_colors[insn->src1] <= MIR_COLOR_DE))
+                return 0;
+            last_uses[insn->src1] = i;
+            last_uses[insn->src2] = i;
+            ++operation_count;
+            saw_body = 1;
+            break;
+        case MIR_RETURN:
+            if (insn->dst >= 0 || return_value >= 0 ||
+                insn->src1 < 0 || insn->src1 >= mir.next_value ||
+                definitions[insn->src1] < 0 ||
+                !mir_homed_scalar_dag_identity_conversion(
+                    mir.insns[definitions[insn->src1]].type,
+                    mir.return_type))
+                return 0;
+            return_value = insn->src1;
+            last_uses[insn->src1] = i;
+            terminated = 1;
+            saw_body = 1;
+            break;
+        default:
+            return 0;
+        }
+        if (insn->dst >= 0) {
+            if (!mir_homed_scalar_dag_home_is_emittable(insn->dst))
+                return 0;
+            definitions[insn->dst] = i;
+            if (last_uses[insn->dst] < i)
+                last_uses[insn->dst] = i;
+            if (mir.allocation_colors[insn->dst] == MIR_COLOR_IY)
+                uses_iy = 1;
+        }
+    }
+    if (label_count != 1 || return_value < 0 ||
+        (parameter_count == 0 && operation_count == 0))
+        return 0;
+
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        int color;
+
+        for (color = 0; color < 4; ++color)
+            if (owners[color] >= 0 &&
+                last_uses[owners[color]] < i)
+                owners[color] = -1;
+        if ((insn->opcode == MIR_UNARY ||
+             insn->opcode == MIR_BINARY) &&
+            last_uses[insn->src1] > i &&
+            (mir.allocation_colors[insn->src1] == MIR_COLOR_HL ||
+             mir.allocation_colors[insn->src1] == MIR_COLOR_DE))
+            return 0;
+        if (insn->dst >= 0) {
+            color = mir.allocation_colors[insn->dst] - MIR_COLOR_HL;
+            if (owners[color] >= 0 &&
+                last_uses[owners[color]] > i)
+                return 0;
+        }
+        for (color = 0; color < 4; ++color)
+            if (owners[color] >= 0 &&
+                last_uses[owners[color]] <= i)
+                owners[color] = -1;
+        if (insn->dst >= 0 && last_uses[insn->dst] > i) {
+            color = mir.allocation_colors[insn->dst] - MIR_COLOR_HL;
+            owners[color] = insn->dst;
+        }
+    }
+
+    frameless = !uses_iy && effective_local_bytes == 0;
+    if (frameless) {
+        for (i = 0; i < mir.count; ++i)
+            if (mir.insns[i].opcode == MIR_PARAM &&
+                type_size(mir.objects[mir.insns[i].object].type) != 2)
+                frameless = 0;
+    }
+    if (!frameless) {
+        for (i = 0; i < mir.count; ++i)
+            if (mir.insns[i].opcode == MIR_PARAM) {
+                const struct MirObject *object =
+                    &mir.objects[mir.insns[i].object];
+                long parameter_offset =
+                    (long)object->offset + (uses_iy ? 2L : 0L);
+                int width = type_size(object->type);
+
+                if (parameter_offset < -128 ||
+                    parameter_offset + width - 1 > 127)
+                    return 0;
+            }
+    }
+    *uses_iy_out = uses_iy;
+    *frameless_out = frameless;
+    return 1;
+}
+
 int mir_has_phi_instruction(void)
 {
     int instruction;
@@ -2784,101 +3089,12 @@ int mir_try_emit_homed_scalar_dag(MirStream *out)
 {
     int uses_iy;
     int frameless;
-    int return_value = -1;
-    int parameter_count = 0;
-    int operation_count = 0;
     int i;
 
     /* Prove every later helper call before stack-check text, extern state, or
      * generated labels become observable to a declined direct attempt. */
-    if ((mir.return_type & 15) != TYPE_INT ||
-        type_ptr_depth(mir.return_type) != 0 ||
-        !mir_scalar_dag_type_is_emittable(mir.return_type) ||
-        mir.allocation_spill_count != 0 ||
-        mir.allocation_colors == NULL)
+    if (!mir_homed_scalar_dag_preflight(&uses_iy, &frameless))
         return 0;
-    for (i = 0; i < mir.count; ++i) {
-        const struct MirInsn *insn = &mir.insns[i];
-        if (insn->dst >= 0 &&
-            (insn->dst >= mir.next_value ||
-             type_ptr_depth(insn->type) != 0 ||
-             !mir_scalar_dag_type_is_emittable(insn->type) ||
-             !mir_homed_scalar_dag_home_is_emittable(insn->dst)))
-            return 0;
-        switch (insn->opcode) {
-        case MIR_NOP: case MIR_LABEL: case MIR_CONST:
-            break;
-        case MIR_PARAM:
-            if (insn->object < 0 || insn->object >= mir.object_count ||
-                mir.objects[insn->object].storage != SC_PARAM ||
-                type_ptr_depth(mir.objects[insn->object].type) != 0 ||
-                !mir_scalar_dag_type_is_emittable(
-                    mir.objects[insn->object].type))
-                return 0;
-            ++parameter_count;
-            break;
-        case MIR_UNARY:
-            ++operation_count;
-            if (!mir_homed_scalar_dag_home_is_emittable(insn->src1))
-                return 0;
-            if (insn->immediate != 0 && insn->immediate != '+' &&
-                insn->immediate != '-' && insn->immediate != '~' &&
-                insn->immediate != '!')
-                return 0;
-            break;
-        case MIR_BINARY:
-            ++operation_count;
-            if (!mir_homed_scalar_dag_home_is_emittable(insn->src1) ||
-                !mir_homed_scalar_dag_home_is_emittable(insn->src2) ||
-                type_ptr_depth(insn->secondary_offset) != 0 ||
-                !mir_scalar_dag_type_is_emittable(
-                    insn->secondary_offset))
-                return 0;
-            if (insn->immediate != '+' && insn->immediate != '-' &&
-                insn->immediate != '&' && insn->immediate != '|' &&
-                insn->immediate != '^')
-                return 0;
-            if (mir.allocation_colors[insn->src2] == MIR_COLOR_HL)
-                return 0;
-            break;
-        case MIR_RETURN:
-            if (return_value >= 0)
-                return 0;
-            return_value = insn->src1;
-            if (!mir_homed_scalar_dag_home_is_emittable(return_value))
-                return 0;
-            break;
-        default:
-            return 0;
-        }
-    }
-    if (return_value < 0)
-        return 0;
-    if (parameter_count == 0 && operation_count == 0)
-        return 0;
-
-    uses_iy = mir_home_uses_iy();
-    frameless = !uses_iy && mir_effective_local_bytes() == 0;
-    if (frameless) {
-        for (i = 0; i < mir.count; ++i)
-            if (mir.insns[i].opcode == MIR_PARAM &&
-                type_size(mir.objects[mir.insns[i].object].type) != 2)
-                frameless = 0;
-    }
-    if (!frameless) {
-        for (i = 0; i < mir.count; ++i)
-            if (mir.insns[i].opcode == MIR_PARAM) {
-                const struct MirObject *object =
-                    &mir.objects[mir.insns[i].object];
-                long parameter_offset =
-                    (long)object->offset + (uses_iy ? 2L : 0L);
-                int width = type_size(object->type);
-
-                if (parameter_offset < -128 ||
-                    parameter_offset + width - 1 > 127)
-                    return 0;
-            }
-    }
     if (frameless) {
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
