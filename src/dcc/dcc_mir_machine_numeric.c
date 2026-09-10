@@ -9647,7 +9647,9 @@ static int mir_match_recursive_byte_minimax_schedule(
         if (!mir_minimax_unsigned_byte_type(
                 self->proto_types[argument]) ||
             self->proto_types[argument] !=
-                mir.insns[argument + 1].type)
+                mir.insns[argument + 1].type ||
+            self->proto_types[argument] !=
+                mir.insns[recursive_arguments[argument]].type)
             return mir_machine_reject(
                 "recursive-byte-minimax-schedule",
                 "argument-types");
