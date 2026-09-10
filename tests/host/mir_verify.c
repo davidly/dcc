@@ -1079,6 +1079,104 @@ static void verify_spilled_preflight_rejection(void)
     expect_spilled_candidate("va_arg width rejection", 0);
 }
 
+static void verify_va_arg_offset_preflight(void)
+{
+    static const long invalid_offsets[] = { LONG_MIN, -129, 127, LONG_MAX };
+    static const long valid_offsets[] = { -128, 126 };
+    size_t invalid;
+    size_t valid;
+
+    for (valid = 0; valid < sizeof(valid_offsets) / sizeof(valid_offsets[0]);
+         ++valid) {
+        for (invalid = 0;
+             invalid < sizeof(invalid_offsets) / sizeof(invalid_offsets[0]);
+             ++invalid) {
+            MirStream *control;
+            MirStream *retry;
+            char control_text[2048];
+            char retry_text[2048];
+            size_t control_bytes;
+            size_t retry_bytes;
+            int first_label;
+            int result;
+
+            setup(4, 2, 1);
+            mir.local_bytes = 128;
+            mir.insns[2].opcode = MIR_VA_ARG;
+            mir.insns[2].dst = 1;
+            mir.insns[2].immediate = valid_offsets[valid];
+            mir.insns[2].secondary_offset = 2;
+            mir.insns[3].src1 = 1;
+            if (!mir_verify_and_dump()) {
+                fprintf(stderr, "FAIL va_arg offset verification control\n");
+                ++failures;
+                clear_liveness();
+                return;
+            }
+            control = mir_stream_open();
+            retry = mir_stream_open();
+            if (control == NULL || retry == NULL) {
+                fprintf(stderr, "FAIL va_arg offset stream allocation\n");
+                ++failures;
+                mir_stream_close(control);
+                mir_stream_close(retry);
+                clear_liveness();
+                return;
+            }
+            first_label = label_id;
+            result = mir_try_emit_spilled_scalar_cfg(control);
+            if (result != 1 || mir_stream_size(control) <= 0) {
+                fprintf(stderr, "FAIL va_arg valid offset %ld\n",
+                        valid_offsets[valid]);
+                ++failures;
+            }
+            label_id = first_label;
+            mir.insns[2].immediate = invalid_offsets[invalid];
+            result = mir_try_emit_spilled_scalar_cfg(retry);
+            if (result != 0) {
+                fprintf(stderr, "FAIL va_arg invalid offset %ld accepted\n",
+                        invalid_offsets[invalid]);
+                ++failures;
+            }
+            if (mir_stream_tell(retry) != 0 || mir_stream_size(retry) != 0) {
+                fprintf(stderr, "FAIL va_arg rejected offset %ld emitted text\n",
+                        invalid_offsets[invalid]);
+                ++failures;
+            }
+            if (label_id != first_label) {
+                fprintf(stderr, "FAIL va_arg rejected offset %ld consumed labels\n",
+                        invalid_offsets[invalid]);
+                ++failures;
+            }
+            /* Retry without resetting the function, stream, or analysis caches. */
+            mir.insns[2].immediate = valid_offsets[valid];
+            result = mir_try_emit_spilled_scalar_cfg(retry);
+            if (result != 1) {
+                fprintf(stderr, "FAIL va_arg offset %ld retry after %ld\n",
+                        valid_offsets[valid], invalid_offsets[invalid]);
+                ++failures;
+            }
+            mir_stream_rewind(control);
+            mir_stream_rewind(retry);
+            control_bytes = mir_stream_read(
+                control_text, 1, sizeof(control_text), control);
+            retry_bytes = mir_stream_read(
+                retry_text, 1, sizeof(retry_text), retry);
+            if (control_bytes == sizeof(control_text) ||
+                retry_bytes == sizeof(retry_text) ||
+                control_bytes != retry_bytes ||
+                memcmp(control_text, retry_text, control_bytes) != 0) {
+                fprintf(stderr, "FAIL va_arg retry changed valid offset %ld text\n",
+                        valid_offsets[valid]);
+                ++failures;
+            }
+            mir_stream_close(control);
+            mir_stream_close(retry);
+            clear_liveness();
+        }
+    }
+}
+
 static void verify_immediate_phi_return_forwarding(void)
 {
     setup(11, 4, 4);
@@ -1387,6 +1485,7 @@ int main(void)
     verify_five_call_arguments();
     verify_spilled_feature_defaults();
     verify_spilled_preflight_rejection();
+    verify_va_arg_offset_preflight();
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
     verify_scalar_dag_emission();

@@ -11,6 +11,8 @@ ctest --test-dir build/mir-tests --output-on-failure
 For Clang/GCC sanitizer coverage, configure with
 `-DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer'` and run
 CTest with `ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1`.
+An additional build with `-DCMAKE_C_FLAGS=-fwrapv` exercises offset rejection
+without allowing the host compiler to assume signed overflow is impossible.
 
 The tests cover operand and object bounds, dimensions, opcodes, branch labels,
 definition uniqueness, PHI references, call identities, argument positions,
@@ -61,6 +63,12 @@ invalid aggregate return/value widths, unsupported opcodes, unresolved memory,
 invalid indirect widths, malformed direct/indirect calls, and invalid
 `va_arg` offsets before code emission. Successful and rejecting controls also
 exercise exact-shape, selector, and backend-slot diagnostic reporting.
+The two-byte `va_list` pointer must fit entirely within IX displacements
+[-128, 127], so `MIR_VA_ARG` accepts starting offsets -128 through 126.
+Out-of-range offsets, including `LONG_MIN` and `LONG_MAX`, must reject without
+writing text or consuming labels. Repairing only the offset and retrying in
+the same stream, without resetting function or analysis state, must produce
+the same bytes as a clean valid candidate at either supported boundary.
 
 `dcc_mir_verify.c` constructs an independent CFG and immediate-dominator tree
 using reverse postorder. Its storage is linear in the MIR size. Verification

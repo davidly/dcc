@@ -31642,7 +31642,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
              insn->memory_size <= 0))
             return mir_scalar_cfg_preflight_reject("aggregate-call-abi", i);
         if (insn->opcode == MIR_VA_ARG &&
-            (insn->immediate < -128 || insn->immediate + 1 > 127 ||
+            (insn->immediate < -128 || insn->immediate > 126 ||
              (insn->secondary_offset != 2 && insn->secondary_offset != 4)))
             return mir_scalar_cfg_preflight_reject("va-arg", i);
     }
