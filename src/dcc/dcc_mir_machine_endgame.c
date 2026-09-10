@@ -6688,6 +6688,48 @@ static int mir_endgame_scope_instruction(int profile_instruction)
     return instruction + 3;
 }
 
+static int mir_endgame_scope_compact_opcode(int instruction)
+{
+    int profile_instruction = instruction;
+
+    if (instruction >= 424)
+        profile_instruction += 6;
+    else if (instruction >= 369)
+        profile_instruction += 4;
+    else if (instruction >= 304)
+        profile_instruction += 2;
+    if (profile_instruction < 0 ||
+        profile_instruction >=
+            (int)sizeof(mir_endgame_scope_opcodes))
+        return -1;
+    return mir_endgame_scope_opcodes[profile_instruction];
+}
+
+static int mir_endgame_scope_reordered_opcode(int instruction)
+{
+    switch (instruction) {
+    case 335:
+    case 521:
+    case 616:
+    case 764:
+    case 765:
+    case 954:
+    case 1172:
+    case 1284:
+        return MIR_NOP;
+    case 337:
+    case 523:
+    case 619:
+    case 767:
+    case 768:
+    case 977:
+    case 1183:
+        return MIR_PHI;
+    default:
+        return mir_endgame_scope_compact_opcode(instruction);
+    }
+}
+
 static int mir_endgame_scope_opcode_sequence(void)
 {
     size_t profile_instruction;
@@ -6696,8 +6738,48 @@ static int mir_endgame_scope_opcode_sequence(void)
     if (mir.count != (int)sizeof(mir_endgame_scope_opcodes) - 6 &&
         mir.count != 1347)
         return 0;
-    if (mir_endgame_scope_reordered())
+    if (mir_endgame_scope_reordered()) {
+        /* Prove every slot in both promoted-local reorderings. */
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            int expected;
+
+            if (mir.count == 1344) {
+                expected =
+                    mir_endgame_scope_reordered_opcode(instruction);
+            } else if (instruction < 1122) {
+                expected =
+                    mir_endgame_scope_reordered_opcode(instruction);
+            } else if (instruction == 1122 ||
+                       (instruction >= 1173 &&
+                        instruction <= 1182) ||
+                       instruction == 1184 ||
+                       instruction == 1186 ||
+                       instruction == 1286 ||
+                       instruction == 1287) {
+                expected = MIR_NOP;
+            } else if (instruction >= 1123 &&
+                       instruction <= 1172) {
+                expected =
+                    mir_endgame_scope_compact_opcode(
+                        instruction - 1);
+            } else if (instruction == 1183 ||
+                       instruction == 1185) {
+                expected = MIR_PHI;
+            } else if (instruction >= 1187 &&
+                       instruction <= 1285) {
+                expected =
+                    mir_endgame_scope_compact_opcode(
+                        instruction - 2);
+            } else {
+                expected =
+                    mir_endgame_scope_compact_opcode(
+                        instruction - 3);
+            }
+            if (mir.insns[instruction].opcode != expected)
+                return 0;
+        }
         return 1;
+    }
     for (profile_instruction = 0;
          profile_instruction < sizeof(mir_endgame_scope_opcodes);
          ++profile_instruction) {
@@ -6713,6 +6795,23 @@ static int mir_endgame_scope_opcode_sequence(void)
             return 0;
     }
     return instruction == mir.count;
+}
+
+static int mir_endgame_scope_initial_stores(void)
+{
+    const struct MirInsn *sum =
+        &mir.insns[mir_endgame_scope_instruction(2)];
+    const struct MirInsn *index =
+        &mir.insns[mir_endgame_scope_instruction(7)];
+
+    return sum->src1 ==
+               mir.insns[mir_endgame_scope_instruction(1)].dst &&
+           sum->memory_size == 2 && sum->bit_width == 0 &&
+           mir_machine_named_nonvolatile(sum) &&
+           index->src1 ==
+               mir.insns[mir_endgame_scope_instruction(6)].dst &&
+           index->memory_size == 2 && index->bit_width == 0 &&
+           mir_machine_named_nonvolatile(index);
 }
 
 static int mir_endgame_scope_structure(void)
@@ -7163,6 +7262,9 @@ static int mir_match_endgame_scope_runner(
     if (!mir_endgame_scope_structure())
         return mir_machine_reject(
             "endgame-scope-runner", "operations");
+    if (!mir_endgame_scope_initial_stores())
+        return mir_machine_reject(
+            "endgame-scope-runner", "initial-stores");
     if (!mir_endgame_scope_graph())
         return mir_machine_reject(
             "endgame-scope-runner", "graph");
@@ -12949,6 +13051,7 @@ int mir_try_emit_endgame_runners(MirStream *out, int phase)
         return 1;
     }
     if (mir_match_endgame_scope_runner(&scope_plan)) {
+        mir_machine_accept("endgame-scope-runner");
         mir_emit_endgame_scope_runner(out, &scope_plan);
         return 1;
     }
