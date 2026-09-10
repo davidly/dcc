@@ -96,14 +96,20 @@ module object; an initial duplicate-translation-unit report was discarded and
 the corrected collection contains no duplicate selector functions or coverage
 exclusions.
 
+The next wave executes 6,018 exact leaf configurations. It isolates the final
+affine fallback, canonicalizes and preflights scalar-DAG casts, and adds
+exhaustive byte-math plus fixture-backed directory-enumeration proof campaigns.
+Review added direct-call requirements for byte-math helpers and complete fixed
+and variadic argument ABI validation for every directory callback.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,368 / 4,368 | 100.00% |
-| Lines | 177,846 / 190,452 | 93.38% |
-| Native branch outcomes | 91,683 / 145,158 | 63.16% |
-| Regions | 160,119 / 170,626 | 93.84% |
+| Functions | 4,376 / 4,376 | 100.00% |
+| Lines | 178,307 / 190,754 | 93.47% |
+| Native branch outcomes | 92,030 / 145,488 | 63.26% |
+| Regions | 160,669 / 171,006 | 93.96% |
 
-The raw ledger has 53,228 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,211 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload

@@ -123,9 +123,16 @@ integration compiled the selector as a second translation unit and duplicated
 now links the normal selector object, and LLVM 18 confirms zero duplicate or
 misattributed selector functions without any exclusion.
 
-Latest integrated totals: 4,368/4,368 functions, 177,846/190,452 lines
-(93.38%), 91,683/145,158 native branch outcomes (63.16%), and
-160,119/170,626 regions (93.84%). The raw uncovered ledger is 53,228.
+The following wave raises the exact inventory to 6,018 configurations. It
+isolates the affine selector fallback, canonicalizes scalar-DAG cast emission,
+and adds a 2,048-case byte-math oracle plus fixture-backed directory ownership
+and failure controls. Review added direct-call proofs for byte-math helpers and
+validates every fixed and variadic directory-call argument type before exact
+emission.
+
+Latest integrated totals: 4,376/4,376 functions, 178,307/190,754 lines
+(93.47%), 92,030/145,488 native branch outcomes (63.26%), and
+160,669/171,006 regions (93.96%). The raw uncovered ledger is 53,211.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -137,7 +144,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `471de8da` (`Link selector isolation test normally`).
+  `fee9f2a3` (`Validate directory call argument ABI`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -173,7 +180,13 @@ parallel-wave summary for the current measurement.
   - `0710c912` — spill-slot operand bounds;
   - `1d29427f` / `0f0a5537` — multidimensional array proofs; and
   - `5cd36798` through `b6daaa16` — recursive MinMax proofs and standard
-    campaign integration.
+    campaign integration;
+  - `5044557a` / `aab56e4a` — affine fallback transaction and linked host
+    access;
+  - `45dd8b14` — scalar-DAG cast and preflight correctness;
+  - `49d3da4a` / `4425846c` — byte-math proof and direct-call hardening; and
+  - `ce71729b` / `fee9f2a3` — directory dataflow, ownership, and argument ABI
+    proofs.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
