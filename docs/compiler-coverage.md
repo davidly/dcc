@@ -1,5 +1,45 @@
 # Compiler source coverage
 
+## Batched, parallel execution
+
+Run focused new cases during development; collect the full corpus once for an
+integrated checkpoint, not once per small mutation batch. The shipping compiler
+still requires its independent strict release and performance checks before
+publishing production changes. Test-only edits do not require rerunning
+unchanged release/debugger gates.
+
+`DCC_COVERAGE_JOBS` bounds the coverage build, main/extended runners, clobber
+workers and debug censuses (default 8). Concurrent development or validation
+processes must share a job budget rather than each using all available cores.
+Clobber workers are separate processes, so diagnostic environment variables
+cannot race between tests.
+
+The one-command workflow remains the default. Alternatively split a checkpoint
+into stages, always using the same absolute build directory and toolchain:
+
+```sh
+export DCC_COVERAGE_BUILD_DIR="$PWD/build/compiler-coverage"
+export DCC_COVERAGE_JOBS=8
+DCC_COVERAGE_STAGE=build sh scripts/compiler-coverage.sh
+DCC_COVERAGE_STAGE=collect sh scripts/compiler-coverage.sh
+DCC_COVERAGE_STAGE=report sh scripts/compiler-coverage.sh
+```
+
+`build` records input and executable hashes. `collect` verifies that identity,
+starts a fresh profile pool, and records success only after every required
+workload completes. `report` verifies input, tool, execution-manifest and
+profile hashes without rebuilding or rerunning targets. A failed collection
+cannot reuse a previous success stamp. Editing inputs requires a new build
+checkpoint and collection; profiles from separate worker revisions or faulty
+compiler mutants must not be combined. Initialized test-submodule files are
+included in the input identity.
+
+`inputs.json`, `build.json` and `collection.json` are generated provenance
+artifacts, not coverage exclusions. A build-directory lock prevents overlapping
+stages; separate checkpoints use separate directories.
+
+## Full workload
+
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
 separate Clang-instrumented compiler and exercise it with:
 

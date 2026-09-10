@@ -14,6 +14,23 @@ binary_dir="$build_dir/bin"
 raw_dir="$build_dir/raw"
 report_dir="$build_dir/report"
 
+stage=${DCC_COVERAGE_STAGE:-all}
+jobs=${DCC_COVERAGE_JOBS:-8}
+case "$stage" in
+    all|build|collect|report) ;;
+    *) echo "compiler-coverage: stage must be all, build, collect, or report" >&2; exit 1 ;;
+esac
+case "$jobs" in
+    ''|*[!0-9]*|0*) echo "compiler-coverage: jobs must be a positive integer" >&2; exit 1 ;;
+esac
+mkdir -p "$build_dir"
+if ! mkdir "$build_dir/.coverage-lock" 2>/dev/null; then
+    echo "compiler-coverage: build directory is already in use: $build_dir" >&2
+    exit 1
+fi
+trap 'rmdir "$build_dir/.coverage-lock"' EXIT
+checkpoint="$repo_root/scripts/coverage-checkpoint.py"
+
 clang_cmd=${CC:-clang}
 pwsh_cmd=${PWSH:-pwsh}
 
@@ -48,14 +65,33 @@ fi
 coverage_sources=$(sh "$repo_root/scripts/coverage-sources.sh")
 python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd"
 
+if [ "$stage" = all ] || [ "$stage" = build ]; then
+python3 "$checkpoint" prepare --build-dir "$build_dir" \
+    --tool "clang=$(command -v "$clang_cmd")" \
+    --tool "pwsh=$(command -v "$pwsh_cmd")" \
+    --tool "llvm-cov=$(command -v "$llvm_cov")" \
+    --tool "llvm-profdata=$(command -v "$llvm_profdata")" \
+    --tool "dccmake=$repo_root/dccmake" --tool "dccpeep=$repo_root/dccpeep" \
+    --tool "m80c=$repo_root/m80c" --tool "l80c=$repo_root/l80c" \
+    --tool "dccrtlstrip=$repo_root/dccrtlstrip" \
+    --tool "ntvcm=$(command -v ntvcm)"
 cmake -S "$repo_root/src/dcc" -B "$build_dir/cmake" \
     -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_C_COMPILER="$clang_cmd" \
     -DDCC_ENABLE_COVERAGE=ON \
     -DDCC_BUILD_MIR_TESTS=ON \
     -DDCC_RUNTIME_OUTPUT_DIRECTORY="$binary_dir"
-cmake --build "$build_dir/cmake" --parallel
+cmake --build "$build_dir/cmake" --parallel "$jobs"
+python3 "$checkpoint" built --build-dir "$build_dir" \
+    --tool "dcc=$binary_dir/dcc" --tool "host=$build_dir/cmake/mir-verify-test"
+fi
+if [ "$stage" = build ]; then
+    echo "Coverage build checkpoint: $build_dir/build.json"
+    exit 0
+fi
 
+if [ "$stage" = all ] || [ "$stage" = collect ]; then
+python3 "$checkpoint" start --build-dir "$build_dir"
 mkdir -p "$raw_dir" "$report_dir"
 find "$raw_dir" -type f -name '*.profraw' -delete
 
@@ -67,11 +103,11 @@ export DCC="$binary_dir/dcc"
 export LLVM_PROFILE_FILE="$raw_dir/dcc-%8m.profraw"
 
 cd "$repo_root"
-"$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full
-"$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -NoStackCheck
-"$pwsh_cmd" -NoProfile -File scripts/runall-extended.ps1 -C11 -Mode full
+"$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -ThrottleLimit "$jobs"
+"$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -NoStackCheck -ThrottleLimit "$jobs"
+"$pwsh_cmd" -NoProfile -File scripts/runall-extended.ps1 -C11 -Mode full -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
-    -ExecutionManifest "$report_dir/mir-clobber-executions.json"
+    -Jobs "$jobs" -ExecutionManifest "$report_dir/mir-clobber-executions.json"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-lifetime-tests.ps1
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-require-emit.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-ast-dump.ps1 -Dcc "$DCC"
@@ -86,10 +122,18 @@ for debug_args in "-g" "-gline" "-g -fstack-check" "-gline -fstack-check"; do
         python3 "$repo_root/scripts/mir-migration-census.py" \
         --compiler "$DCC" \
         --output "$build_dir/debug-census-$debug_name.tsv" \
+        --jobs "$jobs" \
         --extra-args="$debug_args"
 done
 ctest --test-dir "$build_dir/cmake" --output-on-failure
+python3 "$checkpoint" collected --build-dir "$build_dir"
+fi
+if [ "$stage" = collect ]; then
+    echo "Coverage collection checkpoint: $build_dir/collection.json"
+    exit 0
+fi
 
+python3 "$checkpoint" report --build-dir "$build_dir"
 set -- "$raw_dir"/*.profraw
 if [ ! -e "$1" ]; then
     echo "compiler-coverage: no raw profiles were produced" >&2
