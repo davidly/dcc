@@ -175,6 +175,24 @@
     "MachineMutationFunction": "test_many"
   },
   {
+    "Name": "pr6fcall",
+    "Group": "packed-record-wave6",
+    "Sources": ["tests/mir-clobber/pr6rec.c"],
+    "Defines": ["PR6_DUMP_FASTCALL"],
+    "Expected": [
+      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "packed-record-runner",
+    "ExactFunction": "test_many",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "test_many",
+    "RequiredSelectorFunction": "test_many",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
     "Name": "pr6debug",
     "Group": "packed-record-wave6-debug",
     "Sources": ["tests/mir-clobber/pr6rec.c"],

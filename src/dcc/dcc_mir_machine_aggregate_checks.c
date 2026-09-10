@@ -3535,8 +3535,10 @@ static int mir_match_packed_record_runner(
         arguments[1] != mir.insns[312].dst ||
         arguments[2] != mir.insns[315].dst ||
         !dump_function->has_proto ||
+        dump_function->is_fastcall ||
         dump_function->proto_variadic ||
         dump_function->proto_nargs != 3 ||
+        mir.insns[318].type != dump_function->type ||
         (dump_function->type & 15) != TYPE_VOID ||
         type_ptr_depth(dump_function->type) != 0 ||
         !mir_packed_scalar_type(

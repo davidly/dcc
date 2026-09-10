@@ -16,9 +16,10 @@ struct PackedRecord
 };
 
 static struct PackedRecord before_records[10];
-static struct PackedRecord records[20];
+struct PackedRecord records[20];
 static struct PackedRecord after_records[10];
 static int failures;
+int dump_arguments_ok;
 
 static void check_record(
     const struct PackedRecord *record, unsigned int index)
@@ -32,13 +33,12 @@ static void check_record(
         ++failures;
 }
 
-void ShowBinaryData(uint8_t *data, size_t length, size_t indent)
+void VerifyBinaryData(void)
 {
     uint32_t hash = 2166136261UL;
     size_t index;
 
-    if (data != (uint8_t *)records ||
-        length != sizeof(records) || indent != 4)
+    if (!dump_arguments_ok)
         ++failures;
     for (index = 0; index < COUNT_OF(before_records); ++index) {
         const uint8_t *bytes = (const uint8_t *)&before_records[index];
@@ -85,6 +85,52 @@ void ShowBinaryData(uint8_t *data, size_t length, size_t indent)
         ((uint8_t *)after_records)[0],
         ((uint8_t *)after_records)[sizeof(after_records) - 1]);
 }
+
+#ifdef PR6_DUMP_FASTCALL
+extern void __fastcall ShowBinaryData(
+    uint8_t *data, size_t length, size_t indent);
+
+#asm
+        public  _ShowBinaryData
+_ShowBinaryData:
+        push    hl
+        ld      a,b
+        or      a
+        jp      nz,pr6_bad_args
+        ld      a,c
+        cp      4
+        jp      nz,pr6_bad_args
+        ld      a,d
+        cp      1
+        jp      nz,pr6_bad_args
+        ld      a,e
+        cp      24
+        jp      nz,pr6_bad_args
+        pop     hl
+        ld      de,_records
+        or      a
+        sbc     hl,de
+        jp      nz,pr6_bad
+        ld      hl,1
+        ld      (_dump_arguments_ok),hl
+        jp      _VerifyBinaryData
+pr6_bad_args:
+        pop     hl
+pr6_bad:
+        ld      hl,0
+        ld      (_dump_arguments_ok),hl
+        jp      _VerifyBinaryData
+#endasm
+#else
+void ShowBinaryData(uint8_t *data, size_t length, size_t indent)
+{
+    dump_arguments_ok =
+        data == (uint8_t *)records &&
+        length == sizeof(records) &&
+        indent == 4;
+    VerifyBinaryData();
+}
+#endif
 
 void test_many()
 {
