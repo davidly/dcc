@@ -87,6 +87,7 @@ python3 "$checkpoint" built --build-dir "$build_dir" \
     --tool "host=$build_dir/cmake/mir-verify-test" \
     --tool "host-scalar-dag=$build_dir/cmake/mir-scalar-dag-test" \
     --tool "host-consteval=$build_dir/cmake/mir-consteval-isolation-test" \
+    --tool "host-vla-smooth=$build_dir/cmake/mir-vla-smooth-isolation-test" \
     --tool "host-selector-isolation=$build_dir/cmake/mir-selector-isolation-test"
 fi
 if [ "$stage" = build ]; then
@@ -118,6 +119,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
+python3 scripts/endgame-scope-wave18-campaign.py --jobs "$jobs"
 env -u DCC_MIR_MACHINE_MUTATE DCC_MIR_MACHINE_MUTATE_FUNCTION=main \
     "$DCC" -c "$repo_root/tests/mir-clobber/logserie.c" \
     -o "$build_dir/no-machine-mutation.MAC"
@@ -149,6 +151,7 @@ fi
     -object "$build_dir/cmake/mir-verify-test" \
     -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-consteval-isolation-test" \
+    -object "$build_dir/cmake/mir-vla-smooth-isolation-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$repo_root"/src/dcc/*.c >"$report_dir/summary.txt"
@@ -163,6 +166,7 @@ printf '%s\n' "$@" >"$report_dir/ast-mir-sources.txt"
     -object "$build_dir/cmake/mir-verify-test" \
     -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-consteval-isolation-test" \
+    -object "$build_dir/cmake/mir-vla-smooth-isolation-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$@" >"$report_dir/ast-mir-summary.txt"
@@ -170,6 +174,7 @@ printf '%s\n' "$@" >"$report_dir/ast-mir-sources.txt"
     -object "$build_dir/cmake/mir-verify-test" \
     -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-consteval-isolation-test" \
+    -object "$build_dir/cmake/mir-vla-smooth-isolation-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$@" >"$report_dir/ast-mir-coverage.json"
@@ -180,6 +185,7 @@ python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
     -object "$build_dir/cmake/mir-verify-test" \
     -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-consteval-isolation-test" \
+    -object "$build_dir/cmake/mir-vla-smooth-isolation-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     -name-allowlist="$report_dir/ast-mir-functions.txt" -show-functions \
@@ -200,6 +206,7 @@ python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
     -object "$build_dir/cmake/mir-verify-test" \
     -object "$build_dir/cmake/mir-scalar-dag-test" \
     -object "$build_dir/cmake/mir-consteval-isolation-test" \
+    -object "$build_dir/cmake/mir-vla-smooth-isolation-test" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     -format=html \

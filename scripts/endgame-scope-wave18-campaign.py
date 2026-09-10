@@ -204,7 +204,14 @@ def main():
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 24))
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    compiler = root / ("dcc.exe" if os.name == "nt" else "dcc")
+    compiler_name = os.environ.get("DCC")
+    compiler = (
+        Path(compiler_name)
+        if compiler_name
+        else root / ("dcc.exe" if os.name == "nt" else "dcc")
+    )
+    if not compiler.is_absolute():
+        compiler = (root / compiler).resolve()
     dccmake = root / ("dccmake.exe" if os.name == "nt" else "dccmake")
 
     runtime_controls(root, dccmake)
