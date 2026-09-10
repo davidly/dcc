@@ -6033,6 +6033,7 @@ static int mir_declared_index(const char *name)
 static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
 {
     struct MirInsn inserted;
+    int declaration;
     int event;
 
     if (index < 0 || index > mir.count)
@@ -6044,6 +6045,15 @@ static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
     for (event = 0; event < mir.debug_event_count; ++event)
         if (mir.debug_events[event].point >= index)
             ++mir.debug_events[event].point;
+    /* Keep lexical declaration coordinates attached to the displaced MIR.
+     * An insertion exactly at an exclusive scope end remains outside it. */
+    for (declaration = 0; declaration < mir.declaration_count;
+         ++declaration) {
+        if (mir.declaration_placeholders[declaration] >= index)
+            ++mir.declaration_placeholders[declaration];
+        if (mir.declaration_scope_ends[declaration] > index)
+            ++mir.declaration_scope_ends[declaration];
+    }
     return &mir.insns[index];
 }
 

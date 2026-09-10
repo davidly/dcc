@@ -1049,6 +1049,132 @@ static void verify_member_metadata_and_address(void)
     clear_liveness();
 }
 
+static void setup_deferred_function_pointer_call(int malformed)
+{
+    struct Sym callback;
+    struct Sym later;
+
+    setup(9, 2, 1);
+    mir.next_call_id = 1;
+    memset(&callback, 0, sizeof(callback));
+    strcpy(callback.name, "verify_deferred_callback");
+    callback.type = TYPE_INT | TYPE_PTR;
+    callback.storage = SC_LOCAL;
+    callback.offset = -2;
+    callback.is_funcptr = 1;
+    callback.has_proto = 1;
+    callback.proto_nargs = 1;
+    callback.proto_types[0] = TYPE_LONG;
+    callback.funcptr_return_type = TYPE_INT;
+    mir_note_declared_symbol(&callback);
+    memset(&later, 0, sizeof(later));
+    strcpy(later.name, "verify_later_declaration");
+    later.type = TYPE_INT;
+    later.storage = SC_LOCAL;
+    later.offset = -4;
+    mir_note_declared_symbol(&later);
+
+    mir.declaration_count = 2;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 8;
+    mir.declaration_scope_labels[0] = -1;
+    mir.declaration_placeholders[1] = 6;
+    mir.declaration_scope_ends[1] = 8;
+    mir.declaration_scope_labels[1] = -1;
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_ARG;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].type = TYPE_INT;
+    mir.insns[3].secondary_offset = 0;
+    mir.insns[5].opcode = MIR_CALL;
+    mir.insns[5].dst = 1;
+    mir.insns[5].type = TYPE_INT;
+    mir.insns[5].secondary_offset = 0;
+    if (malformed)
+        strcpy(mir.insns[5].name, "<indirect>");
+    else
+        strcpy(mir.insns[5].name, callback.name);
+    mir.insns[6].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[8].src1 = 1;
+
+    mir.debug_events = (struct MirDebugEvent *)calloc(
+        1, sizeof(*mir.debug_events));
+    if (mir.debug_events == NULL)
+        fatal("cannot allocate deferred metadata debug event");
+    mir.debug_events[0].text = (char *)malloc(20);
+    if (mir.debug_events[0].text == NULL)
+        fatal("cannot allocate deferred metadata debug text");
+    strcpy(mir.debug_events[0].text, ";@dcc-line \"x\" 1\n");
+    mir.debug_events[0].point = 5;
+    mir.debug_event_count = 1;
+    mir.debug_event_capacity = 1;
+}
+
+static void check_deferred_function_pointer_result(const char *name)
+{
+    int ok = 1;
+    int verified;
+
+    ok = ok && mir.count == 11 && mir.next_value == 4;
+    ok = ok && mir.declaration_placeholders[0] == 2;
+    ok = ok && mir.declaration_placeholders[1] == 8;
+    ok = ok && mir.declaration_scope_ends[0] == 10;
+    ok = ok && mir.declaration_scope_ends[1] == 10;
+    ok = ok && mir.debug_event_count == 1;
+    ok = ok && mir.debug_events[0].point == 7;
+    ok = ok && mir.insns[3].opcode == MIR_CONST;
+    ok = ok && mir.insns[3].src1 == -1 && mir.insns[3].type == TYPE_LONG;
+    ok = ok && mir.insns[4].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].src1 == mir.insns[3].dst;
+    ok = ok && mir.insns[6].opcode == MIR_LOAD;
+    ok = ok && mir.insns[6].type == (TYPE_INT | TYPE_PTR);
+    ok = ok && !strcmp(mir.insns[6].name, "verify_deferred_callback");
+    ok = ok && mir.insns[7].opcode == MIR_CALL;
+    ok = ok && mir.insns[7].src1 == mir.insns[6].dst;
+    ok = ok && mir.insns[7].type == TYPE_INT;
+    ok = ok && !strcmp(mir.insns[7].name, "<indirect>");
+    verified = mir_verify_and_dump();
+    ok = ok && verified;
+    if (!ok) {
+        fprintf(stderr, "FAIL %s\n", name);
+        ++failures;
+    }
+    clear_liveness();
+}
+
+static void verify_deferred_function_pointer_metadata(void)
+{
+    setup_deferred_function_pointer_call(0);
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL deferred function-pointer verification control\n");
+        ++failures;
+    }
+    clear_liveness();
+    mir_resolve_deferred_metadata();
+    check_deferred_function_pointer_result(
+        "deferred function-pointer metadata insertion");
+    mir_resolve_deferred_metadata();
+    check_deferred_function_pointer_result(
+        "deferred function-pointer metadata repeat");
+
+    setup_deferred_function_pointer_call(1);
+    expect_verification("malformed deferred function-pointer call", 0);
+    mir_resolve_deferred_metadata();
+    if (mir.count != 9 || mir.next_value != 2 ||
+        mir.declaration_placeholders[0] != 2 ||
+        mir.declaration_placeholders[1] != 6 ||
+        mir.declaration_scope_ends[0] != 8 ||
+        mir.declaration_scope_ends[1] != 8 ||
+        mir.debug_events[0].point != 5) {
+        fprintf(stderr, "FAIL malformed deferred metadata changed MIR state\n");
+        ++failures;
+    }
+    strcpy(mir.insns[5].name, "verify_deferred_callback");
+    mir_resolve_deferred_metadata();
+    check_deferred_function_pointer_result(
+        "deferred metadata retry after malformed call");
+}
+
 static void verify_five_call_arguments(void)
 {
     int arguments[5];
@@ -2061,6 +2187,7 @@ int main(void)
     verify_simple_mir_feature_queries();
     verify_parameter_emitters();
     verify_member_metadata_and_address();
+    verify_deferred_function_pointer_metadata();
     verify_five_call_arguments();
     verify_spilled_feature_defaults();
     verify_homed_parameter_preflight_transaction();
