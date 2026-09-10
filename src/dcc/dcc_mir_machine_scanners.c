@@ -13893,6 +13893,7 @@ int mir_try_emit_scanner_kernels(MirStream *out, int late)
                 &sliding_maximum_schedule)) {
             mir_emit_sliding_maximum_schedule(
                 out, &sliding_maximum_schedule);
+            mir_machine_accept("sliding-maximum-schedule");
             return 1;
         }
         if (mir_match_printable_byte_sanitize_schedule(
