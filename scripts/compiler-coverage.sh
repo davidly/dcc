@@ -187,6 +187,7 @@ python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
     -show-branches=count \
     "$repo_root"/src/dcc/*.c
 
+python3 "$checkpoint" report --build-dir "$build_dir"
 echo "Unfiltered collection summary (not a target): $report_dir/summary.txt"
 echo "Legacy-excluded AST/MIR summary: $report_dir/ast-mir-summary.txt"
 echo "AST/MIR source manifest:   $report_dir/ast-mir-sources.txt"

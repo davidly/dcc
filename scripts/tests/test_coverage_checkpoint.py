@@ -119,6 +119,28 @@ class CoverageCheckpointTests(unittest.TestCase):
         with self.assertRaisesRegex(checkpoint.CheckpointError, "profiles changed"):
             checkpoint.check_collection(self.root, self.build)
 
+    def test_missing_profile(self):
+        self.complete()
+        (self.build / "raw/p.profraw").unlink()
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "missing or empty"):
+            checkpoint.check_collection(self.root, self.build)
+
+    def test_deleted_tracked_input(self):
+        subprocess.run(["git", "-C", str(self.root), "add", "src/dcc/a.c"],
+                       check=True)
+        self.source.unlink()
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "input missing"):
+            checkpoint.check_build(self.root, self.build)
+
+    def test_build_stamp_change(self):
+        self.complete()
+        path = self.build / "build.json"
+        record = json.loads(path.read_text())
+        record["revision"] = "different"
+        checkpoint.write_record(path, record)
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "different build"):
+            checkpoint.check_collection(self.root, self.build)
+
     def test_duplicate_execution_manifest(self):
         self.complete()
         (self.build / "report/mir-clobber-executions.json").write_text(
