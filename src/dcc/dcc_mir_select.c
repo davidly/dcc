@@ -1046,6 +1046,22 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
     return 1;
 }
 
+static int mir_comparison_param_fits(
+    const struct MirInsn *parameter, int width)
+{
+    const struct MirObject *object;
+
+    if (parameter == NULL || parameter->opcode != MIR_PARAM ||
+        parameter->object < 0 || parameter->object >= mir.object_count ||
+        (width != 2 && width != 4))
+        return 0;
+    object = &mir.objects[parameter->object];
+    return object->storage == SC_PARAM &&
+           type_size(object->type) == width &&
+           object->offset >= -128 &&
+           object->offset <= 128 - width;
+}
+
 /* Strict first CFG selector:
  *
  *     if (a == b) return C1; return C2;
@@ -1149,7 +1165,7 @@ static int mir_try_emit_comparison_branch(MirStream *out)
         int width = type_size(mir.objects[left->object].type);
         int is_float = type_is_float(mir.objects[left->object].type);
 
-        if (width != 2 && width != 4)
+        if (!mir_comparison_param_fits(left, width))
             return 0;
         false_label = new_label();
         mir_emit_prologue(out);
@@ -1189,6 +1205,9 @@ static int mir_try_emit_comparison_branch(MirStream *out)
      * only exists to reuse a single unsigned 16-bit `sbc`). Left/right
      * are used exactly as `compare` originally defined them - no swap. */
     if (type_size(compare->secondary_offset) == 4) {
+        if (!mir_comparison_param_fits(left, 4) ||
+            !mir_comparison_param_fits(right, 4))
+            return 0;
         false_label = new_label();
         mir_emit_prologue(out);
         if (!mir_emit_load_param_wide(out, left))
@@ -1224,6 +1243,9 @@ static int mir_try_emit_comparison_branch(MirStream *out)
         right = temporary;
         operation = TOK_GE;
     }
+    if (!mir_comparison_param_fits(left, 2) ||
+        !mir_comparison_param_fits(right, 2))
+        return 0;
     unsigned_compare =
         (mir.objects[left->object].type & TYPE_UNSIGNED) != 0 ||
         type_ptr_depth(mir.objects[left->object].type) > 0;
