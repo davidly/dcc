@@ -1,0 +1,41 @@
+[
+  {
+    "Name": "esw11-exact",
+    "Group": "endgame-scope-wave11",
+    "Sources": ["tests/mir-clobber/scopw11.c"],
+    "Defines": [],
+    "Expected": ["tforsco passed with great success"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "endgame-scope-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "esw11-store-width",
+    "Group": "endgame-scope-wave11",
+    "Sources": ["tests/mir-clobber/scopw11.c"],
+    "Defines": [],
+    "Expected": ["tforsco passed with great success"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "endgame-scope-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "2:memory_size:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "esw11-debug",
+    "Group": "endgame-scope-wave11",
+    "Sources": ["tests/mir-clobber/scopw11.c"],
+    "Defines": [],
+    "Expected": ["tforsco passed with great success"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  }
+]
