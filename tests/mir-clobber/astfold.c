@@ -32,6 +32,6 @@ int main(void)
 
     if (failures != 0)
         return 1;
-    puts("tastfold passed");
+    puts("astfold passed");
     return 0;
 }
