@@ -109,14 +109,20 @@ semantic mutations to zero by proving operators, dataflow, local types, table
 bounds, argument ABI, loops, and normalization; its upper-clamp oracle now uses
 defined 16-bit arithmetic.
 
+The next wave executes 6,320 exact leaf configurations. It adds numeric
+assignments to byte/word structure members and a square-grid proof campaign,
+requires opcode-specific operands before spilled allocation indexing, and
+fully validates both current reordered endgame-scope opcode layouts. The
+endgame controls use the shared clobber runner rather than a private harness.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,386 / 4,386 | 100.00% |
-| Lines | 178,932 / 191,369 | 93.50% |
-| Native branch outcomes | 92,547 / 146,238 | 63.29% |
-| Regions | 161,433 / 171,769 | 93.98% |
+| Functions | 4,389 / 4,389 | 100.00% |
+| Lines | 179,082 / 191,532 | 93.50% |
+| Native branch outcomes | 92,709 / 146,412 | 63.32% |
+| Regions | 161,559 / 171,916 | 93.98% |
 
-The raw ledger has 53,444 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,456 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload

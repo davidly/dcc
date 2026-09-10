@@ -138,9 +138,16 @@ complete fixed-kernel proof and 206-mutation survivor audit now cover operators,
 dataflow, types, table bounds, call ABI, loops, and normalization with a defined
 upper-clamp sentinel oracle.
 
-Latest integrated totals: 4,386/4,386 functions, 178,932/191,369 lines
-(93.50%), 92,547/146,238 native branch outcomes (63.29%), and
-161,433/171,769 regions (93.98%). The raw uncovered ledger is 53,444.
+The following wave raises the exact inventory to 6,320 configurations with
+numeric structure-member assignments and square-grid/endgame-scope proofs.
+Spilled MIR now validates opcode-required operands before allocation indexing,
+closing 38 sanitizer-reproduced malformed-input paths while preserving valid
+void-call and void-return sentinels. Endgame tests were moved from a private
+runner into the shared coverage inventory.
+
+Latest integrated totals: 4,389/4,389 functions, 179,082/191,532 lines
+(93.50%), 92,709/146,412 native branch outcomes (63.32%), and
+161,559/171,916 regions (93.98%). The raw uncovered ledger is 53,456.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -152,7 +159,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `9a92aa0a` (`Prove fixed softmax schedule semantics`).
+  `b847b62e` (`ci: build all registered MIR host tests`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -199,7 +206,13 @@ parallel-wave summary for the current measurement.
   - `e17dfb9f` — numeric integer bitfield assignments;
   - `00554317` — additional packed-record ABI proofs; and
   - `1c8c01b0` through `9a92aa0a` — complete variable and fixed softmax
-    semantic proofs.
+    semantic proofs;
+  - `91050259` — opcode-aware spilled operand preflight;
+  - `acc02c27` / `0fedef02` — numeric structure-member assignments;
+  - `cd9cd9c1` — square-grid proof controls;
+  - `930bf5b0` / `3eab3f44` — endgame-scope proof and shared campaign; and
+  - `b847b62e` — CI now builds every registered MIR host-test target before
+    CTest on Linux, macOS, and Windows.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
