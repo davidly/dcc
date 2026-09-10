@@ -33,7 +33,11 @@ static int print_calls;
 static int size_calls;
 static int free_calls;
 
+#ifdef D9_VOLATILE_QUIET
+volatile bool quiet = false;
+#else
 bool quiet = false;
+#endif
 
 bool w9_initialize_body(struct FCBCPM *pfcb, char *pfilename)
 {
@@ -292,7 +296,11 @@ int enumerate(char *pfile)
     char *pthis, **presult;
     uint32_t fsize;
     char file[13];
+#ifdef D9_LIST_401
+    static char *list[401];
+#else
     static char *list[400];
+#endif
 
     if (!w9_initialize(&the_fcb, pfile))
         return false;
@@ -350,7 +358,11 @@ int enumerate(char *pfile)
         w9_free(list[i]);
     }
 
+#ifdef D9_RESULT_RETURN
+    return result == 255;
+#else
     return true;
+#endif
 }
 
 int main(void)

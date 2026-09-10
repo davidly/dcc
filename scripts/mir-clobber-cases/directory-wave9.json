@@ -544,5 +544,92 @@
     "RequiredGenericFunction": "enumerate",
     "MachineMutation": "298:type:36",
     "MachineMutationFunction": "enumerate"
+  },
+  {
+    "Name": "d9volatile",
+    "Group": "directory-wave9",
+    "Sources": [
+      "tests/mir-clobber/direnum9.c"
+    ],
+    "FixturePaths": [
+      "tests/mir-clobber/W9ALPHA1.DAT",
+      "tests/mir-clobber/W9BETA22.D",
+      "tests/mir-clobber/W9C.D",
+      "tests/mir-clobber/W9NOPE.TXT",
+      "tests/mir-clobber/X9IGNORE.DAT"
+    ],
+    "Defines": [
+      "D9_VOLATILE_QUIET"
+    ],
+    "Expected": [
+      "found=W9BETA22.D",
+      "entry=0 name=W9ALPHA1.DAT size=128",
+      "entry=1 name=W9BETA22.D size=256",
+      "entry=2 name=W9C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "enumerate"
+  },
+  {
+    "Name": "d9extent",
+    "Group": "directory-wave9",
+    "Sources": [
+      "tests/mir-clobber/direnum9.c"
+    ],
+    "FixturePaths": [
+      "tests/mir-clobber/W9ALPHA1.DAT",
+      "tests/mir-clobber/W9BETA22.D",
+      "tests/mir-clobber/W9C.D",
+      "tests/mir-clobber/W9NOPE.TXT",
+      "tests/mir-clobber/X9IGNORE.DAT"
+    ],
+    "Defines": [
+      "D9_LIST_401"
+    ],
+    "Expected": [
+      "found=W9BETA22.D",
+      "entry=0 name=W9ALPHA1.DAT size=128",
+      "entry=1 name=W9BETA22.D size=256",
+      "entry=2 name=W9C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "enumerate"
+  },
+  {
+    "Name": "d9return",
+    "Group": "directory-wave9",
+    "Sources": [
+      "tests/mir-clobber/direnum9.c"
+    ],
+    "FixturePaths": [
+      "tests/mir-clobber/W9ALPHA1.DAT",
+      "tests/mir-clobber/W9BETA22.D",
+      "tests/mir-clobber/W9C.D",
+      "tests/mir-clobber/W9NOPE.TXT",
+      "tests/mir-clobber/X9IGNORE.DAT"
+    ],
+    "Defines": [
+      "D9_RESULT_RETURN"
+    ],
+    "Expected": [
+      "found=W9BETA22.D",
+      "entry=0 name=W9ALPHA1.DAT size=128",
+      "entry=1 name=W9BETA22.D size=256",
+      "entry=2 name=W9C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "directory-enumeration-runner",
+    "ExactFunction": "enumerate",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "enumerate"
   }
 ]
