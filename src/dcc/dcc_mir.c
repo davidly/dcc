@@ -1115,6 +1115,9 @@ static int mir_lower_expr(const struct AstNode *node);
 static void mir_lower_stmt(const struct AstNode *node);
 static int mir_lvalue_type(const struct AstNode *node);
 static int mir_lower_conversion(int value, int target_type);
+static int mir_expr_ast_is_complete(const struct AstNode *node);
+static int mir_lower_aggregate_call_address(const struct AstNode *call,
+                                            const struct Sym *temporary);
 static void mir_emit_ident_store(const struct AstNode *ident, int value);
 static int mir_try_lower_inline_call_expr(const struct AstNode *call,
                                           struct Sym *fn_sym,
@@ -1593,6 +1596,8 @@ static int mir_try_lower_inline_call_expr(const struct AstNode *call,
 
     if (out_value == NULL)
         return 0;
+    if (!mir_expr_ast_is_complete(call))
+        return 0;
     if (fn_sym != NULL &&
         (fn_sym->inline_stmt_expr != NULL || fn_sym->inline_stmt_body != NULL))
         return 0;
@@ -1629,7 +1634,8 @@ static int mir_try_lower_inline_call_stmt(const struct AstNode *call)
     struct AstNode *stmt;
     struct MirInlineCallScope scope;
 
-    if (call == NULL || call->kind != AST_CALL || call->a == NULL ||
+    if (call == NULL || call->kind != AST_CALL ||
+        !mir_expr_ast_is_complete(call) ||
         call->a->kind != AST_IDENT)
         return 0;
     fn_sym = find_global(call->a->sval);
@@ -1737,8 +1743,8 @@ static int mir_reload_bitfield(int address, const struct FieldDef *field,
     return value;
 }
 
-static int mir_lower_aggregate_call_address(const struct AstNode *call,
-                                            const struct Sym *temporary)
+static int mir_lower_aggregate_call_address_impl(const struct AstNode *call,
+                                                 const struct Sym *temporary)
 {
     struct MirInsn *insn;
     int argument;
@@ -2545,6 +2551,9 @@ static int mir_assignment_operator_is_supported(int operation)
 }
 
 #define MIR_AST_PREFLIGHT_INLINE_FRAMES 32
+#define MIR_AST_PREFLIGHT_INLINE_ENTRIES 64
+#define MIR_AST_PREFLIGHT_ACTIVE 1
+#define MIR_AST_PREFLIGHT_COMPLETE 2
 
 struct MirAstPreflightFrame {
     const struct AstNode *node;
@@ -2552,65 +2561,184 @@ struct MirAstPreflightFrame {
     int checked;
 };
 
+struct MirAstPreflightEntry {
+    const struct AstNode *node;
+    unsigned char state;
+};
+
 struct MirAstPreflight {
     struct MirAstPreflightFrame *frames;
-    size_t count;
-    size_t capacity;
+    size_t frame_count;
+    size_t frame_capacity;
+    struct MirAstPreflightEntry *entries;
+    size_t entry_count;
+    size_t entry_capacity;
     struct MirAstPreflightFrame
         inline_frames[MIR_AST_PREFLIGHT_INLINE_FRAMES];
+    struct MirAstPreflightEntry
+        inline_entries[MIR_AST_PREFLIGHT_INLINE_ENTRIES];
 };
+
+static struct MirAstPreflight *mir_active_ast_preflight;
 
 static void mir_ast_preflight_init(struct MirAstPreflight *preflight)
 {
     preflight->frames = preflight->inline_frames;
-    preflight->count = 0;
-    preflight->capacity = MIR_AST_PREFLIGHT_INLINE_FRAMES;
+    preflight->frame_count = 0;
+    preflight->frame_capacity = MIR_AST_PREFLIGHT_INLINE_FRAMES;
+    preflight->entries = preflight->inline_entries;
+    preflight->entry_count = 0;
+    preflight->entry_capacity = MIR_AST_PREFLIGHT_INLINE_ENTRIES;
+    memset(preflight->inline_entries, 0, sizeof(preflight->inline_entries));
 }
 
 static void mir_ast_preflight_dispose(struct MirAstPreflight *preflight)
 {
     if (preflight->frames != preflight->inline_frames)
         free(preflight->frames);
+    if (preflight->entries != preflight->inline_entries)
+        free(preflight->entries);
 }
 
-static void mir_ast_preflight_grow(struct MirAstPreflight *preflight)
+static void mir_ast_preflight_grow_frames(
+    struct MirAstPreflight *preflight)
 {
     struct MirAstPreflightFrame *grown;
     size_t new_capacity;
 
-    if (preflight->capacity > (size_t)-1 / 2)
+    if (preflight->frame_capacity > (size_t)-1 / 2)
         fatal("out of memory");
-    new_capacity = preflight->capacity * 2;
+    new_capacity = preflight->frame_capacity * 2;
     if (new_capacity > (size_t)-1 / sizeof(*grown))
         fatal("out of memory");
     grown = (struct MirAstPreflightFrame *)xmalloc(
         new_capacity * sizeof(*grown));
     memcpy(grown, preflight->frames,
-           preflight->count * sizeof(*grown));
+           preflight->frame_count * sizeof(*grown));
     if (preflight->frames != preflight->inline_frames)
         free(preflight->frames);
     preflight->frames = grown;
-    preflight->capacity = new_capacity;
+    preflight->frame_capacity = new_capacity;
+}
+
+static size_t mir_ast_preflight_hash(const struct AstNode *node)
+{
+    size_t hash = (size_t)node;
+
+    hash ^= hash >> 7;
+    hash ^= hash >> 17;
+    return hash;
+}
+
+static struct MirAstPreflightEntry *mir_ast_preflight_find_entry(
+    const struct MirAstPreflight *preflight, const struct AstNode *node)
+{
+    size_t index = mir_ast_preflight_hash(node) &
+                   (preflight->entry_capacity - 1);
+
+    while (preflight->entries[index].node != NULL) {
+        if (preflight->entries[index].node == node)
+            return &preflight->entries[index];
+        index = (index + 1) & (preflight->entry_capacity - 1);
+    }
+    return NULL;
+}
+
+static void mir_ast_preflight_grow_entries(
+    struct MirAstPreflight *preflight)
+{
+    struct MirAstPreflightEntry *grown;
+    struct MirAstPreflightEntry *old_entries = preflight->entries;
+    size_t old_capacity = preflight->entry_capacity;
+    size_t index;
+    size_t new_capacity;
+
+    if (old_capacity > (size_t)-1 / 2)
+        fatal("out of memory");
+    new_capacity = old_capacity * 2;
+    if (new_capacity > (size_t)-1 / sizeof(*grown))
+        fatal("out of memory");
+    grown = (struct MirAstPreflightEntry *)xmalloc(
+        new_capacity * sizeof(*grown));
+    memset(grown, 0, new_capacity * sizeof(*grown));
+    preflight->entries = grown;
+    preflight->entry_capacity = new_capacity;
+    preflight->entry_count = 0;
+    for (index = 0; index < old_capacity; ++index)
+        if (old_entries[index].node != NULL) {
+            size_t slot = mir_ast_preflight_hash(old_entries[index].node) &
+                          (new_capacity - 1);
+            while (grown[slot].node != NULL)
+                slot = (slot + 1) & (new_capacity - 1);
+            grown[slot] = old_entries[index];
+            ++preflight->entry_count;
+        }
+    if (old_entries != preflight->inline_entries)
+        free(old_entries);
+}
+
+static struct MirAstPreflightEntry *mir_ast_preflight_insert_entry(
+    struct MirAstPreflight *preflight, const struct AstNode *node)
+{
+    size_t index;
+
+    if (preflight->entry_count >=
+        preflight->entry_capacity - preflight->entry_capacity / 4)
+        mir_ast_preflight_grow_entries(preflight);
+    index = mir_ast_preflight_hash(node) &
+            (preflight->entry_capacity - 1);
+    while (preflight->entries[index].node != NULL)
+        index = (index + 1) & (preflight->entry_capacity - 1);
+    preflight->entries[index].node = node;
+    preflight->entries[index].state = MIR_AST_PREFLIGHT_ACTIVE;
+    ++preflight->entry_count;
+    return &preflight->entries[index];
 }
 
 static int mir_ast_preflight_push(struct MirAstPreflight *preflight,
                                   const struct AstNode *node)
 {
-    size_t index;
+    struct MirAstPreflightEntry *entry;
     struct MirAstPreflightFrame *frame;
 
     if (node == NULL)
-        return 0;
-    for (index = 0; index < preflight->count; ++index)
-        if (preflight->frames[index].node == node)
-            return 0;
-    if (preflight->count == preflight->capacity)
-        mir_ast_preflight_grow(preflight);
-    frame = &preflight->frames[preflight->count++];
+        return -1;
+    entry = mir_ast_preflight_find_entry(preflight, node);
+    if (entry != NULL)
+        return entry->state == MIR_AST_PREFLIGHT_COMPLETE ? 0 : -1;
+    (void)mir_ast_preflight_insert_entry(preflight, node);
+    if (preflight->frame_count == preflight->frame_capacity)
+        mir_ast_preflight_grow_frames(preflight);
+    frame = &preflight->frames[preflight->frame_count++];
     frame->node = node;
     frame->next_child = 0;
     frame->checked = 0;
     return 1;
+}
+
+static void mir_ast_preflight_complete_top(
+    struct MirAstPreflight *preflight)
+{
+    const struct AstNode *node =
+        preflight->frames[preflight->frame_count - 1].node;
+    struct MirAstPreflightEntry *entry =
+        mir_ast_preflight_find_entry(preflight, node);
+
+    if (entry == NULL)
+        fatal("internal MIR AST preflight state");
+    entry->state = MIR_AST_PREFLIGHT_COMPLETE;
+    --preflight->frame_count;
+}
+
+static int mir_ast_preflight_contains(
+    const struct MirAstPreflight *preflight, const struct AstNode *node)
+{
+    const struct MirAstPreflightEntry *entry;
+
+    if (preflight == NULL || node == NULL)
+        return 0;
+    entry = mir_ast_preflight_find_entry(preflight, node);
+    return entry != NULL && entry->state == MIR_AST_PREFLIGHT_COMPLETE;
 }
 
 static int mir_expr_ast_node_is_complete(const struct AstNode *node)
@@ -2696,18 +2824,19 @@ static int mir_expr_ast_child(const struct AstNode *node, size_t index,
     }
 }
 
-static int mir_expr_ast_is_complete(const struct AstNode *node)
+static int mir_expr_ast_preflight(
+    const struct AstNode *node, struct MirAstPreflight *preflight)
 {
     const struct AstNode *child;
-    struct MirAstPreflight preflight;
     int complete = 1;
+    int pushed;
 
-    mir_ast_preflight_init(&preflight);
-    if (!mir_ast_preflight_push(&preflight, node))
+    mir_ast_preflight_init(preflight);
+    if (mir_ast_preflight_push(preflight, node) <= 0)
         complete = 0;
-    while (complete && preflight.count > 0) {
+    while (complete && preflight->frame_count > 0) {
         struct MirAstPreflightFrame *frame =
-            &preflight.frames[preflight.count - 1];
+            &preflight->frames[preflight->frame_count - 1];
 
         if (!frame->checked) {
             if (!mir_expr_ast_node_is_complete(frame->node)) {
@@ -2731,12 +2860,23 @@ static int mir_expr_ast_is_complete(const struct AstNode *node)
         }
         if (mir_expr_ast_child(frame->node, frame->next_child, &child)) {
             ++frame->next_child;
-            if (!mir_ast_preflight_push(&preflight, child))
+            pushed = mir_ast_preflight_push(preflight, child);
+            if (pushed < 0)
                 complete = 0;
-        } else {
-            --preflight.count;
-        }
+        } else
+            mir_ast_preflight_complete_top(preflight);
     }
+    return complete;
+}
+
+static int mir_expr_ast_is_complete(const struct AstNode *node)
+{
+    struct MirAstPreflight preflight;
+    int complete;
+
+    if (mir_ast_preflight_contains(mir_active_ast_preflight, node))
+        return 1;
+    complete = mir_expr_ast_preflight(node, &preflight);
     mir_ast_preflight_dispose(&preflight);
     return complete;
 }
@@ -2753,7 +2893,117 @@ static int mir_emit_opaque_expr(const struct AstNode *node)
     return value;
 }
 
+static int mir_lower_expr_impl(const struct AstNode *node);
+
+static int mir_lower_aggregate_call_address(const struct AstNode *call,
+                                            const struct Sym *temporary)
+{
+    struct MirAstPreflight preflight;
+    struct MirAstPreflight *saved_preflight;
+    int value;
+
+    if (call == NULL || call->kind != AST_CALL)
+        return -1;
+    if (mir_ast_preflight_contains(mir_active_ast_preflight, call))
+        return mir_lower_aggregate_call_address_impl(call, temporary);
+    if (!mir_expr_ast_preflight(call, &preflight)) {
+        mir_ast_preflight_dispose(&preflight);
+        return mir_emit_opaque_expr(call);
+    }
+    saved_preflight = mir_active_ast_preflight;
+    mir_active_ast_preflight = &preflight;
+    value = mir_lower_aggregate_call_address_impl(call, temporary);
+    mir_active_ast_preflight = saved_preflight;
+    mir_ast_preflight_dispose(&preflight);
+    return value;
+}
+
 static int mir_lower_expr(const struct AstNode *node)
+{
+    struct MirAstPreflight preflight;
+    struct MirAstPreflight *saved_preflight;
+    int value;
+
+    if (node == NULL)
+        return -1;
+    if (mir_ast_preflight_contains(mir_active_ast_preflight, node))
+        return mir_lower_expr_impl(node);
+    if (!mir_expr_ast_preflight(node, &preflight)) {
+        mir_ast_preflight_dispose(&preflight);
+        return mir_emit_opaque_expr(node);
+    }
+    saved_preflight = mir_active_ast_preflight;
+    mir_active_ast_preflight = &preflight;
+    value = mir_lower_expr_impl(node);
+    mir_active_ast_preflight = saved_preflight;
+    mir_ast_preflight_dispose(&preflight);
+    return value;
+}
+
+static int mir_simple_unary_node(const struct AstNode *node)
+{
+    if (node == NULL)
+        return 0;
+    if (node->kind == AST_CAST)
+        return 1;
+    return node->kind == AST_UNARY && node->op != '*' && node->op != '&' &&
+           node->op != TOK_INC && node->op != TOK_DEC;
+}
+
+static int mir_lower_simple_unary_chain(const struct AstNode *node)
+{
+    const struct AstNode *inline_nodes[32];
+    const struct AstNode **nodes = inline_nodes;
+    const struct AstNode *current = node;
+    size_t capacity = 32;
+    size_t count = 0;
+    size_t index;
+    int value;
+
+    while (mir_simple_unary_node(current)) {
+        if (count == capacity) {
+            const struct AstNode **grown;
+            size_t new_capacity;
+
+            if (capacity > (size_t)-1 / 2)
+                fatal("out of memory");
+            new_capacity = capacity * 2;
+            if (new_capacity > (size_t)-1 / sizeof(*grown))
+                fatal("out of memory");
+            grown = (const struct AstNode **)xmalloc(
+                new_capacity * sizeof(*grown));
+            memcpy(grown, nodes, count * sizeof(*grown));
+            if (nodes != inline_nodes)
+                free(nodes);
+            nodes = grown;
+            capacity = new_capacity;
+        }
+        nodes[count++] = current;
+        current = current->a;
+    }
+    value = mir_lower_expr(current);
+    for (index = count; index > 0; --index) {
+        const struct AstNode *unary = nodes[index - 1];
+        struct MirInsn *insn;
+        int result = mir_new_value();
+
+        insn = mir_emit(MIR_UNARY);
+        insn->dst = result;
+        insn->src1 = value;
+        insn->type = unary->type;
+        insn->immediate = unary->op;
+        if (unary->kind == AST_CAST && type_ptr_depth(unary->type) > 0) {
+            insn->has_pointer_qualifiers = 1;
+            insn->pointee_volatile_mask = unary->pointee_volatile_mask;
+        }
+        value = result;
+    }
+    if (nodes != inline_nodes)
+        free(nodes);
+    return value;
+}
+
+static int mir_lower_expr_impl(const struct AstNode *node)
 {
     struct MirInsn *insn;
     int left;
@@ -2770,10 +3020,6 @@ static int mir_lower_expr(const struct AstNode *node)
     int else_exit_label;
     int i;
 
-    if (node == NULL)
-        return -1;
-    if (!mir_expr_ast_is_complete(node))
-        return mir_emit_opaque_expr(node);
     switch (node->kind) {
     case AST_INT_LIT:
         value = mir_new_value();
@@ -3028,18 +3274,7 @@ static int mir_lower_expr(const struct AstNode *node)
             insn->memory_size = type_size(dereferenced_type);
             return value;
         }
-        left = mir_lower_expr(node->a);
-        value = mir_new_value();
-        insn = mir_emit(MIR_UNARY);
-        insn->dst = value;
-        insn->src1 = left;
-        insn->type = node->type;
-        insn->immediate = node->op;
-        if (node->kind == AST_CAST && type_ptr_depth(node->type) > 0) {
-            insn->has_pointer_qualifiers = 1;
-            insn->pointee_volatile_mask = node->pointee_volatile_mask;
-        }
-        return value;
+        return mir_lower_simple_unary_chain(node);
     case AST_POSTFIX:
         if (node->op == TOK_INC || node->op == TOK_DEC) {
             value = mir_lower_incdec(node->a, node->op, 1);

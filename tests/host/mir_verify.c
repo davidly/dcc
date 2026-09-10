@@ -882,23 +882,27 @@ static void verify_large_expression_preflight(void)
     int depth;
     int index;
     int ok = 1;
+    static const int depths[] = {256, 257, 4096};
 
-    chain = (struct AstNode *)xmalloc(258 * sizeof(*chain));
-    memset(chain, 0, 258 * sizeof(*chain));
-    chain[257].kind = AST_INT_LIT;
-    chain[257].type = TYPE_INT;
-    chain[257].ival = 1;
-    for (index = 256; index >= 0; --index) {
+    chain = (struct AstNode *)xmalloc(4097 * sizeof(*chain));
+    memset(chain, 0, 4097 * sizeof(*chain));
+    chain[4096].kind = AST_INT_LIT;
+    chain[4096].type = TYPE_INT;
+    chain[4096].ival = 1;
+    for (index = 4095; index >= 0; --index) {
         chain[index].kind = AST_UNARY;
         chain[index].type = TYPE_INT;
         chain[index].op = '!';
         chain[index].a = &chain[index + 1];
     }
-    for (depth = 256; depth <= 257; ++depth)
+    for (index = 0; index < 3; ++index) {
+        depth = depths[index];
         ok = expect_valid_expr_lowering(
             depth == 256 ? "verify_unary_depth_256" :
-                           "verify_unary_depth_257",
-            &chain[257 - depth], depth + 1, depth + 1, 0) && ok;
+            depth == 257 ? "verify_unary_depth_257" :
+                           "verify_unary_depth_4096",
+            &chain[4096 - depth], depth + 1, depth + 1, 0) && ok;
+    }
     free(chain);
 
     memset(&argument, 0, sizeof(argument));
@@ -926,6 +930,189 @@ static void verify_large_expression_preflight(void)
             &call, argument_count * 2 + 1, argument_count + 1, 1) && ok;
     }
     free(arguments);
+
+    if (!ok)
+        ++failures;
+}
+
+static int check_opaque_call_transaction(
+    const char *name, int instruction, int value, int label, int call_id,
+    int inline_temp_id, int aggregate_temp_bytes, int root_kind,
+    int has_return)
+{
+    int expected_count = instruction + 1 + has_return;
+
+    if (mir.count != expected_count || mir.next_value != value + 1 ||
+        mir.next_label != label || mir.next_call_id != call_id ||
+        mir.next_inline_temp_id != inline_temp_id ||
+        mir.aggregate_temp_bytes != aggregate_temp_bytes ||
+        mir.insns[instruction].opcode != MIR_OPAQUE ||
+        mir.insns[instruction].dst != value ||
+        mir.insns[instruction].immediate != root_kind ||
+        (has_return &&
+         (mir.insns[instruction + 1].opcode != MIR_RETURN ||
+          mir.insns[instruction + 1].src1 != value))) {
+        fprintf(stderr, "FAIL call fast-path transaction %s\n", name);
+        return 0;
+    }
+    return 1;
+}
+
+static void verify_call_fast_path_preflight(void)
+{
+    struct AstNode aggregate_call;
+    struct AstNode aggregate_callee;
+    struct AstNode assignment;
+    struct AstNode inline_argument;
+    struct AstNode inline_body_call;
+    struct AstNode inline_body_callee;
+    struct AstNode inline_call;
+    struct AstNode inline_callee;
+    struct AstNode lhs;
+    struct AstNode return_stmt;
+    struct AstNode *inline_arguments[1];
+    struct Sym *aggregate_function;
+    struct Sym *inline_function;
+    struct Sym *target;
+    int aggregate_temp_bytes;
+    int call_id;
+    int inline_temp_id;
+    int instruction;
+    int label;
+    int struct_type = TYPE_STRUCT | (3 << STRUCT_SHIFT);
+    int value;
+    int ok = 1;
+
+    memset(&aggregate_call, 0, sizeof(aggregate_call));
+    memset(&aggregate_callee, 0, sizeof(aggregate_callee));
+    memset(&assignment, 0, sizeof(assignment));
+    memset(&inline_argument, 0, sizeof(inline_argument));
+    memset(&inline_body_call, 0, sizeof(inline_body_call));
+    memset(&inline_body_callee, 0, sizeof(inline_body_callee));
+    memset(&inline_call, 0, sizeof(inline_call));
+    memset(&inline_callee, 0, sizeof(inline_callee));
+    memset(&lhs, 0, sizeof(lhs));
+    memset(&return_stmt, 0, sizeof(return_stmt));
+
+    aggregate_function = add_global(
+        "verify_aggregate_preflight", struct_type, SC_FUNC);
+    aggregate_callee.kind = AST_IDENT;
+    aggregate_callee.type = struct_type;
+    aggregate_callee.sval = aggregate_function->name;
+    aggregate_callee.sym = aggregate_function;
+    aggregate_call.kind = AST_CALL;
+    aggregate_call.type = struct_type;
+    aggregate_call.a = &aggregate_callee;
+    aggregate_call.list_len = 1;
+    aggregate_call.list_cap = 1;
+    aggregate_call.list = NULL;
+    target = add_global("verify_aggregate_target", struct_type, SC_GLOBAL);
+
+    mir_begin_function(
+        "verify_aggregate_initializer_preflight",
+        "_verify_aggregate_initializer_preflight",
+        EMIT_SINK_FINAL, 0, 0, 0);
+    instruction = mir.count;
+    value = mir.next_value;
+    label = mir.next_label;
+    call_id = mir.next_call_id;
+    inline_temp_id = mir.next_inline_temp_id;
+    aggregate_temp_bytes = mir.aggregate_temp_bytes;
+    mir_capture_struct_initializer(target, &aggregate_call);
+    ok = check_opaque_call_transaction(
+        "aggregate initializer", instruction, value, label, call_id,
+        inline_temp_id, aggregate_temp_bytes, AST_CALL, 0) && ok;
+
+    return_stmt.kind = AST_RETURN;
+    return_stmt.a = &aggregate_call;
+    mir_begin_function(
+        "verify_aggregate_return_preflight",
+        "_verify_aggregate_return_preflight",
+        EMIT_SINK_FINAL, 0, 0, 0);
+    mir.return_type = struct_type;
+    instruction = mir.count;
+    value = mir.next_value;
+    label = mir.next_label;
+    call_id = mir.next_call_id;
+    inline_temp_id = mir.next_inline_temp_id;
+    aggregate_temp_bytes = mir.aggregate_temp_bytes;
+    mir_capture_stmt(&return_stmt);
+    ok = check_opaque_call_transaction(
+        "aggregate return", instruction, value, label, call_id,
+        inline_temp_id, aggregate_temp_bytes, AST_CALL, 1) && ok;
+
+    lhs.kind = AST_IDENT;
+    lhs.type = struct_type;
+    lhs.sval = target->name;
+    lhs.sym = target;
+    assignment.kind = AST_ASSIGN;
+    assignment.type = struct_type;
+    assignment.op = '=';
+    assignment.a = &lhs;
+    assignment.b = &aggregate_call;
+    ok = expect_malformed_expr_transaction(
+        "verify_aggregate_assignment_preflight", &assignment) && ok;
+
+    inline_body_callee.kind = AST_IDENT;
+    inline_body_callee.type = TYPE_VOID;
+    inline_body_callee.sval = "verify_inline_nested_call";
+    inline_body_call.kind = AST_CALL;
+    inline_body_call.type = TYPE_VOID;
+    inline_body_call.a = &inline_body_callee;
+    inline_function = add_global(
+        "verify_inline_stmt_preflight", TYPE_VOID, SC_FUNC);
+    inline_function->is_static = 1;
+    inline_function->is_inline = 1;
+    inline_function->has_proto = 1;
+    inline_function->proto_nargs = 1;
+    inline_function->proto_types[0] = TYPE_INT;
+    inline_function->inline_stmt_expr = &inline_body_call;
+    inline_callee.kind = AST_IDENT;
+    inline_callee.type = TYPE_VOID;
+    inline_callee.sval = inline_function->name;
+    inline_callee.sym = inline_function;
+    inline_call.kind = AST_CALL;
+    inline_call.type = TYPE_VOID;
+    inline_call.a = &inline_callee;
+    inline_call.list_len = 1;
+    inline_call.list_cap = 1;
+    inline_call.list = NULL;
+    return_stmt.kind = AST_EXPR_STMT;
+    return_stmt.a = &inline_call;
+
+    mir_begin_function(
+        "verify_inline_list_preflight", "_verify_inline_list_preflight",
+        EMIT_SINK_FINAL, 0, 0, 0);
+    instruction = mir.count;
+    value = mir.next_value;
+    label = mir.next_label;
+    call_id = mir.next_call_id;
+    inline_temp_id = mir.next_inline_temp_id;
+    aggregate_temp_bytes = mir.aggregate_temp_bytes;
+    mir_capture_stmt(&return_stmt);
+    ok = check_opaque_call_transaction(
+        "inline corrupt list", instruction, value, label, call_id,
+        inline_temp_id, aggregate_temp_bytes, AST_CALL, 0) && ok;
+
+    inline_argument.kind = AST_UNARY;
+    inline_argument.type = TYPE_INT;
+    inline_argument.op = '-';
+    inline_argument.a = &inline_argument;
+    inline_arguments[0] = &inline_argument;
+    inline_call.list = inline_arguments;
+    mir_begin_function(
+        "verify_inline_cycle_preflight", "_verify_inline_cycle_preflight",
+        EMIT_SINK_FINAL, 0, 0, 0);
+    instruction = mir.count;
+    value = mir.next_value;
+    label = mir.next_label;
+    call_id = mir.next_call_id;
+    inline_temp_id = mir.next_inline_temp_id;
+    aggregate_temp_bytes = mir.aggregate_temp_bytes;
+    mir_capture_stmt(&return_stmt);
+    ok = check_opaque_call_transaction(
+        "inline cyclic argument", instruction, value, label, call_id,
+        inline_temp_id, aggregate_temp_bytes, AST_CALL, 0) && ok;
 
     if (!ok)
         ++failures;
@@ -4206,6 +4393,7 @@ int main(void)
     verify_call_lowering_preflight();
     verify_expression_lowering_preflight();
     verify_large_expression_preflight();
+    verify_call_fast_path_preflight();
     verify_diamond_edge_liveness();
     verify_immediate_phi_consumer_forwarding();
     verify_call_argument_liveness();
