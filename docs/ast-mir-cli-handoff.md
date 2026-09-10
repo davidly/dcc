@@ -25,6 +25,44 @@ The broader request is NOT complete. Function coverage is exact, but retained
 line, branch, and region gaps plus tens of thousands of raw branch records
 still need investigation.
 
+## Parallel Execution and Test Cadence
+
+The current workflow replaces sequential per-family full-suite runs with
+isolated background workers and consolidated integration gates:
+
+- Assign disjoint source modules and data-only case manifests to workers.
+  Keep one owner for shared host tests and one integrator for publication.
+- Workers run new/changed cases and valid controls, not the entire corpus.
+  Test-only changes reuse unchanged native release/debug evidence.
+- Integrate ready worker changes into an immutable checkpoint, then run the
+  required full gates once for that combined tree before publishing production
+  changes. Run the full clobber corpus inside coverage, not again immediately
+  before the same coverage workload.
+- Use bounded child processes with `run-mir-clobber-tests.ps1 -Jobs N`.
+  `-ListExecutions PATH` enumerates exact leaf keys; `-ShardIndex` and
+  `-ShardCount` allow explicit partitions. The merged successful manifest must
+  equal the expected inventory exactly, without missing or duplicated leaves.
+- New independent campaigns belong in `scripts/mir-clobber-cases/*.json`.
+  Their explicit `Group` aliases avoid collisions with existing case names.
+- `run-mir-compiler-mutations.ps1 -Jobs 2 -BuildJobs 2` runs an unmutated
+  baseline first, then isolated clean mutant builds; crashes and build failures
+  are invalid results, not mutation kills.
+- Use `DCC_COVERAGE_STAGE=build|collect|report` with
+  `DCC_COVERAGE_JOBS=8` to stage an immutable coverage checkpoint. Report-only
+  runs verify recorded input/tool/profile hashes and do not rerun targets.
+  Do not merge worker revisions or faulty compiler profiles.
+
+Each worktree needs its own binaries and CMake output directory. The canonical
+build's `-OutputPath` redirects intermediate artifacts, not repository-root
+tools; it is not sufficient isolation for simultaneous builds in one checkout.
+Use a combined CPU budget across workers and nested build/test jobs.
+
+The legacy AST/body emitters remain excluded; active metadata and MIR support
+remain in scope. The final 100% claim still requires two clean collections with
+exact equality for all four scoped metrics, plus correctness and unchanged
+performance baselines. Parallel execution and fewer repeated gates do not
+relax those completion criteria.
+
 ## Publication State
 
 - Repository: <https://github.com/davidly/dcc>.
