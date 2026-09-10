@@ -1,0 +1,270 @@
+[
+  {
+    "Name": "mdw8-exact",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireExact": true
+  },
+  {
+    "Name": "mdw8-root-type",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "1:type:18",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-member-type",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "2:type:18",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-index-type",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "4:type:17",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-index-sign",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "3:type:34",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-index-flow",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "115:src2:999",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-loop-width",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "108:memory_size:1",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-loop-sign",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "108:type:34",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-bound-sign",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "99:type:34",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-return-load",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "664:type:34",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-return-value",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "671:type:34",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-print-abi",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "670:src1:1",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-return-op",
+    "Group": "multidim-wave8",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave8",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave8",
+    "RequiredSelectorFunction": "multidim_wave8",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "672:type:34",
+    "MachineMutationFunction": "multidim_wave8"
+  },
+  {
+    "Name": "mdw8-debug",
+    "Group": "multidim-wave8-debug",
+    "Sources": ["tests/mir-clobber/mdimw8.c"],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW8 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  }
+]
