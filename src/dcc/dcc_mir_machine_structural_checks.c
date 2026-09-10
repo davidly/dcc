@@ -1622,6 +1622,48 @@ static int mir_compound_add_store_event(
     return 1;
 }
 
+static const struct MirInsn *mir_compound_call_argument(
+    const struct MirInsn *call, int index)
+{
+    const struct MirInsn *result = NULL;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *argument = &mir.insns[instruction];
+
+        if (argument->opcode != MIR_ARG ||
+            argument->secondary_offset != call->secondary_offset ||
+            argument->immediate != index)
+            continue;
+        if (result != NULL)
+            return NULL;
+        result = argument;
+    }
+    return result;
+}
+
+static int mir_compound_argument_matches_store(int instruction)
+{
+    const struct MirInsn *argument = &mir.insns[instruction];
+    const struct MirInsn *use;
+    int prior;
+
+    if (instruction <= 0 ||
+        mir.insns[instruction - 1].opcode != MIR_NOP)
+        return 1;
+    use = &mir.insns[instruction - 1];
+    if (use->object < 0)
+        return 1;
+    for (prior = instruction - 2; prior >= 0; --prior) {
+        const struct MirInsn *store = &mir.insns[prior];
+
+        if (store->opcode == MIR_STORE &&
+            store->object == use->object)
+            return store->src1 == argument->src1;
+    }
+    return 0;
+}
+
 static int mir_compound_check_function(
     const struct MirInsn *call, struct Sym **function_out)
 {
@@ -1631,13 +1673,12 @@ static int mir_compound_check_function(
         function->is_funcptr || function->is_noreturn ||
         !function->has_proto || function->proto_variadic ||
         function->proto_nargs != 3 ||
-        type_ptr_depth(function->proto_types[0]) != 1 ||
-        type_size(function->proto_types[0]) != 2 ||
-        type_ptr_depth(function->proto_types[1]) != 0 ||
-        type_ptr_depth(function->proto_types[2]) != 0 ||
-        type_size(function->proto_types[1]) != 2 ||
-        type_size(function->proto_types[2]) != 2 ||
-        (call->type & 15) != TYPE_VOID ||
+        function->type != TYPE_VOID ||
+        call->type != function->type ||
+        function->proto_types[0] !=
+            (TYPE_CHAR | TYPE_PTR) ||
+        function->proto_types[1] != TYPE_INT ||
+        function->proto_types[2] != TYPE_INT ||
         call->memory_flags != 0)
         return 0;
     if (*function_out != NULL && *function_out != function)
@@ -1652,6 +1693,8 @@ static int mir_compound_add_call_event(
     const struct MirCompoundValue *values, int value_capacity)
 {
     struct MirCompoundCheckEvent *event;
+    const struct MirInsn *argument_insn;
+    const struct MirInsn *definition;
     int arguments[3];
     int argument;
 
@@ -1663,6 +1706,17 @@ static int mir_compound_add_call_event(
         if (arguments[argument] < 0 ||
             arguments[argument] >= value_capacity)
             return 0;
+    for (argument = 0; argument < 3; ++argument) {
+        argument_insn =
+            mir_compound_call_argument(call, argument);
+        definition = mir_definition(arguments[argument]);
+        if (argument_insn == NULL || definition == NULL ||
+            argument_insn->type !=
+                plan->check_function->proto_types[argument] ||
+            definition->type !=
+                plan->check_function->proto_types[argument])
+            return 0;
+    }
     if (values[arguments[0]].kind != MIR_COMPOUND_VALUE_STRING ||
         values[arguments[1]].kind != MIR_COMPOUND_VALUE_INTEGER ||
         values[arguments[2]].kind != MIR_COMPOUND_VALUE_INTEGER ||
@@ -1691,7 +1745,8 @@ static int mir_compound_add_helper_event(
         function->is_funcptr || function->is_noreturn ||
         !function->has_proto || function->proto_variadic ||
         function->proto_nargs != 0 ||
-        (call->type & 15) != TYPE_VOID ||
+        function->type != TYPE_VOID ||
+        call->type != function->type ||
         call->memory_flags != 0 ||
         !mir_machine_call_has_no_arguments(call) ||
         plan->helper_function != NULL ||
@@ -5961,7 +6016,10 @@ static int mir_match_compound_check_runner(
         switch (insn->opcode) {
         case MIR_LABEL:
         case MIR_NOP:
+            break;
         case MIR_ARG:
+            if (!mir_compound_argument_matches_store(instruction))
+                goto done;
             break;
         case MIR_CONST:
             if (insn->dst < 0 || insn->dst >= value_capacity ||
@@ -5974,8 +6032,7 @@ static int mir_match_compound_check_runner(
             break;
         case MIR_STRING_ADDRESS:
             if (insn->dst < 0 || insn->dst >= value_capacity ||
-                type_ptr_depth(insn->type) != 1 ||
-                type_size(insn->type) != 2)
+                insn->type != (TYPE_CHAR | TYPE_PTR))
                 goto done;
             values[insn->dst].kind =
                 MIR_COMPOUND_VALUE_STRING;
@@ -5988,6 +6045,7 @@ static int mir_match_compound_check_runner(
                     insn, &memory_type, &memory_storage,
                     &memory_offset) ||
                 memory_storage != SC_LOCAL ||
+                insn->type != type_add_ptr(memory_type) ||
                 mir_compound_frame_index(
                     mir.local_bytes, memory_offset, 1) < 0)
                 goto done;
@@ -6003,7 +6061,10 @@ static int mir_match_compound_check_runner(
                 values[insn->src1].kind !=
                     MIR_COMPOUND_VALUE_ADDRESS ||
                 values[insn->src2].kind !=
-                    MIR_COMPOUND_VALUE_INTEGER)
+                    MIR_COMPOUND_VALUE_INTEGER ||
+                mir_definition(insn->src1) == NULL ||
+                insn->type !=
+                    mir_definition(insn->src1)->type)
                 goto done;
             values[insn->dst].kind =
                 MIR_COMPOUND_VALUE_ADDRESS;
@@ -6016,7 +6077,9 @@ static int mir_match_compound_check_runner(
                 insn->src1 < 0 || insn->src1 >= value_capacity ||
                 values[insn->src1].kind !=
                     MIR_COMPOUND_VALUE_ADDRESS ||
-                insn->immediate < 0)
+                insn->immediate < 0 ||
+                insn->type != (TYPE_INT | TYPE_PTR) ||
+                insn->memory_size != 2)
                 goto done;
             values[insn->dst].kind =
                 MIR_COMPOUND_VALUE_ADDRESS;
@@ -6067,6 +6130,8 @@ static int mir_match_compound_check_runner(
             if (insn->dst < 0 || insn->dst >= value_capacity ||
                 insn->src1 < 0 || insn->src1 >= value_capacity ||
                 insn->src2 < 0 || insn->src2 >= value_capacity ||
+                insn->type != TYPE_INT ||
+                insn->secondary_offset != TYPE_INT ||
                 values[insn->src1].kind !=
                     MIR_COMPOUND_VALUE_INTEGER ||
                 values[insn->src2].kind !=
@@ -6094,6 +6159,10 @@ static int mir_match_compound_check_runner(
                     insn, &memory_type, &memory_storage,
                     &memory_offset) ||
                 memory_storage != SC_LOCAL ||
+                insn->type != memory_type ||
+                insn->memory_size != type_size(memory_type) ||
+                mir_definition(insn->src1) == NULL ||
+                mir_definition(insn->src1)->type != insn->type ||
                 insn->memory_flags != 0)
                 goto done;
             width = insn->memory_size;
@@ -6113,6 +6182,8 @@ static int mir_match_compound_check_runner(
                     insn, &memory_type, &memory_storage,
                     &memory_offset) ||
                 memory_storage != SC_LOCAL ||
+                insn->type != memory_type ||
+                insn->memory_size != 0 ||
                 insn->memory_flags != 0)
                 goto done;
             width = insn->memory_size > 0
@@ -6130,7 +6201,16 @@ static int mir_match_compound_check_runner(
                 insn->src2 < 0 || insn->src2 >= value_capacity ||
                 values[insn->src1].kind !=
                     MIR_COMPOUND_VALUE_ADDRESS ||
-                insn->memory_flags != 0 || insn->bit_width != 0)
+                insn->memory_flags != 0 || insn->bit_width != 0 ||
+                mir_definition(insn->src1) == NULL ||
+                mir_definition(insn->src2) == NULL ||
+                type_ptr_depth(
+                    mir_definition(insn->src1)->type) != 1 ||
+                type_decay_ptr(
+                    mir_definition(insn->src1)->type) !=
+                    insn->type ||
+                insn->memory_size != type_size(type_decay_ptr(
+                    mir_definition(insn->src1)->type)))
                 goto done;
             memory_offset = (int)values[insn->src1].value;
             width = insn->memory_size;
@@ -6149,6 +6229,13 @@ static int mir_match_compound_check_runner(
                 values[insn->src1].kind !=
                     MIR_COMPOUND_VALUE_ADDRESS ||
                 insn->memory_flags != 0 || insn->bit_width != 0 ||
+                mir_definition(insn->src1) == NULL ||
+                type_ptr_depth(
+                    mir_definition(insn->src1)->type) != 1 ||
+                type_decay_ptr(
+                    mir_definition(insn->src1)->type) !=
+                    insn->type ||
+                insn->memory_size != type_size(insn->type) ||
                 !mir_compound_load_memory(
                     bytes, byte_known, addresses, address_known,
                     mir.local_bytes,
@@ -6204,23 +6291,31 @@ static int mir_match_compound_check_runner(
             &mir.insns[final_load], &memory_type,
             &memory_storage, &memory_offset) ||
         memory_storage != SC_GLOBAL ||
+        mir.insns[final_load].type != memory_type ||
+        mir.insns[final_load].memory_size != 0 ||
         type_ptr_depth(memory_type) != 0 ||
         type_size(memory_type) != 2 ||
         (plan->failure_root =
              find_global(mir.insns[final_load].name)) == NULL ||
         plan->failure_root->is_volatile ||
         mir.insns[final_load + 1].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[final_load + 1].type != 0 ||
+        mir.insns[final_load + 1].immediate != 0 ||
         mir.insns[final_load + 1].src1 !=
             mir.insns[final_load].dst ||
         mir.insns[final_load + 1].label !=
             mir.insns[final_load + 4].label ||
         !mir_machine_constant_equals(
             mir.insns[final_load + 2].dst, 1) ||
+        mir.insns[final_load + 2].type != mir.return_type ||
         mir.insns[final_load + 3].opcode != MIR_RETURN ||
+        mir.insns[final_load + 3].type != 0 ||
         mir.insns[final_load + 3].src1 !=
             mir.insns[final_load + 2].dst ||
         mir.insns[final_load + 4].opcode != MIR_LABEL ||
         mir.insns[final_load + 5].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[final_load + 5].type !=
+            (TYPE_CHAR | TYPE_PTR) ||
         mir.insns[final_load + 6].opcode != MIR_ARG ||
         mir.insns[final_load + 6].src1 !=
             mir.insns[final_load + 5].dst ||
@@ -6230,7 +6325,9 @@ static int mir_match_compound_check_runner(
         instruction != mir.insns[final_load + 5].dst ||
         !mir_machine_constant_equals(
             mir.insns[final_load + 8].dst, 0) ||
+        mir.insns[final_load + 8].type != mir.return_type ||
         mir.insns[final_load + 9].opcode != MIR_RETURN ||
+        mir.insns[final_load + 9].type != 0 ||
         mir.insns[final_load + 9].src1 !=
             mir.insns[final_load + 8].dst)
         goto done;
@@ -6243,9 +6340,20 @@ static int mir_match_compound_check_runner(
         plan->print_function->is_funcptr ||
         plan->print_function->is_noreturn ||
         !plan->print_function->has_proto ||
+        plan->print_function->type !=
+            mir.insns[final_load + 7].type ||
         plan->print_function->proto_nargs != 1 ||
         !plan->print_function->proto_variadic ||
-        (mir.insns[final_load + 7].type & 15) != TYPE_INT)
+        plan->print_function->type != TYPE_INT ||
+        plan->print_function->proto_types[0] !=
+            (TYPE_CHAR | TYPE_PTR) ||
+        mir_compound_call_argument(
+            &mir.insns[final_load + 7], 0) == NULL ||
+        mir_compound_call_argument(
+            &mir.insns[final_load + 7], 0)->type !=
+            plan->print_function->proto_types[0] ||
+        mir.insns[final_load + 7].memory_flags !=
+            MIR_CALL_FLAG_VARIADIC)
         goto done;
     ok = 1;
 done:
