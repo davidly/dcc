@@ -3376,6 +3376,7 @@ static int mir_lcs_char_pointer_type(int type)
 {
     return type_ptr_depth(type) == 1 &&
            (type & 15) == TYPE_CHAR &&
+           (type & TYPE_UNSIGNED) == 0 &&
            type_size(type) == 2;
 }
 
@@ -3392,6 +3393,7 @@ static int mir_lcs_char_type(int type)
     return type_ptr_depth(type) == 0 &&
            !type_is_float(type) &&
            (type & 15) == TYPE_CHAR &&
+           (type & TYPE_UNSIGNED) == 0 &&
            type_size(type) == 1;
 }
 
@@ -3806,7 +3808,22 @@ static int mir_lcs_binary(
            insn->immediate == operation &&
            insn->src1 == mir.insns[left].dst &&
            insn->src2 == mir.insns[right].dst &&
-           mir_lcs_int_type(insn->type);
+           mir_lcs_int_type(insn->type) &&
+           insn->secondary_offset == insn->type;
+}
+
+static int mir_lcs_int_constant(int instruction, long expected)
+{
+    const struct MirInsn *constant = &mir.insns[instruction];
+
+    return constant->opcode == MIR_CONST &&
+           mir_lcs_int_type(constant->type) &&
+           constant->immediate == expected;
+}
+
+static int mir_lcs_local_word_width(const struct MirInsn *insn)
+{
+    return insn->memory_size == 0 || insn->memory_size == 2;
 }
 
 static int mir_lcs_index(
@@ -3833,6 +3850,7 @@ static int mir_lcs_same_local_store(
     const struct MirInsn *store = &mir.insns[instruction];
 
     return mir_machine_unobservable_local_store(store) &&
+           mir_lcs_local_word_width(store) &&
            mir_machine_same_location(store, &mir.insns[expected]) &&
            store->src1 == mir.insns[value].dst;
 }
@@ -3844,6 +3862,7 @@ static int mir_lcs_same_local_load(int instruction, int expected)
     return load->opcode == MIR_LOAD &&
            mir_machine_same_location(load, &mir.insns[expected]) &&
            mir_lcs_int_type(load->type) &&
+           mir_lcs_local_word_width(load) &&
            (load->memory_flags & (1 | 8)) == 0;
 }
 
@@ -3971,9 +3990,8 @@ static int mir_match_lcs_dp_schedule(struct MirLcsDpSchedule *plan)
     for (item = 0;
          item < (int)(sizeof(constants) / sizeof(constants[0]));
          ++item)
-        if (!mir_machine_constant_equals(
-                mir.insns[constants[item][0]].dst,
-                constants[item][1]))
+        if (!mir_lcs_int_constant(
+                constants[item][0], constants[item][1]))
             return mir_machine_reject("lcs-dp", "constants");
 
     if (!mir_machine_parameter_value_offset(
@@ -3990,9 +4008,11 @@ static int mir_match_lcs_dp_schedule(struct MirLcsDpSchedule *plan)
         return mir_machine_reject("lcs-dp", "parameters");
 
     if (!mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        !mir_lcs_local_word_width(&mir.insns[4]) ||
         mir.insns[4].src1 != mir.insns[3].dst ||
         !mir_lcs_same_local_store(20, 4, 19) ||
         !mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        !mir_lcs_local_word_width(&mir.insns[6]) ||
         mir.insns[6].src1 != mir.insns[5].dst ||
         !mir_lcs_same_local_store(37, 6, 36) ||
         !mir_lcs_phi(10, 3, 19, 0, 21, 4) ||
@@ -4015,6 +4035,7 @@ static int mir_match_lcs_dp_schedule(struct MirLcsDpSchedule *plan)
         return mir_machine_reject("lcs-dp", "length-loops");
 
     if (!mir_machine_unobservable_local_store(&mir.insns[43]) ||
+        !mir_lcs_local_word_width(&mir.insns[43]) ||
         mir.insns[43].src1 != mir.insns[41].dst ||
         !mir_lcs_same_local_store(65, 43, 64) ||
         !mir_lcs_phi(49, 41, 64, 40, 61, 43) ||
@@ -4023,6 +4044,7 @@ static int mir_match_lcs_dp_schedule(struct MirLcsDpSchedule *plan)
         !mir_lcs_binary(64, '+', 49, 63) ||
         !mir_lcs_jump(66, 44) ||
         !mir_machine_unobservable_local_store(&mir.insns[70]) ||
+        !mir_lcs_local_word_width(&mir.insns[70]) ||
         mir.insns[70].src1 != mir.insns[68].dst ||
         !mir_lcs_same_local_store(93, 70, 92) ||
         !mir_lcs_phi(77, 68, 92, 67, 89, 70) ||

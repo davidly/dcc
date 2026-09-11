@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 23) / 24 ))
+campaign_jobs=$(( (mutation_jobs + 24) / 25 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -276,6 +276,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-action-%8m.profraw" \
     --output-dir "$build_dir/action-wave24-audit" \
     >"$campaign_dir/action.log" 2>&1 &
 action_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-lcs-%8m.profraw" \
+    python3 scripts/lcs-wave24-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/lcs-wave24-audit" \
+    >"$campaign_dir/lcs.log" 2>&1 &
+lcs_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -301,7 +307,8 @@ for campaign in \
     "bitfield-report:$bitfield_report_pid" \
     "additive:$additive_pid" \
     "byte-rotate:$byte_rotate_pid" \
-    "action:$action_pid"
+    "action:$action_pid" \
+    "lcs:$lcs_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
