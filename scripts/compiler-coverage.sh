@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 10) / 11 ))
+campaign_jobs=$(( (mutation_jobs + 11) / 12 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -200,6 +200,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-do-while-%8m.profraw" \
     --jobs "$campaign_jobs" --skip-runtime \
     >"$campaign_dir/do-while.log" 2>&1 &
 do_while_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-symbol-find-%8m.profraw" \
+    python3 scripts/symbol-find-wave21-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/symbol-find-wave21-audit" \
+    >"$campaign_dir/symbol-find.log" 2>&1 &
+symbol_find_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -212,7 +218,8 @@ for campaign in \
     "packed-record:$packed_record_pid" \
     "fortran-fatal:$fortran_fatal_pid" \
     "matrix-add:$matrix_add_pid" \
-    "do-while:$do_while_pid"
+    "do-while:$do_while_pid" \
+    "symbol-find:$symbol_find_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
