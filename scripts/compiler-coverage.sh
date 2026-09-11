@@ -304,6 +304,16 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-for-increment-%8m.profraw" \
     --output-dir "$build_dir/for-increment-wave26-audit" \
     >"$campaign_dir/for-increment.log" 2>&1 &
 for_increment_pid=$!
+abort_jobs=$campaign_jobs
+if [ "$abort_jobs" -gt 2 ]; then
+    abort_jobs=2
+fi
+LLVM_PROFILE_FILE="$raw_dir/dcc-abort-%8m.profraw" \
+    python3 scripts/abort-wave27-audit.py \
+    --jobs "$abort_jobs" \
+    --output-dir "$build_dir/abort-wave27-audit" \
+    >"$campaign_dir/abort.log" 2>&1 &
+abort_pid=$!
 affine_jobs=$campaign_jobs
 if [ "$affine_jobs" -lt 4 ]; then
     affine_jobs=4
@@ -367,6 +377,7 @@ for campaign in \
     "lcs:$lcs_pid" \
     "fileio:$fileio_pid" \
     "for-increment:$for_increment_pid" \
+    "abort:$abort_pid" \
     "affine-fill:$affine_fill_pid" \
     "pointer-condition:$pointer_condition_pid" \
     "cast-logical:$cast_logical_pid" \

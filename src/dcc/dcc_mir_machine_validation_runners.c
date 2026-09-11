@@ -1715,17 +1715,14 @@ static int mir_match_memory_exercise_runner(
 
 static int mir_abort_runner_word_type(int type)
 {
-    return type_ptr_depth(type) == 0 &&
-           (type & 15) == TYPE_INT &&
-           (type & TYPE_UNSIGNED) == 0 &&
+    return type == TYPE_INT &&
            type_size(type) == 2;
 }
 
 static int mir_abort_runner_pointer_type(
     int type, int base_type)
 {
-    return type_ptr_depth(type) == 1 &&
-           (type & 15) == base_type &&
+    return type == (base_type | TYPE_PTR) &&
            type_size(type) == 2;
 }
 
@@ -1871,8 +1868,7 @@ static int mir_abort_runner_function_types(
             plan->rename_function->proto_types[0], TYPE_CHAR) &&
         mir_abort_runner_pointer_type(
             plan->rename_function->proto_types[1], TYPE_CHAR) &&
-        type_ptr_depth(plan->check_function->type) == 0 &&
-        (plan->check_function->type & 15) == TYPE_VOID &&
+        plan->check_function->type == TYPE_VOID &&
         mir_abort_runner_pointer_type(
             plan->check_function->proto_types[0], TYPE_CHAR) &&
         mir_abort_runner_word_type(
@@ -1906,8 +1902,7 @@ static int mir_abort_runner_function_types(
             plan->is_space_function->type) &&
         mir_abort_runner_word_type(
             plan->is_space_function->proto_types[0]) &&
-        type_ptr_depth(plan->abort_function->type) == 0 &&
-        (plan->abort_function->type & 15) == TYPE_VOID;
+        plan->abort_function->type == TYPE_VOID;
 }
 
 static int mir_match_abort_file_runner(
@@ -1997,6 +1992,9 @@ static int mir_match_abort_file_runner(
     static const int failure_widths[] = {
         0, 2, 0, 2, 0, 0
     };
+    static const int reused_strings[] = {
+        18, 27, 62, 71, 73, 92
+    };
     struct Sym *functions[12];
     int argument_instructions[3];
     int arguments[3];
@@ -2014,7 +2012,15 @@ static int mir_match_abort_file_runner(
     if ((mir.count != 264 && mir.count != 269) ||
         mir_cfg_block_count() != 27 ||
         mir.has_vla || mir.local_bytes != 12 ||
+        mir.dead_local_suffix_bytes != 0 ||
         mir.aggregate_temp_bytes != 0 ||
+        mir.opaque_count != 0 ||
+        mir.has_runtime_stride_param ||
+        mir.is_variadic_function ||
+        mir.object_count != 0 ||
+        mir.declared_count != 2 ||
+        mir.alias_count != 0 ||
+        mir.has_declared_register_object ||
         !mir_abort_runner_word_type(mir.return_type))
         return mir_machine_reject(
             "abort-file-runner", "shape");
@@ -2023,6 +2029,26 @@ static int mir_match_abort_file_runner(
                 expected_opcodes[instruction])
             return mir_machine_reject(
                 "abort-file-runner", "opcode");
+    first = 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int previous;
+
+        if (mir.insns[instruction].opcode != MIR_LABEL)
+            continue;
+        if (mir.insns[instruction].label < 0)
+            return mir_machine_reject(
+                "abort-file-runner", "label");
+        ++first;
+        for (previous = 0; previous < instruction; ++previous)
+            if (mir.insns[previous].opcode == MIR_LABEL &&
+                mir.insns[previous].label ==
+                    mir.insns[instruction].label)
+                return mir_machine_reject(
+                    "abort-file-runner", "label-alias");
+    }
+    if (first != 27)
+        return mir_machine_reject(
+            "abort-file-runner", "label-count");
 
     plan->open_function =
         mir_abort_runner_function(5, 0, 2, 0);
@@ -2212,7 +2238,8 @@ static int mir_match_abort_file_runner(
         if (!mir_abort_runner_pointer_type(
                 string->type, TYPE_CHAR) ||
             string->immediate < 0 ||
-            string->immediate >= nstrings)
+            string->immediate >= nstrings ||
+            string_wide[string->immediate])
             return mir_machine_reject(
                 "abort-file-runner", "string-type");
         plan->strings[item] = (int)string->immediate;
@@ -2226,6 +2253,15 @@ static int mir_match_abort_file_runner(
             (int)mir.insns[string_instructions[MIR_ABORT_RETURNED]].immediate;
     else
         plan->strings[MIR_ABORT_RETURNED] = -1;
+    for (item = 0;
+         item < (int)(sizeof(reused_strings) /
+                      sizeof(reused_strings[0]));
+         ++item)
+        if (!mir_abort_runner_pointer_type(
+                mir.insns[reused_strings[item]].type,
+                TYPE_CHAR))
+            return mir_machine_reject(
+                "abort-file-runner", "string-reuse-type");
     if (mir.insns[18].immediate !=
             plan->strings[MIR_ABORT_OLD_NAME] ||
         mir.insns[71].immediate !=
@@ -2246,6 +2282,9 @@ static int mir_match_abort_file_runner(
             &memory_storage, &memory_offset) ||
         memory_storage != SC_LOCAL || memory_offset != -2 ||
         !mir_abort_runner_pointer_type(memory_type, TYPE_INT) ||
+        !mir_abort_runner_pointer_type(
+            mir.insns[7].type, TYPE_INT) ||
+        mir.insns[7].bit_width != 0 ||
         !mir_machine_unobservable_local_store(&mir.insns[7]))
         return mir_machine_reject(
             "abort-file-runner", "file-local");
@@ -2261,11 +2300,13 @@ static int mir_match_abort_file_runner(
                 TYPE_INT) ||
             mir.insns[file_locations[item]].memory_size !=
                 file_widths[item] ||
-            mir.insns[file_locations[item]].memory_flags != 0)
+            mir.insns[file_locations[item]].memory_flags != 0 ||
+            mir.insns[file_locations[item]].bit_width != 0)
             return mir_machine_reject(
                 "abort-file-runner", "file-location");
     if (mir.insns[file_locations[0]].memory_size != file_widths[0] ||
-        mir.insns[file_locations[0]].memory_flags != 0)
+        mir.insns[file_locations[0]].memory_flags != 0 ||
+        mir.insns[file_locations[0]].bit_width != 0)
         return mir_machine_reject(
             "abort-file-runner", "file-width");
     if (!mir_machine_same_location(
@@ -2279,6 +2320,20 @@ static int mir_match_abort_file_runner(
         mir.insns[77].src1 != mir.insns[75].dst)
         return mir_machine_reject(
             "abort-file-runner", "file-declaration");
+    if (strcmp(mir.declared_names[0], mir.insns[7].name) ||
+        mir.declared_types[0] != (TYPE_INT | TYPE_PTR) ||
+        mir.declared_type_unstable[0] ||
+        mir.declared_storage[0] != SC_LOCAL ||
+        mir.declared_offsets[0] != -2 ||
+        mir.declared_sizes[0] != 2 ||
+        mir.declared_is_array[0] ||
+        mir.declared_is_vla[0] ||
+        mir.declared_is_volatile[0] ||
+        mir.declared_pointee_is_volatile[0] ||
+        mir.declared_pointee_volatile_masks[0] != 0 ||
+        mir.declared_is_funcptr[0])
+        return mir_machine_reject(
+            "abort-file-runner", "file-metadata");
 
     if (!mir_scalar_memory_location(
             &mir.insns[48], &memory_type,
@@ -2291,11 +2346,29 @@ static int mir_match_abort_file_runner(
         !mir_abort_runner_pointer_type(
             mir.insns[60].type, TYPE_CHAR) ||
         !mir_abort_runner_word_type(mir.insns[50].type) ||
+        !mir_machine_same_location(
+            &mir.insns[48], &mir.insns[60]) ||
         strcmp(mir.insns[48].name, mir.insns[60].name) ||
         strcmp(mir.insns[48].name, mir.insns[50].name) ||
         !mir_machine_constant_equals(mir.insns[50].dst, 8))
         return mir_machine_reject(
             "abort-file-runner", "buffer");
+    if (strcmp(mir.declared_names[1], mir.insns[48].name) ||
+        mir.declared_types[1] != TYPE_CHAR ||
+        mir.declared_type_unstable[1] ||
+        mir.declared_storage[1] != SC_LOCAL ||
+        mir.declared_offsets[1] != -10 ||
+        mir.declared_sizes[1] != 8 ||
+        !mir.declared_is_array[1] ||
+        mir.declared_dim_counts[1] != 1 ||
+        mir.declared_dims[1][0] != 8 ||
+        mir.declared_elem_sizes[1] != 1 ||
+        mir.declared_is_vla[1] ||
+        mir.declared_is_volatile[1] ||
+        mir.declared_is_const[1] ||
+        mir.declared_is_funcptr[1])
+        return mir_machine_reject(
+            "abort-file-runner", "buffer-metadata");
 
     plan->failures = find_global(mir.insns[41].name);
     if (plan->failures == NULL ||
@@ -2311,6 +2384,10 @@ static int mir_match_abort_file_runner(
         memory_storage != SC_GLOBAL || memory_offset != 0)
         return mir_machine_reject(
             "abort-file-runner", "failure-global");
+    if (!mir_abort_runner_word_type(mir.insns[41].type) ||
+        mir.insns[41].bit_width != 0)
+        return mir_machine_reject(
+            "abort-file-runner", "failure-type");
     for (item = 1;
          item < (int)(sizeof(failure_locations) /
                       sizeof(failure_locations[0]));
@@ -2322,11 +2399,13 @@ static int mir_match_abort_file_runner(
                 mir.insns[failure_locations[item]].type) ||
             mir.insns[failure_locations[item]].memory_size !=
                 failure_widths[item] ||
-            mir.insns[failure_locations[item]].memory_flags != 0)
+            mir.insns[failure_locations[item]].memory_flags != 0 ||
+            mir.insns[failure_locations[item]].bit_width != 0)
             return mir_machine_reject(
                 "abort-file-runner", "failure-location");
     if (mir.insns[failure_locations[0]].memory_size != failure_widths[0] ||
         mir.insns[failure_locations[0]].memory_flags != 0 ||
+        mir.insns[failure_locations[0]].bit_width != 0 ||
         !mir_abort_runner_word_type(mir.insns[42].type) ||
         !mir_abort_runner_word_type(mir.insns[43].type) ||
         !mir_abort_runner_word_type(mir.insns[87].type) ||
@@ -2415,14 +2494,17 @@ static int mir_match_abort_file_runner(
                 mir.insns[start + 14].label ||
             !mir_machine_constant_equals(
                 mir.insns[start + 12].dst, 1) ||
+            mir.insns[start + 12].type != 0 ||
             mir.insns[start + 13].label !=
                 mir.insns[start + 16].label ||
             !mir_machine_constant_equals(
                 mir.insns[start + 15].dst, 0) ||
+            mir.insns[start + 15].type != 0 ||
             mir.insns[start + 17].src1 !=
                 mir.insns[start + 12].dst ||
             mir.insns[start + 17].src2 !=
                 mir.insns[start + 15].dst ||
+            mir.insns[start + 17].type != 0 ||
             mir.insns[start + 17].phi_pred1 !=
                 mir.insns[start + 11].label ||
             mir.insns[start + 17].phi_pred2 !=

@@ -4,10 +4,30 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-#ifdef AW13_WIDE_FAILURES
+#ifdef AW27_VOLATILE_FAILURES
+static volatile int failures;
+#elif defined(AW13_WIDE_FAILURES)
 static long failures;
 #else
 static int failures;
+#endif
+
+#ifdef AW27_ALT_STRINGS
+#define OLD_NAME "A27OLD.TMP"
+#define NEW_NAME "A27NEW.TMP"
+#define FILE_CONTENT "wave27"
+#define SUCCESS_TEXT "abort wave27 ok\n"
+#else
+#define OLD_NAME "AW13OLD.TMP"
+#define NEW_NAME "AW13NEW.TMP"
+#define FILE_CONTENT "wave13"
+#define SUCCESS_TEXT "abort wave13 ok\n"
+#endif
+
+#ifdef AW27_LARGE_BUFFER
+#define MAIN_BUFFER_SIZE 9
+#else
+#define MAIN_BUFFER_SIZE 8
 #endif
 
 static int open_calls;
@@ -106,7 +126,7 @@ static int w13remove(const char *name)
     int new_absent;
 
     ++remove_calls;
-    stream = fopen("AW13OLD.TMP", "r");
+    stream = fopen(OLD_NAME, "r");
     old_absent = stream == NULL;
     if (stream)
         fclose(stream);
@@ -115,7 +135,7 @@ static int w13remove(const char *name)
     if (stream) {
         fgets(buffer, sizeof(buffer), stream);
         fclose(stream);
-        content_ok = strcmp(buffer, "wave13") == 0;
+        content_ok = strcmp(buffer, FILE_CONTENT) == 0;
     }
     removed = remove(name);
     stream = fopen(name, "r");
@@ -154,7 +174,7 @@ static int w13print(const char *format, ...)
     int result;
 
     ++print_calls;
-    if (!strcmp(format, "abort wave13 ok\n") ||
+    if (!strcmp(format, SUCCESS_TEXT) ||
         !strcmp(format, "%s"))
         printf(
             "oracle files=%d open=%d puts=%d close=%d rename=%d "
@@ -182,16 +202,20 @@ static _Noreturn void w13abort(void)
 
 int main(void)
 {
+#ifdef AW27_VOLATILE_FILE
+    FILE * volatile file;
+#else
     FILE *file;
-    char buffer[8];
+#endif
+    char buffer[MAIN_BUFFER_SIZE];
 
-    file = w13open("AW13OLD.TMP", "w");
-    W13_PUTS("wave13", file);
+    file = w13open(OLD_NAME, "w");
+    W13_PUTS(FILE_CONTENT, file);
     w13close(file);
     w13check(
         "rename_ret",
-        w13rename("AW13OLD.TMP", "AW13NEW.TMP"), 0);
-    file = w13open("AW13NEW.TMP", "r");
+        w13rename(OLD_NAME, NEW_NAME), 0);
+    file = w13open(NEW_NAME, "r");
 #ifdef AW13_BRANCH_GUARD
     if (!file || branch_guard) {
 #else
@@ -202,15 +226,17 @@ int main(void)
     } else {
         w13gets(buffer, sizeof(buffer), file);
         w13close(file);
-        w13check("rename_content", w13compare(buffer, "wave13"), 0);
+        w13check(
+            "rename_content",
+            w13compare(buffer, FILE_CONTENT), 0);
     }
-    file = w13open("AW13OLD.TMP", "r");
+    file = w13open(OLD_NAME, "r");
     if (file) {
         w13print("FAIL rename: old file still exists\n");
         w13close(file);
         ++failures;
     }
-    w13remove("AW13NEW.TMP");
+    w13remove(NEW_NAME);
     w13check("isgraph_A", w13printable('A') && !w13space('A'), 1);
     w13check("isgraph_z", w13printable('z') && !w13space('z'), 1);
     w13check("isgraph_0", w13printable('0') && !w13space('0'), 1);
@@ -231,9 +257,9 @@ int main(void)
 #endif
     }
 #ifdef AW13_PRINT_PAIR
-    w13print("%s", "abort wave13 ok\n");
+    w13print("%s", SUCCESS_TEXT);
 #else
-    w13print("abort wave13 ok\n");
+    w13print(SUCCESS_TEXT);
 #endif
     w13abort();
     w13print("FAIL abort: returned\n");
