@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 19) / 20 ))
+campaign_jobs=$(( (mutation_jobs + 20) / 21 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -201,6 +201,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-divmod-%8m.profraw" \
     --output-dir "$build_dir/divmod-wave22-audit" \
     >"$campaign_dir/divmod.log" 2>&1 &
 divmod_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-catalan-%8m.profraw" \
+    python3 scripts/catalan-wave23-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/catalan-wave23-audit" \
+    >"$campaign_dir/catalan.log" 2>&1 &
+catalan_pid=$!
 LLVM_PROFILE_FILE="$raw_dir/dcc-do-while-%8m.profraw" \
     python3 scripts/do-while-wave21-campaign.py \
     --jobs "$campaign_jobs" --skip-runtime \
@@ -265,6 +271,7 @@ for campaign in \
     "fortran-fatal:$fortran_fatal_pid" \
     "matrix-add:$matrix_add_pid" \
     "divmod:$divmod_pid" \
+    "catalan:$catalan_pid" \
     "do-while:$do_while_pid" \
     "symbol-find:$symbol_find_pid" \
     "ctype-realloc:$ctype_realloc_pid" \
