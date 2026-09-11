@@ -310,6 +310,11 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-pointer-condition-%8m.profraw" \
     --output-dir "$build_dir/pointer-condition-wave25-audit" \
     >"$campaign_dir/pointer-condition.log" 2>&1 &
 pointer_condition_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-cast-logical-%8m.profraw" \
+    python3 scripts/cast-logical-wave26-campaign.py \
+    --jobs "$campaign_jobs" --skip-runtime \
+    >"$campaign_dir/cast-logical.log" 2>&1 &
+cast_logical_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -340,7 +345,8 @@ for campaign in \
     "lcs:$lcs_pid" \
     "fileio:$fileio_pid" \
     "affine-fill:$affine_fill_pid" \
-    "pointer-condition:$pointer_condition_pid"
+    "pointer-condition:$pointer_condition_pid" \
+    "cast-logical:$cast_logical_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
