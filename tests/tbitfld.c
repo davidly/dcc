@@ -5,28 +5,53 @@
 #endif
 
 struct Bits {
+#ifdef MIR_W23_UNSIGNED_WIDTH4
+    unsigned a:4;
+    unsigned b:4;
+#else
     unsigned a:3;
     unsigned b:5;
+#endif
     unsigned c:8;
     int d;
 };
 
 struct SignedBits {
+#ifdef MIR_W23_SIGNED_A_UNSIGNED
+    unsigned a:4;
+#else
     int a:4;
+#endif
     unsigned b:4;
     int c;
 };
 
+#ifdef MIR_W23_VOLATILE_GLOBALS
+static volatile struct Bits g = { 5, 17, 200, 1234 };
+static volatile struct SignedBits gs = { -3, 12, 77 };
+#else
 static struct Bits g = { 5, 17, 200, 1234 };
 static struct SignedBits gs = { -3, 12, 77 };
+#endif
 
+#ifdef MIR_W23_RENAMED_HELPERS
+#define make_bits make_bits_wave23
+#define make_signed make_signed_wave23
+#define sum_bits sum_bits_wave23
+#define sum_signed sum_signed_wave23
+#endif
+
+#ifdef MIR_W23_WIDE_MAKE_D
+static struct Bits make_bits(unsigned a, unsigned b, unsigned c, long d)
+#else
 static struct Bits make_bits(unsigned a, unsigned b, unsigned c, int d)
+#endif
 {
     struct Bits x;
     x.a = a;
     x.b = b;
     x.c = c;
-    x.d = d;
+    x.d = (int)d;
     return x;
 }
 
@@ -52,23 +77,39 @@ static int sum_signed(struct SignedBits x)
 int main(void)
 {
     struct Bits l = { 3, 7, 99, 456 };
+#ifdef MIR_W23_STATIC_RESULTS
+    static struct Bits m;
+#else
     struct Bits m;
+#endif
     struct SignedBits ls = { -2, 5, 20 };
+#ifdef MIR_W23_STATIC_RESULTS
+    static struct SignedBits ms;
+#else
     struct SignedBits ms;
+#endif
     int post;
     int pre;
 
     printf("global %u %u %u %d %d\n", g.a, g.b, g.c, g.d, sum_bits(g));
     printf("local %u %u %u %d %d\n", l.a, l.b, l.c, l.d, sum_bits(l));
 
+#ifdef MIR_W23_WIDE_MAKE_D
+    m = make_bits(6, 31, 255, (long)MIR_CLOBBER_MAKE_D);
+#else
     m = make_bits(6, 31, 255, MIR_CLOBBER_MAKE_D);
+#endif
     printf("return %u %u %u %d %d\n", m.a, m.b, m.c, m.d, sum_bits(m));
 
     m.a = 2; m.b = 4; m.c = 8; m.d = 16;
     printf("assign %u %u %u %d %d\n", m.a, m.b, m.c, m.d, sum_bits(m));
 
     m.a = 1; m.b = 3; m.c = 4; m.d = 0;
+#ifdef MIR_W23_XOR_RMW
+    m.a ^= 3;
+#else
     m.a += 3;
+#endif
     m.c <<= 2;
     post = m.a++;
     pre = ++m.b;
