@@ -4177,17 +4177,38 @@ static int mir_match_action_decode_member(
 {
     const struct MirInsn *load = &mir.insns[load_index];
     const struct MirInsn *member = &mir.insns[member_index];
+    struct FieldDef *field;
+    int struct_id;
 
     if (load->opcode != MIR_LOAD ||
         !mir_machine_same_location(
             load, &mir.insns[parameter_index]) ||
+        load->type != mir.insns[parameter_index].type ||
+        !mir_machine_named_nonvolatile(load) ||
         member->opcode != MIR_MEMBER_ADDRESS ||
         member->src1 != load->dst ||
+        member->type != (TYPE_INT | TYPE_PTR) ||
         member->memory_size != 2 ||
         member->bit_width != 0 ||
-        (member->memory_flags & (1 | 8)) != 0 ||
+        member->bit_shift != 0 ||
+        member->bit_mask != 0 ||
+        member->memory_flags != 0 ||
+        member->pointee_volatile_mask != 0 ||
+        member->has_pointer_qualifiers ||
         member->immediate < -32768 ||
         member->immediate > 32767)
+        return 0;
+    struct_id = base_struct_id_from_type(load->type);
+    field = struct_id > 0
+        ? find_field_def(struct_id, member->name)
+        : NULL;
+    if (field == NULL || field->type != TYPE_INT ||
+        field->offset != member->immediate ||
+        field->size != 2 || field->is_volatile ||
+        field->pointee_volatile_mask != 0 ||
+        field->is_array || field->is_anonymous ||
+        field->is_promoted || field->bit_width != 0 ||
+        field->bit_shift != 0 || field->bit_mask != 0)
         return 0;
     *offset_out = (int)member->immediate;
     return 1;
@@ -4222,10 +4243,237 @@ static int mir_match_action_decode_string(
     const struct MirInsn *string = &mir.insns[instruction];
 
     if (string->opcode != MIR_STRING_ADDRESS ||
-        !mir_match_action_decode_pointer_type(string->type))
+        string->type != (TYPE_CHAR | TYPE_PTR) ||
+        string->immediate < 0 || string->immediate >= nstrings ||
+        string_wide[string->immediate])
         return 0;
     *string_id = (int)string->immediate;
     return 1;
+}
+
+static int mir_action_decode_declared_parameter(
+    const struct MirInsn *parameter, int type, int offset)
+{
+    int declared;
+    int matches = 0;
+
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        if (strcmp(mir.declared_names[declared], parameter->name))
+            continue;
+        ++matches;
+        if (mir.declared_types[declared] != type ||
+            mir.declared_type_unstable[declared] ||
+            mir.declared_storage[declared] != SC_PARAM ||
+            mir.declared_offsets[declared] != offset ||
+            mir.declared_sizes[declared] != 2 ||
+            mir.declared_is_array[declared] ||
+            mir.declared_is_vla[declared] ||
+            mir.declared_is_volatile[declared] ||
+            mir.declared_pointee_is_volatile[declared] ||
+            mir.declared_pointee_volatile_masks[declared] != 0 ||
+            mir.declared_dim_counts[declared] != 0 ||
+            mir.declared_elem_sizes[declared] != 0 ||
+            mir.declared_vla_size_offsets[declared] != 0 ||
+            mir.declared_dynamic_strides[declared] != 0 ||
+            mir.declared_runtime_stride_names[declared][0] != '\0' ||
+            mir.declared_is_const[declared] ||
+            mir.declared_is_funcptr[declared])
+            return 0;
+    }
+    return matches == 1;
+}
+
+static int mir_action_decode_expected_type(
+    int instruction, int statement_type)
+{
+    const int statement_loads[] = {6, 38, 42, 57, 70};
+    const int text_loads[] = {3, 10, 20, 44, 51, 64, 72};
+    const int integer_constants[] = {8, 40, 59, 66, 74};
+    const int integer_calls[] = {14, 24, 46, 55};
+    int item;
+
+    if (instruction == 1)
+        return statement_type;
+    if (instruction == 2)
+        return TYPE_CHAR | TYPE_PTR;
+    for (item = 0;
+         item < (int)(sizeof(statement_loads) /
+                      sizeof(statement_loads[0]));
+         ++item)
+        if (instruction == statement_loads[item])
+            return statement_type;
+    for (item = 0;
+         item < (int)(sizeof(text_loads) / sizeof(text_loads[0]));
+         ++item)
+        if (instruction == text_loads[item])
+            return TYPE_CHAR | TYPE_PTR;
+    for (item = 0;
+         item < (int)(sizeof(integer_constants) /
+                      sizeof(integer_constants[0]));
+         ++item)
+        if (instruction == integer_constants[item])
+            return TYPE_INT;
+    for (item = 0;
+         item < (int)(sizeof(integer_calls) /
+                      sizeof(integer_calls[0]));
+         ++item)
+        if (instruction == integer_calls[item])
+            return TYPE_INT;
+    if (instruction == 5 || instruction == 76)
+        return TYPE_VOID;
+    if (instruction == 68)
+        return TYPE_CHAR | TYPE_PTR;
+    if (instruction == 71)
+        return statement_type;
+    if (instruction == 67 || instruction == 75)
+        return TYPE_INT;
+    if (mir.insns[instruction].opcode == MIR_ARG)
+        return TYPE_CHAR | TYPE_PTR;
+    if (instruction == 7 || instruction == 39 ||
+        instruction == 43 || instruction == 58)
+        return TYPE_INT | TYPE_PTR;
+    if (instruction == 12 || instruction == 22 ||
+        instruction == 53)
+        return TYPE_CHAR | TYPE_PTR;
+    if (mir.insns[instruction].opcode == MIR_STORE_INDIRECT)
+        return TYPE_INT;
+    return 0;
+}
+
+static int mir_action_decode_instruction_metadata(int statement_type)
+{
+    unsigned char call_ids[7];
+    unsigned char labels[17];
+    int call_count = 0;
+    int instruction;
+    int label_count = 0;
+
+    memset(call_ids, 0, sizeof(call_ids));
+    memset(labels, 0, sizeof(labels));
+    if (mir.next_value != 38 || mir.next_label != 17 ||
+        mir.next_call_id != 7 || mir.object_count != 0 ||
+        mir.declared_count != 2 || mir.alias_count != 0 ||
+        mir.opaque_count != 0 || mir.return_type != TYPE_VOID ||
+        mir.has_runtime_stride_param || mir.is_variadic_function ||
+        mir.has_indirect_incdec || mir.has_pointer_difference ||
+        mir.has_narrowed_for_counter || mir.has_compound_literal)
+        return 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected_type =
+            mir_action_decode_expected_type(instruction, statement_type);
+
+        if (insn->type != expected_type ||
+            insn->pointee_volatile_mask != 0 ||
+            insn->has_pointer_qualifiers ||
+            insn->bit_width != 0 ||
+            insn->bit_shift != 0 ||
+            insn->bit_mask != 0 ||
+            insn->divmod_cast_types != 0)
+            return 0;
+        if (insn->opcode == MIR_CALL) {
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 || insn->memory_size != 0 ||
+                insn->memory_flags != 0 || insn->label != -1 ||
+                insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id ||
+                call_ids[insn->secondary_offset])
+                return 0;
+            call_ids[insn->secondary_offset] = 1;
+            ++call_count;
+        } else if (insn->memory_flags != 0) {
+            return 0;
+        }
+
+        switch (insn->opcode) {
+        case MIR_PARAM:
+        case MIR_LOAD:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 ||
+                insn->secondary_offset != 0 ||
+                insn->memory_size != 0 || insn->label != -1 ||
+                !mir_machine_named_nonvolatile(insn))
+                return 0;
+            break;
+        case MIR_ARG:
+            if (insn->src1 < 0 || insn->src2 != -1 ||
+                insn->immediate < 0 || insn->immediate > 2 ||
+                insn->memory_size != 0 || insn->label != -1 ||
+                insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id)
+                return 0;
+            break;
+        case MIR_MEMBER_ADDRESS:
+            if (insn->src1 < 0 || insn->src2 != -1 ||
+                insn->secondary_offset != 0 ||
+                insn->label != -1 ||
+                insn->memory_size != 2)
+                return 0;
+            break;
+        case MIR_CONST:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->secondary_offset != 0 ||
+                insn->memory_size != 0 || insn->label != -1)
+                return 0;
+            break;
+        case MIR_STORE_INDIRECT:
+            if (insn->src1 < 0 || insn->src2 < 0 ||
+                insn->immediate != 0 || insn->secondary_offset != 0 ||
+                insn->memory_size != 2 || insn->label != -1)
+                return 0;
+            break;
+        case MIR_STRING_ADDRESS:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->secondary_offset != 0 ||
+                insn->memory_size != 0 || insn->label != -1)
+                return 0;
+            break;
+        case MIR_BRANCH_FALSE:
+            if (insn->src1 < 0 || insn->src2 != -1 ||
+                insn->immediate != 0 ||
+                insn->secondary_offset != 0 ||
+                insn->memory_size != 0)
+                return 0;
+            break;
+        case MIR_PHI:
+            if (insn->src1 < 0 || insn->src2 < 0 ||
+                insn->immediate != 0 ||
+                insn->secondary_offset != 0 ||
+                insn->memory_size != 0)
+                return 0;
+            break;
+        case MIR_LABEL:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 ||
+                insn->secondary_offset != 0 ||
+                insn->memory_size != 0 ||
+                insn->label < 0 || insn->label >= mir.next_label ||
+                labels[insn->label])
+                return 0;
+            labels[insn->label] = 1;
+            ++label_count;
+            break;
+        case MIR_JUMP:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 ||
+                insn->secondary_offset != 0 ||
+                insn->memory_size != 0)
+                return 0;
+            break;
+        case MIR_RETURN:
+        case MIR_NOP:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 ||
+                insn->secondary_offset != 0 ||
+                insn->memory_size != 0)
+                return 0;
+            break;
+        default:
+            break;
+        }
+    }
+    return call_count == 7 && label_count == 11;
 }
 
 static int mir_match_action_decode_schedule(
@@ -4258,6 +4506,8 @@ static int mir_match_action_decode_schedule(
     int argument;
     int action_offset;
     int instruction;
+    int statement_type;
+    int struct_id;
     long constant;
     struct Sym *function;
 
@@ -4272,20 +4522,35 @@ static int mir_match_action_decode_schedule(
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "action-decode-schedule", "opcodes");
+    statement_type = mir.insns[1].type;
+    struct_id = base_struct_id_from_type(statement_type);
+    if (type_ptr_depth(statement_type) != 1 ||
+        type_size(statement_type) != 2 ||
+        struct_id <= 0 || struct_id > nstruct_defs ||
+        struct_defs[struct_id - 1].size <= 0 ||
+        !mir_action_decode_instruction_metadata(statement_type))
+        return mir_machine_reject(
+            "action-decode-schedule", "metadata");
 
     if (!mir_machine_parameter_value_offset(
             mir.insns[1].dst,
             &plan->statement_stack_offset) ||
         !mir_machine_parameter_value_offset(
             mir.insns[2].dst, &plan->text_stack_offset) ||
-        plan->statement_stack_offset ==
-            plan->text_stack_offset ||
+        (plan->statement_stack_offset <
+             plan->text_stack_offset + 2 &&
+         plan->text_stack_offset <
+             plan->statement_stack_offset + 2) ||
+        plan->statement_stack_offset + 2 < -128 ||
         plan->statement_stack_offset + 3 > 127 ||
+        plan->text_stack_offset + 2 < -128 ||
         plan->text_stack_offset + 3 > 127 ||
-        !mir_match_action_decode_pointer_type(
-            mir.insns[1].type) ||
-        !mir_match_action_decode_pointer_type(
-            mir.insns[2].type) ||
+        !mir_action_decode_declared_parameter(
+            &mir.insns[1], statement_type,
+            plan->statement_stack_offset + 2) ||
+        !mir_action_decode_declared_parameter(
+            &mir.insns[2], TYPE_CHAR | TYPE_PTR,
+            plan->text_stack_offset + 2) ||
         mir_machine_pointee_is_volatile(&mir.insns[1]) ||
         mir_machine_pointee_is_volatile(&mir.insns[2]) ||
         !mir_machine_same_location(
@@ -4295,9 +4560,10 @@ static int mir_match_action_decode_schedule(
         argument != mir.insns[3].dst ||
         !mir_match_action_decode_call(
             &mir.insns[5], 1, &plan->trim_function) ||
-        !mir_match_action_decode_pointer_type(
-            plan->trim_function->proto_types[0]) ||
-        (mir.insns[5].type & 15) != TYPE_VOID)
+        plan->trim_function->type != TYPE_VOID ||
+        plan->trim_function->proto_types[0] !=
+            (TYPE_CHAR | TYPE_PTR) ||
+        mir.insns[5].type != plan->trim_function->type)
         return mir_machine_reject(
             "action-decode-schedule", "entry");
 
@@ -4325,12 +4591,12 @@ static int mir_match_action_decode_schedule(
             12, &plan->goto_string_ids[0]) ||
         !mir_match_action_decode_call(
             &mir.insns[14], 2, &plan->prefix_function) ||
-        !mir_match_action_decode_pointer_type(
-            plan->prefix_function->proto_types[0]) ||
-        !mir_match_action_decode_pointer_type(
-            plan->prefix_function->proto_types[1]) ||
-        !mir_match_action_decode_word_type(
-            mir.insns[14].type) ||
+        plan->prefix_function->type != TYPE_INT ||
+        plan->prefix_function->proto_types[0] !=
+            (TYPE_CHAR | TYPE_PTR) ||
+        plan->prefix_function->proto_types[1] !=
+            (TYPE_CHAR | TYPE_PTR) ||
+        mir.insns[14].type != plan->prefix_function->type ||
         mir.insns[15].src1 != mir.insns[14].dst ||
         mir.insns[15].label != mir.insns[19].label ||
         !mir_machine_same_location(
@@ -4400,10 +4666,10 @@ static int mir_match_action_decode_schedule(
         argument != mir.insns[44].dst ||
         !mir_match_action_decode_call(
             &mir.insns[46], 1, &plan->label_function) ||
-        !mir_match_action_decode_pointer_type(
-            plan->label_function->proto_types[0]) ||
-        !mir_match_action_decode_word_type(
-            mir.insns[46].type) ||
+        plan->label_function->type != TYPE_INT ||
+        plan->label_function->proto_types[0] !=
+            (TYPE_CHAR | TYPE_PTR) ||
+        mir.insns[46].type != plan->label_function->type ||
         mir.insns[47].src1 != mir.insns[43].dst ||
         mir.insns[47].src2 != mir.insns[46].dst ||
         mir.insns[47].memory_size != 2 ||
@@ -4463,12 +4729,12 @@ static int mir_match_action_decode_schedule(
         constant < 0 || constant > 255 ||
         !mir_match_action_decode_call(
             &mir.insns[68], 2, &plan->search_function) ||
-        !mir_match_action_decode_pointer_type(
-            plan->search_function->proto_types[0]) ||
-        !mir_match_action_decode_word_type(
-            plan->search_function->proto_types[1]) ||
-        !mir_match_action_decode_pointer_type(
-            mir.insns[68].type) ||
+        plan->search_function->type !=
+            (TYPE_CHAR | TYPE_PTR) ||
+        plan->search_function->proto_types[0] !=
+            (TYPE_CHAR | TYPE_PTR) ||
+        plan->search_function->proto_types[1] != TYPE_INT ||
+        mir.insns[68].type != plan->search_function->type ||
         mir.insns[69].src1 != mir.insns[68].dst ||
         mir.insns[69].label != mir.insns[79].label)
         return mir_machine_reject(
@@ -4490,13 +4756,14 @@ static int mir_match_action_decode_schedule(
         !mir_match_action_decode_call(
             &mir.insns[76], 3,
             &plan->assignment_function) ||
-        !mir_match_action_decode_pointer_type(
-            plan->assignment_function->proto_types[0]) ||
-        !mir_match_action_decode_pointer_type(
-            plan->assignment_function->proto_types[1]) ||
-        !mir_match_action_decode_word_type(
-            plan->assignment_function->proto_types[2]) ||
-        (mir.insns[76].type & 15) != TYPE_VOID)
+        plan->assignment_function->type != TYPE_VOID ||
+        plan->assignment_function->proto_types[0] !=
+            statement_type ||
+        plan->assignment_function->proto_types[1] !=
+            (TYPE_CHAR | TYPE_PTR) ||
+        plan->assignment_function->proto_types[2] != TYPE_INT ||
+        mir.insns[76].type !=
+            plan->assignment_function->type)
         return mir_machine_reject(
             "action-decode-schedule", "assignment");
     plan->assignment_mode =
@@ -14839,6 +15106,7 @@ int mir_try_emit_scanner_kernels(MirStream *out, int late)
                 &action_decode_schedule)) {
             mir_emit_action_decode_schedule(
                 out, &action_decode_schedule);
+            mir_machine_accept("action-decode-schedule");
             return 1;
         }
         if (mir_match_buffered_declaration_schedule(
