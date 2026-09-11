@@ -294,6 +294,16 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-fileio-%8m.profraw" \
     --output-dir "$build_dir/fileio-wave25-audit" \
     >"$campaign_dir/fileio.log" 2>&1 &
 fileio_pid=$!
+for_increment_jobs=$campaign_jobs
+if [ "$for_increment_jobs" -gt 2 ]; then
+    for_increment_jobs=2
+fi
+LLVM_PROFILE_FILE="$raw_dir/dcc-for-increment-%8m.profraw" \
+    python3 scripts/for-increment-wave26-audit.py \
+    --jobs "$for_increment_jobs" \
+    --output-dir "$build_dir/for-increment-wave26-audit" \
+    >"$campaign_dir/for-increment.log" 2>&1 &
+for_increment_pid=$!
 affine_jobs=$campaign_jobs
 if [ "$affine_jobs" -lt 4 ]; then
     affine_jobs=4
@@ -344,6 +354,7 @@ for campaign in \
     "action:$action_pid" \
     "lcs:$lcs_pid" \
     "fileio:$fileio_pid" \
+    "for-increment:$for_increment_pid" \
     "affine-fill:$affine_fill_pid" \
     "pointer-condition:$pointer_condition_pid" \
     "cast-logical:$cast_logical_pid"

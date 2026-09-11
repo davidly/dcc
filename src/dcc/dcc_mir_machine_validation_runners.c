@@ -3958,6 +3958,17 @@ static int mir_match_callback_registration_runner(
     return 1;
 }
 
+static int mir_for_increment_signed_word_type(int type)
+{
+    return type == TYPE_INT && type_size(type) == 2;
+}
+
+static int mir_for_increment_char_pointer_type(int type)
+{
+    return type == (TYPE_CHAR | TYPE_PTR) &&
+           type_size(type) == 2;
+}
+
 static int mir_for_increment_word_function(
     const struct MirInsn *call, struct Sym **function_out,
     int argument_count)
@@ -3967,10 +3978,7 @@ static int mir_for_increment_word_function(
 
     if (call->opcode != MIR_CALL || call->src1 >= 0 ||
         call->memory_flags != 0 ||
-        type_ptr_depth(call->type) != 0 ||
-        (call->type & 15) != TYPE_INT ||
-        (call->type & TYPE_UNSIGNED) != 0 ||
-        type_size(call->type) != 2 ||
+        !mir_for_increment_signed_word_type(call->type) ||
         (function = find_global(call->name)) == NULL ||
         function->storage != SC_FUNC ||
         !function->is_defined ||
@@ -3979,10 +3987,7 @@ static int mir_for_increment_word_function(
         !function->has_proto ||
         function->proto_variadic ||
         function->proto_nargs != argument_count ||
-        type_ptr_depth(function->type) != 0 ||
-        (function->type & 15) != TYPE_INT ||
-        (function->type & TYPE_UNSIGNED) != 0 ||
-        type_size(function->type) != 2)
+        !mir_for_increment_signed_word_type(function->type))
         return 0;
     assembly_name = asm_name_for(sym_asm_name(function));
     if (call->base_name[0] != 0 &&
@@ -4029,6 +4034,20 @@ static int mir_match_for_increment_runner(
     static const int constants[7] = {47, 51, 63, 75, 87, 99, 111};
     static const int expected_values[7] = {10, 10, 4, 4, 14, 22, 14};
     static const int stage_phis[5] = {72, 84, 96, 108, 120};
+    static const int result_offsets[7] = {
+        -2, -4, -6, -8, -10, -12, -14
+    };
+    static const int label_instructions[19] = {
+        0, 54, 57, 59, 66, 69, 71, 78, 81, 83,
+        90, 93, 95, 102, 105, 107, 114, 117, 119
+    };
+    static const int boolean_constants[12] = {
+        55, 58, 67, 70, 79, 82,
+        91, 94, 103, 106, 115, 118
+    };
+    static const int boolean_phis[6] = {
+        60, 72, 84, 96, 108, 120
+    };
     int call_arguments[8];
     const char *assembly_name;
     int call_count = 0;
@@ -4038,11 +4057,16 @@ static int mir_match_for_increment_runner(
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 123 || mir_cfg_block_count() != 19 ||
         mir.has_vla || mir.local_bytes != 14 ||
+        mir.dead_local_suffix_bytes != 14 ||
         mir.aggregate_temp_bytes != 0 ||
-        type_ptr_depth(mir.return_type) != 0 ||
-        (mir.return_type & 15) != TYPE_INT ||
-        (mir.return_type & TYPE_UNSIGNED) != 0 ||
-        type_size(mir.return_type) != 2)
+        mir.opaque_count != 0 ||
+        mir.has_runtime_stride_param ||
+        mir.is_variadic_function ||
+        mir.object_count != 7 ||
+        mir.declared_count != 7 ||
+        mir.alias_count != 0 ||
+        mir.has_declared_register_object ||
+        !mir_for_increment_signed_word_type(mir.return_type))
         return mir_machine_reject(
             "for-increment-runner", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -4056,14 +4080,32 @@ static int mir_match_for_increment_runner(
     if (call_count != 8)
         return mir_machine_reject(
             "for-increment-runner", "call-count");
+    for (item = 0; item < 19; ++item) {
+        int previous;
+        int label = mir.insns[label_instructions[item]].label;
+
+        if (label < 0)
+            return mir_machine_reject(
+                "for-increment-runner", "label");
+        for (previous = 0; previous < item; ++previous)
+            if (label ==
+                    mir.insns[label_instructions[previous]].label)
+                return mir_machine_reject(
+                    "for-increment-runner", "label-alias");
+    }
 
     for (item = 0; item < 7; ++item) {
         const struct MirInsn *call = &mir.insns[calls[item]];
         const struct MirInsn *store = &mir.insns[stores[item]];
+        const struct MirObject *object;
         int expected_argument_count =
             item < 2 || item == 4 ? 1 : (item < 4 ? 2 : 0);
         int previous;
 
+        if (store->object != item)
+            return mir_machine_reject(
+                "for-increment-runner", "result-object");
+        object = &mir.objects[store->object];
         if (!mir_for_increment_word_function(
                 call, &plan->helpers[item],
                 expected_argument_count) ||
@@ -4071,13 +4113,26 @@ static int mir_match_for_increment_runner(
                 call, expected_argument_count, call_arguments) ||
             store->src1 != call->dst ||
             store->memory_size != 2 ||
-            type_ptr_depth(store->type) != 0 ||
-            (store->type & 15) != TYPE_INT ||
-            (store->type & TYPE_UNSIGNED) != 0 ||
-            type_size(store->type) != 2 ||
+            !mir_for_increment_signed_word_type(store->type) ||
             !mir_machine_unobservable_local_store(store) ||
             !mir_machine_same_location(
-                store, &mir.insns[condition_nops[item]]))
+                store, &mir.insns[condition_nops[item]]) ||
+            strcmp(object->name, store->name) ||
+            object->storage != SC_LOCAL ||
+            !mir_for_increment_signed_word_type(object->type) ||
+            object->offset != result_offsets[item] ||
+            object->is_register ||
+            strcmp(mir.declared_names[item], store->name) ||
+            mir.declared_storage[item] != SC_LOCAL ||
+            !mir_for_increment_signed_word_type(
+                mir.declared_types[item]) ||
+            mir.declared_type_unstable[item] ||
+            mir.declared_offsets[item] != result_offsets[item] ||
+            mir.declared_sizes[item] != 2 ||
+            mir.declared_is_array[item] ||
+            mir.declared_is_vla[item] ||
+            mir.declared_is_volatile[item] ||
+            mir.declared_is_funcptr[item])
             return mir_machine_reject(
                 "for-increment-runner", "helper-call");
         for (previous = 0; previous < item; ++previous) {
@@ -4102,19 +4157,10 @@ static int mir_match_for_increment_runner(
                     call->secondary_offset ||
                 mir.insns[argument_instruction].type !=
                     mir.insns[constant_instruction].type ||
-                type_ptr_depth(
-                    mir.insns[constant_instruction].type) != 0 ||
-                (mir.insns[constant_instruction].type & 15) != TYPE_INT ||
-                (mir.insns[constant_instruction].type &
-                 TYPE_UNSIGNED) != 0 ||
-                type_size(mir.insns[constant_instruction].type) != 2 ||
-                type_ptr_depth(
-                    plan->helpers[item]->proto_types[0]) != 0 ||
-                (plan->helpers[item]->proto_types[0] & 15) != TYPE_INT ||
-                (plan->helpers[item]->proto_types[0] &
-                 TYPE_UNSIGNED) != 0 ||
-                type_size(
-                    plan->helpers[item]->proto_types[0]) != 2)
+                !mir_for_increment_signed_word_type(
+                    mir.insns[constant_instruction].type) ||
+                !mir_for_increment_signed_word_type(
+                    plan->helpers[item]->proto_types[0]))
                 return mir_machine_reject(
                     "for-increment-runner", "integer-helper");
         } else if (item < 4) {
@@ -4125,8 +4171,10 @@ static int mir_match_for_increment_runner(
             const struct MirInsn *string =
                 &mir.insns[string_instruction];
 
-            if (type_ptr_depth(string->type) != 1 ||
-                (string->type & 15) != TYPE_CHAR ||
+            if (!mir_for_increment_char_pointer_type(string->type) ||
+                string->immediate < 0 ||
+                string->immediate >= nstrings ||
+                string_wide[string->immediate] ||
                 string->immediate != mir.insns[9].immediate ||
                 call_arguments[0] != string->dst ||
                 call_arguments[1] !=
@@ -4145,23 +4193,13 @@ static int mir_match_for_increment_runner(
                     call->secondary_offset ||
                 mir.insns[constant_argument].type !=
                     mir.insns[constant_instruction].type ||
-                type_ptr_depth(
-                    mir.insns[constant_instruction].type) != 0 ||
-                (mir.insns[constant_instruction].type & 15) != TYPE_INT ||
-                (mir.insns[constant_instruction].type &
-                 TYPE_UNSIGNED) != 0 ||
-                type_size(mir.insns[constant_instruction].type) != 2 ||
+                !mir_for_increment_signed_word_type(
+                    mir.insns[constant_instruction].type) ||
                 plan->helpers[item]->proto_types[0] != string->type ||
-                type_ptr_depth(
-                    plan->helpers[item]->proto_types[0]) != 1 ||
-                (plan->helpers[item]->proto_types[0] & 15) != TYPE_CHAR ||
-                type_ptr_depth(
-                    plan->helpers[item]->proto_types[1]) != 0 ||
-                (plan->helpers[item]->proto_types[1] & 15) != TYPE_INT ||
-                (plan->helpers[item]->proto_types[1] &
-                 TYPE_UNSIGNED) != 0 ||
-                type_size(
-                    plan->helpers[item]->proto_types[1]) != 2)
+                !mir_for_increment_char_pointer_type(
+                    plan->helpers[item]->proto_types[0]) ||
+                !mir_for_increment_signed_word_type(
+                    plan->helpers[item]->proto_types[1]))
                 return mir_machine_reject(
                     "for-increment-runner", "pointer-helper");
         } else if (item == 4) {
@@ -4172,24 +4210,23 @@ static int mir_match_for_increment_runner(
                 mir.insns[22].secondary_offset !=
                     call->secondary_offset ||
                 mir.insns[22].type != mir.insns[21].type ||
-                type_ptr_depth(mir.insns[21].type) != 0 ||
-                (mir.insns[21].type & 15) != TYPE_INT ||
-                (mir.insns[21].type & TYPE_UNSIGNED) != 0 ||
-                type_size(mir.insns[21].type) != 2 ||
-                type_ptr_depth(
-                    plan->helpers[item]->proto_types[0]) != 0 ||
-                (plan->helpers[item]->proto_types[0] & 15) != TYPE_INT ||
-                (plan->helpers[item]->proto_types[0] &
-                 TYPE_UNSIGNED) != 0 ||
-                type_size(
-                    plan->helpers[item]->proto_types[0]) != 2)
+                !mir_for_increment_signed_word_type(
+                    mir.insns[21].type) ||
+                !mir_for_increment_signed_word_type(
+                    plan->helpers[item]->proto_types[0]))
                 return mir_machine_reject(
                     "for-increment-runner", "bounded-helper");
         }
     }
     plan->input_string_id = (int)mir.insns[9].immediate;
     plan->format_string_id = (int)mir.insns[29].immediate;
-    if (plan->input_string_id == plan->format_string_id)
+    if (plan->input_string_id < 0 ||
+        plan->input_string_id >= nstrings ||
+        string_wide[plan->input_string_id] ||
+        plan->format_string_id < 0 ||
+        plan->format_string_id >= nstrings ||
+        string_wide[plan->format_string_id] ||
+        plan->input_string_id == plan->format_string_id)
         return mir_machine_reject(
             "for-increment-runner", "strings");
 
@@ -4202,18 +4239,14 @@ static int mir_match_for_increment_runner(
         !plan->print_function->has_proto ||
         !plan->print_function->proto_variadic ||
         plan->print_function->proto_nargs != 1 ||
-        type_ptr_depth(plan->print_function->type) != 0 ||
-        (plan->print_function->type & 15) != TYPE_INT ||
-        (plan->print_function->type & TYPE_UNSIGNED) != 0 ||
-        type_size(plan->print_function->type) != 2 ||
-        type_ptr_depth(plan->print_function->proto_types[0]) != 1 ||
-        (plan->print_function->proto_types[0] & 15) != TYPE_CHAR ||
+        !mir_for_increment_signed_word_type(
+            plan->print_function->type) ||
+        !mir_for_increment_char_pointer_type(
+            plan->print_function->proto_types[0]) ||
         mir.insns[45].src1 >= 0 ||
         mir.insns[45].memory_flags != MIR_CALL_FLAG_VARIADIC ||
-        type_ptr_depth(mir.insns[45].type) != 0 ||
-        (mir.insns[45].type & 15) != TYPE_INT ||
-        (mir.insns[45].type & TYPE_UNSIGNED) != 0 ||
-        type_size(mir.insns[45].type) != 2 ||
+        !mir_for_increment_signed_word_type(
+            mir.insns[45].type) ||
         !mir_machine_call_arguments(
             &mir.insns[45], 8, call_arguments))
         return mir_machine_reject(
@@ -4222,8 +4255,8 @@ static int mir_match_for_increment_runner(
         asm_name_for(sym_asm_name(plan->print_function));
     if ((mir.insns[45].base_name[0] != 0 &&
          strcmp(mir.insns[45].base_name, assembly_name)) ||
-        type_ptr_depth(mir.insns[29].type) != 1 ||
-        (mir.insns[29].type & 15) != TYPE_CHAR ||
+        !mir_for_increment_char_pointer_type(
+            mir.insns[29].type) ||
         call_arguments[0] != mir.insns[29].dst ||
         mir.insns[30].src1 != mir.insns[29].dst ||
         mir.insns[30].immediate != 0 ||
@@ -4263,16 +4296,24 @@ static int mir_match_for_increment_runner(
             !mir_machine_constant_equals(
                 mir.insns[constants[item]].dst,
                 expected_values[item]) ||
+            !mir_for_increment_signed_word_type(
+                mir.insns[constants[item]].type) ||
             comparison->immediate != TOK_EQ ||
             comparison->src1 != mir.insns[calls[item]].dst ||
             comparison->src2 != mir.insns[constants[item]].dst ||
-            type_ptr_depth(comparison->type) != 0 ||
-            (comparison->type & 15) != TYPE_INT ||
-            (comparison->type & TYPE_UNSIGNED) != 0 ||
-            type_size(comparison->type) != 2)
+            !mir_for_increment_signed_word_type(
+                comparison->type))
             return mir_machine_reject(
                 "for-increment-runner", "checks");
     }
+    for (item = 0; item < 12; ++item)
+        if (mir.insns[boolean_constants[item]].type != 0)
+            return mir_machine_reject(
+                "for-increment-runner", "boolean-constant-type");
+    for (item = 0; item < 6; ++item)
+        if (mir.insns[boolean_phis[item]].type != 0)
+            return mir_machine_reject(
+                "for-increment-runner", "boolean-phi-type");
     if (mir.insns[49].src1 != mir.insns[48].dst ||
         mir.insns[49].label != mir.insns[57].label ||
         mir.insns[53].src1 != mir.insns[52].dst ||
@@ -4329,10 +4370,8 @@ static int mir_match_for_increment_runner(
     }
     if (mir.insns[121].immediate != '!' ||
         mir.insns[121].src1 != mir.insns[120].dst ||
-        type_ptr_depth(mir.insns[121].type) != 0 ||
-        (mir.insns[121].type & 15) != TYPE_INT ||
-        (mir.insns[121].type & TYPE_UNSIGNED) != 0 ||
-        type_size(mir.insns[121].type) != 2 ||
+        !mir_for_increment_signed_word_type(
+            mir.insns[121].type) ||
         mir.insns[122].src1 != mir.insns[121].dst)
         return mir_machine_reject(
             "for-increment-runner", "return");
@@ -15003,6 +15042,7 @@ int mir_try_emit_validation_runners(MirStream *out, int phase)
         }
         if (mir_match_for_increment_runner(
                 &for_increment_plan)) {
+            mir_machine_accept("for-increment-runner");
             mir_emit_for_increment_runner(
                 out, &for_increment_plan);
             return 1;
