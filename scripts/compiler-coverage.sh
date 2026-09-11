@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 17) / 18 ))
+campaign_jobs=$(( (mutation_jobs + 18) / 19 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -240,6 +240,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-wide-string-%8m.profraw" \
     --jobs "$campaign_jobs" --skip-runtime \
     >"$campaign_dir/wide-string.log" 2>&1 &
 wide_string_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-bitfield-report-%8m.profraw" \
+    python3 scripts/bitfield-report-wave23-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/bitfield-report-wave23-audit" \
+    >"$campaign_dir/bitfield-report.log" 2>&1 &
+bitfield_report_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -259,7 +265,8 @@ for campaign in \
     "wrapper-init:$wrapper_init_pid" \
     "fixed-softmax:$fixed_softmax_pid" \
     "symbol-insert:$symbol_insert_pid" \
-    "wide-string:$wide_string_pid"
+    "wide-string:$wide_string_pid" \
+    "bitfield-report:$bitfield_report_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
