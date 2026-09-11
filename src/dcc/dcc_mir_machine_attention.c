@@ -197,7 +197,15 @@ static int mir_match_matrix_product_parameter(
     int *stack_offset)
 {
     const struct MirInsn *parameter = &mir.insns[instruction];
+    int declared;
 
+    if (mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        memchr(parameter->name, 0, sizeof(parameter->name)) == NULL)
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (memchr(mir.declared_names[declared], 0,
+                   sizeof(mir.declared_names[declared])) == NULL)
+            return 0;
     if (parameter->opcode != MIR_PARAM ||
         (is_pointer
              ? !mir_match_matrix_product_pointer_type(parameter->type)
@@ -205,6 +213,7 @@ static int mir_match_matrix_product_parameter(
         parameter->src1 != -1 || parameter->src2 != -1 ||
         parameter->immediate != 0 || parameter->memory_size != 0 ||
         !mir_matrix_product_clean_auxiliary_metadata(parameter) ||
+        !mir_machine_named_nonvolatile(parameter) ||
         !mir_machine_parameter_value_offset(
             parameter->dst, stack_offset) ||
         *stack_offset != expected_offset)
@@ -374,6 +383,218 @@ static int mir_match_matrix_product_add_metadata(void)
         mir.insns[132].immediate != 0 ||
         !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[132]))
         return 0;
+    return 1;
+}
+
+static int mir_matrix_product_store_cfg_valid(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected[2];
+        int expected_count = 0;
+        int label_instruction = -1;
+        int label_matches = 0;
+        int candidate;
+        int successor;
+
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE) {
+            if (insn->label < 0 || insn->label >= mir.next_label)
+                return 0;
+            for (candidate = 0; candidate < mir.count; ++candidate)
+                if (mir.insns[candidate].opcode == MIR_LABEL &&
+                    mir.insns[candidate].label == insn->label) {
+                    label_instruction = candidate;
+                    ++label_matches;
+                }
+            if (label_matches != 1)
+                return 0;
+            expected[expected_count++] = label_instruction;
+        }
+        if (insn->opcode == MIR_BRANCH_FALSE) {
+            if (instruction + 1 >= mir.count)
+                return 0;
+            expected[expected_count++] = instruction + 1;
+        } else if (insn->opcode != MIR_JUMP &&
+                   instruction + 1 < mir.count) {
+            expected[expected_count++] = instruction + 1;
+        }
+        if (insn->successor_count != expected_count)
+            return 0;
+        for (successor = 0; successor < expected_count; ++successor)
+            if (insn->successors[successor] != expected[successor])
+                return 0;
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int other;
+
+        if (mir.insns[instruction].opcode != MIR_LABEL)
+            continue;
+        if (mir.insns[instruction].label < 0 ||
+            mir.insns[instruction].label >= mir.next_label)
+            return 0;
+        for (other = instruction + 1; other < mir.count; ++other)
+            if (mir.insns[other].opcode == MIR_LABEL &&
+                mir.insns[other].label ==
+                    mir.insns[instruction].label)
+                return 0;
+    }
+    return mir.insns[mir.count - 1].opcode == MIR_LABEL &&
+        mir.insns[mir.count - 1].successor_count == 0;
+}
+
+static int mir_match_matrix_product_store_metadata(void)
+{
+    static const int count_types[] = {
+        7, 8, 15, 26, 27, 37, 51, 60, 61, 62, 63, 125, 126, 127
+    };
+    static const int word_types[] = {
+        18, 19, 20, 39, 40, 41, 48, 53, 75, 77, 87, 97,
+        104, 111, 121
+    };
+    static const int long_types[] = {
+        23, 24, 43, 49, 54, 55, 56, 58, 70, 74, 81, 86,
+        90, 94, 96, 99, 100, 101, 102, 103, 108, 109, 110
+    };
+    static const int pointer_types[] = {
+        10, 12, 29, 31, 44, 45, 46, 47, 52, 66, 67, 68, 69
+    };
+    static const int zero_types[] = {114, 117, 120};
+    static const int word_binary_types[] = {20, 41};
+    static const int long_comparison_types[] = {75, 87, 97};
+    static const int long_binary_types[] = {55, 56, 102, 110};
+    static const int pointer_binary_types[] = {46, 68};
+    static const int count_binary_types[] = {62, 126};
+    int declared;
+    int instruction;
+    int item;
+
+    if (mir.next_value != 91 || mir.next_label != 20 ||
+        mir.next_call_id != 1 || mir.next_inline_temp_id != 1 ||
+        mir.local_bytes != 38 || mir.object_count != 6 ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count != 0 ||
+        mir.has_runtime_stride_param || mir.is_variadic_function ||
+        mir.has_indirect_incdec || mir.has_pointer_difference ||
+        mir.has_narrowed_for_counter || mir.has_compound_literal ||
+        mir.opaque_count != 0 ||
+        memchr(mir.name, 0, sizeof(mir.name)) == NULL)
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (memchr(mir.declared_names[declared], 0,
+                   sizeof(mir.declared_names[declared])) == NULL)
+            return 0;
+    if (!mir_matrix_product_store_cfg_valid())
+        return 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const struct MirInsn *source;
+        int expected_flags = 0;
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (instruction == 7 || instruction == 23 ||
+            instruction == 26 || instruction == 57)
+            expected_flags = 512;
+        else if (instruction == 74 || instruction == 86)
+            expected_flags = MIR_MEMORY_FLAG_DEFERRED_WIDE_CONST;
+        if (insn->memory_flags != expected_flags ||
+            insn->pointee_volatile_mask != 0 ||
+            insn->has_pointer_qualifiers ||
+            insn->bit_width != 0 || insn->bit_shift != 0 ||
+            insn->bit_mask != 0 || insn->divmod_cast_types != 0)
+            return 0;
+        if (insn->opcode != MIR_LOAD && insn->opcode != MIR_STORE)
+            continue;
+        if (!mir_scalar_memory_location(
+                insn, &memory_type, &memory_storage,
+                &memory_offset) ||
+            insn->type != memory_type ||
+            !mir_machine_named_nonvolatile(insn))
+            return 0;
+        if (insn->opcode == MIR_LOAD) {
+            if (insn->memory_size != 0)
+                return 0;
+        } else {
+            source = mir_definition(insn->src1);
+            if (source == NULL || source->type != memory_type ||
+                insn->memory_size != type_size(memory_type))
+                return 0;
+        }
+    }
+
+    for (item = 0;
+         item < (int)(sizeof(count_types) / sizeof(count_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_count_type(
+                mir.insns[count_types[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(word_types) / sizeof(word_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_word_type(
+                mir.insns[word_types[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(long_types) / sizeof(long_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_long_type(
+                mir.insns[long_types[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(pointer_types) /
+                      sizeof(pointer_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_pointer_type(
+                mir.insns[pointer_types[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(zero_types) / sizeof(zero_types[0]));
+         ++item)
+        if (mir.insns[zero_types[item]].type != 0)
+            return 0;
+
+    for (item = 0;
+         item < (int)(sizeof(word_binary_types) /
+                      sizeof(word_binary_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_word_type(
+                mir.insns[word_binary_types[item]].secondary_offset))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(long_comparison_types) /
+                      sizeof(long_comparison_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_long_type(
+                mir.insns[
+                    long_comparison_types[item]].secondary_offset))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(long_binary_types) /
+                      sizeof(long_binary_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_long_type(
+                mir.insns[long_binary_types[item]].secondary_offset))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(pointer_binary_types) /
+                      sizeof(pointer_binary_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_pointer_type(
+                mir.insns[
+                    pointer_binary_types[item]].secondary_offset))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(count_binary_types) /
+                      sizeof(count_binary_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_count_type(
+                mir.insns[count_binary_types[item]].secondary_offset))
+            return 0;
     return 1;
 }
 
@@ -1156,11 +1377,14 @@ static int mir_match_matrix_product_store_schedule(
     int instruction;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 130 || mir.next_value != 91 ||
+    if (mir.count != 130 ||
         mir_cfg_block_count() != 19 || mir.local_bytes != 38 ||
-        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.has_vla || mir.return_type != TYPE_VOID ||
         mir.aggregate_temp_bytes != 0)
         return 0;
+    if (!mir_match_matrix_product_store_metadata())
+        return mir_machine_reject(
+            "matrix-product-store-schedule", "metadata");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
             expected_opcodes[instruction])
