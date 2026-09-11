@@ -2578,6 +2578,554 @@ static void verify_homed_branch_target_preflight_transaction(void)
     clear_liveness();
 }
 
+static void verify_homed_noncall_preflight_transaction(void)
+{
+    static const char *mutations[] = {
+        "duplicate definition",
+        "use before definition",
+        "invalid unused label",
+        "invalid object",
+        "invalid home color",
+        "invalid spill slot",
+        "invalid value type",
+        "binary operand width",
+        "truncated allocation table",
+        "invalid type flags"
+    };
+    struct Sym *global;
+    struct MirInsn control_insns[8];
+    MirStream *control;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int saved_colors[4];
+    int saved_spills[4];
+    int saved_allocation_capacity;
+    int saved_spill_count;
+    int first_label;
+    size_t mutation;
+    int result;
+    int ok = 1;
+
+    global = add_global("verify_homed_noncall_object", TYPE_INT, SC_GLOBAL);
+    setup(8, 4, 1);
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[2].immediate = 5;
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].immediate = '+';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[4].opcode = MIR_LOAD;
+    mir.insns[4].dst = 3;
+    strcpy(mir.insns[4].name, global->name);
+    mir.insns[7].src1 = 2;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed noncall preflight verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    if (control == NULL) {
+        fprintf(stderr, "FAIL homed noncall preflight stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    memcpy(control_insns, mir.insns, sizeof(control_insns));
+    memcpy(saved_colors, mir.allocation_colors, sizeof(saved_colors));
+    memcpy(saved_spills, mir.allocation_spills, sizeof(saved_spills));
+    saved_allocation_capacity = mir.allocation_capacity;
+    saved_spill_count = mir.allocation_spill_count;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    for (mutation = 0;
+         mutation < sizeof(mutations) / sizeof(mutations[0]);
+         ++mutation) {
+        MirStream *retry = mir_stream_open();
+        long prefix_end;
+        int mutation_ok = 1;
+
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        mir_stream_puts("; preserved prefix\n", retry);
+        prefix_end = mir_stream_tell(retry);
+        label_id = first_label;
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        memcpy(mir.allocation_colors, saved_colors, sizeof(saved_colors));
+        memcpy(mir.allocation_spills, saved_spills, sizeof(saved_spills));
+        mir.allocation_capacity = saved_allocation_capacity;
+        mir.allocation_spill_count = saved_spill_count;
+        if (mutation == 0) {
+            mir.insns[6].opcode = MIR_CONST;
+            mir.insns[6].dst = 2;
+            mir.insns[6].immediate = 99;
+        } else if (mutation == 1) {
+            mir.insns[2].opcode = MIR_NOP;
+            mir.insns[2].dst = -1;
+            mir.insns[6] = control_insns[2];
+        } else if (mutation == 2) {
+            mir.insns[6].opcode = MIR_LABEL;
+            mir.insns[6].label = mir.next_label;
+        } else if (mutation == 3) {
+            mir.insns[4].object = mir.object_count;
+        } else if (mutation == 4) {
+            mir.allocation_colors[0] = MIR_COLOR_COUNT;
+        } else if (mutation == 5) {
+            mir.allocation_colors[0] = -1;
+            mir.allocation_spills[0] = 1;
+            mir.allocation_spill_count = 1;
+        } else if (mutation == 6) {
+            mir.insns[1].type = 7;
+        } else if (mutation == 7) {
+            mir.insns[3].immediate = TOK_EQ;
+            mir.insns[3].secondary_offset = TYPE_LONG;
+        } else if (mutation == 8) {
+            mir.allocation_capacity = mir.next_value - 1;
+        } else {
+            mir.insns[1].type = TYPE_INT | 0x4000;
+        }
+
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 0;
+        mutation_ok = mutation_ok &&
+            mir_stream_tell(retry) == prefix_end &&
+            mir_stream_size(retry) == prefix_end;
+        mutation_ok = mutation_ok && label_id == first_label;
+
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        memcpy(mir.allocation_colors, saved_colors, sizeof(saved_colors));
+        memcpy(mir.allocation_spills, saved_spills, sizeof(saved_spills));
+        mir.allocation_capacity = saved_allocation_capacity;
+        mir.allocation_spill_count = saved_spill_count;
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 1;
+        mutation_ok = mutation_ok &&
+            mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text);
+        mutation_ok = mutation_ok && retry_bytes == control_bytes;
+        mutation_ok = mutation_ok &&
+            memcmp(retry_text, control_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr, "FAIL homed noncall %s transaction\n",
+                    mutations[mutation]);
+        ok = ok && mutation_ok;
+        mir_stream_close(retry);
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL homed noncall preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_noncall_dominance_transaction(void)
+{
+    struct MirInsn control_insns[11];
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    long prefix_end;
+    int result;
+    int ok = 1;
+
+    setup(11, 3, 3);
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[2].immediate = 9;
+    mir.insns[3].opcode = MIR_BRANCH_FALSE;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].label = 1;
+    mir.insns[5].opcode = MIR_JUMP;
+    mir.insns[5].label = 2;
+    mir.insns[6].opcode = MIR_LABEL;
+    mir.insns[6].label = 1;
+    mir.insns[8].opcode = MIR_LABEL;
+    mir.insns[8].label = 2;
+    mir.insns[9].opcode = MIR_BINARY;
+    mir.insns[9].dst = 2;
+    mir.insns[9].src1 = 0;
+    mir.insns[9].src2 = 1;
+    mir.insns[9].immediate = '+';
+    mir.insns[9].secondary_offset = TYPE_INT;
+    mir.insns[10].src1 = 2;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed dominance verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL homed dominance stream allocation\n");
+        ++failures;
+        mir_stream_close(retry);
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    memcpy(control_insns, mir.insns, sizeof(control_insns));
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir_stream_puts("; preserved prefix\n", retry);
+    prefix_end = mir_stream_tell(retry);
+    label_id = first_label;
+    mir.insns[2].opcode = MIR_NOP;
+    mir.insns[2].dst = -1;
+    mir.insns[4] = control_insns[2];
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(retry);
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == prefix_end &&
+         mir_stream_size(retry) == prefix_end;
+    ok = ok && label_id == first_label;
+
+    memcpy(mir.insns, control_insns, sizeof(control_insns));
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(retry);
+    ok = ok && result == 1;
+    ok = ok && mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && retry_bytes == control_bytes;
+    ok = ok && memcmp(retry_text, control_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL homed noncall dominance transaction\n");
+        ++failures;
+    }
+    mir_stream_close(retry);
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_memory_preflight_transaction(void)
+{
+    static const char *rejections[] = {
+        "bitfield extent",
+        "bitfield mask",
+        "wide address source",
+        "wide narrow-store source"
+    };
+    static const char *compatible[] = {
+        "integer address representation",
+        "byte value representation",
+        "implicit integer representation"
+    };
+    struct MirInsn control_insns[5];
+    MirStream *control;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int saved_colors[2];
+    int saved_spills[2];
+    int saved_spill_count;
+    int first_label;
+    size_t mutation;
+    int result;
+    int ok = 1;
+
+    setup(5, 2, 1);
+    mir.insns[1].type = TYPE_VOID | TYPE_PTR;
+    mir.insns[1].immediate = 4096;
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[2].immediate = 3;
+    mir.insns[3].opcode = MIR_STORE_INDIRECT;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].memory_size = 2;
+    mir.insns[3].bit_width = 3;
+    mir.insns[3].bit_shift = 4;
+    mir.insns[3].bit_mask = 0x70;
+    mir.insns[4].src1 = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed memory preflight verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    if (control == NULL) {
+        fprintf(stderr, "FAIL homed memory preflight stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    memcpy(control_insns, mir.insns, sizeof(control_insns));
+    memcpy(saved_colors, mir.allocation_colors, sizeof(saved_colors));
+    memcpy(saved_spills, mir.allocation_spills, sizeof(saved_spills));
+    saved_spill_count = mir.allocation_spill_count;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    for (mutation = 0;
+         mutation < sizeof(rejections) / sizeof(rejections[0]);
+         ++mutation) {
+        MirStream *retry = mir_stream_open();
+        long prefix_end;
+        int mutation_ok = 1;
+
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        mir_stream_puts("; preserved prefix\n", retry);
+        prefix_end = mir_stream_tell(retry);
+        label_id = first_label;
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        memcpy(mir.allocation_colors, saved_colors, sizeof(saved_colors));
+        memcpy(mir.allocation_spills, saved_spills, sizeof(saved_spills));
+        mir.allocation_spill_count = saved_spill_count;
+        if (mutation == 0) {
+            mir.insns[3].bit_shift = 15;
+            mir.insns[3].bit_mask = 0x8000;
+        } else if (mutation == 1) {
+            mir.insns[3].bit_mask = 0x60;
+        } else if (mutation == 2) {
+            mir.insns[1].type = TYPE_LONG;
+        } else {
+            mir.insns[2].type = TYPE_LONG;
+        }
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 0;
+        mutation_ok = mutation_ok &&
+            mir_stream_tell(retry) == prefix_end &&
+            mir_stream_size(retry) == prefix_end;
+        mutation_ok = mutation_ok && label_id == first_label;
+
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        memcpy(mir.allocation_colors, saved_colors, sizeof(saved_colors));
+        memcpy(mir.allocation_spills, saved_spills, sizeof(saved_spills));
+        mir.allocation_spill_count = saved_spill_count;
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 1;
+        mutation_ok = mutation_ok &&
+            mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text);
+        mutation_ok = mutation_ok && retry_bytes == control_bytes;
+        mutation_ok = mutation_ok &&
+            memcmp(retry_text, control_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr, "FAIL homed memory %s transaction\n",
+                    rejections[mutation]);
+        ok = ok && mutation_ok;
+        mir_stream_close(retry);
+    }
+
+    for (mutation = 0;
+         mutation < sizeof(compatible) / sizeof(compatible[0]);
+         ++mutation) {
+        MirStream *retry = mir_stream_open();
+        int mutation_ok = 1;
+
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        label_id = first_label;
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        memcpy(mir.allocation_colors, saved_colors, sizeof(saved_colors));
+        memcpy(mir.allocation_spills, saved_spills, sizeof(saved_spills));
+        mir.allocation_spill_count = saved_spill_count;
+        if (mutation == 0)
+            mir.insns[1].type = TYPE_INT | TYPE_UNSIGNED;
+        else if (mutation == 1)
+            mir.insns[2].type = TYPE_CHAR | TYPE_UNSIGNED;
+        else
+            mir.insns[2].type = 0;
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 1;
+        mir_stream_rewind(retry);
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text);
+        mutation_ok = mutation_ok && retry_bytes == control_bytes;
+        mutation_ok = mutation_ok &&
+            memcmp(retry_text, control_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr, "FAIL homed compatible %s control\n",
+                    compatible[mutation]);
+        ok = ok && mutation_ok;
+        mir_stream_close(retry);
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL homed memory preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_phi_preflight_transaction(void)
+{
+    static const char *mutations[] = {
+        "unknown predecessor",
+        "non-dominating source"
+    };
+    struct MirInsn control_insns[11];
+    MirStream *control;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    size_t mutation;
+    int result;
+    int ok = 1;
+
+    setup(11, 4, 4);
+    mir.insns[2].opcode = MIR_BRANCH_FALSE;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].label = 2;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].label = 1;
+    mir.insns[4].opcode = MIR_CONST;
+    mir.insns[4].dst = 1;
+    mir.insns[4].immediate = 10;
+    mir.insns[5].opcode = MIR_JUMP;
+    mir.insns[5].label = 3;
+    mir.insns[6].opcode = MIR_LABEL;
+    mir.insns[6].label = 2;
+    mir.insns[7].opcode = MIR_CONST;
+    mir.insns[7].dst = 2;
+    mir.insns[7].immediate = 20;
+    mir.insns[8].opcode = MIR_LABEL;
+    mir.insns[8].label = 3;
+    mir.insns[9].opcode = MIR_PHI;
+    mir.insns[9].dst = 3;
+    mir.insns[9].src1 = 1;
+    mir.insns[9].phi_pred1 = 1;
+    mir.insns[9].src2 = 2;
+    mir.insns[9].phi_pred2 = 2;
+    mir.insns[10].src1 = 3;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed PHI preflight verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    if (control == NULL) {
+        fprintf(stderr, "FAIL homed PHI preflight stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    memcpy(control_insns, mir.insns, sizeof(control_insns));
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    for (mutation = 0;
+         mutation < sizeof(mutations) / sizeof(mutations[0]);
+         ++mutation) {
+        MirStream *retry = mir_stream_open();
+        long prefix_end;
+        int mutation_ok = 1;
+
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        mir_stream_puts("; preserved prefix\n", retry);
+        prefix_end = mir_stream_tell(retry);
+        label_id = first_label;
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        if (mutation == 0)
+            mir.insns[9].phi_pred1 = 0;
+        else
+            mir.insns[9].src1 = 2;
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 0;
+        mutation_ok = mutation_ok &&
+            mir_stream_tell(retry) == prefix_end &&
+            mir_stream_size(retry) == prefix_end;
+        mutation_ok = mutation_ok && label_id == first_label;
+
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 1;
+        mutation_ok = mutation_ok &&
+            mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text);
+        mutation_ok = mutation_ok && retry_bytes == control_bytes;
+        mutation_ok = mutation_ok &&
+            memcmp(retry_text, control_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr, "FAIL homed PHI %s transaction\n",
+                    mutations[mutation]);
+        ok = ok && mutation_ok;
+        mir_stream_close(retry);
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL homed PHI preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
 static void verify_homed_call_preflight_transaction(void)
 {
     static const char *mutations[] = {
@@ -4414,6 +4962,10 @@ int main(void)
     verify_homed_parameter_preflight_transaction();
     verify_homed_value_operand_preflight_transaction();
     verify_homed_branch_target_preflight_transaction();
+    verify_homed_noncall_preflight_transaction();
+    verify_homed_noncall_dominance_transaction();
+    verify_homed_memory_preflight_transaction();
+    verify_homed_phi_preflight_transaction();
     verify_homed_call_preflight_transaction();
     verify_homed_call_dominance_preflight_transaction();
     verify_homed_unused_value_operands();
