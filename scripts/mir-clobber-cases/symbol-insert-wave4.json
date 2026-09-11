@@ -12,7 +12,8 @@
     "StackModes": [true, false],
     "ExactTemplate": "symbol-insert-schedule",
     "ExactFunction": "sym_add",
-    "RequireExact": true
+    "RequireExact": true,
+    "DebugModes": ["lines"]
   },
   {
     "Name": "syminerr",
@@ -172,6 +173,240 @@
     "RequiredSelectorFunction": "sym_add",
     "RequiredSelector": "spilled-scalar-cfg",
     "MachineMutation": "67:immediate:1",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "symincap22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_CAPACITY_CONTROL"],
+    "Expected": ["error=symbol table full"],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireExact": true
+  },
+  {
+    "Name": "syminwrap22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_COPY_WRAPPER"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0",
+      "copy=3 order=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireExact": true
+  },
+  {
+    "Name": "syminlim22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_LIMIT_127"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "sym_add"
+  },
+  {
+    "Name": "syminucnt22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_UNSIGNED_COUNT"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "sym_add",
+    "DebugModes": ["true", "lines"]
+  },
+  {
+    "Name": "syminvroot22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_VOLATILE_TABLE_ROOT"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "sym_add"
+  },
+  {
+    "Name": "syminvrec22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_VOLATILE_RECORDS"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "sym_add"
+  },
+  {
+    "Name": "syminupar22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_UNSIGNED_PARAMETERS"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "sym_add"
+  },
+  {
+    "Name": "symincopybound22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_WIDE_COPY"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "sym_add"
+  },
+  {
+    "Name": "syminargtype22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_add",
+    "MachineMutation": "9:type:5",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "symincountstore22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_add",
+    "MachineMutation": "15:identity:88",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "syminlocalstore22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_add",
+    "MachineMutation": "17:identity:88",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "symincast22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_add",
+    "MachineMutation": "47:immediate:33",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "syminfieldtype22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_add",
+    "MachineMutation": "60:type:5",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "syminstring22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_add",
+    "MachineMutation": "8:immediate:32767",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "syminparam22",
+    "Group": "symbol-insert-wave22",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "sym_add",
+    "MachineMutation": "2:immediate:32767",
     "MachineMutationFunction": "sym_add"
   }
 ]

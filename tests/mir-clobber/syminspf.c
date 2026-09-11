@@ -2,7 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef SYMBOL_INSERT_LIMIT_127
+#define MAXSYM 127
+#else
 #define MAXSYM 128
+#endif
 #define MAXNAME 16
 
 struct Sym {
@@ -17,8 +21,36 @@ struct Sym {
     unsigned char proc;
 };
 
+#ifdef SYMBOL_INSERT_VOLATILE_TABLE_ROOT
+static struct Sym * volatile sym;
+#elif defined(SYMBOL_INSERT_VOLATILE_RECORDS)
+static volatile struct Sym *sym;
+#else
 static struct Sym *sym;
+#endif
+
+#ifdef SYMBOL_INSERT_UNSIGNED_COUNT
+static unsigned int nsym;
+#else
 static int nsym;
+#endif
+
+#ifdef SYMBOL_INSERT_COPY_WRAPPER
+static int copy_calls;
+static int copy_order_ok = 1;
+
+static char *copy_name(char *destination, const char *source,
+                      unsigned int count)
+{
+    ++copy_calls;
+    if (nsym <= 0 || destination != sym[nsym - 1].name)
+        copy_order_ok = 0;
+    return strncpy(destination, source, count);
+}
+#define SYMBOL_COPY copy_name
+#else
+#define SYMBOL_COPY strncpy
+#endif
 
 static void die(const char *message)
 {
@@ -26,7 +58,12 @@ static void die(const char *message)
     exit(1);
 }
 
+#ifdef SYMBOL_INSERT_UNSIGNED_PARAMETERS
+static int sym_add(const char *name, unsigned int kind,
+                   unsigned int scope)
+#else
 static int sym_add(const char *name, int kind, int scope)
+#endif
 {
     int index;
 
@@ -34,7 +71,11 @@ static int sym_add(const char *name, int kind, int scope)
         die("symbol table full");
     index = nsym++;
     memset(&sym[index], 0, sizeof(sym[index]));
-    strncpy(sym[index].name, name, MAXNAME - 1);
+#ifdef SYMBOL_INSERT_WIDE_COPY
+    SYMBOL_COPY(sym[index].name, name, MAXNAME);
+#else
+    SYMBOL_COPY(sym[index].name, name, MAXNAME - 1);
+#endif
     sym[index].kind = kind;
     sym[index].scope = scope;
     sym[index].size = 2;
@@ -52,7 +93,12 @@ static int sym_find(const char *name)
     return -1;
 }
 
+#ifdef SYMBOL_INSERT_UNSIGNED_PARAMETERS
+static int sym_intern(const char *name, unsigned int kind,
+                      unsigned int scope)
+#else
 static int sym_intern(const char *name, int kind, int scope)
+#endif
 {
     int index;
 
@@ -101,6 +147,11 @@ int main(void)
     sym = (struct Sym *)calloc(MAXSYM, sizeof(struct Sym));
     if (sym == NULL)
         die("allocation failed");
+#ifdef SYMBOL_INSERT_CAPACITY_CONTROL
+    nsym = MAXSYM;
+    sym_add("FULL", 1, 1);
+    return 99;
+#endif
     untouched = record_zero(&sym[3]);
 
     first = sym_add("OLD", 5, 7);
@@ -170,6 +221,9 @@ int main(void)
         (unsigned)sym[1].kind, (unsigned)sym[1].scope,
         sym[2].name, (unsigned)sym[2].kind,
         (unsigned)sym[2].scope, record_zero(&sym[3]), failures);
+#ifdef SYMBOL_INSERT_COPY_WRAPPER
+    printf("copy=%d order=%d\n", copy_calls, copy_order_ok);
+#endif
     free(sym);
     return failures != 0;
 }
