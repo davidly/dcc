@@ -1,7 +1,11 @@
 #include <stdio.h>
 
 typedef int model_value_t;
+#ifdef SMXFW22_UNSIGNED_WEIGHT
+typedef unsigned long weight_value_t;
+#else
 typedef long weight_value_t;
+#endif
 
 #define MODEL_VALUE_MAX 32767
 #define MODEL_VALUE_MIN (-32768)
@@ -15,7 +19,12 @@ typedef long weight_value_t;
 #define EXPONENTIAL_TABLE_LENGTH 256
 #endif
 
-static model_value_t exponential_table[EXPONENTIAL_TABLE_LENGTH] = {
+#ifdef SMXFW22_VOLATILE_TABLE
+static volatile model_value_t
+#else
+static model_value_t
+#endif
+exponential_table[EXPONENTIAL_TABLE_LENGTH] = {
     256, 248, 240, 233, 226, 219, 212, 206,
     199, 193, 187, 182, 176, 171, 165, 160
 };
@@ -32,28 +41,68 @@ static model_value_t clamp_to_model_value(weight_value_t value)
 static inline model_value_t divide_q8(model_value_t numerator,
                                       model_value_t denominator)
 {
+#ifdef SMXFW22_SCALE_128
+    return clamp_to_model_value(
+        ((weight_value_t)numerator * 128L) / denominator);
+#elif defined(SMXFW22_INDIRECT_CLAMP)
+    model_value_t (*clamp_function)(weight_value_t);
+
+    clamp_function = clamp_to_model_value;
+    return clamp_function(
+        ((weight_value_t)numerator * 256L) / denominator);
+#else
     return clamp_to_model_value(
         ((weight_value_t)numerator * 256L) / denominator);
+#endif
 }
 
+#ifdef SMXFW22_VOLATILE_VECTOR
+#ifdef SMXFW22_NONVOID_RETURN
+static int fixed_softmax_wave10(volatile model_value_t *vector)
+#else
+static void fixed_softmax_wave10(volatile model_value_t *vector)
+#endif
+#else
+#ifdef SMXFW22_NONVOID_RETURN
+static int fixed_softmax_wave10(model_value_t *vector)
+#else
 static void fixed_softmax_wave10(model_value_t *vector)
+#endif
+#endif
 {
     int mx, d, idx, sum;
+#ifdef SMXFW22_VOLATILE_VECTOR
+    volatile model_value_t *item;
+#else
     model_value_t *item;
+#endif
     unsigned char i;
 
     mx = vector[0];
+#ifdef SMXFW22_PREFIX_INCREMENT
+    for (i = 1; i < SOFTMAX_LENGTH; ++i)
+#else
     for (i = 1; i < SOFTMAX_LENGTH; i++)
+#endif
         if (vector[i] > mx)
             mx = vector[i];
     sum = 0;
+#ifdef SMXFW22_PREFIX_INCREMENT
+    for (i = 0, item = vector; i < SOFTMAX_LENGTH; ++i, ++item) {
+#else
     for (i = 0, item = vector; i < SOFTMAX_LENGTH; i++, item++) {
+#endif
         d = mx - *item;
         if (d < 0)
             d = 0;
         idx = d >> 3;
+#ifdef SMXFW22_CLAMP_127
+        if (idx > 127)
+            idx = 127;
+#else
         if (idx > 255)
             idx = 255;
+#endif
         *item = exponential_table[idx];
 #ifdef SMXFW10_SUBTRACT
         sum -= *item;
@@ -61,8 +110,15 @@ static void fixed_softmax_wave10(model_value_t *vector)
         sum += *item;
 #endif
     }
+#ifdef SMXFW22_PREFIX_INCREMENT
+    for (i = 0, item = vector; i < SOFTMAX_LENGTH; ++i, ++item)
+#else
     for (i = 0, item = vector; i < SOFTMAX_LENGTH; i++, item++)
+#endif
         *item = divide_q8(*item, sum);
+#ifdef SMXFW22_NONVOID_RETURN
+    return 7;
+#endif
 }
 
 struct GuardedVector {
@@ -84,6 +140,12 @@ static model_value_t reference_exponential(int index)
 
     if (index < 16)
         return first_values[index];
+#ifdef SMXFW22_CLAMP_127
+    if (index == 127)
+        return 123;
+    if (index == 255)
+        return 456;
+#endif
     return 0;
 }
 
@@ -109,8 +171,13 @@ static void reference_fixed_softmax(model_value_t *vector)
         if (difference < 0)
             difference = 0;
         index = difference >> 3;
+#ifdef SMXFW22_CLAMP_127
+        if (index > 127)
+            index = 127;
+#else
         if (index > 255)
             index = 255;
+#endif
         vector[i] = reference_exponential(index);
 #ifdef SMXFW10_SUBTRACT
         sum -= vector[i];
@@ -120,7 +187,11 @@ static void reference_fixed_softmax(model_value_t *vector)
     }
     for (i = 0; i < SOFTMAX_LENGTH; ++i)
         vector[i] = clamp_to_model_value(
+#ifdef SMXFW22_SCALE_128
+            ((weight_value_t)vector[i] * 128L) / sum);
+#else
             ((weight_value_t)vector[i] * 256L) / sum);
+#endif
 }
 
 static void run_case(const model_value_t *input)
@@ -134,7 +205,12 @@ static void run_case(const model_value_t *input)
     for (i = 0; i < SOFTMAX_LENGTH; ++i)
         actual.values[i] = expected.values[i] = input[i];
     reference_fixed_softmax(expected.values);
+#ifdef SMXFW22_NONVOID_RETURN
+    if (fixed_softmax_wave10(actual.values) != 7)
+        ++failures;
+#else
     fixed_softmax_wave10(actual.values);
+#endif
     ++checks;
     if (actual.before != expected.before ||
         actual.after != expected.after)
@@ -164,6 +240,10 @@ int main(void)
 
 #ifdef SMXFW10_LONG_TABLE
     exponential_table[256] = 1234;
+#endif
+#ifdef SMXFW22_CLAMP_127
+    exponential_table[127] = 123;
+    exponential_table[255] = 456;
 #endif
     run_case(equal);
     run_case(stepped);

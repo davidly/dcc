@@ -1625,6 +1625,69 @@ static int mir_match_softmax_argument(
            argument->secondary_offset == call->secondary_offset;
 }
 
+static int mir_match_fixed_softmax_unique_definition(
+    int value, const struct MirInsn *expected)
+{
+    int definitions = 0;
+    int instruction;
+
+    if (value < 0 || value >= mir.next_value ||
+        mir_definition(value) != expected)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].dst == value)
+            ++definitions;
+    return definitions == 1;
+}
+
+static int mir_match_fixed_softmax_call(
+    const struct MirInsn *call, const struct MirInsn *argument,
+    const struct MirInsn *value_definition,
+    struct Sym **function_out)
+{
+    const struct MirInsn *source;
+    struct Sym *function;
+    int call_index;
+    int argument_index;
+    int value;
+
+    value = value_definition->dst;
+    if (!mir_match_softmax_call(call, 1, &function) ||
+        call->src1 != -1 || call->src2 != -1 ||
+        call->immediate != 0 || call->memory_size != 0 ||
+        call->secondary_offset <= 0 ||
+        (call->memory_flags &
+         ~MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0 ||
+        call->pointee_volatile_mask != 0 ||
+        call->has_pointer_qualifiers ||
+        call->bit_width != 0 || call->bit_shift != 0 ||
+        call->bit_mask != 0 || call->divmod_cast_types != 0 ||
+        !mir_match_fixed_softmax_unique_definition(
+            call->dst, call))
+        return 0;
+    call_index = (int)(call - mir.insns);
+    argument_index = (int)(argument - mir.insns);
+    source = mir_definition(argument->src1);
+    if (argument_index < 0 || argument_index >= call_index ||
+        source != value_definition || source >= argument ||
+        !mir_match_fixed_softmax_unique_definition(
+            value, value_definition) ||
+        argument->dst >= 0 || argument->src2 >= 0 ||
+        argument->memory_size != 0 ||
+        argument->memory_flags != 0 ||
+        argument->pointee_volatile_mask != 0 ||
+        argument->has_pointer_qualifiers ||
+        argument->bit_width != 0 || argument->bit_shift != 0 ||
+        argument->bit_mask != 0 ||
+        argument->divmod_cast_types != 0 ||
+        !mir_match_softmax_argument(
+            call, argument, 0, value,
+            function->proto_types[0]))
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
 static int mir_match_fixed_softmax_schedule(
     struct MirFixedSoftmaxSchedule *plan)
 {
@@ -1990,13 +2053,10 @@ static int mir_match_fixed_softmax_schedule(
             &mir.insns[139], '/', mir.insns[136].dst,
             mir.insns[138].dst, MIR_SOFTMAX_LOCAL_LONG,
             MIR_SOFTMAX_LOCAL_LONG) ||
-        !mir_match_softmax_call(
-            &mir.insns[141], 1, &plan->clamp_function) ||
+        !mir_match_fixed_softmax_call(
+            &mir.insns[141], &mir.insns[140],
+            &mir.insns[139], &plan->clamp_function) ||
         !mir_match_matrix_product_long_type(
-            plan->clamp_function->proto_types[0]) ||
-        !mir_match_softmax_argument(
-            &mir.insns[141], &mir.insns[140], 0,
-            mir.insns[139].dst,
             plan->clamp_function->proto_types[0]) ||
         mir.insns[142].src1 != mir.insns[129].dst ||
         mir.insns[142].src2 != mir.insns[141].dst ||

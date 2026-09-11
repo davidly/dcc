@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 13) / 14 ))
+campaign_jobs=$(( (mutation_jobs + 15) / 16 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -223,6 +223,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-wrapper-init-%8m.profraw" \
     --jobs "$campaign_jobs" --skip-runtime \
     >"$campaign_dir/wrapper-init.log" 2>&1 &
 wrapper_init_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-fixed-softmax-%8m.profraw" \
+    python3 scripts/fixed-softmax-wave22-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/fixed-softmax-wave22-audit" \
+    >"$campaign_dir/fixed-softmax.log" 2>&1 &
+fixed_softmax_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -239,7 +245,8 @@ for campaign in \
     "do-while:$do_while_pid" \
     "symbol-find:$symbol_find_pid" \
     "ctype-realloc:$ctype_realloc_pid" \
-    "wrapper-init:$wrapper_init_pid"
+    "wrapper-init:$wrapper_init_pid" \
+    "fixed-softmax:$fixed_softmax_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
