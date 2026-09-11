@@ -252,6 +252,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-flagged-record-%8m.profraw" \
     --output-dir "$build_dir/flagged-record-wave24-audit" \
     >"$campaign_dir/flagged-record.log" 2>&1 &
 flagged_record_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-promotion-%8m.profraw" \
+    python3 scripts/promotion-wave25-campaign.py \
+    --jobs "$campaign_jobs" --skip-runtime \
+    --output-dir "$build_dir/promotion-wave25-audit" \
+    >"$campaign_dir/promotion.log" 2>&1 &
+promotion_pid=$!
 LLVM_PROFILE_FILE="$raw_dir/dcc-bitfield-report-%8m.profraw" \
     python3 scripts/bitfield-report-wave23-audit.py \
     --jobs "$campaign_jobs" \
@@ -326,6 +332,7 @@ for campaign in \
     "symbol-insert:$symbol_insert_pid" \
     "wide-string:$wide_string_pid" \
     "flagged-record:$flagged_record_pid" \
+    "promotion:$promotion_pid" \
     "bitfield-report:$bitfield_report_pid" \
     "additive:$additive_pid" \
     "byte-rotate:$byte_rotate_pid" \

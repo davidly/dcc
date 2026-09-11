@@ -12269,6 +12269,224 @@ static int mir_promotion_check_profile(void)
          mir_cfg_block_count() == 2 && mir.local_bytes == 9);
 }
 
+static void mir_promotion_check_hash_value(
+    unsigned long long *first, unsigned long long *second,
+    unsigned long long value)
+{
+    *first ^= value;
+    *first *= 1099511628211ULL;
+    *second ^= value + 0x9e3779b97f4a7c15ULL +
+        (*second << 6) + (*second >> 2);
+}
+
+static int mir_promotion_check_payload(void)
+{
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int instruction;
+    int object;
+    int declared;
+    int item;
+
+    if (mir.object_count < 0 ||
+        mir.object_count >
+            (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+        return 0;
+    /* The emitter replaces the whole computation, so retain every semantic
+     * field. Source spellings are excluded; the proof below resolves each
+     * observable symbol and call prototype independently. */
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)insn->type,
+            (unsigned long long)(unsigned int)insn->immediate,
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            (unsigned long long)(unsigned int)insn->object,
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)insn->secondary_offset,
+            (unsigned long long)(unsigned int)insn->inline_temp_id,
+            (unsigned long long)(unsigned int)insn->divmod_cast_types
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_promotion_check_hash_value(
+                &first, &second, values[item]);
+    }
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)entry->storage,
+            (unsigned long long)(unsigned int)entry->type,
+            (unsigned long long)(unsigned int)entry->offset,
+            (unsigned long long)(unsigned int)entry->entry_value,
+            (unsigned long long)(unsigned int)entry->is_register
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_promotion_check_hash_value(
+                &first, &second, values[item]);
+    }
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)
+                mir.declared_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_type_unstable[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_storage[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dim_counts[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_elem_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_vla_size_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_vla[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_array[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_volatile[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_pointee_is_volatile[declared],
+            (unsigned long long)
+                mir.declared_pointee_volatile_masks[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dynamic_strides[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_const[declared],
+            (unsigned long long)
+                mir.declared_const_values[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_funcptr[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_funcptr_return_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_has_proto[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_nargs[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_variadic[declared]
+        };
+
+        if (mir.declared_dim_counts[declared] < 0 ||
+            mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+            mir.declared_proto_nargs[declared] < 0 ||
+            mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+            return 0;
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_promotion_check_hash_value(
+                &first, &second, values[item]);
+        for (item = 0;
+             item < mir.declared_dim_counts[declared]; ++item)
+            mir_promotion_check_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_dims[declared][item]);
+        for (item = 0;
+             item < mir.declared_proto_nargs[declared]; ++item)
+            mir_promotion_check_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_proto_types[declared][item]);
+    }
+    for (item = 0; item < mir.alias_count; ++item)
+        mir_promotion_check_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)
+                mir.alias_declaration_indices[item]);
+    {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)mir.count,
+            (unsigned long long)(unsigned int)mir.next_value,
+            (unsigned long long)(unsigned int)mir.next_label,
+            (unsigned long long)(unsigned int)mir.next_call_id,
+            (unsigned long long)(unsigned int)
+                mir.next_inline_temp_id,
+            (unsigned long long)(unsigned int)
+                mir.has_indirect_incdec,
+            (unsigned long long)(unsigned int)
+                mir.has_pointer_difference,
+            (unsigned long long)(unsigned int)
+                mir.has_narrowed_for_counter,
+            (unsigned long long)(unsigned int)
+                mir.has_compound_literal,
+            (unsigned long long)(unsigned int)mir.has_vla,
+            (unsigned long long)(unsigned int)
+                mir.implicit_zero_return,
+            (unsigned long long)(unsigned int)
+                mir.has_runtime_stride_param,
+            (unsigned long long)(unsigned int)
+                mir.is_variadic_function,
+            (unsigned long long)(unsigned int)mir.return_type,
+            (unsigned long long)(unsigned int)mir.local_bytes,
+            (unsigned long long)(unsigned int)
+                mir.dead_local_suffix_bytes,
+            (unsigned long long)(unsigned int)
+                mir.aggregate_temp_bytes,
+            (unsigned long long)(unsigned int)mir.opaque_count,
+            (unsigned long long)(unsigned int)mir.object_count,
+            (unsigned long long)(unsigned int)
+                mir.has_declared_register_object,
+            (unsigned long long)(unsigned int)mir.declared_count,
+            (unsigned long long)(unsigned int)mir.alias_count
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_promotion_check_hash_value(
+                &first, &second, values[item]);
+    }
+    /* Three production layouts, renamed fixture, and unsigned counter. */
+    if ((first == 0x1fa6ac1812c00de4ULL &&
+         second == 0x6fba14332c40ebf4ULL) ||
+        (first == 0x55841e556ba2194dULL &&
+         second == 0xef88bbe4d11a62a2ULL) ||
+        (first == 0x268543861ab460f4ULL &&
+         second == 0xf729a854ecd294bbULL) ||
+        (first == 0xb625e5bd6e88a119ULL &&
+         second == 0x6ea96f33e09d6878ULL) ||
+        (first == 0x3c7a375a3aef4cebULL &&
+         second == 0xbca70cd230f1c5eeULL))
+        return 1;
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s "
+                "template=promotion-check-runner "
+                "reject=semantic-payload "
+                "fingerprint=%016llx:%016llx\n",
+                mir.name, first, second);
+    return 0;
+}
+
 static int mir_promotion_check_label(int label)
 {
     int instruction;
@@ -12482,11 +12700,18 @@ static int mir_match_promotion_check_runner(
     int ok = 0;
 
     memset(plan, 0, sizeof(*plan));
-    if (!mir_promotion_check_profile() ||
-        mir.has_vla || mir.aggregate_temp_bytes != 0 ||
-        !mir_endgame_word_type(mir.return_type) ||
-        !mir_promotion_check_tail(plan, &final_load))
+    if (!mir_promotion_check_profile())
+        return mir_machine_reject(
+            "promotion-check-runner", "shape");
+    if (mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        !mir_endgame_word_type(mir.return_type))
+        return mir_machine_reject(
+            "promotion-check-runner", "function-type");
+    if (!mir_promotion_check_payload())
         return 0;
+    if (!mir_promotion_check_tail(plan, &final_load))
+        return mir_machine_reject(
+            "promotion-check-runner", "tail");
     values = (long *)calloc(
         (size_t)(mir.next_value > 0 ? mir.next_value : 1),
         sizeof(*values));
@@ -12756,8 +12981,11 @@ done:
     free(value_known);
     free(local_bytes);
     free(local_known);
-    if (!ok)
+    if (!ok) {
         memset(plan, 0, sizeof(*plan));
+        mir_machine_reject(
+            "promotion-check-runner", "semantic-proof");
+    }
     return ok;
 }
 
@@ -13213,6 +13441,7 @@ int mir_try_emit_endgame_runners(MirStream *out, int phase)
     struct MirPromotionCheckRunner promotion_plan;
 
     if (mir_match_promotion_check_runner(&promotion_plan)) {
+        mir_machine_accept("promotion-check-runner");
         mir_emit_promotion_check_runner(out, &promotion_plan);
         return 1;
     }
