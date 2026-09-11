@@ -14511,6 +14511,8 @@ static struct Sym *mir_buffered_console_function(
     struct Sym *function;
 
     if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        memchr(call->name, 0, sizeof(call->name)) == NULL ||
+        memchr(call->base_name, 0, sizeof(call->base_name)) == NULL ||
         call->memory_flags !=
             (variadic ? MIR_CALL_FLAG_VARIADIC : 0) ||
         (function = find_global(call->name)) == NULL ||
@@ -14559,8 +14561,7 @@ static int mir_buffered_console_function_types(
             configure->proto_types[2], 0) &&
         mir_buffered_console_word_type(
             configure->proto_types[3], 1) &&
-        type_ptr_depth(check->type) == 0 &&
-        (check->type & 15) == TYPE_VOID &&
+        check->type == TYPE_VOID &&
         mir_buffered_console_pointer_type(
             check->proto_types[0], TYPE_CHAR) &&
         mir_buffered_console_pointer_type(
@@ -14570,8 +14571,7 @@ static int mir_buffered_console_function_types(
         mir_buffered_console_word_type(flush->type, 0) &&
         mir_buffered_console_pointer_type(
             flush->proto_types[0], TYPE_INT) &&
-        type_ptr_depth(free_function->type) == 0 &&
-        (free_function->type & 15) == TYPE_VOID &&
+        free_function->type == TYPE_VOID &&
         mir_buffered_console_pointer_type(
             free_function->proto_types[0], TYPE_VOID) &&
         mir_buffered_console_word_type(puts_stream->type, 0) &&
@@ -14585,8 +14585,7 @@ static int mir_buffered_console_function_types(
         mir_buffered_console_word_type(putchar_function->type, 0) &&
         mir_buffered_console_word_type(
             putchar_function->proto_types[0], 0) &&
-        type_ptr_depth(setbuf_function->type) == 0 &&
-        (setbuf_function->type & 15) == TYPE_VOID &&
+        setbuf_function->type == TYPE_VOID &&
         mir_buffered_console_pointer_type(
             setbuf_function->proto_types[0], TYPE_INT) &&
         mir_buffered_console_pointer_type(
@@ -14618,17 +14617,355 @@ static int mir_buffered_console_function_types(
 static int mir_buffered_console_local(
     int instruction, int expected_offset, int pointer_base)
 {
+    const struct MirInsn *insn = &mir.insns[instruction];
     int type;
     int storage;
     int offset;
 
     return mir_scalar_memory_location(
-               &mir.insns[instruction], &type, &storage, &offset) &&
+               insn, &type, &storage, &offset) &&
+           memchr(insn->name, 0, sizeof(insn->name)) != NULL &&
+           mir_machine_named_nonvolatile(insn) &&
            storage == SC_LOCAL &&
            offset == expected_offset &&
+           insn->type == type &&
+           insn->memory_size ==
+               (insn->opcode == MIR_LOAD ? 0 : type_size(type)) &&
            (pointer_base < 0
                 ? mir_buffered_console_word_type(type, 0)
                 : mir_buffered_console_pointer_type(type, pointer_base));
+}
+
+static int mir_buffered_console_cfg_valid(void)
+{
+    unsigned char labels[25];
+    int instruction;
+    int label_count = 0;
+
+    memset(labels, 0, sizeof(labels));
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected[2];
+        int expected_count = 0;
+        int label_instruction = -1;
+        int candidate;
+        int successor;
+
+        if (insn->opcode == MIR_LABEL) {
+            if (insn->label < 0 || insn->label >= mir.next_label ||
+                labels[insn->label])
+                return 0;
+            labels[insn->label] = 1;
+            ++label_count;
+        }
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE) {
+            if (insn->label < 0 || insn->label >= mir.next_label)
+                return 0;
+            for (candidate = 0; candidate < mir.count; ++candidate)
+                if (mir.insns[candidate].opcode == MIR_LABEL &&
+                    mir.insns[candidate].label == insn->label)
+                    label_instruction = candidate;
+            if (label_instruction < 0)
+                return 0;
+            expected[expected_count++] = label_instruction;
+        }
+        if (insn->opcode == MIR_BRANCH_FALSE) {
+            if (instruction + 1 >= mir.count)
+                return 0;
+            expected[expected_count++] = instruction + 1;
+        } else if (insn->opcode != MIR_JUMP &&
+                   insn->opcode != MIR_RETURN &&
+                   instruction + 1 < mir.count) {
+            expected[expected_count++] = instruction + 1;
+        }
+        if (insn->successor_count != expected_count)
+            return 0;
+        for (successor = 0; successor < expected_count; ++successor)
+            if (insn->successors[successor] != expected[successor])
+                return 0;
+    }
+    if (label_count != 16)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_PHI &&
+            (insn->phi_pred1 < 0 ||
+             insn->phi_pred1 >= mir.next_label ||
+             !labels[insn->phi_pred1] ||
+             insn->phi_pred2 < 0 ||
+             insn->phi_pred2 >= mir.next_label ||
+             !labels[insn->phi_pred2]))
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_buffered_console_storage_metadata(void)
+{
+    static const int expected_types[7] = {
+        17, 17, 2, 17, 17, 18, 17
+    };
+    int aliases[MAX_LOCALS];
+    int declared;
+    int item;
+
+    if (mir.object_count != 1 || mir.declared_count != 7 ||
+        mir.alias_count != 4 || mir.has_declared_register_object ||
+        memchr(mir.name, 0, sizeof(mir.name)) == NULL)
+        return 0;
+    if (memchr(mir.objects[0].name, 0,
+               sizeof(mir.objects[0].name)) == NULL ||
+        mir.objects[0].storage != SC_LOCAL ||
+        !mir_buffered_console_word_type(mir.objects[0].type, 0) ||
+        mir.objects[0].offset != -6 ||
+        mir.objects[0].entry_value != MIR_OBJECT_UNDEFINED ||
+        mir.objects[0].is_register)
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        if (memchr(mir.declared_names[declared], 0,
+                   sizeof(mir.declared_names[declared])) == NULL ||
+            memchr(mir.declared_link_names[declared], 0,
+                   sizeof(mir.declared_link_names[declared])) == NULL ||
+            memchr(mir.declared_runtime_stride_names[declared], 0,
+                   sizeof(mir.declared_runtime_stride_names[declared])) ==
+                NULL ||
+            mir.declared_types[declared] != expected_types[declared] ||
+            mir.declared_type_unstable[declared] ||
+            mir.declared_storage[declared] != SC_LOCAL ||
+            mir.declared_offsets[declared] != -2 * (declared + 1) ||
+            mir.declared_sizes[declared] != 2 ||
+            mir.declared_dim_counts[declared] != 0 ||
+            mir.declared_elem_sizes[declared] != 0 ||
+            mir.declared_vla_size_offsets[declared] != 0 ||
+            mir.declared_is_vla[declared] ||
+            mir.declared_is_array[declared] ||
+            mir.declared_is_volatile[declared] ||
+            mir.declared_pointee_is_volatile[declared] ||
+            mir.declared_pointee_volatile_masks[declared] != 0 ||
+            mir.declared_dynamic_strides[declared] != 0 ||
+            mir.declared_is_const[declared] ||
+            mir.declared_const_values[declared] != 0 ||
+            mir.declared_is_funcptr[declared] ||
+            mir.declared_funcptr_return_types[declared] != 0 ||
+            mir.declared_has_proto[declared] ||
+            mir.declared_proto_nargs[declared] != 0 ||
+            mir.declared_proto_variadic[declared] ||
+            mir.declared_link_names[declared][0] != 0 ||
+            mir.declared_runtime_stride_names[declared][0] != 0)
+            return 0;
+    }
+    memset(aliases, 0, sizeof(aliases));
+    for (item = 0; item < mir.alias_count; ++item) {
+        int index = mir.alias_declaration_indices[item];
+
+        if (memchr(mir.alias_source_names[item], 0,
+                   sizeof(mir.alias_source_names[item])) == NULL ||
+            memchr(mir.alias_internal_names[item], 0,
+                   sizeof(mir.alias_internal_names[item])) == NULL ||
+            mir.alias_source_names[item][0] == 0 ||
+            mir.alias_internal_names[item][0] == 0 ||
+            !strcmp(mir.alias_source_names[item],
+                    mir.alias_internal_names[item]) ||
+            index < 0 || index >= mir.declared_count ||
+            aliases[index])
+            return 0;
+        aliases[index] = 1;
+    }
+    return 1;
+}
+
+static int mir_buffered_console_instruction_metadata(void)
+{
+    int instruction = -1;
+
+#define MIR_BUFFERED_METADATA_REJECT(reason)                                \
+    do {                                                                    \
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)                       \
+            fprintf(stderr,                                                 \
+                    "; MIR machine function=%s "                            \
+                    "template=buffered-console-runner "                     \
+                    "metadata=%d:%s\n",                                    \
+                    mir.name, instruction, (reason));                       \
+        return 0;                                                           \
+    } while (0)
+
+    if (mir.next_value != 290 || mir.next_label != 25 ||
+        mir.next_call_id != 72 || mir.next_inline_temp_id != 1 ||
+        mir.opaque_count != 0 || mir.has_runtime_stride_param ||
+        mir.is_variadic_function || mir.has_indirect_incdec ||
+        mir.has_pointer_difference || mir.has_narrowed_for_counter ||
+        mir.has_compound_literal)
+        MIR_BUFFERED_METADATA_REJECT("dimensions");
+    if (nstrings < 0 || nstrings > MAX_STRINGS)
+        MIR_BUFFERED_METADATA_REJECT("string-count");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected_flags = 0;
+        int expected_pointer_qualifiers = 0;
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (insn->opcode == MIR_CALL &&
+            (insn->memory_flags & MIR_CALL_FLAG_VARIADIC))
+            expected_flags = MIR_CALL_FLAG_VARIADIC;
+        else if (instruction == 8 || instruction == 121 ||
+                 instruction == 124 || instruction == 160 ||
+                 instruction == 352 || instruction == 369)
+            expected_flags = 512;
+        else if (instruction == 77 || instruction == 240)
+            expected_flags = 128;
+        if (instruction == 213 || instruction == 274 ||
+            instruction == 301 || instruction == 428)
+            expected_pointer_qualifiers = 1;
+        if (insn->memory_flags != expected_flags ||
+            insn->pointee_volatile_mask != 0 ||
+            insn->has_pointer_qualifiers !=
+                expected_pointer_qualifiers ||
+            insn->bit_width != 0 || insn->bit_shift != 0 ||
+            insn->bit_mask != 0 || insn->inline_temp_id != 0 ||
+            insn->divmod_cast_types != 0)
+            MIR_BUFFERED_METADATA_REJECT("qualifiers");
+
+        switch (insn->opcode) {
+        case MIR_LABEL:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 || insn->memory_size != 0 ||
+                insn->secondary_offset != 0)
+                MIR_BUFFERED_METADATA_REJECT("label");
+            break;
+        case MIR_STRING_ADDRESS:
+            if (!mir_buffered_console_pointer_type(
+                    insn->type, TYPE_CHAR) ||
+                insn->immediate < 0 ||
+                insn->immediate >= nstrings ||
+                strings[insn->immediate] == NULL ||
+                string_wide[insn->immediate] ||
+                insn->src1 != -1 || insn->src2 != -1 ||
+                insn->memory_size != 0 ||
+                insn->secondary_offset != 0 || insn->label != -1)
+                MIR_BUFFERED_METADATA_REJECT("string");
+            break;
+        case MIR_ARG:
+            if (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+                mir_definition(insn->src1) == NULL ||
+                insn->src2 != -1 || insn->memory_size != 0 ||
+                insn->label != -1 ||
+                insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id)
+                MIR_BUFFERED_METADATA_REJECT("argument");
+            break;
+        case MIR_CALL:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 || insn->memory_size != 0 ||
+                insn->label != -1 ||
+                insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id ||
+                memchr(insn->name, 0, sizeof(insn->name)) == NULL ||
+                memchr(insn->base_name, 0,
+                       sizeof(insn->base_name)) == NULL)
+                MIR_BUFFERED_METADATA_REJECT("call");
+            break;
+        case MIR_CONST:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->memory_size != 0 ||
+                insn->secondary_offset != 0 || insn->label != -1)
+                MIR_BUFFERED_METADATA_REJECT("constant");
+            break;
+        case MIR_LOAD:
+        case MIR_STORE:
+            if (memchr(insn->name, 0, sizeof(insn->name)) == NULL ||
+                !mir_machine_named_nonvolatile(insn) ||
+                !mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                insn->type != memory_type ||
+                insn->memory_size !=
+                    (insn->opcode == MIR_LOAD
+                        ? 0 : type_size(memory_type)) ||
+                insn->src2 != -1 || insn->immediate != 0 ||
+                insn->secondary_offset != 0 || insn->label != -1 ||
+                (insn->opcode == MIR_LOAD
+                    ? insn->src1 != -1
+                    : (insn->src1 < 0 ||
+                       mir_definition(insn->src1) == NULL ||
+                       mir_definition(insn->src1)->type != memory_type)))
+                MIR_BUFFERED_METADATA_REJECT("memory");
+            break;
+        case MIR_BRANCH_FALSE:
+        case MIR_RETURN:
+            if (insn->src1 < 0 ||
+                mir_definition(insn->src1) == NULL ||
+                insn->src2 != -1 || insn->immediate != 0 ||
+                insn->memory_size != 0 ||
+                insn->secondary_offset != 0 ||
+                (insn->opcode == MIR_BRANCH_FALSE
+                    ? insn->label < 0
+                    : insn->label != -1))
+                MIR_BUFFERED_METADATA_REJECT("unary-flow");
+            break;
+        case MIR_BINARY:
+            if (!mir_buffered_console_word_type(insn->type, 0) ||
+                insn->src1 < 0 || mir_definition(insn->src1) == NULL ||
+                insn->src2 < 0 || mir_definition(insn->src2) == NULL ||
+                insn->memory_size != 0 ||
+                insn->secondary_offset != TYPE_INT ||
+                insn->label != -1)
+                MIR_BUFFERED_METADATA_REJECT("binary");
+            break;
+        case MIR_INDEX_ADDRESS:
+            if (!mir_buffered_console_pointer_type(
+                    insn->type, TYPE_CHAR) ||
+                insn->src1 < 0 || mir_definition(insn->src1) == NULL ||
+                insn->src2 < 0 || mir_definition(insn->src2) == NULL ||
+                insn->immediate != 1 || insn->memory_size != 1 ||
+                insn->secondary_offset != 0 || insn->label != -1)
+                MIR_BUFFERED_METADATA_REJECT("index-address");
+            break;
+        case MIR_STORE_INDIRECT:
+            if (insn->src1 < 0 || mir_definition(insn->src1) == NULL ||
+                insn->src2 < 0 || mir_definition(insn->src2) == NULL ||
+                insn->immediate != 0 || insn->memory_size != 1 ||
+                insn->secondary_offset != 0 || insn->label != -1)
+                MIR_BUFFERED_METADATA_REJECT("indirect-store");
+            break;
+        case MIR_JUMP:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 || insn->memory_size != 0 ||
+                insn->secondary_offset != 0 || insn->label < 0)
+                MIR_BUFFERED_METADATA_REJECT("jump");
+            break;
+        case MIR_PHI:
+            if (!mir_buffered_console_word_type(insn->type, 0) ||
+                insn->src1 < 0 || mir_definition(insn->src1) == NULL ||
+                insn->src2 < 0 || mir_definition(insn->src2) == NULL ||
+                insn->immediate != 0 || insn->memory_size != 0 ||
+                insn->secondary_offset != 0 || insn->label != -1)
+                MIR_BUFFERED_METADATA_REJECT("phi");
+            break;
+        case MIR_UNARY:
+            if (type_ptr_depth(insn->type) != 0 ||
+                (insn->type & 15) != TYPE_CHAR ||
+                (insn->type & TYPE_UNSIGNED) != 0 ||
+                type_size(insn->type) != 1 ||
+                insn->src1 < 0 || mir_definition(insn->src1) == NULL ||
+                insn->src2 != -1 || insn->immediate != 0 ||
+                insn->memory_size != 0 ||
+                insn->secondary_offset != 0 || insn->label != -1)
+                MIR_BUFFERED_METADATA_REJECT("cast");
+            break;
+        case MIR_NOP:
+            break;
+        default:
+            MIR_BUFFERED_METADATA_REJECT("opcode");
+        }
+    }
+    if (!mir_buffered_console_cfg_valid())
+        MIR_BUFFERED_METADATA_REJECT("cfg");
+#undef MIR_BUFFERED_METADATA_REJECT
+    return 1;
 }
 
 static int mir_match_buffered_console_runner(
@@ -14787,6 +15124,8 @@ static int mir_match_buffered_console_runner(
         mir.has_vla || mir.local_bytes != 14 ||
         mir.aggregate_temp_bytes != 0 ||
         !mir_buffered_console_word_type(mir.return_type, 0) ||
+        !mir_buffered_console_storage_metadata() ||
+        !mir_buffered_console_instruction_metadata() ||
         strlen(expected_opcodes) != (size_t)mir.count)
         return mir_machine_reject(
             "buffered-console-runner", "shape");
@@ -14809,6 +15148,9 @@ static int mir_match_buffered_console_runner(
         call_name = call->base_name[0] != 0
             ? call->base_name
             : asm_name_for(sym_asm_name(plan->functions[item]));
+        if (strlen(call_name) >= sizeof(plan->call_names[item]))
+            return mir_machine_reject(
+                "buffered-console-runner", "function-name");
         snprintf(plan->call_names[item],
                  sizeof(plan->call_names[item]), "%s", call_name);
         for (first = 0; first < item; ++first)
@@ -14846,7 +15188,9 @@ static int mir_match_buffered_console_runner(
                 "buffered-console-runner", "call");
         for (first = 0; first < calls[item].argument_count; ++first)
             if (arguments[first] !=
-                    mir.insns[calls[item].definitions[first]].dst)
+                    mir.insns[calls[item].definitions[first]].dst ||
+                mir_definition(arguments[first]) == NULL ||
+                type_size(mir_definition(arguments[first])->type) != 2)
                 return mir_machine_reject(
                     "buffered-console-runner", "call-argument");
     }
@@ -14867,7 +15211,10 @@ static int mir_match_buffered_console_runner(
             &mir.insns[string_instructions[item]];
 
         if (!mir_buffered_console_pointer_type(
-                string->type, TYPE_CHAR))
+                string->type, TYPE_CHAR) ||
+            string->immediate < 0 || string->immediate >= nstrings ||
+            strings[string->immediate] == NULL ||
+            string_wide[string->immediate])
             return mir_machine_reject(
                 "buffered-console-runner", "string-type");
         plan->strings[item] = (int)string->immediate;
@@ -14917,6 +15264,9 @@ static int mir_match_buffered_console_runner(
         !mir_machine_unobservable_local_store(&mir.insns[370]))
         return mir_machine_reject(
             "buffered-console-runner", "local-flow");
+    if (mir.insns[125].src1 != mir.insns[123].dst)
+        return mir_machine_reject(
+            "buffered-console-runner", "index-initializer");
 
     if (mir.insns[22].immediate != TOK_NE ||
         mir.insns[22].src1 != mir.insns[20].dst ||
@@ -15344,6 +15694,7 @@ int mir_try_emit_validation_runners(MirStream *out, int phase)
         struct MirFixedCallCheckRunner plan;
         if (mir_match_buffered_console_runner(
                 &buffered_console_plan)) {
+            mir_machine_accept("buffered-console-runner");
             mir_emit_buffered_console_runner(
                 out, &buffered_console_plan);
             return 1;

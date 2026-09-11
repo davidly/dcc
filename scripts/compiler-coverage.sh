@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 35) / 36 ))
+campaign_jobs=$(( (mutation_jobs + 36) / 37 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -358,6 +358,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-memory-exercise-%8m.profraw" \
     --jobs "$campaign_jobs" --skip-runtime \
     >"$campaign_dir/memory-exercise.log" 2>&1 &
 memory_exercise_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-buffered-console-%8m.profraw" \
+    python3 scripts/buffered-console-wave27-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/buffered-console-wave27-audit" \
+    >"$campaign_dir/buffered-console.log" 2>&1 &
+buffered_console_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -395,7 +401,8 @@ for campaign in \
     "minimax:$minimax_pid" \
     "matrix-store:$matrix_store_pid" \
     "callback-registration:$callback_registration_pid" \
-    "memory-exercise:$memory_exercise_pid"
+    "memory-exercise:$memory_exercise_pid" \
+    "buffered-console:$buffered_console_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
