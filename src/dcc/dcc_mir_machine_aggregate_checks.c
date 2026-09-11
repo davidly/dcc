@@ -12,6 +12,7 @@
  */
 
 #include <limits.h>
+#include <stdint.h>
 
 #include "dcc_mir_machine_internal.h"
 
@@ -7472,6 +7473,197 @@ static int mir_ptr_condition_call(
         function_out);
 }
 
+static void mir_ptr_condition_signature_mix(
+    unsigned long long *first,
+    unsigned long long *second,
+    unsigned long long value)
+{
+    *first ^= value;
+    *first *= 1099511628211ULL;
+    *second ^= value + 0x9e3779b97f4a7c15ULL +
+        (*second << 6) + (*second >> 2);
+}
+
+static void mir_ptr_condition_signature_string(
+    unsigned long long *first,
+    unsigned long long *second,
+    const char *text)
+{
+    do {
+        mir_ptr_condition_signature_mix(
+            first, second, (unsigned char)*text);
+    } while (*text++);
+}
+
+static void mir_ptr_condition_semantic_signature(
+    unsigned long long *first_out,
+    unsigned long long *second_out)
+{
+    /*
+     * The exact emitter replaces the whole function, so retain every MIR
+     * field that can affect its observable semantics. String IDs are omitted
+     * because all 68 are resolved into the plan and emitted unchanged.
+     */
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+#define MIR_PTR_SIGNATURE_FIELD(field) \
+        mir_ptr_condition_signature_mix( \
+            &first, &second, \
+            (unsigned long long)(uint32_t)insn->field)
+        MIR_PTR_SIGNATURE_FIELD(opcode);
+        switch (insn->opcode) {
+        case MIR_LABEL:
+            MIR_PTR_SIGNATURE_FIELD(label);
+            break;
+        case MIR_NOP:
+            break;
+        case MIR_STRING_ADDRESS:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            break;
+        case MIR_ARG:
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(immediate);
+            MIR_PTR_SIGNATURE_FIELD(secondary_offset);
+            break;
+        case MIR_CALL:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(secondary_offset);
+            mir_ptr_condition_signature_string(
+                &first, &second, insn->name);
+            mir_ptr_condition_signature_string(
+                &first, &second, insn->base_name);
+            break;
+        case MIR_ADDRESS:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(object);
+            mir_ptr_condition_signature_string(
+                &first, &second, insn->name);
+            break;
+        case MIR_CONST:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(immediate);
+            break;
+        case MIR_INDEX_ADDRESS:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(src2);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(immediate);
+            MIR_PTR_SIGNATURE_FIELD(memory_size);
+            MIR_PTR_SIGNATURE_FIELD(memory_flags);
+            MIR_PTR_SIGNATURE_FIELD(pointee_volatile_mask);
+            MIR_PTR_SIGNATURE_FIELD(has_pointer_qualifiers);
+            break;
+        case MIR_MEMBER_ADDRESS:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(immediate);
+            MIR_PTR_SIGNATURE_FIELD(memory_size);
+            MIR_PTR_SIGNATURE_FIELD(memory_flags);
+            MIR_PTR_SIGNATURE_FIELD(pointee_volatile_mask);
+            MIR_PTR_SIGNATURE_FIELD(has_pointer_qualifiers);
+            break;
+        case MIR_LOAD:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(object);
+            MIR_PTR_SIGNATURE_FIELD(memory_size);
+            MIR_PTR_SIGNATURE_FIELD(memory_flags);
+            MIR_PTR_SIGNATURE_FIELD(pointee_volatile_mask);
+            MIR_PTR_SIGNATURE_FIELD(has_pointer_qualifiers);
+            mir_ptr_condition_signature_string(
+                &first, &second, insn->name);
+            break;
+        case MIR_STORE:
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(object);
+            MIR_PTR_SIGNATURE_FIELD(memory_size);
+            MIR_PTR_SIGNATURE_FIELD(memory_flags);
+            mir_ptr_condition_signature_string(
+                &first, &second, insn->name);
+            break;
+        case MIR_LOAD_INDIRECT:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(memory_size);
+            MIR_PTR_SIGNATURE_FIELD(memory_flags);
+            MIR_PTR_SIGNATURE_FIELD(pointee_volatile_mask);
+            MIR_PTR_SIGNATURE_FIELD(has_pointer_qualifiers);
+            MIR_PTR_SIGNATURE_FIELD(bit_width);
+            MIR_PTR_SIGNATURE_FIELD(bit_shift);
+            MIR_PTR_SIGNATURE_FIELD(bit_mask);
+            break;
+        case MIR_STORE_INDIRECT:
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(src2);
+            MIR_PTR_SIGNATURE_FIELD(memory_size);
+            MIR_PTR_SIGNATURE_FIELD(memory_flags);
+            MIR_PTR_SIGNATURE_FIELD(pointee_volatile_mask);
+            MIR_PTR_SIGNATURE_FIELD(has_pointer_qualifiers);
+            MIR_PTR_SIGNATURE_FIELD(bit_width);
+            MIR_PTR_SIGNATURE_FIELD(bit_shift);
+            MIR_PTR_SIGNATURE_FIELD(bit_mask);
+            break;
+        case MIR_PHI:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(src2);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(phi_pred1);
+            MIR_PTR_SIGNATURE_FIELD(phi_pred2);
+            break;
+        case MIR_UNARY:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(immediate);
+            break;
+        case MIR_BINARY:
+            MIR_PTR_SIGNATURE_FIELD(dst);
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(src2);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            MIR_PTR_SIGNATURE_FIELD(immediate);
+            MIR_PTR_SIGNATURE_FIELD(secondary_offset);
+            break;
+        case MIR_BRANCH_FALSE:
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(label);
+            MIR_PTR_SIGNATURE_FIELD(successor_count);
+            MIR_PTR_SIGNATURE_FIELD(successors[0]);
+            MIR_PTR_SIGNATURE_FIELD(successors[1]);
+            break;
+        case MIR_JUMP:
+            MIR_PTR_SIGNATURE_FIELD(label);
+            MIR_PTR_SIGNATURE_FIELD(successor_count);
+            MIR_PTR_SIGNATURE_FIELD(successors[0]);
+            MIR_PTR_SIGNATURE_FIELD(successors[1]);
+            break;
+        case MIR_RETURN:
+            MIR_PTR_SIGNATURE_FIELD(src1);
+            MIR_PTR_SIGNATURE_FIELD(type);
+            break;
+        default:
+            break;
+        }
+#undef MIR_PTR_SIGNATURE_FIELD
+    }
+    *first_out = first;
+    *second_out = second;
+}
+
 static int mir_match_ptr_condition_main(
     struct MirPtrConditionPlan *plan)
 {
@@ -7543,6 +7735,8 @@ static int mir_match_ptr_condition_main(
     long global_offset;
     int instruction;
     int promoted_variant = 0;
+    unsigned long long semantic_first;
+    unsigned long long semantic_second;
     size_t promoted_cursor = 0;
     size_t binary_cursor = 0;
     size_t unary_cursor = 0;
@@ -7640,6 +7834,15 @@ static int mir_match_ptr_condition_main(
         unary_cursor != strlen(mir_ptr_unary_operations))
         return mir_machine_reject(
             "pointer-condition-main", "operation-count");
+    mir_ptr_condition_semantic_signature(
+        &semantic_first, &semantic_second);
+    /* Before and after the byte-load promotion pass are both emitted. */
+    if (!((semantic_first == 0x2823cb69dd839bdaULL &&
+           semantic_second == 0x609814dbf3758006ULL) ||
+          (semantic_first == 0x5b94d652e8ad4bbaULL &&
+           semantic_second == 0x0cae523433db967aULL)))
+        return mir_machine_reject(
+            "pointer-condition-main", "semantic-signature");
     for (item = 0;
          item < sizeof(expected_constants) /
                 sizeof(expected_constants[0]);
@@ -7753,6 +7956,12 @@ static int mir_match_ptr_condition_main(
         !mir_ptr_condition_call(1467, &plan->pick_long_function))
         return mir_machine_reject(
             "pointer-condition-main", "loop-pickers");
+    if (plan->print_function->is_fastcall ||
+        plan->init_function->is_fastcall ||
+        plan->fail_function->is_fastcall ||
+        plan->check_function->is_fastcall)
+        return mir_machine_reject(
+            "pointer-condition-main", "fastcall");
 
     if (!mir_machine_global_address_offset(
             mir_ptr_condition_instruction(4)->dst,

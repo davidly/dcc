@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 26) / 27 ))
+campaign_jobs=$(( (mutation_jobs + 27) / 28 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -298,6 +298,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-affine-fill-%8m.profraw" \
     --output-dir "$build_dir/affine-fill-wave25-audit" \
     >"$campaign_dir/affine-fill.log" 2>&1 &
 affine_fill_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-pointer-condition-%8m.profraw" \
+    python3 scripts/pointer-condition-wave25-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/pointer-condition-wave25-audit" \
+    >"$campaign_dir/pointer-condition.log" 2>&1 &
+pointer_condition_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -326,7 +332,8 @@ for campaign in \
     "action:$action_pid" \
     "lcs:$lcs_pid" \
     "fileio:$fileio_pid" \
-    "affine-fill:$affine_fill_pid"
+    "affine-fill:$affine_fill_pid" \
+    "pointer-condition:$pointer_condition_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
