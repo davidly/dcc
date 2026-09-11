@@ -11580,11 +11580,19 @@ static int mir_directory_semantic_payload(void)
             mir_directory_hash_value(
                 &first, &second, values[item]);
     }
+    /* Wave 9 whole-program and module payloads. */
     if (first == 0x501d8d651a0e9d97ULL &&
         second == 0xec7a581a114702bcULL)
         return 1;
     if (first == 0x5ff1dac7c1c1e06bULL &&
         second == 0xf88c9f2320d84756ULL)
+        return 1;
+    /* Wave 3 uses the same proven schedule with distinct symbol metadata. */
+    if (first == 0xabbd741b11962ad6ULL &&
+        second == 0x8d4944d73a1d5511ULL)
+        return 1;
+    if (first == 0x57370ba5556d4f3eULL &&
+        second == 0xf2defc979218d26fULL)
         return 1;
     if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
         fprintf(stderr,

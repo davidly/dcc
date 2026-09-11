@@ -51,8 +51,50 @@ VARIANTS = {
     "canonical-io-stack": (
         "-fstack-check", "-ffloatio", "-flongio"
     ),
+    "line-debug": ("-gline",),
+    "line-debug-stack": ("-gline", "-fstack-check"),
     "module": ("-c",),
     "module-stack": ("-c", "-fstack-check"),
+}
+LAYOUTS = {
+    "wave3": {
+        "source": "tests/mir-clobber/direnum3.c",
+        "output": "D3W19",
+        "fixtures": (
+            "Q7ALPHA1.DAT",
+            "Q7BETA22.D",
+            "Q7C.D",
+            "Q7NOPE.TXT",
+            "R7IGNORE.DAT",
+        ),
+        "expected": (
+            "found=Q7BETA22.D",
+            "entry=0 name=Q7ALPHA1.DAT size=128",
+            "entry=1 name=Q7BETA22.D size=256",
+            "entry=2 name=Q7C.D size=384",
+            "oracle ok=1 init=4 first=1 next=3 sizebdos=3 "
+            "dup=3 sort=1 search=1 print=4 size=3 free=3",
+        ),
+    },
+    "wave9": {
+        "source": "tests/mir-clobber/direnum9.c",
+        "output": "D9W19",
+        "fixtures": (
+            "W9ALPHA1.DAT",
+            "W9BETA22.D",
+            "W9C.D",
+            "W9NOPE.TXT",
+            "X9IGNORE.DAT",
+        ),
+        "expected": (
+            "found=W9BETA22.D",
+            "entry=0 name=W9ALPHA1.DAT size=128",
+            "entry=1 name=W9BETA22.D size=256",
+            "entry=2 name=W9C.D size=384",
+            "oracle ok=1 init=4 first=1 next=3 sizebdos=3 "
+            "dup=3 sort=1 search=1 print=4 size=3 free=3",
+        ),
+    },
 }
 EXACT_ACCEPT = (
     "function=enumerate "
@@ -79,7 +121,7 @@ def run(command, root, env=None, timeout=60):
     return completed.stdout + completed.stderr
 
 
-def compiler_command(compiler, flags):
+def compiler_command(compiler, flags, source):
     return [
         str(compiler),
         *flags,
@@ -87,20 +129,20 @@ def compiler_command(compiler, flags):
         "512",
         "-I",
         ".",
-        "tests/mir-clobber/direnum9.c",
+        source,
         "-o",
         os.devnull,
     ]
 
 
-def baseline_instructions(root, compiler, flags):
+def baseline_instructions(root, compiler, flags, source):
     env = os.environ.copy()
     env.update(
         DCC_MIR_REPORT="1",
         DCC_MIR_FUNCTION="enumerate",
         DCC_MIR_MACHINE_REPORT="1",
     )
-    output = run(compiler_command(compiler, flags), root, env)
+    output = run(compiler_command(compiler, flags, source), root, env)
     if EXACT_ACCEPT not in output:
         raise RuntimeError(
             f"directory exact control rejected for flags {flags}\n"
@@ -146,7 +188,7 @@ def mutation_jobs(instructions):
     return jobs
 
 
-def mutation_survives(root, compiler, flags, job):
+def mutation_survives(root, compiler, flags, source, job):
     instruction, opcode, field, value = job
     env = os.environ.copy()
     env.update(
@@ -156,7 +198,7 @@ def mutation_survives(root, compiler, flags, job):
             f"{instruction}:{field}:{value}"
         ),
     )
-    output = run(compiler_command(compiler, flags), root, env)
+    output = run(compiler_command(compiler, flags, source), root, env)
     return job if EXACT_ACCEPT in output else None
 
 
@@ -166,78 +208,68 @@ def runtime_controls(root, dccmake, jobs):
             "pwsh",
             str(root / "scripts" / "run-mir-clobber-tests.ps1"),
             "-Cases",
-            "directory-wave9",
+            "directory-wave3,directory-wave9",
             "-Jobs",
             str(jobs),
         ],
         root,
         timeout=900,
     )
-    expected = (
-        "found=W9BETA22.D",
-        "entry=0 name=W9ALPHA1.DAT size=128",
-        "entry=1 name=W9BETA22.D size=256",
-        "entry=2 name=W9C.D size=384",
-        "oracle ok=1 init=4 first=1 next=3 sizebdos=3 "
-        "dup=3 sort=1 search=1 print=4 size=3 free=3",
-    )
     campaign = root / "build" / "directory-wave19-campaign"
     shutil.rmtree(campaign, ignore_errors=True)
-    fixtures = (
-        "W9ALPHA1.DAT",
-        "W9BETA22.D",
-        "W9C.D",
-        "W9NOPE.TXT",
-        "X9IGNORE.DAT",
-    )
-    for stack_check in (True, False):
-        for peep in (True, False):
-            name = (
-                f"{'stack' if stack_check else 'nostack'}-"
-                f"{'peep' if peep else 'nopeep'}"
-            )
-            build_dir = campaign / name
-            build_dir.mkdir(parents=True)
-            output = run(
-                [
-                    str(dccmake),
-                    "dcc-input=tests/mir-clobber/direnum9.c",
-                    "dcc-output=D9W19",
-                    f"dcc-build-dir={build_dir}",
-                    f"dcc-peep={str(peep).lower()}",
-                    f"dcc-stack-check={str(stack_check).lower()}",
-                    "dcc-stack-bytes=512",
-                    "dcc-floatio=true",
-                    "dcc-flongio=true",
-                ],
-                root,
-                dict(
-                    os.environ,
-                    DCC_MIR_MACHINE_REPORT="1",
-                    DCC_MIR_SELECT_REPORT="1",
-                ),
-            )
-            if EXACT_ACCEPT not in output:
-                raise RuntimeError(
-                    f"canonical I/O exact control rejected ({name})\n"
-                    f"{output}"
+    for layout_name, layout in LAYOUTS.items():
+        for stack_check in (True, False):
+            for peep in (True, False):
+                name = (
+                    f"{layout_name}-"
+                    f"{'stack' if stack_check else 'nostack'}-"
+                    f"{'peep' if peep else 'nopeep'}"
                 )
-            for fixture in fixtures:
-                shutil.copy2(
-                    root / "tests" / "mir-clobber" / fixture,
-                    build_dir / fixture,
+                build_dir = campaign / name
+                build_dir.mkdir(parents=True)
+                output = run(
+                    [
+                        str(dccmake),
+                        f"dcc-input={layout['source']}",
+                        f"dcc-output={layout['output']}",
+                        f"dcc-build-dir={build_dir}",
+                        f"dcc-peep={str(peep).lower()}",
+                        f"dcc-stack-check={str(stack_check).lower()}",
+                        "dcc-stack-bytes=512",
+                        "dcc-floatio=true",
+                        "dcc-flongio=true",
+                    ],
+                    root,
+                    dict(
+                        os.environ,
+                        DCC_MIR_MACHINE_REPORT="1",
+                        DCC_MIR_SELECT_REPORT="1",
+                    ),
                 )
-            runtime = run(
-                ["ntvcm", "-p", "-s:0", "D9W19.COM"],
-                build_dir,
-                timeout=30,
-            )
-            for line in expected:
-                if line not in runtime:
+                if EXACT_ACCEPT not in output:
                     raise RuntimeError(
-                        f"canonical I/O runtime failed ({name})\n"
-                        f"{runtime}"
+                        f"canonical I/O exact control rejected "
+                        f"({name})\n{output}"
                     )
+                for fixture in layout["fixtures"]:
+                    shutil.copy2(
+                        root / "tests" / "mir-clobber" / fixture,
+                        build_dir / fixture,
+                    )
+                runtime = run(
+                    [
+                        "ntvcm", "-p", "-s:0",
+                        f"{layout['output']}.COM",
+                    ],
+                    build_dir,
+                    timeout=30,
+                )
+                for line in layout["expected"]:
+                    if line not in runtime:
+                        raise RuntimeError(
+                            f"canonical I/O runtime failed "
+                            f"({name})\n{runtime}"
+                        )
     shutil.rmtree(campaign, ignore_errors=True)
 
 
@@ -261,33 +293,38 @@ def main():
 
     if not args.skip_runtime:
         runtime_controls(root, dccmake, args.jobs)
-    for name, flags in VARIANTS.items():
-        instructions = baseline_instructions(root, compiler, flags)
-        jobs = mutation_jobs(instructions)
-        survivors = []
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=args.jobs
-        ) as executor:
-            futures = [
-                executor.submit(
-                    mutation_survives,
-                    root,
-                    compiler,
-                    flags,
-                    job,
-                )
-                for job in jobs
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                survivor = future.result()
-                if survivor is not None:
-                    survivors.append(survivor)
-        if survivors:
-            raise RuntimeError(
-                f"{name}: {len(survivors)} mutation survivors: "
-                f"{sorted(survivors)[:20]}"
+    for layout_name, layout in LAYOUTS.items():
+        for variant_name, flags in VARIANTS.items():
+            instructions = baseline_instructions(
+                root, compiler, flags, layout["source"]
             )
-        print(f"{name}: {len(jobs)} mutations, zero survivors")
+            jobs = mutation_jobs(instructions)
+            survivors = []
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=args.jobs
+            ) as executor:
+                futures = [
+                    executor.submit(
+                        mutation_survives,
+                        root,
+                        compiler,
+                        flags,
+                        layout["source"],
+                        job,
+                    )
+                    for job in jobs
+                ]
+                for future in concurrent.futures.as_completed(futures):
+                    survivor = future.result()
+                    if survivor is not None:
+                        survivors.append(survivor)
+            name = f"{layout_name}-{variant_name}"
+            if survivors:
+                raise RuntimeError(
+                    f"{name}: {len(survivors)} mutation survivors: "
+                    f"{sorted(survivors)[:20]}"
+                )
+            print(f"{name}: {len(jobs)} mutations, zero survivors")
     print("directory Wave 19 campaign passed")
 
 

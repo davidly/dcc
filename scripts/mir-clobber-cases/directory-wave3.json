@@ -24,6 +24,30 @@
     "RequireExact": true
   },
   {
+    "Name": "d3debug",
+    "Group": "directory-wave3",
+    "Sources": ["tests/mir-clobber/direnum3.c"],
+    "FixturePaths": [
+      "tests/mir-clobber/Q7ALPHA1.DAT",
+      "tests/mir-clobber/Q7BETA22.D",
+      "tests/mir-clobber/Q7C.D",
+      "tests/mir-clobber/Q7NOPE.TXT",
+      "tests/mir-clobber/R7IGNORE.DAT"
+    ],
+    "Expected": [
+      "found=Q7BETA22.D",
+      "entry=0 name=Q7ALPHA1.DAT size=128",
+      "entry=1 name=Q7BETA22.D size=256",
+      "entry=2 name=Q7C.D size=384",
+      "oracle ok=1 init=4 first=1 next=3 sizebdos=3 dup=3 sort=1 search=1 print=4 size=3 free=3"
+    ],
+    "Exit": 0,
+    "DebugModes": [
+      "true",
+      "lines"
+    ]
+  },
+  {
     "Name": "d3bdos",
     "Group": "directory-wave3",
     "Sources": ["tests/mir-clobber/direnum3.c"],
