@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 7) / 8 ))
+campaign_jobs=$(( (mutation_jobs + 8) / 9 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -184,6 +184,11 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-packed-record-%8m.profraw" \
     --output-dir "$build_dir/packed-record-wave20-audit" \
     >"$campaign_dir/packed-record.log" 2>&1 &
 packed_record_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-fortran-fatal-%8m.profraw" \
+    python3 scripts/fortran-fatal-wave21-campaign.py \
+    --jobs "$campaign_jobs" --skip-runtime \
+    >"$campaign_dir/fortran-fatal.log" 2>&1 &
+fortran_fatal_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -193,7 +198,8 @@ for campaign in \
     "multidim:$multidim_pid" \
     "long-index:$long_index_pid" \
     "sliding:$sliding_pid" \
-    "packed-record:$packed_record_pid"
+    "packed-record:$packed_record_pid" \
+    "fortran-fatal:$fortran_fatal_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}

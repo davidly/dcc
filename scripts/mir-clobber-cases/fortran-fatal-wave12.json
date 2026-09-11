@@ -48,6 +48,22 @@
     "RequireExact": true
   },
   {
+    "Name": "ff12sboth",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_STATIC_PRINT", "FF12_STATIC_EXIT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireExact": true
+  },
+  {
     "Name": "ff12fmt",
     "Group": "fortran-fatal-wave12",
     "Sources": ["tests/mir-clobber/ffatal12.c"],
@@ -227,5 +243,157 @@
     "RequiredSelector": "spilled-scalar-cfg",
     "MachineMutation": "80:identity:120",
     "MachineMutationFunction": "ff12_die"
+  },
+  {
+    "Name": "ff12vstm",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_VOLATILE_STATEMENTS"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12vpc",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_VOLATILE_PC"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12vcnt",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_VOLATILE_COUNT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12vmsg",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_VOLATILE_MESSAGE"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12layout",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_LAYOUT_PAD"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=68",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12uprint",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_UNSIGNED_PRINT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12uexit",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_UNSIGNED_EXIT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ff12rexit",
+    "Group": "fortran-fatal-wave12",
+    "Sources": ["tests/mir-clobber/ffatal12.c"],
+    "Defines": ["FF12_RETURNING_EXIT"],
+    "Expected": [
+      "FF12 oracle index=1 text=LINE stride=66",
+      "forint:boom near pc=1 'LINE'"
+    ],
+    "Exit": 1,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "fortran-fatal-schedule",
+    "ExactFunction": "ff12_die",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "ff12_die",
+    "RequiredSelectorFunction": "ff12_die",
+    "RequiredSelector": "spilled-scalar-cfg"
   }
 ]

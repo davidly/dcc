@@ -3,6 +3,9 @@
 
 struct Ff12Stmt {
     int label;
+#ifdef FF12_LAYOUT_PAD
+    int layout_pad;
+#endif
     char *text;
     int unit;
     int op;
@@ -28,18 +31,37 @@ struct Ff12Stmt {
     struct Ff12Stmt *targets[10];
 };
 
+#ifdef FF12_VOLATILE_STATEMENTS
+static struct Ff12Stmt * volatile ff12_statements;
+#else
 static struct Ff12Stmt *ff12_statements;
+#endif
 #ifdef FF12_UNSIGNED_COUNT
 static unsigned int ff12_statement_count;
+#elif defined(FF12_VOLATILE_COUNT)
+static volatile int ff12_statement_count;
 #else
 static int ff12_statement_count;
 #endif
+#ifdef FF12_VOLATILE_PC
+static struct Ff12Stmt * volatile ff12_program_counter;
+#else
 static struct Ff12Stmt *ff12_program_counter;
+#endif
 
 #ifdef FF12_STATIC_PRINT
 static int ff12_static_print(FILE *stream, const char *format, ...)
 {
     return fprintf(stream, format, "boom", 1, "LINE");
+}
+#endif
+
+#ifdef FF12_UNSIGNED_PRINT
+static unsigned int ff12_unsigned_print(
+    FILE *stream, const char *format, ...)
+{
+    return (unsigned int)fprintf(
+        stream, format, "boom", 1, "LINE");
 }
 #endif
 
@@ -54,6 +76,20 @@ static int ff12_print(
 
 #ifdef FF12_STATIC_EXIT
 static _Noreturn void ff12_static_exit(int status)
+{
+    exit(status);
+}
+#endif
+
+#ifdef FF12_UNSIGNED_EXIT
+static _Noreturn void ff12_unsigned_exit(unsigned int status)
+{
+    exit((int)status);
+}
+#endif
+
+#ifdef FF12_RETURNING_EXIT
+static void ff12_returning_exit(int status)
 {
     exit(status);
 }
@@ -75,10 +111,17 @@ _ff12_exit:
 #endasm
 #endif
 
-static _Noreturn void ff12_die(const char *message)
+static _Noreturn void ff12_die(
+#ifdef FF12_VOLATILE_MESSAGE
+    const char * volatile message)
+#else
+    const char *message)
+#endif
 {
 #ifdef FF12_STATIC_PRINT
     ff12_static_print(
+#elif defined(FF12_UNSIGNED_PRINT)
+    ff12_unsigned_print(
 #elif defined(FF12_FIXED_PRINT)
     ff12_print(
 #else
@@ -100,6 +143,10 @@ static _Noreturn void ff12_die(const char *message)
                 ? ff12_program_counter->text : "");
 #ifdef FF12_STATIC_EXIT
     ff12_static_exit(1);
+#elif defined(FF12_UNSIGNED_EXIT)
+    ff12_unsigned_exit(1);
+#elif defined(FF12_RETURNING_EXIT)
+    ff12_returning_exit(1);
 #elif defined(FF12_FAST_EXIT)
     ff12_exit(1);
 #else
