@@ -18,7 +18,7 @@ cap with `DCC_COVERAGE_CLOBBER_JOBS` after measuring the host. Clobber workers
 are separate processes, so diagnostic environment variables cannot race
 between tests.
 
-The five exhaustive mutation campaigns run concurrently. The mutation job
+The exhaustive mutation campaigns run concurrently. The mutation job
 budget is divided across them, and each campaign receives its own `%8m` LLVM
 profile pool so profile-file locking does not serialize otherwise independent
 compiler processes. `DCC_COVERAGE_MUTATION_JOBS` is the combined budget, not a
