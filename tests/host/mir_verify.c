@@ -4947,6 +4947,43 @@ static void verify_spilled_declared_metadata_preflight(void)
     expect_spilled_candidate("declared metadata valid retry", 1);
 }
 
+static void verify_spilled_widened_call_argument_preflight(void)
+{
+    struct Sym *callee;
+    int control_label;
+
+    callee = add_global("verify_spilled_widened_arg", TYPE_INT, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 1;
+    callee->proto_types[0] = TYPE_LONG;
+    setup(5, 2, 1);
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_LONG;
+    mir.insns[3].opcode = MIR_CALL;
+    mir.insns[3].dst = 1;
+    strcpy(mir.insns[3].name, callee->name);
+    mir.insns[4].src1 = 1;
+    mir.next_call_id = 1;
+    expect_spilled_candidate("narrow source widened call argument control", 1);
+    control_label = label_id;
+
+    mir.insns[1].type = TYPE_FLOAT;
+    expect_spilled_candidate_transaction_rejection(
+        "float source cannot supply integer wide argument",
+        control_label);
+    mir.insns[1].type = TYPE_LONG;
+    mir.insns[2].type = TYPE_INT;
+    callee->proto_types[0] = TYPE_INT;
+    expect_spilled_candidate_transaction_rejection(
+        "wide source cannot supply narrow argument",
+        control_label);
+    mir.insns[1].type = TYPE_INT;
+    mir.insns[2].type = TYPE_LONG;
+    callee->proto_types[0] = TYPE_LONG;
+    expect_spilled_candidate("narrow source widened call argument retry", 1);
+}
+
 static void verify_spilled_aggregate_call_preflight(void)
 {
     struct Sym *callee;
@@ -5529,6 +5566,7 @@ int main(void)
     verify_spilled_dimension_preflight_transaction();
     verify_spilled_structural_preflight();
     verify_spilled_declared_metadata_preflight();
+    verify_spilled_widened_call_argument_preflight();
     verify_spilled_aggregate_call_preflight();
     verify_spilled_vla_size_preflight_transaction();
     verify_immediate_phi_return_forwarding();

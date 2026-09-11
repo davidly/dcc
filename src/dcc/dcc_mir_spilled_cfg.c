@@ -31430,7 +31430,8 @@ static void mir_spilled_resolve_call_prototype(
 static int mir_spilled_argument_source_type_valid(
     int source_type, int argument_type)
 {
-    int size;
+    int argument_size;
+    int source_size;
 
     if (source_type == argument_type)
         return 1;
@@ -31439,8 +31440,21 @@ static int mir_spilled_argument_source_type_valid(
         type_is_float(source_type) ||
         type_is_float(argument_type))
         return 0;
-    size = type_size(source_type);
-    return size == type_size(argument_type) && (size == 2 || size == 4);
+    source_size = type_size(source_type);
+    argument_size = type_size(argument_type);
+    if (source_size == argument_size)
+        return source_size == 2 || source_size == 4;
+    /*
+     * Full debug metadata can keep a narrow defining value while folding its
+     * integer widening conversion into MIR_ARG. The generic call emitter
+     * deliberately loads wide arguments through mir_emit_virtual_load_wide,
+     * which sign- or zero-extends such definitions according to source_type.
+     * Preserve that supported representation, but not wide narrowing or
+     * floating-point bit reinterpretation.
+     */
+    return source_size > 0 && source_size <= 2 &&
+           source_size < argument_size &&
+           (argument_size == 2 || argument_size == 4);
 }
 
 static int mir_spilled_structure_valid(int *invalid_instruction)
