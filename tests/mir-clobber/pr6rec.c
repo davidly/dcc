@@ -8,6 +8,9 @@
 struct PackedRecord
 {
     uint8_t ui8;
+#ifdef PR20_INTERIOR_PADDING
+    uint8_t padding;
+#endif
     uint16_t ui16;
     uint32_t ui32;
     int8_t i8;
@@ -15,14 +18,20 @@ struct PackedRecord
     int32_t i32;
 };
 
+#ifdef PR20_VOLATILE_RECORDS
+#define PR20_RECORD_QUAL volatile
+#else
+#define PR20_RECORD_QUAL
+#endif
+
 static struct PackedRecord before_records[10];
-struct PackedRecord records[20];
+PR20_RECORD_QUAL struct PackedRecord records[20];
 static struct PackedRecord after_records[10];
 static int failures;
 int dump_arguments_ok;
 
 static void check_record(
-    const struct PackedRecord *record, unsigned int index)
+    const PR20_RECORD_QUAL struct PackedRecord *record, unsigned int index)
 {
     if (record->ui8 != (uint8_t)index ||
         record->ui16 != (uint16_t)index * 2 ||
@@ -51,7 +60,8 @@ void VerifyBinaryData(void)
         }
     }
     for (index = 0; index < COUNT_OF(records); ++index) {
-        const uint8_t *bytes = (const uint8_t *)&records[index];
+        const PR20_RECORD_QUAL uint8_t *bytes =
+            (const PR20_RECORD_QUAL uint8_t *)&records[index];
         size_t byte;
 
         check_record(&records[index], (unsigned int)index);
@@ -139,7 +149,7 @@ void test_many()
 
     for (size_t i = 0; i < COUNT_OF(records); i++)
     {
-        struct PackedRecord *m = &records[i];
+        PR20_RECORD_QUAL struct PackedRecord *m = &records[i];
         m->ui8 = (uint8_t)i;
         m->ui16 = (uint16_t)i * 2;
         m->ui32 = (uint32_t)i * 4;
@@ -153,7 +163,7 @@ void test_many()
 
     for (size_t i = 0; i < COUNT_OF(records); i++)
     {
-        struct PackedRecord *m = &records[i];
+        PR20_RECORD_QUAL struct PackedRecord *m = &records[i];
 
         if (m->ui8 != i)
             printf("error: i %u, ui8 is %lu, not %lu\n",
