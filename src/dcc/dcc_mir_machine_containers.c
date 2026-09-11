@@ -1477,15 +1477,277 @@ static int mir_match_ctype_pointer_type(int type)
         type_size(type) == 2;
 }
 
+static int mir_match_ctype_char_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        (type & 15) == TYPE_CHAR &&
+        type_size(type) == 1;
+}
+
+static int mir_match_ctype_char_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+        (type & 15) == TYPE_CHAR &&
+        type_size(type) == 2;
+}
+
+static int mir_match_ctype_integer_type(int type)
+{
+    int base = type & 15;
+
+    return type_ptr_depth(type) == 0 &&
+        (base == TYPE_CHAR || base == TYPE_INT ||
+         base == TYPE_BOOL) &&
+        type_size(type) >= 1 && type_size(type) <= 2;
+}
+
+static int mir_match_ctype_abi_type(int actual, int expected)
+{
+    if (type_ptr_depth(expected) != 0)
+        return mir_match_ctype_pointer_type(actual) &&
+            type_size(actual) == type_size(expected);
+    return mir_match_ctype_integer_type(expected) &&
+        mir_match_ctype_integer_type(actual) &&
+        type_size(actual) == type_size(expected);
+}
+
+static int mir_match_ctype_value_abi_type(
+    int value, int expected_type, const struct MirInsn *before)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL && definition < before &&
+        mir_match_ctype_abi_type(definition->type, expected_type);
+}
+
 static int mir_match_ctype_call_target(
     const struct MirInsn *call, struct Sym *function)
 {
     return function != NULL && !function->is_funcptr &&
         !function->is_fastcall &&
         !function->is_noreturn && function->has_proto &&
+        call->src1 < 0 && call->src2 < 0 &&
+        call->type == function->type &&
         (call->base_name[0] == 0 ||
          !strcmp(call->base_name,
                  asm_name_for(sym_asm_name(function))));
+}
+
+static int mir_match_ctype_call_arguments(
+    const struct MirInsn *call,
+    const struct MirInsn *first_arg,
+    const struct MirInsn *second_arg,
+    int count, int first_value, int second_value,
+    const struct Sym *function)
+{
+    const struct MirInsn *expected[2];
+    int values[2];
+    int found[2] = {0, 0};
+    int call_index;
+    int instruction;
+
+    if (call == NULL || function == NULL ||
+        count < 1 || count > 2)
+        return 0;
+    expected[0] = first_arg;
+    expected[1] = second_arg;
+    values[0] = first_value;
+    values[1] = second_value;
+    call_index = (int)(call - mir.insns);
+    if (call_index < 0 || call_index >= mir.count)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *item = &mir.insns[instruction];
+        const struct MirInsn *source;
+        int index;
+        int expected_type;
+
+        if (item->opcode == MIR_CALL &&
+            item != call &&
+            item->secondary_offset == call->secondary_offset)
+            return 0;
+        if (item->opcode != MIR_ARG ||
+            item->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)item->immediate;
+        if (index < 0 || index >= count)
+            return 0;
+        expected_type = index < function->proto_nargs
+            ? function->proto_types[index] : TYPE_INT;
+        source = mir_definition(item->src1);
+        if ((index >= function->proto_nargs &&
+             !function->proto_variadic) ||
+            expected[index] != item || found[index] ||
+            instruction >= call_index ||
+            !mir_match_ctype_abi_type(
+                item->type, expected_type) ||
+            item->src1 != values[index] ||
+            source == NULL || source >= item ||
+            item->src2 >= 0 || item->dst >= 0 ||
+            !mir_match_ctype_value_abi_type(
+                item->src1, expected_type, item))
+            return 0;
+        found[index] = 1;
+    }
+    return found[0] && (count == 1 || found[1]);
+}
+
+static int mir_match_ctype_unique_definition(
+    int value, const struct MirInsn *expected)
+{
+    int instruction;
+    int definitions = 0;
+
+    if (value < 0 || value >= mir.next_value ||
+        mir_definition(value) != expected)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].dst == value)
+            ++definitions;
+    return definitions == 1;
+}
+
+static int mir_match_ctype_instruction_contract(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const struct MirInsn *source;
+        struct Sym *function;
+        int memory_offset;
+        int memory_storage;
+        int memory_type;
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+            break;
+        case MIR_CONST:
+            if (!mir_match_ctype_integer_type(insn->type))
+                return 0;
+            break;
+        case MIR_STRING_ADDRESS:
+            if (!mir_match_ctype_char_pointer_type(insn->type))
+                return 0;
+            break;
+        case MIR_ARG:
+            source = mir_definition(insn->src1);
+            if (source == NULL || source >= insn ||
+                insn->src2 >= 0 || insn->dst >= 0)
+                return 0;
+            break;
+        case MIR_CALL:
+            function = find_global(insn->name);
+            if (!mir_match_ctype_call_target(insn, function) ||
+                !mir_match_ctype_unique_definition(
+                    insn->dst, insn) ||
+                (((function->type & 15) == TYPE_VOID)
+                     ? insn->type != function->type
+                     : !mir_match_ctype_abi_type(
+                           insn->type,
+                           function->type)) ||
+                insn->memory_flags !=
+                    (function->proto_variadic
+                         ? MIR_CALL_FLAG_VARIADIC : 0))
+                return 0;
+            break;
+        case MIR_UNARY:
+            source = mir_definition(insn->src1);
+            if (source == NULL ||
+                (mir_match_ctype_pointer_type(insn->type)
+                     ? !mir_match_ctype_pointer_type(source->type)
+                     : !mir_match_ctype_word_type(insn->type)))
+                return 0;
+            break;
+        case MIR_BINARY:
+            if (!mir_match_ctype_word_type(insn->type) ||
+                !mir_match_ctype_word_type(insn->secondary_offset) ||
+                !mir_match_ctype_value_abi_type(
+                    insn->src1, insn->secondary_offset, insn) ||
+                !mir_match_ctype_value_abi_type(
+                    insn->src2, insn->secondary_offset, insn))
+                return 0;
+            break;
+        case MIR_LOAD:
+            if (!mir_machine_named_nonvolatile(insn) ||
+                insn->memory_flags != 0 ||
+                insn->memory_size != 0 ||
+                !mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                insn->type != memory_type)
+                return 0;
+            break;
+        case MIR_STORE:
+            source = mir_definition(insn->src1);
+            if (!mir_machine_named_nonvolatile(insn) ||
+                insn->memory_flags != 0 ||
+                !mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                insn->type != memory_type ||
+                insn->memory_size != type_size(memory_type) ||
+                source == NULL || source->type != memory_type)
+                return 0;
+            break;
+        case MIR_INDEX_ADDRESS:
+            source = mir_definition(insn->src1);
+            if (!mir_match_ctype_char_pointer_type(insn->type) ||
+                insn->memory_size != 1 ||
+                insn->memory_flags != 0 ||
+                insn->pointee_volatile_mask != 0 ||
+                insn->has_pointer_qualifiers ||
+                source == NULL ||
+                !mir_match_ctype_char_pointer_type(source->type) ||
+                !mir_match_ctype_value_abi_type(
+                    insn->src2, TYPE_INT, insn))
+                return 0;
+            break;
+        case MIR_LOAD_INDIRECT:
+            source = mir_definition(insn->src1);
+            if (!mir_match_ctype_char_type(insn->type) ||
+                insn->memory_size != 1 ||
+                insn->memory_flags != 0 ||
+                insn->pointee_volatile_mask != 0 ||
+                insn->has_pointer_qualifiers ||
+                insn->bit_width != 0 ||
+                source == NULL ||
+                !mir_match_ctype_char_pointer_type(source->type))
+                return 0;
+            break;
+        case MIR_STORE_INDIRECT:
+            source = mir_definition(insn->src1);
+            if (!mir_match_ctype_char_type(insn->type) ||
+                insn->memory_size != 1 ||
+                insn->memory_flags != 0 ||
+                insn->pointee_volatile_mask != 0 ||
+                insn->has_pointer_qualifiers ||
+                insn->bit_width != 0 ||
+                source == NULL ||
+                !mir_match_ctype_char_pointer_type(source->type) ||
+                !mir_match_ctype_value_abi_type(
+                    insn->src2, insn->type, insn) ||
+                mir_definition(insn->src2)->type != insn->type)
+                return 0;
+            break;
+        case MIR_BRANCH_FALSE:
+            if (!mir_match_ctype_value_abi_type(
+                    insn->src1, TYPE_INT, insn))
+                return 0;
+            break;
+        case MIR_RETURN:
+            if (insn->type != 0 ||
+                (insn->src1 >= 0 &&
+                 !mir_match_ctype_value_abi_type(
+                     insn->src1, mir.return_type, insn)))
+                return 0;
+            break;
+        default:
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int mir_match_ctype_string(int value, int *string_id)
@@ -1494,7 +1756,10 @@ static int mir_match_ctype_string(int value, int *string_id)
 
     if (definition == NULL ||
         definition->opcode != MIR_STRING_ADDRESS ||
-        !mir_match_ctype_pointer_type(definition->type))
+        !mir_match_ctype_char_pointer_type(definition->type) ||
+        definition->immediate < 0 ||
+        definition->immediate >= nstrings ||
+        strings[definition->immediate] == NULL)
         return 0;
     *string_id = (int)definition->immediate;
     return 1;
@@ -1520,8 +1785,8 @@ static int mir_match_ctype_value_call(
     if (!mir_match_ctype_call_target(call, function) ||
         function->proto_nargs != 1 ||
         function->proto_variadic ||
+        !mir_match_ctype_word_type(function->type) ||
         !mir_match_ctype_word_type(function->proto_types[0]) ||
-        !mir_match_ctype_word_type(call->type) ||
         call->memory_flags != 0)
         return 0;
     *function_out = function;
@@ -1536,9 +1801,11 @@ static int mir_match_ctype_check_call(
     if (!mir_match_ctype_call_target(call, function) ||
         function->proto_nargs != 2 ||
         function->proto_variadic ||
+        (function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(function->type) != 0 ||
         !mir_match_ctype_word_type(function->proto_types[0]) ||
-        !mir_match_ctype_pointer_type(function->proto_types[1]) ||
-        (call->type & 15) != TYPE_VOID ||
+        !mir_match_ctype_char_pointer_type(
+            function->proto_types[1]) ||
         call->memory_flags != 0)
         return 0;
     if (*function_out != NULL && *function_out != function)
@@ -1555,8 +1822,10 @@ static int mir_match_ctype_print_call(
     if (!mir_match_ctype_call_target(call, function) ||
         function->proto_nargs != 1 ||
         !function->proto_variadic ||
-        !mir_match_ctype_pointer_type(function->proto_types[0]) ||
-        !mir_match_ctype_word_type(call->type))
+        !mir_match_ctype_word_type(function->type) ||
+        !mir_match_ctype_char_pointer_type(
+            function->proto_types[0]) ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC)
         return 0;
     if (*function_out != NULL && *function_out != function)
         return 0;
@@ -1570,28 +1839,46 @@ static int mir_match_ctype_pointer_call(
     struct Sym **function_out)
 {
     struct Sym *function = find_global(call->name);
-    int argument;
 
     if (!mir_match_ctype_call_target(call, function) ||
         function->proto_nargs != arguments ||
-        function->proto_variadic)
+        function->proto_variadic ||
+        call->memory_flags != 0)
         return 0;
-    for (argument = 0; argument < arguments; ++argument) {
-        int should_be_pointer = argument < pointer_arguments;
-
-        if (should_be_pointer !=
-                mir_match_ctype_pointer_type(
-                    function->proto_types[argument]) ||
-            (!should_be_pointer &&
-             (type_ptr_depth(function->proto_types[argument]) != 0 ||
-              type_size(function->proto_types[argument]) != 2)))
+    if (arguments == 1 && pointer_arguments == 0 &&
+        returns_pointer) {
+        if (type_ptr_depth(function->type) != 1 ||
+            (function->type & 15) != TYPE_VOID ||
+            !mir_match_ctype_integer_type(
+                function->proto_types[0]))
             return 0;
+    } else if (arguments == 2 && pointer_arguments == 2 &&
+               returns_pointer) {
+        if (!mir_match_ctype_char_pointer_type(function->type) ||
+            !mir_match_ctype_char_pointer_type(
+                function->proto_types[0]) ||
+            !mir_match_ctype_char_pointer_type(
+                function->proto_types[1]))
+            return 0;
+    } else if (arguments == 2 && pointer_arguments == 1 &&
+               returns_pointer) {
+        if (type_ptr_depth(function->type) != 1 ||
+            (function->type & 15) != TYPE_VOID ||
+            type_ptr_depth(function->proto_types[0]) != 1 ||
+            (function->proto_types[0] & 15) != TYPE_VOID ||
+            !mir_match_ctype_integer_type(
+                function->proto_types[1]))
+            return 0;
+    } else if (arguments == 1 && pointer_arguments == 1 &&
+               !returns_pointer) {
+        if (type_ptr_depth(function->type) != 0 ||
+            (function->type & 15) != TYPE_VOID ||
+            type_ptr_depth(function->proto_types[0]) != 1 ||
+            (function->proto_types[0] & 15) != TYPE_VOID)
+            return 0;
+    } else {
+        return 0;
     }
-    if (returns_pointer !=
-            mir_match_ctype_pointer_type(call->type))
-        return 0;
-    if (!returns_pointer && (call->type & 15) != TYPE_VOID)
-        return 0;
     if (*function_out != NULL && *function_out != function)
         return 0;
     *function_out = function;
@@ -1606,9 +1893,12 @@ static int mir_match_ctype_compare_call(
     if (!mir_match_ctype_call_target(call, function) ||
         function->proto_nargs != 2 ||
         function->proto_variadic ||
-        !mir_match_ctype_pointer_type(function->proto_types[0]) ||
-        !mir_match_ctype_pointer_type(function->proto_types[1]) ||
-        !mir_match_ctype_word_type(call->type))
+        !mir_match_ctype_word_type(function->type) ||
+        !mir_match_ctype_char_pointer_type(
+            function->proto_types[0]) ||
+        !mir_match_ctype_char_pointer_type(
+            function->proto_types[1]) ||
+        call->memory_flags != 0)
         return 0;
     *function_out = function;
     return 1;
@@ -1628,7 +1918,7 @@ static int mir_match_ctype_prefix_check(
     const struct MirInsn *string_arg;
     const struct MirInsn *check_call;
     int cursor = *instruction;
-    int value_argument;
+    int value_arguments[2];
     int check_arguments[2];
 
     if (plan->check_count >= MIR_MAX_CTYPE_CHECKS)
@@ -1653,26 +1943,25 @@ static int mir_match_ctype_prefix_check(
     string_arg = &mir.insns[cursor++];
     check_call = &mir.insns[cursor++];
     if (input->opcode != MIR_CONST ||
+        input->type != TYPE_INT ||
         value_arg->opcode != MIR_ARG ||
         value_call->opcode != MIR_CALL ||
         expected->opcode != MIR_CONST ||
+        expected->type != TYPE_INT ||
         comparison->opcode != MIR_BINARY ||
+        comparison->type != TYPE_INT ||
+        comparison->secondary_offset != TYPE_INT ||
         (comparison->immediate != TOK_EQ &&
          comparison->immediate != TOK_NE) ||
         check_arg->opcode != MIR_ARG ||
         string->opcode != MIR_STRING_ADDRESS ||
         string_arg->opcode != MIR_ARG ||
         check_call->opcode != MIR_CALL ||
-        !mir_machine_single_call_argument(
-            value_call, &value_argument) ||
-        value_argument != input->dst ||
+        value_arg->src1 != input->dst ||
         comparison->src1 != value_call->dst ||
         comparison->src2 != expected->dst ||
         check_arg->src1 != comparison->dst ||
-        !mir_machine_two_call_arguments(
-            check_call, check_arguments) ||
-        check_arguments[0] != comparison->dst ||
-        check_arguments[1] != string->dst)
+        string_arg->src1 != string->dst)
         return 0;
     check = &plan->checks[plan->check_count];
     if (!mir_match_ctype_constant(
@@ -1685,6 +1974,18 @@ static int mir_match_ctype_prefix_check(
             value_call, &check->value_function) ||
         !mir_match_ctype_check_call(
             check_call, &plan->check_function))
+        return 0;
+    value_arguments[0] = input->dst;
+    value_arguments[1] = -1;
+    check_arguments[0] = comparison->dst;
+    check_arguments[1] = string->dst;
+    if (!mir_match_ctype_call_arguments(
+            value_call, value_arg, NULL, 1,
+            value_arguments[0], -1, check->value_function) ||
+        !mir_match_ctype_call_arguments(
+            check_call, check_arg, string_arg, 2,
+            check_arguments[0], check_arguments[1],
+            plan->check_function))
         return 0;
     check->comparison = (int)comparison->immediate;
     ++plan->check_count;
@@ -6640,6 +6941,9 @@ static int mir_match_ctype_realloc_schedule(
         mir.count < 1 + 8 * 9 + 127 ||
         mir.insns[0].opcode != MIR_LABEL)
         return 0;
+    if (!mir_match_ctype_instruction_contract())
+        return mir_machine_reject(
+            "ctype-realloc-schedule", "instruction-contract");
     while (mir_match_ctype_prefix_check(plan, &instruction))
         ;
     if (plan->check_count < 8 ||
@@ -6680,7 +6984,10 @@ static int mir_match_ctype_realloc_schedule(
             tail[0].dst, &plan->allocation_size) ||
         !mir_match_ctype_pointer_call(
             &tail[3], 1, 0, 1,
-            &plan->allocate_function))
+            &plan->allocate_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[3], &tail[2], NULL, 1,
+            tail[0].dst, -1, plan->allocate_function))
         return mir_machine_reject(
             "ctype-realloc-schedule", "allocation");
     pointer_store = &tail[6];
@@ -6701,7 +7008,10 @@ static int mir_match_ctype_realloc_schedule(
             tail[10].dst,
             &plan->allocation_failure_string_id) ||
         !mir_match_ctype_print_call(
-            &tail[12], &first_print))
+            &tail[12], &first_print) ||
+        !mir_match_ctype_call_arguments(
+            &tail[12], &tail[11], NULL, 1,
+            tail[10].dst, -1, first_print))
         return mir_machine_reject(
             "ctype-realloc-schedule", "allocation-failure");
     plan->print_function = first_print;
@@ -6719,7 +7029,11 @@ static int mir_match_ctype_realloc_schedule(
             tail[19].dst, &plan->source_string_id) ||
         !mir_match_ctype_pointer_call(
             &tail[21], 2, 2, 1,
-            &plan->copy_function))
+            &plan->copy_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[21], &tail[18], &tail[20], 2,
+            tail[17].dst, tail[19].dst,
+            plan->copy_function))
         return mir_machine_reject(
             "ctype-realloc-schedule", "copy");
 
@@ -6754,7 +7068,11 @@ static int mir_match_ctype_realloc_schedule(
             tail[25].dst, &plan->grow_size) ||
         !mir_match_ctype_pointer_call(
             &tail[28], 2, 1, 1,
-            &plan->resize_function))
+            &plan->resize_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[28], &tail[24], &tail[27], 2,
+            tail[22].dst, tail[25].dst,
+            plan->resize_function))
         return mir_machine_reject(
             "ctype-realloc-schedule", "grow");
 
@@ -6773,7 +7091,10 @@ static int mir_match_ctype_realloc_schedule(
         !mir_match_ctype_string(
             tail[35].dst, &plan->grow_failure_string_id) ||
         !mir_match_ctype_print_call(
-            &tail[37], &plan->print_function))
+            &tail[37], &plan->print_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[37], &tail[36], NULL, 1,
+            tail[35].dst, -1, plan->print_function))
         return mir_machine_reject(
             "ctype-realloc-schedule", "grow-failure");
 
@@ -6801,6 +7122,10 @@ static int mir_match_ctype_realloc_schedule(
         argument != plan->source_string_id ||
         !mir_match_ctype_compare_call(
             &tail[46], &plan->compare_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[46], &tail[43], &tail[45], 2,
+            tail[42].dst, tail[44].dst,
+            plan->compare_function) ||
         !mir_machine_constant_equals(tail[47].dst, 0) ||
         !mir_machine_two_call_arguments(&tail[52], arguments) ||
         arguments[0] != tail[48].dst ||
@@ -6808,7 +7133,11 @@ static int mir_match_ctype_realloc_schedule(
         !mir_match_ctype_string(
             tail[50].dst, &plan->preserve_string_id) ||
         !mir_match_ctype_check_call(
-            &tail[52], &plan->check_function))
+            &tail[52], &plan->check_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[52], &tail[49], &tail[51], 2,
+            tail[48].dst, tail[50].dst,
+            plan->check_function))
         return mir_machine_reject(
             "ctype-realloc-schedule", "preserve");
 
@@ -6874,7 +7203,11 @@ static int mir_match_ctype_realloc_schedule(
             tail[68].dst, &plan->shrink_size) ||
         !mir_match_ctype_pointer_call(
             &tail[71], 2, 1, 1,
-            &plan->resize_function))
+            &plan->resize_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[71], &tail[67], &tail[70], 2,
+            tail[65].dst, tail[68].dst,
+            plan->resize_function))
         return mir_machine_reject(
             "ctype-realloc-schedule", "shrink");
 
@@ -6893,7 +7226,10 @@ static int mir_match_ctype_realloc_schedule(
         !mir_match_ctype_string(
             tail[78].dst, &plan->shrink_failure_string_id) ||
         !mir_match_ctype_print_call(
-            &tail[80], &plan->print_function))
+            &tail[80], &plan->print_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[80], &tail[79], NULL, 1,
+            tail[78].dst, -1, plan->print_function))
         return mir_machine_reject(
             "ctype-realloc-schedule", "shrink-failure");
 
@@ -6939,7 +7275,11 @@ static int mir_match_ctype_realloc_schedule(
                 items[8].dst,
                 &plan->byte_string_ids[byte]) ||
             !mir_match_ctype_check_call(
-                &items[10], &plan->check_function))
+                &items[10], &plan->check_function) ||
+            !mir_match_ctype_call_arguments(
+                &items[10], &items[7], &items[9], 2,
+                items[6].dst, items[8].dst,
+                plan->check_function))
             return mir_machine_reject(
                 "ctype-realloc-schedule", "byte-check");
         plan->byte_indices[byte] = (int)index;
@@ -6957,7 +7297,10 @@ static int mir_match_ctype_realloc_schedule(
         argument != tail[107].dst ||
         !mir_match_ctype_pointer_call(
             &tail[110], 1, 1, 0,
-            &plan->free_function))
+            &plan->free_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[110], &tail[109], NULL, 1,
+            tail[107].dst, -1, plan->free_function))
         return mir_machine_reject(
             "ctype-realloc-schedule", "free");
 
@@ -6988,6 +7331,10 @@ static int mir_match_ctype_realloc_schedule(
             &plan->final_failure_string_id) ||
         !mir_match_ctype_print_call(
             &tail[117], &plan->print_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[117], &tail[114], &tail[116], 2,
+            tail[113].dst, tail[115].dst,
+            plan->print_function) ||
         tail[118].opcode != MIR_CONST ||
         tail[119].opcode != MIR_RETURN ||
         tail[119].src1 != tail[118].dst ||
@@ -7004,6 +7351,9 @@ static int mir_match_ctype_realloc_schedule(
             tail[122].dst, &plan->success_string_id) ||
         !mir_match_ctype_print_call(
             &tail[124], &plan->print_function) ||
+        !mir_match_ctype_call_arguments(
+            &tail[124], &tail[123], NULL, 1,
+            tail[122].dst, -1, plan->print_function) ||
         tail[125].opcode != MIR_CONST ||
         tail[126].opcode != MIR_RETURN ||
         tail[126].src1 != tail[125].dst ||

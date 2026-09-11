@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 11) / 12 ))
+campaign_jobs=$(( (mutation_jobs + 12) / 13 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -206,6 +206,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-symbol-find-%8m.profraw" \
     --output-dir "$build_dir/symbol-find-wave21-audit" \
     >"$campaign_dir/symbol-find.log" 2>&1 &
 symbol_find_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-ctype-realloc-%8m.profraw" \
+    python3 scripts/ctype-realloc-wave21-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/ctype-realloc-wave21-audit" \
+    >"$campaign_dir/ctype-realloc.log" 2>&1 &
+ctype_realloc_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -219,7 +225,8 @@ for campaign in \
     "fortran-fatal:$fortran_fatal_pid" \
     "matrix-add:$matrix_add_pid" \
     "do-while:$do_while_pid" \
-    "symbol-find:$symbol_find_pid"
+    "symbol-find:$symbol_find_pid" \
+    "ctype-realloc:$ctype_realloc_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}

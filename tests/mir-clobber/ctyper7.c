@@ -390,7 +390,11 @@ static void crw7_release(void *pointer)
 
 static int crw7_exact(void)
 {
+#ifdef CRW21_VOLATILE_POINTER
+    volatile char *p;
+#else
     char *p;
+#endif
 
     crw7_check(crw7_alpha('A') != 0, "isalpha A");
     crw7_check(crw7_alpha('z') != 0, "isalpha z");
