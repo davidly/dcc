@@ -9789,6 +9789,9 @@ static int mir_minimax_byte_location(
     if (insn == NULL || insn->opcode != opcode ||
         insn->bit_width != 0 ||
         (insn->memory_flags & (1 | 8)) != 0 ||
+        (opcode == MIR_STORE && insn->memory_size != 1) ||
+        (opcode == MIR_LOAD &&
+         !mir_minimax_unsigned_byte_type(insn->type)) ||
         !mir_scalar_memory_location(
             insn, &memory_type, &memory_storage, &memory_offset) ||
         memory_storage != storage ||
@@ -10250,6 +10253,36 @@ static int mir_match_recursive_byte_minimax_schedule(
             return mir_machine_reject(
                 "recursive-byte-minimax-schedule",
                 "branch-dataflow");
+    {
+        static const int word_constants[] = {
+            10, 21, 26, 40, 52, 86, 90, 108,
+            125, 130, 132, 158, 186, 188, 214
+        };
+        static const int byte_constants[] = {
+            32, 36, 46, 58, 61, 67, 70, 75,
+            122, 146, 202, 246
+        };
+        int item;
+
+        for (item = 0;
+             item < (int)(sizeof(word_constants) /
+                          sizeof(word_constants[0]));
+             ++item)
+            if (!mir_minimax_signed_word_type(
+                    mir.insns[word_constants[item]].type))
+                return mir_machine_reject(
+                    "recursive-byte-minimax-schedule",
+                    "constant-types");
+        for (item = 0;
+             item < (int)(sizeof(byte_constants) /
+                          sizeof(byte_constants[0]));
+             ++item)
+            if (!mir_minimax_unsigned_byte_type(
+                    mir.insns[byte_constants[item]].type))
+                return mir_machine_reject(
+                    "recursive-byte-minimax-schedule",
+                    "constant-types");
+    }
 
     if (!mir_minimax_byte_location(
             alpha, MIR_PARAM, SC_PARAM,
@@ -10364,6 +10397,8 @@ static int mir_match_recursive_byte_minimax_schedule(
             mir.insns[36].dst, plan->score_lose) ||
         !mir_machine_constant_equals(
             mir.insns[202].dst, plan->score_lose) ||
+        mir.insns[132].immediate != plan->score_win ||
+        mir.insns[188].immediate != plan->score_lose ||
         !mir_machine_constant_equals(
             mir.insns[46].dst, plan->score_tie) ||
         !mir_machine_constant_equals(
@@ -10481,6 +10516,7 @@ static int mir_match_recursive_byte_minimax_schedule(
             "recursive-byte-minimax-schedule",
             "winner-arguments");
     if (
+        mir.insns[20].src1 != mir.insns[18].dst ||
         !mir_minimax_word_unary(23, 18) ||
         !mir_minimax_word_binary(24, 21, 23, TOK_NE) ||
         !mir_minimax_word_unary(28, 18) ||
@@ -10533,6 +10569,9 @@ static int mir_match_recursive_byte_minimax_schedule(
             &mir.insns[71], MIR_STORE, SC_LOCAL,
             piece_object, piece_location) ||
         mir.insns[76].src1 != mir.insns[75].dst ||
+        !mir_minimax_same_byte_location(
+            &mir.insns[20], MIR_STORE, SC_LOCAL,
+            index_object, index_location) ||
         !mir_minimax_same_byte_location(
             &mir.insns[248], MIR_STORE, SC_LOCAL,
             index_object, index_location))

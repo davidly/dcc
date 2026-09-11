@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 29) / 30 ))
+campaign_jobs=$(( (mutation_jobs + 30) / 31 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -325,6 +325,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-cast-logical-%8m.profraw" \
     --jobs "$campaign_jobs" --skip-runtime \
     >"$campaign_dir/cast-logical.log" 2>&1 &
 cast_logical_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-minimax-%8m.profraw" \
+    python3 scripts/minimax-wave26-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/minimax-wave26-audit" \
+    >"$campaign_dir/minimax.log" 2>&1 &
+minimax_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -357,7 +363,8 @@ for campaign in \
     "for-increment:$for_increment_pid" \
     "affine-fill:$affine_fill_pid" \
     "pointer-condition:$pointer_condition_pid" \
-    "cast-logical:$cast_logical_pid"
+    "cast-logical:$cast_logical_pid" \
+    "minimax:$minimax_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}

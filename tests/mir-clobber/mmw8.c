@@ -1,10 +1,17 @@
 #include <stdio.h>
+#include <stdint.h>
 
 unsigned char minimax_wave8_guard_before = 0x5a;
 
+#ifdef MMW26_SIGNED_BYTE
+#define uint8_t int8_t
+#endif
 #define main minimax_wave8_original_main
 #include "../ttt.c"
 #undef main
+#ifdef MMW26_SIGNED_BYTE
+#undef uint8_t
+#endif
 
 unsigned char minimax_wave8_guard_after = 0xa5;
 
