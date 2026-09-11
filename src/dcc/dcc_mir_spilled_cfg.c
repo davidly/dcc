@@ -31215,6 +31215,10 @@ static int mir_spilled_dimensions_valid(void)
         mir.object_count < 0 ||
         mir.object_count >
             (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 ||
+        mir.declared_count >
+            (int)(sizeof(mir.declared_names) /
+                  sizeof(mir.declared_names[0])) ||
         (mir.count > 0 && mir.insns == NULL) ||
         mir.next_value > mir.count ||
         mir.next_label > mir.count ||
@@ -31250,6 +31254,18 @@ static int mir_spilled_text_metadata_valid(int *invalid_instruction)
     for (instruction = 0; instruction < mir.object_count; ++instruction)
         if (memchr(mir.objects[instruction].name, '\0',
                    sizeof(mir.objects[instruction].name)) == NULL) {
+            if (invalid_instruction != NULL)
+                *invalid_instruction = instruction;
+            return 0;
+        }
+    for (instruction = 0; instruction < mir.declared_count; ++instruction)
+        if (memchr(mir.declared_names[instruction], '\0',
+                   sizeof(mir.declared_names[instruction])) == NULL ||
+            memchr(mir.declared_link_names[instruction], '\0',
+                   sizeof(mir.declared_link_names[instruction])) == NULL ||
+            memchr(mir.declared_runtime_stride_names[instruction], '\0',
+                   sizeof(mir.declared_runtime_stride_names[instruction])) ==
+                NULL) {
             if (invalid_instruction != NULL)
                 *invalid_instruction = instruction;
             return 0;
@@ -31551,7 +31567,8 @@ static int mir_spilled_structure_valid(int *invalid_instruction)
             break;
         }
         memset(&prototype, 0, sizeof(prototype));
-        if (call->opcode == MIR_CALL)
+        if (call->opcode == MIR_CALL ||
+            call->opcode == MIR_CALL_AGGREGATE)
             mir_spilled_resolve_call_prototype(
                 call, instruction, &prototype);
         if (prototype.has_proto &&
@@ -31568,7 +31585,8 @@ static int mir_spilled_structure_valid(int *invalid_instruction)
                 argument->secondary_offset != call->secondary_offset)
                 continue;
             definition = &mir.insns[definitions[argument->src1]];
-            if ((call->opcode == MIR_CALL &&
+            if (((call->opcode == MIR_CALL ||
+                  call->opcode == MIR_CALL_AGGREGATE) &&
                  !type_is_struct_object(argument->type) &&
                  !mir_spilled_argument_source_type_valid(
                      definition->type, argument->type)) ||

@@ -2210,6 +2210,37 @@ static void expect_spilled_candidate(const char *name, int expected)
     }
 }
 
+static void expect_spilled_candidate_transaction_rejection(
+    const char *name,
+    int expected_label)
+{
+    MirStream *stream;
+    int result;
+
+    mir_invalidate_use_cache();
+    prepare_test_cfg_metadata();
+    stream = mir_stream_open();
+    if (stream == NULL) {
+        fprintf(stderr, "FAIL spilled preflight %s stream allocation\n", name);
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    label_id = expected_label;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(stream);
+    if (result != 0 ||
+        mir_stream_tell(stream) != 0 ||
+        mir_stream_size(stream) != 0 ||
+        label_id != expected_label ||
+        mir_spilled_cfg_emitted_frame_bytes() != 0) {
+        fprintf(stderr, "FAIL spilled preflight %s transaction\n", name);
+        ++failures;
+    }
+    mir_stream_close(stream);
+    clear_liveness();
+}
+
 static void verify_homed_parameter_preflight_transaction(void)
 {
     MirStream *control;
@@ -4870,6 +4901,128 @@ static void verify_spilled_structural_preflight(void)
     clear_liveness();
 }
 
+static void verify_spilled_declared_metadata_preflight(void)
+{
+    int control_label;
+
+    setup(3, 1, 1);
+    expect_spilled_candidate("declared metadata control", 1);
+    control_label = label_id;
+
+    mir.declared_count = -1;
+    expect_spilled_candidate_transaction_rejection(
+        "negative declared count",
+        control_label);
+    mir.declared_count = MAX_LOCALS + 1;
+    expect_spilled_candidate_transaction_rejection(
+        "oversized declared count",
+        control_label);
+    mir.declared_count = INT_MAX;
+    expect_spilled_candidate_transaction_rejection(
+        "extreme declared count",
+        control_label);
+    mir.declared_count = 1;
+    memset(mir.declared_names[0], 'n', sizeof(mir.declared_names[0]));
+    expect_spilled_candidate_transaction_rejection(
+        "unterminated declared name",
+        control_label);
+    memset(mir.declared_names[0], 0, sizeof(mir.declared_names[0]));
+    memset(mir.declared_link_names[0],
+           'l',
+           sizeof(mir.declared_link_names[0]));
+    expect_spilled_candidate_transaction_rejection(
+        "unterminated declared link name",
+        control_label);
+    memset(mir.declared_link_names[0],
+           0,
+           sizeof(mir.declared_link_names[0]));
+    memset(mir.declared_runtime_stride_names[0],
+           'r',
+           sizeof(mir.declared_runtime_stride_names[0]));
+    expect_spilled_candidate_transaction_rejection(
+        "unterminated declared runtime stride name",
+        control_label);
+
+    setup(3, 1, 1);
+    expect_spilled_candidate("declared metadata valid retry", 1);
+}
+
+static void verify_spilled_aggregate_call_preflight(void)
+{
+    struct Sym *callee;
+    int control_label;
+    int struct_id;
+    int struct_type;
+
+    struct_id = add_struct_def("verify_spilled_aggregate_argument");
+    struct_defs[struct_id - 1].size = 4;
+    struct_type = make_struct_type(struct_id);
+    callee = add_global("spilled_aggregate_target", struct_type, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 2;
+    callee->proto_types[0] = struct_type;
+    callee->proto_types[1] = TYPE_INT;
+
+    setup(7, 3, 1);
+    mir.return_type = TYPE_VOID;
+    mir.local_bytes = 4;
+    mir.aggregate_temp_bytes = 4;
+    mir.object_count = 1;
+    mir.objects[0].type = struct_type;
+    mir.objects[0].storage = SC_LOCAL;
+    mir.objects[0].offset = -4;
+    strcpy(mir.objects[0].name, "aggregate_argument");
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].dst = 0;
+    mir.insns[1].type = type_add_ptr(struct_type);
+    mir.insns[1].object = 0;
+    strcpy(mir.insns[1].name, mir.objects[0].name);
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = struct_type;
+    mir.insns[3].opcode = MIR_CONST;
+    mir.insns[3].dst = 1;
+    mir.insns[3].type = TYPE_INT;
+    mir.insns[3].immediate = 7;
+    mir.insns[4].opcode = MIR_ARG;
+    mir.insns[4].src1 = 1;
+    mir.insns[4].type = TYPE_INT;
+    mir.insns[4].immediate = 1;
+    mir.insns[5].opcode = MIR_CALL_AGGREGATE;
+    mir.insns[5].dst = 2;
+    mir.insns[5].type = type_add_ptr(struct_type);
+    mir.insns[5].immediate = -8;
+    mir.insns[5].memory_size = 4;
+    strcpy(mir.insns[5].name, callee->name);
+    mir.insns[6].src1 = -1;
+    mir.next_call_id = 1;
+    expect_spilled_candidate("aggregate direct call control", 1);
+    control_label = label_id;
+
+    mir.insns[4].opcode = MIR_NOP;
+    mir.insns[4].src1 = -1;
+    expect_spilled_candidate_transaction_rejection(
+        "aggregate call missing argument",
+        control_label);
+    mir.insns[4].opcode = MIR_ARG;
+    mir.insns[4].src1 = 1;
+    mir.insns[3].type = TYPE_LONG;
+    mir.insns[4].type = TYPE_LONG;
+    expect_spilled_candidate_transaction_rejection(
+        "aggregate fixed parameter type mismatch",
+        control_label);
+    mir.insns[4].type = TYPE_INT;
+    expect_spilled_candidate_transaction_rejection(
+        "aggregate int argument rejects long source",
+        control_label);
+    mir.insns[3].type = TYPE_FLOAT;
+    expect_spilled_candidate_transaction_rejection(
+        "aggregate int argument rejects float source",
+        control_label);
+    mir.insns[3].type = TYPE_INT;
+    expect_spilled_candidate("aggregate direct call valid retry", 1);
+}
+
 static void verify_spilled_vla_size_preflight_transaction(void)
 {
     MirStream *control;
@@ -5375,6 +5528,8 @@ int main(void)
     verify_spilled_cfg_metadata_preflight_transaction();
     verify_spilled_dimension_preflight_transaction();
     verify_spilled_structural_preflight();
+    verify_spilled_declared_metadata_preflight();
+    verify_spilled_aggregate_call_preflight();
     verify_spilled_vla_size_preflight_transaction();
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
