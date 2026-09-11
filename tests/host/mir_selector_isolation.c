@@ -569,6 +569,10 @@ static void setup_comparison_branch(int right_offset)
     strcpy(mir.declared_names[1], "right");
     mir.declared_types[0] = TYPE_INT;
     mir.declared_types[1] = TYPE_INT;
+    mir.declared_storage[0] = SC_PARAM;
+    mir.declared_storage[1] = SC_PARAM;
+    mir.declared_offsets[0] = -128;
+    mir.declared_offsets[1] = right_offset;
     mir.declared_is_volatile[0] = 0;
     mir.declared_is_volatile[1] = 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -616,8 +620,10 @@ static void setup_comparison_branch(int right_offset)
     mir.insns[8].immediate = 22;
     mir.insns[9].opcode = MIR_RETURN;
     mir.insns[9].src1 = 4;
-    mir.allocation_colors[5] = MIR_COLOR_HL;
-    mir.allocation_spills[5] = -1;
+    for (instruction = 0; instruction < mir.next_value; ++instruction) {
+        mir.allocation_colors[instruction] = MIR_COLOR_HL;
+        mir.allocation_spills[instruction] = -1;
+    }
 }
 
 static int verify_comparison_offset_isolation(void)
@@ -728,6 +734,13 @@ static const char *comparison_mutation_name(int mutation)
     };
 
     return names[mutation];
+}
+
+static int comparison_mutation_is_structurally_invalid(int mutation)
+{
+    /* These reorderings place an operand use before its SSA definition. */
+    return mutation == COMPARISON_LATE_COMPARE ||
+           mutation == COMPARISON_LATE_PARAMETER;
 }
 
 static void mutate_comparison_branch(int mutation)
@@ -869,6 +882,8 @@ static int comparison_control_uses_specialized(int type, int operation)
     setup_comparison_branch(6);
     set_comparison_operand_type(type);
     mir.insns[3].immediate = operation;
+    if (!mir_verify_and_dump())
+        fatal("valid comparison generic fixture did not verify");
     accepted = emit_comparison_general(fallback);
     fallback_label_after = label_id;
     fallback_bytes = read_stream(
@@ -880,6 +895,8 @@ static int comparison_control_uses_specialized(int type, int operation)
     setup_comparison_branch(6);
     set_comparison_operand_type(type);
     mir.insns[3].immediate = operation;
+    if (!mir_verify_and_dump())
+        fatal("valid comparison specialized fixture did not verify");
     accepted = mir_try_emit_z80(specialized);
     specialized_label_after = label_id;
     specialized_bytes = read_stream(
@@ -906,6 +923,20 @@ static void setup_truthiness_branch(int type)
     mir.object_count = 1;
     mir.return_type = TYPE_INT;
     mir.declared_count = 1;
+    if (mir.allocation_capacity < mir.next_value) {
+        int *colors = (int *)realloc(
+            mir.allocation_colors,
+            (size_t)mir.next_value * sizeof(*colors));
+        int *spills = (int *)realloc(
+            mir.allocation_spills,
+            (size_t)mir.next_value * sizeof(*spills));
+
+        if (colors == NULL || spills == NULL)
+            fatal("cannot allocate truthiness selector homes");
+        mir.allocation_colors = colors;
+        mir.allocation_spills = spills;
+        mir.allocation_capacity = mir.next_value;
+    }
     memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
     strcpy(mir.objects[0].name, "value");
     mir.objects[0].storage = SC_PARAM;
@@ -913,6 +944,8 @@ static void setup_truthiness_branch(int type)
     mir.objects[0].offset = -128;
     strcpy(mir.declared_names[0], "value");
     mir.declared_types[0] = type;
+    mir.declared_storage[0] = SC_PARAM;
+    mir.declared_offsets[0] = -128;
     mir.declared_is_volatile[0] = 0;
     for (instruction = 0; instruction < mir.count; ++instruction)
         initialize_selector_instruction(&mir.insns[instruction]);
@@ -938,9 +971,13 @@ static void setup_truthiness_branch(int type)
     mir.insns[6].immediate = 22;
     mir.insns[7].opcode = MIR_RETURN;
     mir.insns[7].src1 = 2;
+    for (instruction = 0; instruction < mir.next_value; ++instruction) {
+        mir.allocation_colors[instruction] = MIR_COLOR_HL;
+        mir.allocation_spills[instruction] = -1;
+    }
 }
 
-static int truth_control_uses_specialized(int type)
+static int truth_control_uses_expected_candidate(int type)
 {
     MirStream *fallback = mir_stream_open();
     MirStream *specialized = mir_stream_open();
@@ -957,6 +994,8 @@ static int truth_control_uses_specialized(int type)
         fatal("cannot create truthiness control streams");
     label_id = 171;
     setup_truthiness_branch(type);
+    if (!mir_verify_and_dump())
+        fatal("valid truthiness generic fixture did not verify");
     accepted = emit_comparison_general(fallback);
     fallback_label_after = label_id;
     fallback_bytes = read_stream(
@@ -966,15 +1005,26 @@ static int truth_control_uses_specialized(int type)
 
     label_id = 171;
     setup_truthiness_branch(type);
+    if (!mir_verify_and_dump())
+        fatal("valid truthiness specialized fixture did not verify");
     accepted = mir_try_emit_z80(specialized);
     specialized_label_after = label_id;
     specialized_bytes = read_stream(
         specialized, specialized_text, sizeof(specialized_text));
     clear_selector_liveness();
-    ok = ok && accepted != 0 &&
-         (specialized_label_after != fallback_label_after ||
-          specialized_bytes != fallback_bytes ||
-          memcmp(specialized_text, fallback_text, fallback_bytes));
+    ok = ok && accepted != 0;
+    if (type_ptr_depth(type) > 0) {
+        /* Verification converts a single-use pointer parameter to a named
+         * load, so this valid form intentionally takes the generic path. */
+        ok = ok && specialized_label_after == fallback_label_after &&
+             specialized_bytes == fallback_bytes &&
+             !memcmp(specialized_text, fallback_text, fallback_bytes);
+    } else {
+        ok = ok &&
+             (specialized_label_after != fallback_label_after ||
+              specialized_bytes != fallback_bytes ||
+              memcmp(specialized_text, fallback_text, fallback_bytes));
+    }
     mir_stream_close(specialized);
     mir_stream_close(fallback);
     return ok;
@@ -1012,7 +1062,7 @@ static int verify_comparison_valid_controls(void)
     for (item = 0;
          item < (int)(sizeof(truth_types) / sizeof(truth_types[0]));
          ++item)
-        if (!truth_control_uses_specialized(truth_types[item])) {
+        if (!truth_control_uses_expected_candidate(truth_types[item])) {
             fprintf(stderr, "truthiness control rejected type=%d\n",
                     truth_types[item]);
             ok = 0;
@@ -1103,6 +1153,8 @@ static int verify_truth_mutation_isolation(void)
         label_id = 181;
         setup_truthiness_branch(TYPE_INT);
         mutate_truthiness_branch(mutation);
+        if (!mir_verify_and_dump())
+            fatal("valid truthiness mutation fixture did not verify");
         accepted = emit_comparison_general(fallback);
         fallback_label_after = label_id;
         fallback_bytes = read_stream(
@@ -1121,6 +1173,8 @@ static int verify_truth_mutation_isolation(void)
         mir_stream_puts("prefix\n", retry);
         setup_truthiness_branch(TYPE_INT);
         mutate_truthiness_branch(mutation);
+        if (!mir_verify_and_dump())
+            fatal("valid truthiness retry fixture did not verify");
         accepted = mir_try_emit_z80(retry);
         retry_bytes = read_stream(retry, retry_text, sizeof(retry_text));
         clear_selector_liveness();
@@ -1146,9 +1200,28 @@ static int verify_truth_mutation_isolation(void)
 
 static int verify_comparison_mutation_isolation(void)
 {
+    MirStream *control = mir_stream_open();
+    char control_text[4096];
+    size_t control_bytes;
+    int control_label_after;
     int mutation;
     int survivors = 0;
-    int ok = 1;
+    int accepted;
+    int ok = control != NULL;
+
+    if (!ok)
+        fatal("cannot create comparison mutation control stream");
+    label_id = 131;
+    setup_comparison_branch(6);
+    if (!mir_verify_and_dump())
+        fatal("valid comparison mutation control did not verify");
+    accepted = mir_try_emit_z80(control);
+    control_label_after = label_id;
+    control_bytes = read_stream(
+        control, control_text, sizeof(control_text));
+    clear_selector_liveness();
+    if (!accepted)
+        fatal("valid comparison mutation control was rejected");
 
     for (mutation = 0; mutation < COMPARISON_MUTATION_COUNT; ++mutation) {
         MirStream *fallback = mir_stream_open();
@@ -1164,7 +1237,40 @@ static int verify_comparison_mutation_isolation(void)
             fatal("cannot create comparison mutation streams");
         label_id = 131;
         setup_comparison_branch(6);
+        if (comparison_mutation_is_structurally_invalid(mutation)) {
+            if (!mir_verify_and_dump())
+                fatal("valid comparison corruption base did not verify");
+            mutate_comparison_branch(mutation);
+            mir_stream_puts("prefix\n", retry);
+            accepted = mir_try_emit_z80(retry);
+            if (accepted != 0 ||
+                mir_stream_size(retry) != 7 || label_id != 131) {
+                ++survivors;
+                fprintf(stderr, "SURVIVED comparison %s\n",
+                        comparison_mutation_name(mutation));
+            }
+            clear_selector_liveness();
+
+            setup_comparison_branch(6);
+            if (!mir_verify_and_dump())
+                fatal("valid comparison transaction retry did not verify");
+            accepted = mir_try_emit_z80(retry);
+            retry_bytes = read_stream(
+                retry, retry_text, sizeof(retry_text));
+            ok = ok && accepted == 1 &&
+                 label_id == control_label_after &&
+                 retry_bytes == control_bytes + 7 &&
+                 !memcmp(retry_text, "prefix\n", 7) &&
+                 !memcmp(
+                     retry_text + 7, control_text, control_bytes);
+            clear_selector_liveness();
+            mir_stream_close(retry);
+            mir_stream_close(fallback);
+            continue;
+        }
         mutate_comparison_branch(mutation);
+        if (!mir_verify_and_dump())
+            fatal("valid comparison mutation fixture did not verify");
         accepted = emit_comparison_general(fallback);
         fallback_label_after = label_id;
         fallback_bytes = read_stream(
@@ -1183,6 +1289,8 @@ static int verify_comparison_mutation_isolation(void)
         mir_stream_puts("prefix\n", retry);
         setup_comparison_branch(6);
         mutate_comparison_branch(mutation);
+        if (!mir_verify_and_dump())
+            fatal("valid comparison retry fixture did not verify");
         accepted = mir_try_emit_z80(retry);
         retry_bytes = read_stream(retry, retry_text, sizeof(retry_text));
         clear_selector_liveness();
@@ -1203,6 +1311,7 @@ static int verify_comparison_mutation_isolation(void)
     }
     fprintf(stderr, "comparison mutation survivors=%d/%d\n",
             survivors, COMPARISON_MUTATION_COUNT);
+    mir_stream_close(control);
     return ok && survivors == 0;
 }
 
