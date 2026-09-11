@@ -564,6 +564,7 @@ $caseDefinitions = @(
         Exit = 0
         ExactTemplate = "float-comparison-report"
         ExactFunction = "compare_float"
+        DebugModes = @("true", "lines")
     },
     [pscustomobject]@{
         Name = "regbyte"

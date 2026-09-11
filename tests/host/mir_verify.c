@@ -4950,7 +4950,14 @@ static void verify_spilled_declared_metadata_preflight(void)
 static void verify_spilled_widened_call_argument_preflight(void)
 {
     struct Sym *callee;
+    MirStream *control;
+    MirStream *retry;
+    char control_text[4096];
+    char retry_text[4096];
+    size_t control_bytes;
+    size_t retry_bytes;
     int control_label;
+    int result;
 
     callee = add_global("verify_spilled_widened_arg", TYPE_INT, SC_FUNC);
     callee->has_proto = 1;
@@ -4982,6 +4989,76 @@ static void verify_spilled_widened_call_argument_preflight(void)
     mir.insns[2].type = TYPE_LONG;
     callee->proto_types[0] = TYPE_LONG;
     expect_spilled_candidate("narrow source widened call argument retry", 1);
+
+    callee->proto_types[0] = TYPE_BOOL;
+    setup(5, 2, 1);
+    mir.insns[1].type = 0;
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_BOOL;
+    mir.insns[3].opcode = MIR_CALL;
+    mir.insns[3].dst = 1;
+    strcpy(mir.insns[3].name, callee->name);
+    mir.insns[4].src1 = 1;
+    mir.next_call_id = 1;
+    prepare_test_cfg_metadata();
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr,
+                "FAIL spilled implicit-word argument stream allocation\n");
+        ++failures;
+        mir_stream_close(control);
+        mir_stream_close(retry);
+        clear_liveness();
+        return;
+    }
+    control_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    if (result != 1 || mir_stream_size(control) == 0) {
+        fprintf(stderr,
+                "FAIL spilled implicit-word boolean argument control\n");
+        ++failures;
+    }
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+
+    mir.insns[1].type = TYPE_LONG;
+    label_id = control_label;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    if (result != 0 ||
+        mir_stream_tell(retry) != 0 ||
+        mir_stream_size(retry) != 0 ||
+        label_id != control_label ||
+        mir_spilled_cfg_emitted_frame_bytes() != 0) {
+        fprintf(stderr,
+                "FAIL spilled wide boolean argument transaction\n");
+        ++failures;
+    }
+
+    mir.insns[1].type = 0;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    mir_stream_rewind(retry);
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    if (result != 1 ||
+        control_bytes >= sizeof(control_text) ||
+        retry_bytes >= sizeof(retry_text) ||
+        retry_bytes != control_bytes ||
+        memcmp(retry_text, control_text, control_bytes) != 0) {
+        fprintf(stderr,
+                "FAIL spilled implicit-word boolean argument retry\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    mir_stream_close(retry);
+    clear_liveness();
 }
 
 static void verify_spilled_aggregate_call_preflight(void)

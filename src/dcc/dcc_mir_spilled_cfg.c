@@ -31442,8 +31442,18 @@ static int mir_spilled_argument_source_type_valid(
         return 0;
     source_size = type_size(source_type);
     argument_size = type_size(argument_type);
+    /*
+     * The stack ABI gives every non-wide scalar a two-byte argument slot.
+     * Loading a byte definition extends it into HL, while passing a word to
+     * a byte parameter leaves the required low byte in the same slot. This
+     * also covers type-less logical PHIs, whose implicit scalar width is a
+     * word even when their MIR_ARG retains TYPE_BOOL.
+     */
+    if (source_size > 0 && source_size <= 2 &&
+        argument_size > 0 && argument_size <= 2)
+        return 1;
     if (source_size == argument_size)
-        return source_size == 2 || source_size == 4;
+        return source_size == 4;
     /*
      * Full debug metadata can keep a narrow defining value while folding its
      * integer widening conversion into MIR_ARG. The generic call emitter
