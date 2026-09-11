@@ -2454,47 +2454,348 @@ static int mir_file_io_function_types(
     const struct MirFileIoRunner *plan)
 {
     return
-        mir_abort_runner_pointer_type(
-            plan->open_function->type, TYPE_INT) &&
-        mir_abort_runner_pointer_type(
-            plan->open_function->proto_types[0], TYPE_CHAR) &&
-        mir_abort_runner_pointer_type(
-            plan->open_function->proto_types[1], TYPE_CHAR) &&
-        mir_abort_runner_pointer_type(
-            plan->reopen_function->type, TYPE_INT) &&
-        mir_abort_runner_pointer_type(
-            plan->reopen_function->proto_types[0], TYPE_CHAR) &&
-        mir_abort_runner_pointer_type(
-            plan->reopen_function->proto_types[1], TYPE_CHAR) &&
-        mir_abort_runner_pointer_type(
-            plan->reopen_function->proto_types[2], TYPE_INT) &&
-        mir_abort_runner_word_type(plan->close_function->type) &&
-        mir_abort_runner_pointer_type(
-            plan->close_function->proto_types[0], TYPE_INT) &&
-        mir_abort_runner_word_type(plan->remove_function->type) &&
-        mir_abort_runner_pointer_type(
-            plan->remove_function->proto_types[0], TYPE_CHAR) &&
-        mir_abort_runner_pointer_type(
-            plan->read_function->type, TYPE_CHAR) &&
-        mir_abort_runner_pointer_type(
-            plan->read_function->proto_types[0], TYPE_CHAR) &&
-        mir_abort_runner_word_type(
-            plan->read_function->proto_types[1]) &&
-        mir_abort_runner_pointer_type(
-            plan->read_function->proto_types[2], TYPE_INT) &&
-        mir_abort_runner_word_type(plan->write_function->type) &&
-        mir_abort_runner_pointer_type(
-            plan->write_function->proto_types[0], TYPE_CHAR) &&
-        mir_abort_runner_pointer_type(
-            plan->write_function->proto_types[1], TYPE_INT) &&
-        mir_abort_runner_word_type(plan->compare_function->type) &&
-        mir_abort_runner_pointer_type(
-            plan->compare_function->proto_types[0], TYPE_CHAR) &&
-        mir_abort_runner_pointer_type(
-            plan->compare_function->proto_types[1], TYPE_CHAR) &&
-        mir_abort_runner_word_type(plan->print_function->type) &&
-        mir_abort_runner_pointer_type(
-            plan->print_function->proto_types[0], TYPE_CHAR);
+        plan->open_function->type == (TYPE_INT | TYPE_PTR) &&
+        plan->open_function->proto_types[0] ==
+            (TYPE_CHAR | TYPE_PTR) &&
+        plan->open_function->proto_types[1] ==
+            (TYPE_CHAR | TYPE_PTR) &&
+        plan->reopen_function->type == (TYPE_INT | TYPE_PTR) &&
+        plan->reopen_function->proto_types[0] ==
+            (TYPE_CHAR | TYPE_PTR) &&
+        plan->reopen_function->proto_types[1] ==
+            (TYPE_CHAR | TYPE_PTR) &&
+        plan->reopen_function->proto_types[2] ==
+            (TYPE_INT | TYPE_PTR) &&
+        plan->close_function->type == TYPE_INT &&
+        plan->close_function->proto_types[0] ==
+            (TYPE_INT | TYPE_PTR) &&
+        plan->remove_function->type == TYPE_INT &&
+        plan->remove_function->proto_types[0] ==
+            (TYPE_CHAR | TYPE_PTR) &&
+        plan->read_function->type == (TYPE_CHAR | TYPE_PTR) &&
+        plan->read_function->proto_types[0] ==
+            (TYPE_CHAR | TYPE_PTR) &&
+        plan->read_function->proto_types[1] == TYPE_INT &&
+        plan->read_function->proto_types[2] ==
+            (TYPE_INT | TYPE_PTR) &&
+        plan->write_function->type == TYPE_INT &&
+        plan->write_function->proto_types[0] ==
+            (TYPE_CHAR | TYPE_PTR) &&
+        plan->write_function->proto_types[1] ==
+            (TYPE_INT | TYPE_PTR) &&
+        plan->compare_function->type == TYPE_INT &&
+        plan->compare_function->proto_types[0] ==
+            (TYPE_CHAR | TYPE_PTR) &&
+        plan->compare_function->proto_types[1] ==
+            (TYPE_CHAR | TYPE_PTR) &&
+        plan->print_function->type == TYPE_INT &&
+        plan->print_function->proto_types[0] ==
+            (TYPE_CHAR | TYPE_PTR);
+}
+
+static int mir_file_io_value_type(int value)
+{
+    int definition;
+
+    for (definition = 0; definition < mir.count; ++definition)
+        if (mir.insns[definition].dst == value)
+            return mir.insns[definition].type;
+    return -1;
+}
+
+static int mir_file_io_expected_type(int instruction)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+
+    switch (insn->opcode) {
+    case MIR_STRING_ADDRESS:
+    case MIR_ADDRESS:
+    case MIR_INDEX_ADDRESS:
+        return TYPE_CHAR | TYPE_PTR;
+    case MIR_LOAD:
+        return TYPE_INT | TYPE_PTR;
+    case MIR_LOAD_INDIRECT:
+        return TYPE_CHAR;
+    case MIR_UNARY:
+    case MIR_BINARY:
+        return TYPE_INT;
+    case MIR_CONST:
+        if (instruction == 137 || instruction == 244)
+            return TYPE_CHAR;
+        if (instruction == 103 || instruction == 106 ||
+            instruction == 119 || instruction == 122 ||
+            instruction == 210 || instruction == 213 ||
+            instruction == 226 || instruction == 229)
+            return 0;
+        return TYPE_INT;
+    case MIR_PHI:
+        if (instruction == 88 || instruction == 195)
+            return TYPE_INT;
+        return 0;
+    case MIR_ARG:
+    case MIR_STORE:
+        return mir_file_io_value_type(insn->src1);
+    case MIR_STORE_INDIRECT:
+        return mir_file_io_value_type(insn->src2);
+    case MIR_CALL:
+        return insn->type;
+    case MIR_NOP:
+        return insn->type;
+    default:
+        return 0;
+    }
+}
+
+static int mir_file_io_metadata_reject(
+    int instruction, const char *reason)
+{
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s "
+                "template=file-io-runner metadata=%d:%s\n",
+                mir.name, instruction, reason);
+    return 0;
+}
+
+static int mir_file_io_instruction_metadata(void)
+{
+    unsigned char labels[49];
+    int instruction;
+    int label_count = 0;
+
+    memset(labels, 0, sizeof(labels));
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected_memory_size = 0;
+
+        if (insn->opcode == MIR_NOP)
+            continue;
+        if (insn->type !=
+                mir_file_io_expected_type(instruction) ||
+            insn->pointee_volatile_mask != 0 ||
+            insn->has_pointer_qualifiers ||
+            insn->bit_width != 0 ||
+            insn->bit_shift != 0 ||
+            insn->bit_mask != 0 ||
+            insn->inline_temp_id != 0 ||
+            insn->divmod_cast_types != 0)
+            return mir_file_io_metadata_reject(
+                instruction, "type-or-qualifier");
+        if (insn->opcode == MIR_STORE)
+            expected_memory_size = 2;
+        else if (insn->opcode == MIR_INDEX_ADDRESS ||
+                 insn->opcode == MIR_LOAD_INDIRECT ||
+                 insn->opcode == MIR_STORE_INDIRECT)
+            expected_memory_size = 1;
+        if (insn->memory_size != expected_memory_size)
+            return mir_file_io_metadata_reject(
+                instruction, "memory-size");
+        if (insn->opcode != MIR_CALL &&
+            insn->memory_flags != 0)
+            return mir_file_io_metadata_reject(
+                instruction, "memory-flags");
+
+        switch (insn->opcode) {
+        case MIR_LABEL:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 ||
+                insn->secondary_offset != 0 ||
+                insn->label < 0 || insn->label >= mir.next_label ||
+                labels[insn->label])
+                return mir_file_io_metadata_reject(
+                    instruction, "label");
+            labels[insn->label] = 1;
+            ++label_count;
+            break;
+        case MIR_STRING_ADDRESS:
+        case MIR_ADDRESS:
+        case MIR_LOAD:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->secondary_offset != 0 ||
+                insn->label != -1)
+                return mir_file_io_metadata_reject(
+                    instruction, "address-or-load");
+            break;
+        case MIR_ARG:
+            if (insn->src1 < 0 || insn->src2 != -1 ||
+                insn->label != -1 ||
+                insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id)
+                return mir_file_io_metadata_reject(
+                    instruction, "argument");
+            break;
+        case MIR_CALL:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 || insn->label != -1 ||
+                insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id)
+                return mir_file_io_metadata_reject(
+                    instruction, "call");
+            break;
+        case MIR_STORE:
+        case MIR_UNARY:
+        case MIR_BRANCH_FALSE:
+        case MIR_RETURN:
+        case MIR_LOAD_INDIRECT:
+            if (insn->src1 < 0 || insn->src2 != -1 ||
+                (insn->opcode != MIR_UNARY &&
+                 insn->immediate != 0) ||
+                insn->secondary_offset != 0 ||
+                (insn->opcode == MIR_BRANCH_FALSE
+                     ? insn->label < 0
+                     : insn->label != -1))
+                return mir_file_io_metadata_reject(
+                    instruction, "unary-flow");
+            break;
+        case MIR_CONST:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->secondary_offset != 0 ||
+                insn->label != -1)
+                return mir_file_io_metadata_reject(
+                    instruction, "constant");
+            break;
+        case MIR_PHI:
+            if (insn->src1 < 0 || insn->src2 < 0 ||
+                insn->immediate != 0 ||
+                insn->secondary_offset != 0 ||
+                insn->label != -1)
+                return mir_file_io_metadata_reject(
+                    instruction, "phi");
+            break;
+        case MIR_INDEX_ADDRESS:
+        case MIR_BINARY:
+        case MIR_STORE_INDIRECT:
+            if (insn->src1 < 0 || insn->src2 < 0 ||
+                insn->secondary_offset !=
+                    (insn->opcode == MIR_BINARY ? 2 : 0) ||
+                (insn->opcode == MIR_INDEX_ADDRESS &&
+                 insn->immediate != 1) ||
+                (insn->opcode == MIR_STORE_INDIRECT &&
+                 insn->immediate != 0) ||
+                insn->label != -1)
+                return mir_file_io_metadata_reject(
+                    instruction, "binary-or-indirect");
+            break;
+        case MIR_JUMP:
+            if (insn->src1 != -1 || insn->src2 != -1 ||
+                insn->immediate != 0 ||
+                insn->secondary_offset != 0 ||
+                insn->label < 0)
+                return mir_file_io_metadata_reject(
+                    instruction, "jump");
+            break;
+        default:
+            return mir_file_io_metadata_reject(
+                instruction, "opcode");
+        }
+    }
+    if (label_count != 29)
+        return mir_file_io_metadata_reject(
+            mir.count, "label-count");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if ((insn->opcode == MIR_BRANCH_FALSE ||
+             insn->opcode == MIR_JUMP) &&
+            (insn->label >= mir.next_label ||
+             !labels[insn->label]))
+            return mir_file_io_metadata_reject(
+                instruction, "branch-target");
+        if (insn->opcode == MIR_PHI &&
+            (insn->phi_pred1 < 0 ||
+             insn->phi_pred1 >= mir.next_label ||
+             !labels[insn->phi_pred1] ||
+             insn->phi_pred2 < 0 ||
+             insn->phi_pred2 >= mir.next_label ||
+             !labels[insn->phi_pred2]))
+            return mir_file_io_metadata_reject(
+                instruction, "phi-predecessor");
+    }
+    return 1;
+}
+
+static int mir_file_io_declared_local(
+    const char *name, int type, int offset, int size,
+    int is_array, int dimension)
+{
+    int declared;
+    int matches = 0;
+
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        if (strcmp(mir.declared_names[declared], name))
+            continue;
+        ++matches;
+        if (mir.declared_types[declared] != type ||
+            mir.declared_type_unstable[declared] ||
+            mir.declared_storage[declared] != SC_LOCAL ||
+            mir.declared_offsets[declared] != offset ||
+            mir.declared_sizes[declared] != size ||
+            mir.declared_dim_counts[declared] != is_array ||
+            mir.declared_elem_sizes[declared] !=
+                (is_array ? 1 : 0) ||
+            mir.declared_is_array[declared] != is_array ||
+            (is_array &&
+             mir.declared_dims[declared][0] != dimension) ||
+            mir.declared_is_vla[declared] ||
+            mir.declared_vla_size_offsets[declared] != 0 ||
+            mir.declared_dynamic_strides[declared] != 0 ||
+            mir.declared_runtime_stride_names[declared][0] != '\0' ||
+            mir.declared_is_volatile[declared] ||
+            mir.declared_pointee_is_volatile[declared] ||
+            mir.declared_pointee_volatile_masks[declared] != 0 ||
+            mir.declared_is_const[declared] ||
+            mir.declared_const_values[declared] != 0 ||
+            mir.declared_is_funcptr[declared] ||
+            mir.declared_funcptr_return_types[declared] != 0 ||
+            mir.declared_has_proto[declared] ||
+            mir.declared_proto_nargs[declared] != 0 ||
+            mir.declared_proto_variadic[declared] ||
+            mir.declared_link_names[declared][0] != '\0')
+            return 0;
+    }
+    return matches == 1;
+}
+
+static int mir_file_io_storage_metadata(void)
+{
+    const char *stream_name = mir.insns[7].name;
+    const char *buffer_name = mir.insns[68].name;
+    const char *index_name = mir.insns[86].name;
+    const char *secondary_name = mir.insns[291].name;
+    const struct MirObject *index;
+
+    if (mir.object_count != 1 || mir.declared_count != 4 ||
+        mir.alias_count != 1 ||
+        stream_name[0] == '\0' || buffer_name[0] == '\0' ||
+        index_name[0] == '\0' || secondary_name[0] == '\0' ||
+        !strcmp(stream_name, buffer_name) ||
+        !strcmp(stream_name, index_name) ||
+        !strcmp(stream_name, secondary_name) ||
+        !strcmp(buffer_name, index_name) ||
+        !strcmp(buffer_name, secondary_name) ||
+        !strcmp(index_name, secondary_name) ||
+        !mir_file_io_declared_local(
+            stream_name, TYPE_INT | TYPE_PTR, -2, 2, 0, 0) ||
+        !mir_file_io_declared_local(
+            buffer_name, TYPE_CHAR, -34, 32, 1, 32) ||
+        !mir_file_io_declared_local(
+            index_name, TYPE_INT, -38, 2, 0, 0) ||
+        !mir_file_io_declared_local(
+            secondary_name, TYPE_INT | TYPE_PTR,
+            -40, 2, 0, 0))
+        return 0;
+    index = &mir.objects[0];
+    if (strcmp(index->name, index_name) ||
+        index->storage != SC_LOCAL ||
+        index->type != TYPE_INT ||
+        index->offset != -38 ||
+        index->entry_value != -1 ||
+        index->is_register ||
+        strcmp(mir.alias_internal_names[0], secondary_name) ||
+        mir.alias_source_names[0][0] == '\0' ||
+        mir.alias_declaration_indices[0] != 0)
+        return 0;
+    return 1;
 }
 
 static int mir_file_io_trim_loop(int base)
@@ -2724,14 +3025,30 @@ static int mir_match_file_io_runner(struct MirFileIoRunner *plan)
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 316 || mir_cfg_block_count() != 29 ||
+        mir.next_value != 179 || mir.next_label != 49 ||
+        mir.next_call_id != 28 || mir.next_inline_temp_id != 1 ||
         mir.has_vla || mir.local_bytes != 40 ||
+        mir.dead_local_suffix_bytes != 0 ||
         mir.aggregate_temp_bytes != 0 ||
-        !mir_abort_runner_word_type(mir.return_type))
+        mir.opaque_count != 0 ||
+        mir.has_runtime_stride_param ||
+        mir.is_variadic_function ||
+        mir.has_indirect_incdec ||
+        mir.has_pointer_difference ||
+        mir.has_narrowed_for_counter ||
+        mir.has_compound_literal ||
+        !mir.implicit_zero_return ||
+        mir.has_declared_register_object ||
+        mir.return_type != TYPE_INT ||
+        !mir_file_io_storage_metadata())
         return mir_machine_reject("file-io-runner", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
                 expected_opcodes[instruction])
             return mir_machine_reject("file-io-runner", "opcode");
+    if (!mir_file_io_instruction_metadata())
+        return mir_machine_reject(
+            "file-io-runner", "metadata");
 
     plan->open_function =
         mir_abort_runner_function(5, 0, 2, 0);
@@ -2881,8 +3198,10 @@ static int mir_match_file_io_runner(struct MirFileIoRunner *plan)
         const struct MirInsn *string =
             &mir.insns[string_instructions[item]];
 
-        if (!mir_abort_runner_pointer_type(
-                string->type, TYPE_CHAR))
+        if (string->type != (TYPE_CHAR | TYPE_PTR) ||
+            string->immediate < 0 ||
+            string->immediate >= nstrings ||
+            string_wide[string->immediate])
             return mir_machine_reject(
                 "file-io-runner", "string-type");
         plan->strings[item] = (int)string->immediate;
@@ -2917,6 +3236,14 @@ static int mir_match_file_io_runner(struct MirFileIoRunner *plan)
                 &mir.insns[file_locations[item]]))
             return mir_machine_reject(
                 "file-io-runner", "stream-location");
+    for (item = 0;
+         item < (int)(sizeof(file_locations) /
+                      sizeof(file_locations[0]));
+         ++item)
+        if (!mir_machine_named_nonvolatile(
+                &mir.insns[file_locations[item]]))
+            return mir_machine_reject(
+                "file-io-runner", "stream-volatile");
     if (mir.insns[7].src1 != mir.insns[5].dst ||
         mir.insns[32].src1 != mir.insns[30].dst ||
         mir.insns[57].src1 != mir.insns[55].dst ||
@@ -2942,6 +3269,14 @@ static int mir_match_file_io_runner(struct MirFileIoRunner *plan)
                 &mir.insns[buffer_addresses[item]]))
             return mir_machine_reject(
                 "file-io-runner", "buffer-location");
+    for (item = 0;
+         item < (int)(sizeof(buffer_addresses) /
+                      sizeof(buffer_addresses[0]));
+         ++item)
+        if (!mir_machine_named_nonvolatile(
+                &mir.insns[buffer_addresses[item]]))
+            return mir_machine_reject(
+                "file-io-runner", "buffer-volatile");
     if (!mir_machine_constant_equals(mir.insns[70].dst, 32) ||
         !mir_machine_constant_equals(mir.insns[177].dst, 32) ||
         !mir_file_io_trim_loop(84) ||
@@ -14423,6 +14758,7 @@ int mir_try_emit_validation_runners(MirStream *out, int phase)
             return 1;
         }
         if (mir_match_file_io_runner(&file_io_plan)) {
+            mir_machine_accept("file-io-runner");
             mir_emit_file_io_runner(out, &file_io_plan);
             return 1;
         }
