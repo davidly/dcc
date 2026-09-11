@@ -9557,6 +9557,18 @@ static int mir_vla_fill_call_word_pointer_type(int type)
         type_size(type) == 2;
 }
 
+#ifdef DCC_MIR_VLA_SMOOTH_ISOLATION_TEST
+int mir_try_emit_vla_smooth_isolation(MirStream *out)
+{
+    struct MirVlaSmoothPlan plan;
+
+    if (!mir_match_vla_smooth(&plan))
+        return 0;
+    mir_emit_vla_smooth(out, &plan);
+    return 1;
+}
+#endif
+
 static int mir_match_vla_fill_call_schedule(
     struct MirVlaFillCallSchedule *plan)
 {

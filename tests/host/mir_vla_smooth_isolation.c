@@ -3,7 +3,6 @@
 #undef main
 #include "dcc_mir_internal.h"
 #include "dcc_mir_machine_internal.h"
-#include "../../src/dcc/dcc_mir_machine_aggregate_checks.c"
 
 struct VlaInsnFixture {
     int instruction;
@@ -471,12 +470,7 @@ static void apply_vla_mutation(enum VlaMutation mutation)
 
 static int emit_vla_smooth_candidate(MirStream *out)
 {
-    struct MirVlaSmoothPlan plan;
-
-    if (!mir_match_vla_smooth(&plan))
-        return 0;
-    mir_emit_vla_smooth(out, &plan);
-    return 1;
+    return mir_try_emit_vla_smooth_isolation(out);
 }
 
 static size_t read_vla_stream(

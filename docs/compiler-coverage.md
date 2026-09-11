@@ -8,18 +8,29 @@ still requires its independent strict release and performance checks before
 publishing production changes. Test-only edits do not require rerunning
 unchanged release/debugger gates.
 
-`DCC_COVERAGE_JOBS` bounds the coverage build, main/extended runners, clobber
-workers and debug censuses (default 8). Concurrent development or validation
-processes must share a job budget rather than each using all available cores.
-Clobber workers are separate processes, so diagnostic environment variables
-cannot race between tests.
+`DCC_COVERAGE_JOBS` bounds the coverage build, main/extended runners, and host
+CTest processes; it defaults to the online CPU count. Mutation audits and
+debug censuses use the same value unless `DCC_COVERAGE_MUTATION_JOBS` or
+`DCC_COVERAGE_CENSUS_JOBS` overrides them. The clobber runner is independently
+capped at four workers by default because instrumented diagnostic-heavy cases
+can exceed their fixed compile timeout under higher contention; override that
+cap with `DCC_COVERAGE_CLOBBER_JOBS` after measuring the host. Clobber workers
+are separate processes, so diagnostic environment variables cannot race
+between tests.
+
+The five exhaustive mutation campaigns run concurrently. The mutation job
+budget is divided across them, and each campaign receives its own `%8m` LLVM
+profile pool so profile-file locking does not serialize otherwise independent
+compiler processes. `DCC_COVERAGE_MUTATION_JOBS` is the combined budget, not a
+per-campaign multiplier.
 
 The one-command workflow remains the default. Alternatively split a checkpoint
 into stages, always using the same absolute build directory and toolchain:
 
 ```sh
 export DCC_COVERAGE_BUILD_DIR="$PWD/build/compiler-coverage"
-export DCC_COVERAGE_JOBS=8
+export DCC_COVERAGE_JOBS="$(getconf _NPROCESSORS_ONLN)"
+export DCC_COVERAGE_CLOBBER_JOBS=4
 DCC_COVERAGE_STAGE=build sh scripts/compiler-coverage.sh
 DCC_COVERAGE_STAGE=collect sh scripts/compiler-coverage.sh
 DCC_COVERAGE_STAGE=report sh scripts/compiler-coverage.sh

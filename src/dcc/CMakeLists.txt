@@ -131,14 +131,14 @@ if(DCC_BUILD_MIR_TESTS)
         ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
         mir-consteval-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    set(DCC_VLA_SMOOTH_TEST_SOURCES ${DCC_MIR_TEST_SOURCES})
-    list(REMOVE_ITEM DCC_VLA_SMOOTH_TEST_SOURCES
-        dcc_mir_machine_aggregate_checks.c)
     add_executable(mir-vla-smooth-isolation-test
         ../../tests/host/mir_vla_smooth_isolation.c
-        ${DCC_VLA_SMOOTH_TEST_SOURCES})
+        ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
         mir-vla-smooth-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(
+        mir-vla-smooth-isolation-test PRIVATE
+        DCC_MIR_VLA_SMOOTH_ISOLATION_TEST=1)
     if(DCC_ENABLE_COVERAGE)
         target_compile_options(mir-verify-test PRIVATE
             -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)

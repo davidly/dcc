@@ -47,10 +47,16 @@ isolated background workers and consolidated integration gates:
 - `run-mir-compiler-mutations.ps1 -Jobs 2 -BuildJobs 2` runs an unmutated
   baseline first, then isolated clean mutant builds; crashes and build failures
   are invalid results, not mutation kills.
-- Use `DCC_COVERAGE_STAGE=build|collect|report` with
-  `DCC_COVERAGE_JOBS=8` to stage an immutable coverage checkpoint. Report-only
-  runs verify recorded input/tool/profile hashes and do not rerun targets.
-  Do not merge worker revisions or faulty compiler profiles.
+- Use `DCC_COVERAGE_STAGE=build|collect|report` to stage an immutable coverage
+  checkpoint. `DCC_COVERAGE_JOBS` defaults to all online CPUs for builds,
+  runall, and host CTest; mutation and census concurrency can be overridden
+  with `DCC_COVERAGE_MUTATION_JOBS` and `DCC_COVERAGE_CENSUS_JOBS`. The
+  diagnostic-heavy clobber runner defaults to a separately safe four workers
+  and can be tuned with `DCC_COVERAGE_CLOBBER_JOBS`. Exhaustive mutation
+  campaigns run concurrently within the combined mutation budget and use
+  separate `%8m` profile pools to avoid serialization on profile-file locks.
+  Report-only runs verify recorded input/tool/profile hashes and do not rerun
+  targets. Do not merge worker revisions or faulty compiler profiles.
 
 Each worktree needs its own binaries and CMake output directory. The canonical
 build's `-OutputPath` redirects intermediate artifacts, not repository-root

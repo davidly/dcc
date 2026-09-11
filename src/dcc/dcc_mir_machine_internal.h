@@ -115,6 +115,9 @@ int mir_try_emit_scanner_kernels(MirStream *out, int late);
 
 /* Returns -1 when no aggregate check schedule matches. */
 int mir_try_emit_aggregate_checks(MirStream *out);
+#ifdef DCC_MIR_VLA_SMOOTH_ISOLATION_TEST
+int mir_try_emit_vla_smooth_isolation(MirStream *out);
+#endif
 
 enum MirStrictSpilledProfile {
     MIR_STRICT_SPILLED_ADDRESS_REMAT = 1,
