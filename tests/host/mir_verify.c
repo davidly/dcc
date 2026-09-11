@@ -2739,6 +2739,128 @@ static void verify_homed_noncall_preflight_transaction(void)
     clear_liveness();
 }
 
+static void verify_homed_dimension_preflight_transaction(void)
+{
+    static const char *dimensions[] = {
+        "next label",
+        "next value"
+    };
+    int invalid_dimensions[2];
+    MirStream *control;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int saved_color;
+    int saved_spill;
+    int saved_spill_count;
+    int saved_next_label;
+    int saved_next_value;
+    int first_label;
+    int dimension;
+    int mutation;
+    int result;
+    int ok = 1;
+
+    setup(3, 1, 1);
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed dimension verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    if (control == NULL) {
+        fprintf(stderr, "FAIL homed dimension stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    saved_color = mir.allocation_colors[0];
+    saved_spill = mir.allocation_spills[0];
+    saved_spill_count = mir.allocation_spill_count;
+    saved_next_label = mir.next_label;
+    saved_next_value = mir.next_value;
+    invalid_dimensions[0] = mir.capacity + 1;
+    invalid_dimensions[1] = INT_MAX;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    for (dimension = 0; dimension < 2; ++dimension) {
+        for (mutation = 0; mutation < 2; ++mutation) {
+            MirStream *retry = mir_stream_open();
+            long prefix_end;
+            int mutation_ok = 1;
+
+            if (retry == NULL) {
+                ok = 0;
+                break;
+            }
+            mir_stream_puts("; preserved prefix\n", retry);
+            prefix_end = mir_stream_tell(retry);
+            label_id = first_label;
+            if (dimension == 0)
+                mir.next_label = invalid_dimensions[mutation];
+            else
+                mir.next_value = invalid_dimensions[mutation];
+            mir_extrn_begin_attempt();
+            result = mir_try_emit_homed_scalar_cfg(retry);
+            mutation_ok = mutation_ok && result == 0;
+            mutation_ok = mutation_ok &&
+                mir_stream_tell(retry) == prefix_end &&
+                mir_stream_size(retry) == prefix_end;
+            mutation_ok = mutation_ok && label_id == first_label;
+            mutation_ok = mutation_ok &&
+                (dimension == 0
+                    ? mir.next_label == invalid_dimensions[mutation] &&
+                      mir.next_value == saved_next_value
+                    : mir.next_label == saved_next_label &&
+                      mir.next_value == invalid_dimensions[mutation]);
+            mutation_ok = mutation_ok &&
+                mir.allocation_colors[0] == saved_color &&
+                mir.allocation_spills[0] == saved_spill &&
+                mir.allocation_spill_count == saved_spill_count;
+
+            mir.next_label = saved_next_label;
+            mir.next_value = saved_next_value;
+            mir_extrn_begin_attempt();
+            result = mir_try_emit_homed_scalar_cfg(retry);
+            mutation_ok = mutation_ok && result == 1;
+            mutation_ok = mutation_ok &&
+                mir.next_label == saved_next_label &&
+                mir.next_value == saved_next_value;
+            mutation_ok = mutation_ok &&
+                mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+            retry_bytes = mir_stream_read(
+                retry_text, 1, sizeof(retry_text), retry);
+            mutation_ok = mutation_ok &&
+                retry_bytes < sizeof(retry_text) &&
+                retry_bytes == control_bytes;
+            mutation_ok = mutation_ok &&
+                memcmp(retry_text, control_text, control_bytes) == 0;
+            if (!mutation_ok)
+                fprintf(stderr,
+                        "FAIL homed dimension %s %s transaction\n",
+                        dimensions[dimension],
+                        mutation == 0 ? "capacity+1" : "INT_MAX");
+            ok = ok && mutation_ok;
+            mir_stream_close(retry);
+        }
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL homed dimension preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
 static void verify_homed_noncall_dominance_transaction(void)
 {
     struct MirInsn control_insns[11];
@@ -4962,6 +5084,7 @@ int main(void)
     verify_homed_parameter_preflight_transaction();
     verify_homed_value_operand_preflight_transaction();
     verify_homed_branch_target_preflight_transaction();
+    verify_homed_dimension_preflight_transaction();
     verify_homed_noncall_preflight_transaction();
     verify_homed_noncall_dominance_transaction();
     verify_homed_memory_preflight_transaction();

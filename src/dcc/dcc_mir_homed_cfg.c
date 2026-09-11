@@ -568,7 +568,8 @@ static int mir_homed_reject(const char *reason)
 static int mir_homed_dimensions_valid(void)
 {
     return mir.count >= 0 && mir.count <= mir.capacity &&
-           mir.next_value >= 0 && mir.next_label >= 0 &&
+           mir.next_value >= 0 && mir.next_value <= mir.capacity &&
+           mir.next_label >= 0 && mir.next_label <= mir.capacity &&
            mir.next_call_id >= 0 &&
            mir.object_count >= 0 &&
            mir.object_count <=
