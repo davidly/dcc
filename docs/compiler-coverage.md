@@ -160,14 +160,30 @@ no-op field-identity rewrites, 10 byte-identical value-equivalent stores, and
 contains 43 profile-pool files and manifest SHA-256
 `d590eac25af8174ee7ec4f271fc51ee011db3c03c9fb0a4689f0254f7245ed96`.
 
+The following integrated waves execute 7,436 exact leaf configurations and
+add five linked host isolation binaries plus committed exhaustive mutation
+campaigns for endgame scope, directory layouts, softmax, byte math, and
+multidimensional arrays. They harden active AST-to-MIR lowering, deferred
+metadata, homed/spilled CFG preflight, scalar DAGs, comparison branches,
+constant evaluation, VLA smoothing, affine fill, call-safe member sums, and
+the corresponding exact schedules. All correctness fixes preserve the checked
+performance baselines.
+
+The VLA host test originally textually included its production matcher module,
+duplicating 272 maintained functions and producing an invalid 94.30% function
+result. That report was discarded. The corrected test links the production
+object once through a test-only entry point. The immutable corrected collection
+contains 85 profile-pool files and manifest SHA-256
+`afa127b37d9096d1a4e5233d81a0c540b04894638e1c3353c8fbeed8120e149a`.
+
 | Metric | Covered / total | Percent |
 | --- | --- | ---: |
-| Functions | 4,421 / 4,421 | 100.00% |
-| Lines | 180,307 / 192,698 | 93.57% |
-| Native branch outcomes | 93,574 / 147,628 | 63.38% |
-| Regions | 162,951 / 173,293 | 94.03% |
+| Functions | 4,486 / 4,486 | 100.00% |
+| Lines | 182,677 / 194,815 | 93.77% |
+| Native branch outcomes | 95,622 / 149,058 | 64.15% |
+| Regions | 165,083 / 175,115 | 94.27% |
 
-The raw ledger has 53,807 uncovered outcomes. This is a checkpoint, not
+The raw ledger has 53,192 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
 ## Full workload

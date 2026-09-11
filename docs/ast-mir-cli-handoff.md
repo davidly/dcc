@@ -186,9 +186,19 @@ add audit has zero survivors across 34 mutations. The compound audit rejects
 rewrites, 10 byte-identical stores, and 11 overwritten-before-read stores with
 passing runtime oracles.
 
-Latest integrated totals: 4,421/4,421 functions, 180,307/192,698 lines
-(93.57%), 93,574/147,628 native branch outcomes (63.38%), and
-162,951/173,293 regions (94.03%). The raw uncovered ledger is 53,807.
+The next integrated waves raise the exact inventory to 7,436 configurations.
+They harden deferred metadata repair, spilled/homed CFG preflight, expression
+lowering, scalar DAGs, comparison branches, constant evaluation, VLA
+smoothing, affine fill, scope/endgame, call-safe member sums, variable
+softmax, byte math, multidimensional arrays, and both retained directory
+layouts. Reviews found and fixed malformed CFG allocation hazards, call
+dominance/result ownership gaps, cyclic AST traversal, valid-type
+over-rejection, indirect-call acceptance, and several performance regressions.
+Exhaustive committed campaigns now cover more than 25,000 semantic mutations.
+
+Latest integrated totals: 4,486/4,486 functions, 182,677/194,815 lines
+(93.77%), 95,622/149,058 native branch outcomes (64.15%), and
+165,083/175,115 regions (94.27%). The raw uncovered ledger is 53,192.
 The later historical sections retain the earlier checkpoints; use this
 parallel-wave summary for the current measurement.
 
@@ -200,7 +210,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest validated continuation implementation:
-  `c1d6e591` (`Reject boolean repeated-add counters`).
+  `3fc259c8` (`Restore Wave 3 directory schedule`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -293,6 +303,16 @@ parallel-wave summary for the current measurement.
   6,854 unique clobber executions. The manifest SHA-256 is
   `d590eac25af8174ee7ec4f271fc51ee011db3c03c9fb0a4689f0254f7245ed96`;
   `collection.json` records the same digest.
+- The Wave 16-19 implementation spans `0fbcf2c3` through `3fc259c8`;
+  `b08957cd` parallelizes coverage and removes duplicate VLA host mappings.
+  The final tree passed both strict release modes with zero regressions,
+  five normal and sanitized host CTests, 11 compiler mutants, debugger tests,
+  120 script tests, exact frozen-parent censuses, and all focused campaigns.
+- The corrected LLVM 18 collection at `b08957cd` contains 85 profile-pool
+  files and exactly 7,436 unique clobber executions. Its manifest SHA-256 is
+  `afa127b37d9096d1a4e5233d81a0c540b04894638e1c3353c8fbeed8120e149a`.
+  Parallel mutation campaigns with distinct profile pools reduced collection
+  time from about 116 minutes to about 67 minutes on this 24-CPU host.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
