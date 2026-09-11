@@ -15,9 +15,14 @@ if ($mainStart -lt 0) {
     throw "Pointer-condition mutation anchor changed: main"
 }
 $main = $source.Substring($mainStart)
+$inactiveStart = $main.IndexOf("#ifdef PTRW25_POINTER_TRUTHINESS")
+$inactiveEnd = $main.IndexOf("#else", $inactiveStart)
+if ($inactiveStart -lt 0 -or $inactiveEnd -lt 0) {
+    throw "Pointer-condition mutation anchor changed: inactive truthiness"
+}
 $mutations = [regex]::Matches(
     $main, '(?<operator>==|!=|<=|>=|<|>)\s*(?<number>\d+)(?<suffix>[LUlu]*)')
-if ($mutations.Count -ne 81) {
+if ($mutations.Count -ne 82) {
     throw "Pointer-condition mutation inventory changed: $($mutations.Count)"
 }
 $environmentNames = @(
@@ -37,6 +42,13 @@ function Invoke-Compile([string]$Text) {
     return [pscustomobject]@{
         ExitCode = $LASTEXITCODE
         Text = $output -join [Environment]::NewLine
+        Assembly = if (Test-Path -LiteralPath (
+            Join-Path $workspace "TPMUT.MAC")) {
+            Get-Content -LiteralPath (
+                Join-Path $workspace "TPMUT.MAC") -Raw
+        } else {
+            ""
+        }
     }
 }
 
@@ -65,6 +77,15 @@ try {
             $source.Substring(0, $mainStart) + $mutatedMain)
         if ($result.ExitCode -ne 0) {
             throw "Pointer-condition mutation $index did not compile"
+        }
+        if ($number.Index -gt $inactiveStart -and
+            $number.Index -lt $inactiveEnd) {
+            if ($result.Text -notmatch
+                    'MIR selection function=main selector=scheduled-machine-cfg' -or
+                $result.Assembly -cne $control.Assembly) {
+                throw "Pointer-condition inactive mutation $index changed output"
+            }
+            continue
         }
         if ($result.Text -notmatch
                 'MIR machine function=main template=pointer-condition-main reject=' -or
