@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 16) / 17 ))
+campaign_jobs=$(( (mutation_jobs + 17) / 18 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -235,6 +235,11 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-symbol-insert-%8m.profraw" \
     --output-dir "$build_dir/symbol-insert-wave22-audit" \
     >"$campaign_dir/symbol-insert.log" 2>&1 &
 symbol_insert_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-wide-string-%8m.profraw" \
+    python3 scripts/wide-string-wave23-campaign.py \
+    --jobs "$campaign_jobs" --skip-runtime \
+    >"$campaign_dir/wide-string.log" 2>&1 &
+wide_string_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -253,7 +258,8 @@ for campaign in \
     "ctype-realloc:$ctype_realloc_pid" \
     "wrapper-init:$wrapper_init_pid" \
     "fixed-softmax:$fixed_softmax_pid" \
-    "symbol-insert:$symbol_insert_pid"
+    "symbol-insert:$symbol_insert_pid" \
+    "wide-string:$wide_string_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
