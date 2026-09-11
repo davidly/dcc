@@ -1,7 +1,39 @@
 #include <stdio.h>
 #include <stdint.h>
 
-#if defined(P25_UNSIGNED_CHECKER)
+#if defined(P25_FASTCALL_CHECKER)
+extern void __fastcall prfchk(
+    const char *name, int got, int expected);
+#endif
+
+#if defined(P25_FASTCALL_PRINT)
+extern void __fastcall pone(const char *format);
+extern void __fastcall ptwo(
+    const char *format, int value);
+
+#asm
+        extrn   _printf
+        public  _pone
+_pone:
+        push    hl
+        call    _printf
+        pop     bc
+        ret
+
+        public  _ptwo
+_ptwo:
+        push    de
+        push    hl
+        call    _printf
+        pop     bc
+        pop     bc
+        ret
+#endasm
+#endif
+
+#if defined(P25_FASTCALL_CHECKER)
+#define P25_CHECK_TYPE int
+#elif defined(P25_UNSIGNED_CHECKER)
 #define P25_CHECK_TYPE unsigned long
 #else
 #define P25_CHECK_TYPE long
@@ -29,7 +61,7 @@
 
 static P25_FAIL_TYPE promotion_failures;
 
-static void promotion_check(
+static void promotion_check_stack(
     const char *name, P25_CHECK_TYPE got,
     P25_CHECK_TYPE expected)
 {
@@ -42,6 +74,30 @@ static void promotion_check(
     }
 }
 
+#if defined(P25_FASTCALL_CHECKER)
+void prstak(const char *name, int got, int expected)
+{
+    promotion_check_stack(name, got, expected);
+}
+
+#asm
+        public  _prfchk
+_prfchk:
+        push    bc
+        push    de
+        push    hl
+        call    _prstak
+        pop     bc
+        pop     bc
+        pop     bc
+        ret
+#endasm
+#else
+#define prfchk promotion_check_stack
+#endif
+
+#define promotion_check prfchk
+
 static int promotion_runner(void)
 {
     P25_BYTE_QUAL int8_t signed_byte = -10;
@@ -51,7 +107,11 @@ static int promotion_runner(void)
     int32_t signed_long = 123456L;
     uint32_t unsigned_long = 4000000000UL;
 
+#if defined(P25_FASTCALL_PRINT)
+    pone("promo25 start\n");
+#else
     printf("promo25 start\n");
+#endif
     promotion_failures = 0;
 
     promotion_check(
@@ -174,10 +234,19 @@ static int promotion_runner(void)
         P25_ACTUAL((long)(signed_byte & 0xff)), 246L);
 
     if (promotion_failures) {
+#if defined(P25_FASTCALL_PRINT)
+        ptwo(
+            "promo25 failed: %d\n", promotion_failures);
+#else
         printf("promo25 failed: %d\n", promotion_failures);
+#endif
         return 1;
     }
+#if defined(P25_FASTCALL_PRINT)
+    pone("promo25 completed with great success\n");
+#else
     printf("promo25 completed with great success\n");
+#endif
     return 0;
 }
 

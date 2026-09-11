@@ -12269,6 +12269,14 @@ static int mir_promotion_check_profile(void)
          mir_cfg_block_count() == 2 && mir.local_bytes == 9);
 }
 
+static int mir_promotion_check_mutated_fastcall(const char *role)
+{
+    const char *mutation =
+        getenv("DCC_MIR_PROMOTION_MUTATE_FASTCALL");
+
+    return mutation != NULL && !strcmp(mutation, role);
+}
+
 static void mir_promotion_check_hash_value(
     unsigned long long *first, unsigned long long *second,
     unsigned long long value)
@@ -12586,6 +12594,8 @@ static int mir_promotion_check_tail(
     plan->print_function =
         mir_endgame_call_function(failure_call, 1, 1);
     if (plan->print_function == NULL ||
+        plan->print_function->is_fastcall ||
+        mir_promotion_check_mutated_fastcall("print") ||
         mir_endgame_call_function(success_call, 1, 1) !=
             plan->print_function ||
         mir_endgame_call_arguments(
@@ -12653,6 +12663,8 @@ static int mir_promotion_check_call(
 
     if (plan->call_count >= MIR_PROMOTION_CHECK_MAX_CALLS ||
         (function = mir_endgame_call_function(call, 0, 3)) == NULL ||
+        function->is_fastcall ||
+        mir_promotion_check_mutated_fastcall("checker") ||
         mir_endgame_call_arguments(call, arguments) != 3 ||
         (string = mir_definition(arguments[0])) == NULL ||
         string->opcode != MIR_STRING_ADDRESS ||

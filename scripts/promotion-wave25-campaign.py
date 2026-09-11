@@ -56,6 +56,7 @@ MUTATION_CASES = {
         ("-DP25_UNSIGNED_FAILURE",)
     ),
 }
+ABI_MUTATIONS = ("checker", "print")
 
 
 def run(command, root, env=None, timeout=120):
@@ -222,6 +223,43 @@ def mutate(
     return (*job, "accepted", "unclassified")
 
 
+def abi_mutations(root, compiler, work):
+    count = 0
+    for case_name, (
+        source,
+        function,
+        flags,
+    ) in MUTATION_CASES.items():
+        for role in ABI_MUTATIONS:
+            output = work / f"abi-{case_name}-{role}.MAC"
+            env = os.environ.copy()
+            env.update(
+                DCC_MIR_MACHINE_REPORT="1",
+                DCC_MIR_SELECT_REPORT="1",
+                DCC_MIR_PROMOTION_MUTATE_FASTCALL=role,
+            )
+            report = run(
+                compiler_command(
+                    compiler, flags, source, output
+                ),
+                root,
+                env,
+            )
+            if exact_accept(report, function) or not generic_accept(
+                report, function
+            ):
+                raise RuntimeError(
+                    f"{case_name}: {role} fastcall ABI mutation "
+                    "did not reject into generic MIR"
+                )
+            output.unlink()
+            count += 1
+    print(
+        f"{count} fastcall ABI mutations, "
+        "zero accepted survivors"
+    )
+
+
 def runtime_controls(root, jobs):
     run(
         [
@@ -310,6 +348,7 @@ def main():
                 f"{control_name}-{variant_name}: "
                 "exact control passed"
             )
+    abi_mutations(root, compiler, work)
 
     all_results = []
     try:
