@@ -551,6 +551,7 @@ int mir_try_selector(MirStream *out, int (*selector)(MirStream *));
 int mir_try_emit_affine_return(MirStream *out);
 int mir_try_emit_repeated_invariant_add_loop(MirStream *out);
 int mir_try_emit_z80(MirStream *out);
+int mir_select_report_enabled(void);
 void mir_clear_debug_events(void);
 void mir_emit_debug_events(MirStream *out, int point);
 void mir_emit_first_debug_location(MirStream *out);

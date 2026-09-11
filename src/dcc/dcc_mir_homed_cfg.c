@@ -3950,7 +3950,7 @@ done:
     }
     free(wide_saved_colors);
     free(wide_saved_spills);
-    if (!accepted && getenv("DCC_MIR_SELECT_REPORT") != NULL)
+    if (!accepted && mir_select_report_enabled())
         fprintf(stderr,
                 "; MIR home-cfg reject function=%s insn=%d opcode=%s "
                 "generated-bytes=%ld generated-insns=%d\n",

@@ -16301,7 +16301,7 @@ static void mir_emit_virtual_store(MirStream *out, int value)
             mir_forwarded_stack_target_instruction = -1;
         }
         if (mir_forwarded_stack_value >= 0) {
-            if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+            if (mir_select_report_enabled())
                 fprintf(stderr,
                         "; MIR planned-stack overlap function=%s "
                         "existing-value=%d existing-consumer=%d "
@@ -31193,7 +31193,7 @@ static void mir_emit_indexed_stack_unary_reduction(
 
 static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
 {
-    if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+    if (mir_select_report_enabled())
         fprintf(stderr,
                 "; MIR scalar-cfg preflight function=%s reason=%s insn=%d\n",
                 mir.name, reason, instruction);
@@ -32177,7 +32177,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 (memory_storage != SC_LOCAL && memory_storage != SC_PARAM &&
                  memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN &&
                  memory_storage != SC_FUNC)) {
-                if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+                if (mir_select_report_enabled())
                     fprintf(stderr,
                             "; MIR unresolved-memory function=%s insn=%d opcode=%s name=%s object=%d\n",
                             mir.name, i, mir_opcode_name(insn->opcode),
@@ -32220,7 +32220,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     mir_planned_stack_handoffs_enabled = 0;
     mir_backend_slots_skip_fused_comparisons = 0;
     mir_report_constant_absolute_addresses();
-    if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+    if (mir_select_report_enabled())
         fprintf(stderr,
                 "; MIR scalar-cfg frame function=%s locals=%d original-locals=%d"
                 " slots=%d bytes=%d\n",
@@ -36136,7 +36136,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     }
     if (mir_planned_stack_invalid ||
         mir_planned_stack_emit_count != mir_planned_stack_consume_count) {
-        if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+        if (mir_select_report_enabled())
             fprintf(stderr,
                     "; MIR planned-stack mismatch function=%s invalid=%d "
                     "emitted=%d consumed=%d pending-value=%d "
@@ -36274,7 +36274,7 @@ done:
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;
     mir_planned_stack_invalid = 0;
-    if (!accepted && getenv("DCC_MIR_SELECT_REPORT") != NULL)
+    if (!accepted && mir_select_report_enabled())
         fprintf(stderr, "; MIR scalar-cfg reject function=%s insn=%d opcode=%s\n",
                 mir.name, i,
                 i >= 0 && i < mir.count

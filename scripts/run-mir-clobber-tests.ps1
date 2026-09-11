@@ -41,6 +41,7 @@ $environmentNames = @(
     "DCC_MIR_REQUIRE_EMIT",
     "DCC_MIR_SELECT_CANDIDATE",
     "DCC_MIR_SELECT_FUNCTION",
+    "DCC_MIR_SELECT_REPORT_FUNCTION",
     "DCC_MIR_SELECT_REPORT"
 )
 $savedEnvironment = @{}
@@ -261,6 +262,9 @@ __ctu:
     $savedSelectReport =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_SELECT_REPORT", "Process")
+    $savedSelectReportFunction =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_SELECT_REPORT_FUNCTION", "Process")
     $savedCandidates =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_CANDIDATES", "Process")
@@ -295,6 +299,14 @@ __ctu:
         })
     Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" `
         $(if ($needsSelectReport) { "1" } else { $null })
+    Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT_FUNCTION" `
+        $(if ($needsSelectReport -and $ExactFunction) {
+            $ExactFunction
+        } elseif ($needsSelectReport -and $RequiredSelectorFunction) {
+            $RequiredSelectorFunction
+        } else {
+            $null
+        })
     Set-ProcessEnvironment "DCC_MIR_REPORT" $null
     Set-ProcessEnvironment "DCC_MIR_FUNCTION" $null
     Set-ProcessEnvironment "DCC_MIR_CANDIDATES" $null
@@ -328,6 +340,8 @@ __ctu:
             $savedGeneralFunction
         Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $savedSelectFunction
         Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $savedSelectCandidate
+        Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT_FUNCTION" `
+            $savedSelectReportFunction
         Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" $savedMachineReport
         Set-ProcessEnvironment "DCC_MIR_MACHINE_FUNCTION" $savedMachineFunction
         Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" $savedSelectReport

@@ -29,6 +29,15 @@ static int mir_cost_regional_candidate_is_diagnostic_validated(void);
 static int mir_large_dense_switch_phi_candidate_is_eligible(void);
 static int mir_boolean_candidate_is_validated(void);
 
+int mir_select_report_enabled(void)
+{
+    const char *filter = getenv("DCC_MIR_SELECT_REPORT_FUNCTION");
+
+    return getenv("DCC_MIR_SELECT_REPORT") != NULL &&
+           (filter == NULL || filter[0] == '\0' ||
+            !strcmp(filter, mir.name));
+}
+
 static int mir_cost_policy_selects_alternative(void)
 {
     const char *policy = getenv("DCC_MIR_COST_POLICY");
@@ -4029,7 +4038,7 @@ void mir_end_function(void)
         goto finish;
     }
     if (!mir_dense_analysis_is_bounded()) {
-        if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+        if (mir_select_report_enabled())
             fprintf(stderr,
                     "; MIR selection function=%s selector=none result=error "
                     "reason=oversized generated-bytes=-1 captured-bytes=-1 "
@@ -4206,7 +4215,7 @@ void mir_end_function(void)
                 "; MIR cost-selected function=%s candidate=%s "
                 "selector=%s selected-hash=%08lx\n",
                 mir.name, candidate_name, selector_name, selected_hash);
-    if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+    if (mir_select_report_enabled())
         fprintf(stderr,
                 "; MIR selection function=%s selector=%s result=mir "
                 "reason=accepted generated-bytes=%ld captured-bytes=-1 "

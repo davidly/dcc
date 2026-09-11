@@ -1017,7 +1017,8 @@ products in `build/mir-clobber-failure-<GUID>`. These artifacts are deliberately
 uncommitted and must be regenerated on the new machine.
 
 Useful diagnostic controls: `DCC_MIR_REPORT=1`, `DCC_MIR_SELECT_REPORT=1`,
-`DCC_MIR_MACHINE_REPORT=1`, `DCC_MIR_MACHINE_FUNCTION`,
+`DCC_MIR_SELECT_REPORT_FUNCTION`, `DCC_MIR_MACHINE_REPORT=1`,
+`DCC_MIR_MACHINE_FUNCTION`,
 `DCC_MIR_CACHE_VERIFY=1`, `DCC_MIR_SELECT_FUNCTION`, and
 `DCC_MIR_SELECT_CANDIDATE`. Production selection must remain
 semantic/structural.
