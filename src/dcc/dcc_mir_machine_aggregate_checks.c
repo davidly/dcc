@@ -8005,13 +8005,18 @@ static int mir_additive_ordered_binary(
 static int mir_additive_global_root(
     int instruction, struct Sym **root_out)
 {
+    const struct MirInsn *address = &mir.insns[instruction];
     long offset;
 
-    if (mir.insns[instruction].opcode != MIR_ADDRESS ||
+    if (address->opcode != MIR_ADDRESS ||
         !mir_machine_global_address_offset(
-            mir.insns[instruction].dst, root_out, &offset, 0) ||
+            address->dst, root_out, &offset, 0) ||
         offset != 0 || (*root_out)->is_volatile ||
-        (*root_out)->is_funcptr)
+        (*root_out)->pointee_is_volatile ||
+        (*root_out)->is_funcptr ||
+        !mir_packed_scalar_type(
+            address->type, (*root_out)->type & 15,
+            ((*root_out)->type & TYPE_UNSIGNED) != 0, 1))
         return 0;
     return 1;
 }
@@ -8056,7 +8061,25 @@ static int mir_additive_local_word(
             (mir.insns[instruction].opcode == MIR_LOAD &&
              mir.insns[instruction].memory_size == 0)) &&
            mir_packed_scalar_type(type, TYPE_INT, 0, 0) &&
+           (mir.insns[instruction].opcode != MIR_LOAD ||
+            mir_packed_scalar_type(
+                mir.insns[instruction].type, TYPE_INT, 0, 0)) &&
            (mir.insns[instruction].memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_additive_unique_definition(
+    int value, const struct MirInsn *expected)
+{
+    int definitions = 0;
+    int instruction;
+
+    if (value < 0 || value >= mir.next_value ||
+        mir_definition(value) != expected)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].dst == value)
+            ++definitions;
+    return definitions == 1;
 }
 
 static int mir_additive_check(
@@ -8072,6 +8095,8 @@ static int mir_additive_check(
     struct Sym *root;
     struct Sym *function;
     int arguments[3];
+    int argument;
+    int call_index;
     long offset;
     long expected;
 
@@ -8098,7 +8123,35 @@ static int mir_additive_check(
         !mir_packed_scalar_type(
             mir.insns[convert_instruction].type, TYPE_LONG, 0, 0) ||
         !mir_aggregate_direct_function(call_instruction, &function) ||
-        (mir.insns[call_instruction].type & 15) != TYPE_VOID ||
+        function->storage != SC_FUNC ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 3 ||
+        function->is_fastcall || function->is_noreturn ||
+        function->type != mir.insns[call_instruction].type ||
+        function->type != TYPE_VOID ||
+        !mir_packed_scalar_type(
+            function->proto_types[0], TYPE_CHAR, 0, 1) ||
+        !mir_packed_scalar_type(
+            function->proto_types[1], TYPE_LONG, 0, 0) ||
+        !mir_packed_scalar_type(
+            function->proto_types[2], TYPE_LONG, 0, 0) ||
+        mir.insns[call_instruction].src1 != -1 ||
+        mir.insns[call_instruction].src2 != -1 ||
+        mir.insns[call_instruction].immediate != 0 ||
+        mir.insns[call_instruction].memory_size != 0 ||
+        (mir.insns[call_instruction].memory_flags &
+         ~MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0 ||
+        mir.insns[call_instruction].pointee_volatile_mask != 0 ||
+        mir.insns[call_instruction].has_pointer_qualifiers ||
+        mir.insns[call_instruction].bit_width != 0 ||
+        mir.insns[call_instruction].bit_shift != 0 ||
+        mir.insns[call_instruction].bit_mask != 0 ||
+        mir.insns[call_instruction].divmod_cast_types != 0 ||
+        !mir_additive_unique_definition(
+            mir.insns[call_instruction].dst,
+            &mir.insns[call_instruction]) ||
+        mir_value_use_count(
+            mir.insns[call_instruction].dst) != 0 ||
         !mir_machine_three_call_arguments(
             &mir.insns[call_instruction], arguments) ||
         arguments[0] !=
@@ -8113,6 +8166,28 @@ static int mir_additive_check(
         !mir_packed_scalar_type(
             mir_definition(arguments[2])->type, TYPE_LONG, 0, 0))
         return 0;
+    call_index = call_instruction;
+    for (argument = 0; argument < 3; ++argument) {
+        const struct MirInsn *arg =
+            &mir.insns[argument_instruction[slot][argument]];
+        const struct MirInsn *source = mir_definition(arg->src1);
+
+        if (argument_instruction[slot][argument] >= call_index ||
+            arg->dst >= 0 || arg->src2 >= 0 ||
+            arg->immediate != argument ||
+            arg->secondary_offset !=
+                mir.insns[call_instruction].secondary_offset ||
+            arg->type != function->proto_types[argument] ||
+            arg->memory_size != 0 || arg->memory_flags != 0 ||
+            arg->pointee_volatile_mask != 0 ||
+            arg->has_pointer_qualifiers ||
+            arg->bit_width != 0 || arg->bit_shift != 0 ||
+            arg->bit_mask != 0 ||
+            arg->divmod_cast_types != 0 ||
+            source == NULL || source >= arg ||
+            !mir_additive_unique_definition(arg->src1, source))
+            return 0;
+    }
     if (slot == 0)
         plan->check_function = function;
     else if (function != plan->check_function)
@@ -8167,9 +8242,16 @@ static int mir_match_additive_subscript_runner(
     if (!mir_additive_opcode_sequence() ||
         mir_cfg_block_count() != 7 || mir.local_bytes != 6 ||
         mir.aggregate_temp_bytes != 0 || mir.has_vla ||
-        (mir.return_type & 15) != TYPE_VOID)
+        mir.return_type != TYPE_VOID)
         return mir_machine_reject(
             "additive-subscript-runner", "shape");
+    for (item = 0; item < mir.count; ++item)
+        if ((mir.insns[item].opcode == MIR_INDEX_ADDRESS ||
+             mir.insns[item].opcode == MIR_LOAD_INDIRECT ||
+             mir.insns[item].opcode == MIR_STORE_INDIRECT) &&
+            (mir.insns[item].memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "additive-subscript-runner", "volatile-memory");
     offset_load_instruction =
         mir.insns[143].opcode == MIR_LOAD ? 143 : 144;
     offset_one_instruction =
@@ -8187,7 +8269,9 @@ static int mir_match_additive_subscript_runner(
         offset_offset == value_offset)
         return mir_machine_reject(
             "additive-subscript-runner", "local-layout");
-    if (!mir_machine_constant_equals(mir.insns[3].src1, 0) ||
+    if (!mir_additive_int_constant(1, &constant) ||
+        constant != 0 ||
+        mir.insns[3].src1 != mir.insns[1].dst ||
         mir.insns[5].object < 0 ||
         mir.insns[5].object != mir.insns[3].object ||
         mir.insns[5].object != mir.insns[22].object ||
@@ -8195,6 +8279,8 @@ static int mir_match_additive_subscript_runner(
         mir.insns[5].src2 != mir.insns[21].dst ||
         mir.insns[5].phi_pred1 != mir.insns[0].label ||
         mir.insns[5].phi_pred2 != mir.insns[18].label ||
+        !mir_packed_scalar_type(
+            mir.insns[5].type, TYPE_INT, 0, 0) ||
         !mir_additive_int_constant(7, &constant) ||
         constant <= 0 || constant > 256)
         return mir_machine_reject(
@@ -8271,26 +8357,16 @@ static int mir_match_additive_subscript_runner(
                 check_layout[item][5], 69 + 13 * item))
             return mir_machine_reject(
                 "additive-subscript-runner", "fixed-checks");
-    if (!plan->check_function->has_proto ||
-        plan->check_function->proto_variadic ||
-        plan->check_function->proto_nargs != 3 ||
-        plan->check_function->is_fastcall ||
-        plan->check_function->is_noreturn ||
-        (plan->check_function->type & 15) != TYPE_VOID ||
-        !mir_packed_scalar_type(
-            plan->check_function->proto_types[0], TYPE_CHAR, 0, 1) ||
-        !mir_packed_scalar_type(
-            plan->check_function->proto_types[1], TYPE_LONG, 0, 0) ||
-        !mir_packed_scalar_type(
-            plan->check_function->proto_types[2], TYPE_LONG, 0, 0))
-        return mir_machine_reject(
-            "additive-subscript-runner", "check-prototype");
-    if (!mir_machine_constant_equals(mir.insns[111].src1, 0) ||
+    if (!mir_additive_int_constant(109, &constant) ||
+        constant != 0 ||
+        mir.insns[111].src1 != mir.insns[109].dst ||
         mir.insns[113].object != mir.insns[5].object ||
         mir.insns[113].src1 != mir.insns[109].dst ||
         mir.insns[113].src2 != mir.insns[154].dst ||
         mir.insns[113].phi_pred1 != mir.insns[24].label ||
         mir.insns[113].phi_pred2 != mir.insns[151].label ||
+        !mir_packed_scalar_type(
+            mir.insns[113].type, TYPE_INT, 0, 0) ||
         !mir_additive_int_constant(115, &constant) ||
         constant <= 0 || constant > 256)
         return mir_machine_reject(
@@ -8307,7 +8383,8 @@ static int mir_match_additive_subscript_runner(
         mir.insns[122].immediate != 4 ||
         !mir_packed_scalar_type(
             mir.insns[122].type, TYPE_INT, 1, 1) ||
-        !mir_machine_constant_equals(mir.insns[123].dst, 0) ||
+        !mir_additive_int_constant(123, &constant) ||
+        constant != 0 ||
         mir.insns[124].src1 != mir.insns[122].dst ||
         mir.insns[124].src2 != mir.insns[123].dst ||
         mir.insns[124].memory_size != 2 ||
@@ -8342,7 +8419,8 @@ static int mir_match_additive_subscript_runner(
         mir.insns[133].immediate != 4 ||
         !mir_packed_scalar_type(
             mir.insns[133].type, TYPE_INT, 1, 1) ||
-        !mir_machine_constant_equals(mir.insns[134].dst, 1) ||
+        !mir_additive_int_constant(134, &constant) ||
+        constant != 1 ||
         mir.insns[135].src1 != mir.insns[133].dst ||
         mir.insns[135].src2 != mir.insns[134].dst ||
         mir.insns[135].memory_size != 2 ||
@@ -8353,7 +8431,8 @@ static int mir_match_additive_subscript_runner(
         mir.insns[136].memory_size != 2 ||
         !mir_packed_scalar_type(
             mir.insns[136].type, TYPE_INT, 1, 0) ||
-        !mir_machine_constant_equals(mir.insns[137].dst, 255) ||
+        !mir_additive_int_constant(137, &constant) ||
+        constant != 255 ||
         mir.insns[139].src1 != mir.insns[136].dst ||
         mir.insns[139].src2 != mir.insns[137].dst ||
         mir.insns[139].immediate != '&' ||
@@ -8369,8 +8448,9 @@ static int mir_match_additive_subscript_runner(
             "additive-subscript-runner", "source-value");
     if (!mir_additive_global_root(142, &root) ||
         root != plan->target ||
-        !mir_machine_constant_equals(
-            mir.insns[offset_one_instruction].dst, 1) ||
+        !mir_additive_int_constant(
+            offset_one_instruction, &constant) ||
+        constant != 1 ||
         !mir_additive_commutative_binary(
             145, offset_load_instruction, offset_one_instruction,
             '+', TYPE_INT) ||
@@ -8387,7 +8467,8 @@ static int mir_match_additive_subscript_runner(
         mir.insns[149].src1 != mir.insns[146].dst ||
         mir.insns[149].src2 != mir.insns[148].dst ||
         mir.insns[149].memory_size != 1 ||
-        !mir_machine_constant_equals(mir.insns[153].dst, 1) ||
+        !mir_additive_int_constant(153, &constant) ||
+        constant != 1 ||
         !mir_additive_commutative_binary(
             154, 113, 153, '+', TYPE_INT) ||
         mir.insns[155].src1 != mir.insns[154].dst ||

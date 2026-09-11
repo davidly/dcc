@@ -8,7 +8,15 @@
 #define ADDW12_SRCV 3
 #define ADDW12_DSTV 8
 
+#ifdef ADDW23_SIGNED_TARGET
+typedef signed char addw12_byte;
+#define ADDW23_EXPECT_BYTE(value) ((long)(addw12_byte)(value))
+#define ADDW23_COMPARE_BYTE(value) ((addw12_byte)(value))
+#else
 typedef unsigned char addw12_byte;
+#define ADDW23_EXPECT_BYTE(value) value##L
+#define ADDW23_COMPARE_BYTE(value) (value)
+#endif
 
 #ifdef ADDW12_SIGNED_SOURCE
 typedef signed short addw12_source_word;
@@ -36,7 +44,12 @@ static const addw12_source_word addw12_source[ADDW12_ROWS][3] = {
 #define ADDW12_SOURCE_OFFSET(i) addw12_source[i][0]
 #define ADDW12_SOURCE_VALUE(i) addw12_source[i][2]
 #else
-static const addw12_source_word addw12_source[ADDW12_ROWS][2] = {
+#ifdef ADDW23_VOLATILE_SOURCE
+static const volatile addw12_source_word
+#else
+static const addw12_source_word
+#endif
+addw12_source[ADDW12_ROWS][2] = {
     {0x19, 0x90}, {0x32, 0x90}, {0x3b, 0x90},
     {0x48, 0x90}, {0x5a, 0x0c}, {0x66, 0x90}
 };
@@ -44,11 +57,19 @@ static const addw12_source_word addw12_source[ADDW12_ROWS][2] = {
 #define ADDW12_SOURCE_VALUE(i) addw12_source[i][1]
 #endif
 
-static addw12_byte addw12_target[ADDW12_ACTIVE + ADDW12_GUARD];
+#ifdef ADDW23_VOLATILE_TARGET
+static volatile addw12_byte
+#else
+static addw12_byte
+#endif
+addw12_target[ADDW12_ACTIVE + ADDW12_GUARD];
 static int addw12_failures;
 static unsigned int addw12_checks;
 
-#ifdef ADDW12_CALL_ORDER
+#if defined(ADDW23_WORD_CHECK)
+static void addw12_check(
+    const char *name, int got, int expected)
+#elif defined(ADDW12_CALL_ORDER)
 static void addw12_check(
     const char *name, long expected, long got)
 #else
@@ -59,7 +80,7 @@ static void addw12_check(
     ++addw12_checks;
     if (got != expected) {
         printf("FAIL %s got %ld expected %ld\n",
-               name, got, expected);
+               name, (long)got, (long)expected);
         ++addw12_failures;
     }
 }
@@ -70,7 +91,12 @@ static void addw12_check(
 #define ADDW12_OFFSET_TYPE int
 #endif
 
-#ifdef ADDW12_CALL_ORDER
+#ifdef ADDW23_INDIRECT_CHECK
+static void (*addw23_check_pointer)(
+    const char *, long, long) = addw12_check;
+#define ADDW12_CHECK(name, got, expected) \
+    addw23_check_pointer(name, got, expected)
+#elif defined(ADDW12_CALL_ORDER)
 #define ADDW12_CHECK(name, got, expected) \
     addw12_check(name, expected, got)
 #else
@@ -94,7 +120,11 @@ static void additive_wave12(void)
     }
 #else
     for (i = 0; i < ADDW12_ACTIVE; i++)
+#ifdef ADDW23_COMMUTED_ADDITION
+        addw12_target[i] = (addw12_byte)(1 + i);
+#else
         addw12_target[i] = (addw12_byte)(i + 1);
+#endif
 #endif
 
     addw12_target[ADDW12_SRCV + 0] = 0xa0;
@@ -103,13 +133,17 @@ static void additive_wave12(void)
     addw12_target[ADDW12_DSTV + 1] = 0xb1;
 
     ADDW12_CHECK("addw12 fixed 3",
-                 addw12_target[ADDW12_SRCV + 0], 0xa0L);
+                 addw12_target[ADDW12_SRCV + 0],
+                 ADDW23_EXPECT_BYTE(0xa0));
     ADDW12_CHECK("addw12 fixed 4",
-                 addw12_target[ADDW12_SRCV + 1], 0xa1L);
+                 addw12_target[ADDW12_SRCV + 1],
+                 ADDW23_EXPECT_BYTE(0xa1));
     ADDW12_CHECK("addw12 fixed 8",
-                 addw12_target[ADDW12_DSTV + 0], 0xb0L);
+                 addw12_target[ADDW12_DSTV + 0],
+                 ADDW23_EXPECT_BYTE(0xb0));
     ADDW12_CHECK("addw12 fixed 9",
-                 addw12_target[ADDW12_DSTV + 1], 0xb1L);
+                 addw12_target[ADDW12_DSTV + 1],
+                 ADDW23_EXPECT_BYTE(0xb1));
 
     for (i = 0; i < ADDW12_ROWS; i++) {
         ADDW12_OFFSET_TYPE off;
@@ -119,15 +153,19 @@ static void additive_wave12(void)
         val = ADDW12_SOURCE_VALUE(i) & 0xff;
 #ifdef ADDW12_INDEX_ORDER
         addw12_target[1 - (-off)] = (addw12_byte)val;
+#elif defined(ADDW23_COMMUTED_ADDITION)
+        addw12_target[1 + off] = (addw12_byte)val;
 #else
         addw12_target[off + 1] = (addw12_byte)val;
 #endif
     }
 
     ADDW12_CHECK("addw12 loop 10",
-                 addw12_target[(0x19 & 0x0f) + 1], 0x90L);
+                 addw12_target[(0x19 & 0x0f) + 1],
+                 ADDW23_EXPECT_BYTE(0x90));
     ADDW12_CHECK("addw12 loop 11",
-                 addw12_target[(0x5a & 0x0f) + 1], 0x0cL);
+                 addw12_target[(0x5a & 0x0f) + 1],
+                 ADDW23_EXPECT_BYTE(0x0c));
 #ifdef ADDW12_RETURN_VALUE
     return 0;
 #endif
@@ -177,7 +215,8 @@ int main(void)
     for (i = ADDW12_ACTIVE;
          i < ADDW12_ACTIVE + ADDW12_GUARD; ++i) {
         ++addw12_checks;
-        if (addw12_target[i] != ADDW12_GUARD_VALUE) {
+        if (addw12_target[i] !=
+            ADDW23_COMPARE_BYTE(ADDW12_GUARD_VALUE)) {
             guards_ok = 0;
             ++addw12_failures;
         }
