@@ -59,6 +59,25 @@ EXPECTED_CLASSIFICATIONS = Counter({
     "opcode-unused": 529,
     "diagnostic-identity": 353,
 })
+FASTCALL_SOURCE_CLASSES = {
+    1: "tests/mir-clobber/b27local.c",
+    3: "tests/mir-clobber/b27local.c",
+    4: "tests/mir-clobber/buf27.c",
+    5: "tests/mir-clobber/buf27.c",
+    6: "tests/mir-clobber/buf27.c",
+    7: "tests/mir-clobber/buf27.c",
+    8: "tests/mir-clobber/buf27.c",
+    9: "tests/mir-clobber/buf27.c",
+    11: "tests/mir-clobber/buf27.c",
+    12: "tests/mir-clobber/buf27.c",
+    13: "tests/mir-clobber/buf27.c",
+    14: "tests/mir-clobber/buf27.c",
+}
+SOURCE_INVALID_FASTCALL_CLASSES = {
+    0: "cannot be variadic",
+    2: "at most 3 parameters",
+    10: "cannot be variadic",
+}
 
 
 def run_compiler(compiler, output, environment):
@@ -106,6 +125,77 @@ def parse_instructions(report):
             f"got {len(instructions)}"
         )
     return instructions
+
+
+def audit_fastcall_classes(compiler, output_dir):
+    rejected = 0
+    invalid = 0
+
+    for fastcall_class, source in FASTCALL_SOURCE_CLASSES.items():
+        output = output_dir / f"fastcall-{fastcall_class}.MAC"
+        environment = os.environ.copy()
+        environment.update({
+            "DCC_MIR_MACHINE_REPORT": "1",
+            "DCC_MIR_SELECT_REPORT": "1",
+        })
+        process = subprocess.run(
+            [
+                str(compiler),
+                f"-DBUF27_FASTCALL_CLASS={fastcall_class}",
+                "-fstack-check", "-stack", "512", "-I", ".",
+                source, "-o", str(output),
+            ],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=180,
+            check=False,
+        )
+        report = process.stdout + process.stderr
+        if process.returncode:
+            raise RuntimeError(
+                f"fastcall class {fastcall_class} failed\n{report}"
+            )
+        if EXACT in report or GENERIC.search(report) is None:
+            raise RuntimeError(
+                f"fastcall class {fastcall_class} was not rejected "
+                "to generic MIR"
+            )
+        output.unlink(missing_ok=True)
+        rejected += 1
+
+    for fastcall_class, diagnostic in (
+            SOURCE_INVALID_FASTCALL_CLASSES.items()):
+        output = output_dir / f"fastcall-invalid-{fastcall_class}.MAC"
+        process = subprocess.run(
+            [
+                str(compiler),
+                f"-DBUF27_FASTCALL_CLASS={fastcall_class}",
+                "-fstack-check", "-stack", "512", "-I", ".",
+                "tests/mir-clobber/buf27.c", "-o", str(output),
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=180,
+            check=False,
+        )
+        report = process.stdout + process.stderr
+        output.unlink(missing_ok=True)
+        if process.returncode == 0 or diagnostic not in report:
+            raise RuntimeError(
+                f"fastcall class {fastcall_class} did not produce "
+                f"the expected source diagnostic: {report}"
+            )
+        invalid += 1
+    print(
+        "buffered-console-wave27 ABI: "
+        f"{rejected} fastcall classes rejected; "
+        f"{invalid} source-invalid classes diagnosed"
+    )
 
 
 def main():
@@ -220,6 +310,7 @@ def main():
         f"{meaningful} meaningful survivors"
     )
     print(f"census: {census_path}")
+    audit_fastcall_classes(compiler, output_dir)
     if not args.discover and (
             meaningful or counts != EXPECTED_CLASSIFICATIONS):
         if counts != EXPECTED_CLASSIFICATIONS:

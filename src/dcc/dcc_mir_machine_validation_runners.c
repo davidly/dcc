@@ -14517,7 +14517,8 @@ static struct Sym *mir_buffered_console_function(
             (variadic ? MIR_CALL_FLAG_VARIADIC : 0) ||
         (function = find_global(call->name)) == NULL ||
         function->storage != SC_FUNC || function->is_funcptr ||
-        function->is_noreturn || !function->has_proto ||
+        function->is_noreturn || function->is_fastcall ||
+        !function->has_proto ||
         function->proto_variadic != variadic ||
         function->proto_nargs != fixed_arguments ||
         call->type != function->type)
