@@ -3828,6 +3828,10 @@ static int mir_match_callback_registration_runner(
     static const int stores[3] = {5, 10, 15};
     static const int declaration_nops[3] = {4, 9, 14};
     static const int condition_nops[3] = {16, 22, 40};
+    static const int label_instructions[18] = {
+        0, 18, 21, 24, 27, 29, 31, 33, 36,
+        39, 42, 45, 47, 49, 51, 54, 59, 63
+    };
     struct Sym *function;
     const char *assembly_name;
     int call_count = 0;
@@ -3855,6 +3859,20 @@ static int mir_match_callback_registration_runner(
     if (call_count != 5)
         return mir_machine_reject(
             "callback-registration-runner", "call-count");
+    for (item = 0; item < 18; ++item) {
+        int previous;
+        int label = mir.insns[label_instructions[item]].label;
+
+        if (label < 0)
+            return mir_machine_reject(
+                "callback-registration-runner", "label");
+        for (previous = 0; previous < item; ++previous)
+            if (label ==
+                    mir.insns[label_instructions[previous]].label)
+                return mir_machine_reject(
+                    "callback-registration-runner",
+                    "label-alias");
+    }
 
     for (item = 0; item < 3; ++item) {
         const struct MirInsn *address =
@@ -4033,6 +4051,10 @@ static int mir_match_callback_registration_runner(
     plan->failure_string_id = (int)mir.insns[55].immediate;
     plan->success_string_id = (int)mir.insns[60].immediate;
     if (plan->failure_string_id == plan->success_string_id ||
+        type_ptr_depth(mir.insns[64].type) != 0 ||
+        (mir.insns[64].type & 15) != TYPE_INT ||
+        (mir.insns[64].type & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.insns[64].type) != 2 ||
         !mir_machine_constant_equals(mir.insns[64].dst, 0) ||
         mir.insns[65].src1 != mir.insns[64].dst)
         return mir_machine_reject(
@@ -15118,6 +15140,7 @@ int mir_try_emit_validation_runners(MirStream *out, int phase)
         }
         if (mir_match_callback_registration_runner(
                 &callback_plan)) {
+            mir_machine_accept("callback-registration-runner");
             mir_emit_callback_registration_runner(
                 out, &callback_plan);
             return 1;

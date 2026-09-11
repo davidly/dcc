@@ -1,0 +1,166 @@
+[
+  {
+    "Name": "cbw27-canonical",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": [],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "cbw27-renamed-callbacks",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": [
+      "h1=w27_first_handler",
+      "h2=w27_second_handler",
+      "h3=w27_third_handler"
+    ],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "cbw27-full-debug",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": [],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [false],
+    "DebugModes": ["true"]
+  },
+  {
+    "Name": "cbw27-fast-register",
+    "Group": "callback-registration-wave27",
+    "Sources": [
+      "tests/tatexit.c",
+      "tests/mir-clobber/cbw27reg.c"
+    ],
+    "Defines": ["W27_FAST_REGISTER"],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "cbw27-failing-register",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": ["W27_FAIL_REGISTRATION=2"],
+    "Expected": ["FAIL atexit returned nonzero"],
+    "Exit": 0, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "cbw27-fast-callbacks",
+    "Group": "callback-registration-wave27",
+    "Sources": [
+      "tests/tatexit.c",
+      "tests/mir-clobber/cbw27fcb.c"
+    ],
+    "Defines": ["W27_FAST_CALLBACKS"],
+    "Expected": ["tatexit ok", "h", "h", "h"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireRejected": true
+  },
+  {
+    "Name": "cbw27-unsigned-results",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": ["W27_UNSIGNED_RESULTS"],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "cbw27-volatile-results",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": ["W27_VOLATILE_RESULTS"],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "cbw27-return-type",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": [],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg",
+    "MachineMutation": "64:type:32767",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cbw27-argument-id",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": [],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg",
+    "MachineMutation": "2:immediate:32767",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cbw27-result-width",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": [],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg",
+    "MachineMutation": "5:memory_size:7",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cbw27-phi-dataflow",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": [],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg",
+    "MachineMutation": "52:src2:1734",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cbw27-callback-identity",
+    "Group": "callback-registration-wave27",
+    "Sources": ["tests/tatexit.c"],
+    "Defines": [],
+    "Expected": ["tatexit ok", "h3", "h2", "h1"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "callback-registration-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg",
+    "MachineMutation": "1:identity:88",
+    "MachineMutationFunction": "main"
+  }
+]
