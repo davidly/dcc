@@ -5291,6 +5291,227 @@ static void mir_emit_call_safe_word_loop_schedule(
         mir_emit_call_safe_member_sum_schedule(out, plan);
 }
 
+static void mir_constant_do_while_hash_value(
+    unsigned long long *first, unsigned long long *second,
+    unsigned long long value)
+{
+    *first ^= value;
+    *first *= 1099511628211ULL;
+    *second ^= value + 0x9e3779b97f4a7c15ULL +
+        (*second << 6) + (*second >> 2);
+}
+
+static int mir_constant_do_while_semantic_payload(void)
+{
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int instruction;
+    int object;
+    int declared;
+    int item;
+
+    if (mir.object_count < 0 ||
+        mir.object_count >
+            (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+        return 0;
+    /*
+     * Source names and inactive branch immediates are normalized. The
+     * matcher separately binds the sole call target and loop constants.
+     */
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)insn->type,
+            (unsigned long long)(unsigned int)
+                ((insn->opcode == MIR_CONST ||
+                  insn->opcode == MIR_JUMP ||
+                  insn->opcode == MIR_BRANCH_FALSE)
+                    ? 0 : insn->immediate),
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            (unsigned long long)(unsigned int)
+                ((insn->opcode == MIR_LOAD ||
+                  insn->opcode == MIR_STORE)
+                    ? insn->object : 0),
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)
+                insn->secondary_offset,
+            (unsigned long long)(unsigned int)
+                insn->inline_temp_id,
+            (unsigned long long)(unsigned int)
+                insn->divmod_cast_types
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_constant_do_while_hash_value(
+                &first, &second, values[item]);
+    }
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+
+        mir_constant_do_while_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->storage);
+        mir_constant_do_while_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->type);
+        mir_constant_do_while_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->offset);
+        mir_constant_do_while_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->entry_value);
+        mir_constant_do_while_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->is_register);
+    }
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)
+                mir.declared_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_type_unstable[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_storage[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dim_counts[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_elem_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_vla_size_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_vla[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_array[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_volatile[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_pointee_is_volatile[declared],
+            (unsigned long long)
+                mir.declared_pointee_volatile_masks[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dynamic_strides[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_const[declared],
+            (unsigned long long)
+                mir.declared_const_values[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_funcptr[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_funcptr_return_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_has_proto[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_nargs[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_variadic[declared]
+        };
+
+        if (mir.declared_dim_counts[declared] < 0 ||
+            mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+            mir.declared_proto_nargs[declared] < 0 ||
+            mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+            return 0;
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_constant_do_while_hash_value(
+                &first, &second, values[item]);
+        for (item = 0;
+             item < mir.declared_dim_counts[declared]; ++item)
+            mir_constant_do_while_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_dims[declared][item]);
+        for (item = 0;
+             item < mir.declared_proto_nargs[declared]; ++item)
+            mir_constant_do_while_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_proto_types[declared][item]);
+    }
+    for (item = 0; item < mir.alias_count; ++item)
+        mir_constant_do_while_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)
+                mir.alias_declaration_indices[item]);
+    {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)mir.count,
+            (unsigned long long)(unsigned int)mir.next_value,
+            (unsigned long long)(unsigned int)mir.next_label,
+            (unsigned long long)(unsigned int)mir.next_call_id,
+            (unsigned long long)(unsigned int)
+                mir.has_indirect_incdec,
+            (unsigned long long)(unsigned int)
+                mir.has_pointer_difference,
+            (unsigned long long)(unsigned int)
+                mir.has_narrowed_for_counter,
+            (unsigned long long)(unsigned int)
+                mir.has_compound_literal,
+            (unsigned long long)(unsigned int)mir.has_vla,
+            (unsigned long long)(unsigned int)
+                mir.implicit_zero_return,
+            (unsigned long long)(unsigned int)
+                mir.has_runtime_stride_param,
+            (unsigned long long)(unsigned int)
+                mir.is_variadic_function,
+            (unsigned long long)(unsigned int)mir.return_type,
+            (unsigned long long)(unsigned int)mir.local_bytes,
+            (unsigned long long)(unsigned int)
+                mir.dead_local_suffix_bytes,
+            (unsigned long long)(unsigned int)
+                mir.aggregate_temp_bytes,
+            (unsigned long long)(unsigned int)mir.opaque_count,
+            (unsigned long long)(unsigned int)mir.object_count,
+            (unsigned long long)(unsigned int)
+                mir.has_declared_register_object,
+            (unsigned long long)(unsigned int)mir.declared_count,
+            (unsigned long long)(unsigned int)mir.alias_count
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_constant_do_while_hash_value(
+                &first, &second, values[item]);
+    }
+    if (first == 0xf0d541f26949b2c5ULL &&
+        second == 0x92c33dd0eac1b45aULL)
+        return 1;
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s "
+                "template=constant-do-while-schedule "
+                "reject=semantic-payload "
+                "fingerprint=%016llx:%016llx\n",
+                mir.name, first, second);
+    return 0;
+}
+
 static int mir_match_constant_do_while_schedule(
     struct MirConstantDoWhileSchedule *plan)
 {
@@ -5349,7 +5570,8 @@ static int mir_match_constant_do_while_schedule(
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 171 || mir_cfg_block_count() != 15 ||
         mir.has_vla || type_size(mir.return_type) != 0)
-        return 0;
+        return mir_machine_reject(
+            "constant-do-while-schedule", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
                 expected_opcodes[instruction])
@@ -5579,6 +5801,11 @@ static int mir_match_constant_do_while_schedule(
                 TYPE_VOID, &check_function))
             return mir_machine_reject(
                 "constant-do-while-schedule", "calls");
+    if (check_function == NULL || check_function->is_fastcall)
+        return mir_machine_reject(
+            "constant-do-while-schedule", "call-abi");
+    if (!mir_constant_do_while_semantic_payload())
+        return 0;
     plan->check_function = check_function;
     plan->second_count = (int)second_count;
     plan->third_initial = (int)third_initial;
