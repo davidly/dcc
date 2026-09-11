@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 5) / 6 ))
+campaign_jobs=$(( (mutation_jobs + 6) / 7 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -173,6 +173,11 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-long-index-%8m.profraw" \
     --jobs "$campaign_jobs" --skip-runtime \
     >"$campaign_dir/long-index.log" 2>&1 &
 long_index_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-sliding-%8m.profraw" \
+    python3 scripts/sliding-wave20-campaign.py \
+    --jobs "$campaign_jobs" --skip-runtime \
+    >"$campaign_dir/sliding.log" 2>&1 &
+sliding_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -180,7 +185,8 @@ for campaign in \
     "softmax:$softmax_pid" \
     "byte-math:$byte_math_pid" \
     "multidim:$multidim_pid" \
-    "long-index:$long_index_pid"
+    "long-index:$long_index_pid" \
+    "sliding:$sliding_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
