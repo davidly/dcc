@@ -31205,19 +31205,23 @@ static int mir_spilled_dimensions_valid(void)
     int64_t effective_local_bytes;
     int64_t base_frame_bytes;
 
-    /* Value and label IDs are created while building instructions. The
-     * instruction buffer capacity is therefore a conservative representation
-     * bound and prevents sparse corrupted IDs from driving multi-GB tables. */
+    /* Value, label, and call IDs are created by instructions. Even when an
+     * optimization turns their defining instruction into a NOP, it retains
+     * the instruction and ID, so count is the practical representation bound.
+     * Do not trust a corrupted allocation capacity to authorize huge tables. */
     if (mir.count < 0 || mir.count > mir.capacity ||
         mir.next_value < 0 || mir.next_label < 0 ||
+        mir.next_call_id < 0 ||
         mir.object_count < 0 ||
         mir.object_count >
             (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
         (mir.count > 0 && mir.insns == NULL) ||
-        mir.next_value > mir.capacity ||
-        mir.next_label > mir.capacity ||
+        mir.next_value > mir.count ||
+        mir.next_label > mir.count ||
+        mir.next_call_id > mir.count ||
         (size_t)mir.next_value > SIZE_MAX / sizeof(int) ||
         (size_t)mir.next_label > SIZE_MAX / sizeof(int) ||
+        (size_t)mir.next_call_id > SIZE_MAX / sizeof(int) ||
         mir.next_value > (INT_MAX - 2 * mir.object_count) / 2)
         return 0;
     effective_local_bytes =
@@ -31226,6 +31230,31 @@ static int mir_spilled_dimensions_valid(void)
     return effective_local_bytes >= 0 &&
            mir.aggregate_temp_bytes >= 0 &&
            base_frame_bytes >= 0 && base_frame_bytes <= 30000;
+}
+
+static int mir_spilled_text_metadata_valid(int *invalid_instruction)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (memchr(insn->name, '\0', sizeof(insn->name)) == NULL ||
+            memchr(insn->base_name, '\0',
+                   sizeof(insn->base_name)) == NULL) {
+            if (invalid_instruction != NULL)
+                *invalid_instruction = instruction;
+            return 0;
+        }
+    }
+    for (instruction = 0; instruction < mir.object_count; ++instruction)
+        if (memchr(mir.objects[instruction].name, '\0',
+                   sizeof(mir.objects[instruction].name)) == NULL) {
+            if (invalid_instruction != NULL)
+                *invalid_instruction = instruction;
+            return 0;
+        }
+    return 1;
 }
 
 /*
@@ -31319,6 +31348,257 @@ static int mir_spilled_value_operands_valid(int *invalid_instruction)
     return 1;
 }
 
+struct MirSpilledCallPrototype {
+    int has_proto;
+    int parameter_count;
+    int variadic;
+    const int *parameter_types;
+};
+
+static void mir_spilled_resolve_call_prototype(
+    const struct MirInsn *call, int call_instruction,
+    struct MirSpilledCallPrototype *prototype)
+{
+    const struct Sym *callee = NULL;
+
+    memset(prototype, 0, sizeof(*prototype));
+    if (strcmp(call->name, "<indirect>") == 0 && call->src1 >= 0) {
+        int definition;
+
+        for (definition = 0; definition < call_instruction; ++definition) {
+            const struct MirInsn *source = &mir.insns[definition];
+            int declared;
+
+            if (source->dst != call->src1 ||
+                (source->opcode != MIR_LOAD &&
+                 source->opcode != MIR_PARAM))
+                continue;
+            declared = -1;
+            {
+                int candidate;
+
+                for (candidate = 0;
+                     candidate < mir.declared_count; ++candidate)
+                    if (strcmp(mir.declared_names[candidate],
+                               source->name) == 0) {
+                        declared = candidate;
+                        break;
+                    }
+            }
+            if (declared >= 0) {
+                if (mir.declared_has_proto[declared]) {
+                    prototype->has_proto = 1;
+                    prototype->parameter_count =
+                        mir.declared_proto_nargs[declared];
+                    prototype->variadic =
+                        mir.declared_proto_variadic[declared];
+                    prototype->parameter_types =
+                        mir.declared_proto_types[declared];
+                }
+                return;
+            }
+            callee = find_global(source->name);
+            break;
+        }
+    } else {
+        callee = find_global(call->name);
+    }
+    if (callee != NULL && callee->has_proto) {
+        prototype->has_proto = 1;
+        prototype->parameter_count = callee->proto_nargs;
+        prototype->variadic = callee->proto_variadic;
+        prototype->parameter_types = callee->proto_types;
+    }
+}
+
+static int mir_spilled_argument_source_type_valid(
+    int source_type, int argument_type)
+{
+    int size;
+
+    if (source_type == argument_type)
+        return 1;
+    if (type_is_struct_object(source_type) ||
+        type_is_struct_object(argument_type) ||
+        type_is_float(source_type) ||
+        type_is_float(argument_type))
+        return 0;
+    size = type_size(source_type);
+    return size == type_size(argument_type) && (size == 2 || size == 4);
+}
+
+static int mir_spilled_structure_valid(int *invalid_instruction)
+{
+    int *definitions;
+    int *calls;
+    int instruction;
+    int valid = 1;
+
+    definitions = (int *)malloc(
+        (size_t)(mir.next_value > 0 ? mir.next_value : 1) *
+        sizeof(*definitions));
+    calls = (int *)malloc(
+        (size_t)(mir.next_call_id > 0 ? mir.next_call_id : 1) *
+        sizeof(*calls));
+    if (definitions == NULL || calls == NULL) {
+        free(calls);
+        free(definitions);
+        if (invalid_instruction != NULL)
+            *invalid_instruction = -1;
+        return 0;
+    }
+    for (instruction = 0; instruction < mir.next_value; ++instruction)
+        definitions[instruction] = -1;
+    for (instruction = 0; instruction < mir.next_call_id; ++instruction)
+        calls[instruction] = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->dst >= 0) {
+            if (definitions[insn->dst] >= 0) {
+                valid = 0;
+                break;
+            }
+            definitions[insn->dst] = instruction;
+        }
+        if (insn->opcode == MIR_CALL ||
+            insn->opcode == MIR_CALL_AGGREGATE) {
+            if (insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id ||
+                calls[insn->secondary_offset] >= 0) {
+                valid = 0;
+                break;
+            }
+            calls[insn->secondary_offset] = instruction;
+        }
+        if (insn->object >= 0 && insn->object < mir.object_count &&
+            (insn->immediate < INT_MIN || insn->immediate > INT_MAX ||
+             (int64_t)mir.objects[insn->object].offset +
+                     (int64_t)insn->immediate < INT_MIN ||
+             (int64_t)mir.objects[insn->object].offset +
+                     (int64_t)insn->immediate > INT_MAX)) {
+            valid = 0;
+            break;
+        }
+    }
+    for (instruction = 0; valid && instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int sources[2];
+        int operand;
+
+        sources[0] = insn->src1;
+        sources[1] = insn->src2;
+        for (operand = 0; operand < 2; ++operand)
+            if (sources[operand] >= 0 &&
+                (definitions[sources[operand]] < 0 ||
+                 (insn->opcode != MIR_PHI &&
+                  definitions[sources[operand]] >= instruction))) {
+                valid = 0;
+                break;
+            }
+        if (!valid)
+            break;
+        if (insn->opcode == MIR_ARG) {
+            int prior;
+            int call_instruction;
+
+            if (insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id ||
+                insn->immediate < 0 || insn->immediate >= mir.count) {
+                valid = 0;
+                break;
+            }
+            call_instruction = calls[insn->secondary_offset];
+            if (call_instruction <= instruction) {
+                valid = 0;
+                break;
+            }
+            for (prior = 0; prior < instruction; ++prior)
+                if (mir.insns[prior].opcode == MIR_ARG &&
+                    mir.insns[prior].secondary_offset ==
+                        insn->secondary_offset &&
+                    mir.insns[prior].immediate == insn->immediate) {
+                    valid = 0;
+                    break;
+                }
+        }
+    }
+    for (instruction = 0; valid && instruction < mir.count; ++instruction) {
+        const struct MirInsn *call = &mir.insns[instruction];
+        struct MirSpilledCallPrototype prototype;
+        const struct Sym *callee;
+        int argument_count = 0;
+        long last_position = -1;
+        int prior;
+
+        if (call->opcode != MIR_CALL &&
+            call->opcode != MIR_CALL_AGGREGATE)
+            continue;
+        if (call->opcode == MIR_CALL &&
+            ((strcmp(call->name, "<indirect>") != 0 &&
+              call->src1 >= 0) ||
+             call->src2 >= 0)) {
+            valid = 0;
+            break;
+        }
+        callee = strcmp(call->name, "<indirect>") == 0
+            ? NULL : find_global(call->name);
+        if (callee != NULL &&
+            (callee->storage != SC_FUNC || callee->is_funcptr ||
+             (call->opcode == MIR_CALL &&
+              callee->type != call->type))) {
+            valid = 0;
+            break;
+        }
+        memset(&prototype, 0, sizeof(prototype));
+        if (call->opcode == MIR_CALL)
+            mir_spilled_resolve_call_prototype(
+                call, instruction, &prototype);
+        if (prototype.has_proto &&
+            (prototype.parameter_count < 0 ||
+             prototype.parameter_count > MAX_PROTO_PARAMS)) {
+            valid = 0;
+            break;
+        }
+        for (prior = 0; prior < instruction; ++prior) {
+            const struct MirInsn *argument = &mir.insns[prior];
+            const struct MirInsn *definition;
+
+            if (argument->opcode != MIR_ARG ||
+                argument->secondary_offset != call->secondary_offset)
+                continue;
+            definition = &mir.insns[definitions[argument->src1]];
+            if ((call->opcode == MIR_CALL &&
+                 !type_is_struct_object(argument->type) &&
+                 !mir_spilled_argument_source_type_valid(
+                     definition->type, argument->type)) ||
+                (prototype.has_proto &&
+                 argument->immediate < prototype.parameter_count &&
+                 argument->type !=
+                     prototype.parameter_types[argument->immediate])) {
+                valid = 0;
+                break;
+            }
+            ++argument_count;
+            if (argument->immediate > last_position)
+                last_position = argument->immediate;
+        }
+        if (!valid)
+            break;
+        if (last_position != (long)argument_count - 1 ||
+            (prototype.has_proto &&
+             (argument_count < prototype.parameter_count ||
+              (!prototype.variadic &&
+               argument_count != prototype.parameter_count))))
+            valid = 0;
+    }
+    if (!valid && invalid_instruction != NULL)
+        *invalid_instruction = instruction;
+    free(calls);
+    free(definitions);
+    return valid;
+}
+
 static int mir_spilled_cfg_metadata_valid(int *invalid_instruction)
 {
     int *label_instructions;
@@ -31329,8 +31609,11 @@ static int mir_spilled_cfg_metadata_valid(int *invalid_instruction)
     label_instructions = (int *)malloc(
         (size_t)(mir.next_label > 0 ? mir.next_label : 1) *
         sizeof(*label_instructions));
-    if (label_instructions == NULL)
-        fatal("out of memory validating MIR spilled CFG metadata");
+    if (label_instructions == NULL) {
+        if (invalid_instruction != NULL)
+            *invalid_instruction = -1;
+        return 0;
+    }
     for (label = 0; label < mir.next_label; ++label)
         label_instructions[label] = -1;
     for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -31383,6 +31666,48 @@ static int mir_spilled_cfg_metadata_valid(int *invalid_instruction)
                 break;
             }
     }
+    for (instruction = 0; valid && instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_PHI) {
+            const struct MirInsn *phi = &mir.insns[instruction];
+            int block_start = mir_phi_physical_start(instruction);
+            int saw_first = 0;
+            int saw_second = 0;
+            int predecessor;
+
+            if (phi->phi_pred1 < 0 || phi->phi_pred1 >= mir.next_label ||
+                phi->phi_pred2 < 0 || phi->phi_pred2 >= mir.next_label ||
+                phi->phi_pred1 == phi->phi_pred2 ||
+                label_instructions[phi->phi_pred1] < 0 ||
+                label_instructions[phi->phi_pred2] < 0) {
+                valid = 0;
+                break;
+            }
+            for (predecessor = 0; predecessor < mir.count; ++predecessor) {
+                int successor;
+
+                for (successor = 0;
+                     successor < mir.insns[predecessor].successor_count;
+                     ++successor)
+                    if (mir.insns[predecessor].successors[successor] ==
+                        block_start) {
+                        int predecessor_label =
+                            mir_block_label_before(predecessor);
+
+                        if (predecessor_label == phi->phi_pred1)
+                            saw_first = 1;
+                        else if (predecessor_label == phi->phi_pred2)
+                            saw_second = 1;
+                        else {
+                            valid = 0;
+                            break;
+                        }
+                    }
+                if (!valid)
+                    break;
+            }
+            if (!saw_first || !saw_second)
+                valid = 0;
+        }
     if (!valid && invalid_instruction != NULL)
         *invalid_instruction = instruction;
     free(label_instructions);
@@ -31755,12 +32080,20 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
 
         if (!mir_spilled_dimensions_valid())
             return mir_scalar_cfg_preflight_reject("dimensions", -1);
+        if (!mir_spilled_text_metadata_valid(&invalid_instruction))
+            return mir_scalar_cfg_preflight_reject(
+                "text-metadata", invalid_instruction);
         if (!mir_spilled_value_operands_valid(&invalid_instruction))
             return mir_scalar_cfg_preflight_reject(
                 "value-operand", invalid_instruction);
+        if (!mir_spilled_structure_valid(&invalid_instruction))
+            return mir_scalar_cfg_preflight_reject(
+                "structure", invalid_instruction);
         if (!mir_spilled_cfg_metadata_valid(&invalid_instruction))
             return mir_scalar_cfg_preflight_reject(
                 "cfg-metadata", invalid_instruction);
+        if (!mir_verify_dominance())
+            return mir_scalar_cfg_preflight_reject("dominance", -1);
     }
     if ((!type_is_struct_object(mir.return_type) &&
             (mir.return_type & 15) != TYPE_VOID &&
@@ -35932,7 +36265,13 @@ int mir_try_emit_spilled_scalar_cfg(MirStream *out)
     /* Let the candidate reset its full per-attempt state and report rejection. */
     if (!mir_spilled_dimensions_valid())
         return mir_emit_spilled_scalar_cfg_candidate(out);
+    if (!mir_spilled_text_metadata_valid(NULL))
+        return mir_emit_spilled_scalar_cfg_candidate(out);
     if (!mir_spilled_value_operands_valid(NULL))
+        return mir_emit_spilled_scalar_cfg_candidate(out);
+    if (!mir_spilled_structure_valid(NULL))
+        return mir_emit_spilled_scalar_cfg_candidate(out);
+    if (!mir_spilled_cfg_metadata_valid(NULL))
         return mir_emit_spilled_scalar_cfg_candidate(out);
     if (!mir_has_phi_first_call_argument_candidate())
         return mir_emit_spilled_scalar_cfg_candidate(out);

@@ -4597,6 +4597,279 @@ static void verify_spilled_dimension_preflight_transaction(void)
     clear_liveness();
 }
 
+static void verify_spilled_structural_preflight(void)
+{
+    struct Sym *callee;
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int saved_capacity;
+    int result;
+    int ok = 1;
+
+    setup(6, 3, 1);
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].immediate = '+';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[5].src1 = 2;
+    expect_spilled_candidate("structural valid control", 1);
+
+    mir.insns[2].dst = 0;
+    expect_spilled_candidate("duplicate definition rejection", 0);
+
+    mir.insns[2].dst = 1;
+    mir.insns[2].opcode = MIR_NOP;
+    mir.insns[2].dst = -1;
+    expect_spilled_candidate("undefined value rejection", 0);
+
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[3].src1 = 2;
+    expect_spilled_candidate("self use rejection", 0);
+
+    setup(3, 1, 1);
+    mir.next_call_id = -1;
+    expect_spilled_candidate("negative call dimension rejection", 0);
+
+    mir.next_call_id = mir.capacity + 1;
+    expect_spilled_candidate("oversized call dimension rejection", 0);
+
+    setup(3, 1, 1);
+    saved_capacity = mir.capacity;
+    mir.capacity = INT_MAX;
+    mir.next_value = INT_MAX;
+    expect_spilled_candidate("capacity-independent value bound", 0);
+    mir.next_value = 1;
+    mir.next_label = INT_MAX;
+    expect_spilled_candidate("capacity-independent label bound", 0);
+    mir.next_label = 1;
+    mir.next_call_id = INT_MAX;
+    expect_spilled_candidate("capacity-independent call bound", 0);
+    mir.capacity = saved_capacity;
+
+    setup(5, 2, 1);
+    mir.insns[2].opcode = MIR_CALL;
+    mir.insns[2].dst = 1;
+    mir.insns[2].secondary_offset = 0;
+    strcpy(mir.insns[2].name, "verify_spilled_call");
+    mir.insns[4].src1 = 1;
+    mir.next_call_id = 1;
+    expect_spilled_candidate("call metadata valid control", 1);
+
+    mir.insns[2].secondary_offset = 1;
+    expect_spilled_candidate("out of range call ID rejection", 0);
+
+    setup(5, 3, 1);
+    mir.insns[1].opcode = MIR_CALL;
+    mir.insns[1].dst = 0;
+    mir.insns[1].secondary_offset = 0;
+    strcpy(mir.insns[1].name, "verify_spilled_call_a");
+    mir.insns[2].opcode = MIR_CALL;
+    mir.insns[2].dst = 1;
+    mir.insns[2].secondary_offset = 1;
+    strcpy(mir.insns[2].name, "verify_spilled_call_b");
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].immediate = '+';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[4].src1 = 2;
+    mir.next_call_id = 2;
+    expect_spilled_candidate("unique call IDs valid control", 1);
+
+    mir.insns[2].secondary_offset = 0;
+    expect_spilled_candidate("duplicate call ID rejection", 0);
+
+    callee = add_global("verify_spilled_arg", TYPE_INT, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 1;
+    callee->proto_types[0] = TYPE_INT;
+    setup(5, 2, 1);
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].immediate = 0;
+    mir.insns[2].secondary_offset = 0;
+    mir.insns[3].opcode = MIR_CALL;
+    mir.insns[3].dst = 1;
+    mir.insns[3].secondary_offset = 0;
+    strcpy(mir.insns[3].name, "verify_spilled_arg");
+    mir.insns[4].src1 = 1;
+    mir.next_call_id = 1;
+    expect_spilled_candidate("argument metadata valid control", 1);
+
+    mir.insns[3].src1 = 0;
+    expect_spilled_candidate("direct call source rejection", 0);
+
+    mir.insns[3].src1 = -1;
+    mir.insns[2].type = TYPE_LONG;
+    expect_spilled_candidate("argument ABI type rejection", 0);
+
+    mir.insns[2].type = TYPE_INT;
+    mir.insns[1].type = TYPE_LONG;
+    expect_spilled_candidate("argument source type rejection", 0);
+
+    mir.insns[1].type = TYPE_INT;
+    mir.insns[2].opcode = MIR_NOP;
+    mir.insns[2].src1 = -1;
+    expect_spilled_candidate("missing prototype argument rejection", 0);
+
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    callee->storage = SC_GLOBAL;
+    expect_spilled_candidate("non-function callee rejection", 0);
+
+    callee->storage = SC_FUNC;
+    mir.insns[3].type = TYPE_CHAR;
+    expect_spilled_candidate("call return ABI rejection", 0);
+
+    mir.insns[3].type = TYPE_INT;
+    mir.insns[2].secondary_offset = 1;
+    expect_spilled_candidate("out of range argument ID rejection", 0);
+
+    mir.insns[2].secondary_offset = 0;
+    mir.insns[2].immediate = 1;
+    expect_spilled_candidate("noncontiguous argument rejection", 0);
+
+    mir.insns[2].immediate = 0;
+    memset(mir.insns[3].name, 'x', sizeof(mir.insns[3].name));
+    expect_spilled_candidate("unterminated call name rejection", 0);
+
+    setup(6, 2, 1);
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].immediate = 0;
+    mir.insns[2].secondary_offset = 0;
+    mir.insns[3].opcode = MIR_ARG;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].immediate = 0;
+    mir.insns[3].secondary_offset = 0;
+    mir.insns[4].opcode = MIR_CALL;
+    mir.insns[4].dst = 1;
+    mir.insns[4].secondary_offset = 0;
+    strcpy(mir.insns[4].name, "verify_spilled_duplicate_arg");
+    mir.insns[5].src1 = 1;
+    mir.next_call_id = 1;
+    expect_spilled_candidate("duplicate argument rejection", 0);
+
+    setup(11, 4, 4);
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 2;
+    mir.insns[3].opcode = MIR_BRANCH_FALSE;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].label = 2;
+    mir.insns[4].opcode = MIR_LABEL;
+    mir.insns[4].label = 1;
+    mir.insns[5].opcode = MIR_CONST;
+    mir.insns[5].dst = 1;
+    mir.insns[6].opcode = MIR_JUMP;
+    mir.insns[6].label = 3;
+    mir.insns[7].opcode = MIR_LABEL;
+    mir.insns[7].label = 2;
+    mir.insns[8].opcode = MIR_LABEL;
+    mir.insns[8].label = 3;
+    mir.insns[9].opcode = MIR_PHI;
+    mir.insns[9].dst = 3;
+    mir.insns[9].src1 = 1;
+    mir.insns[9].src2 = 2;
+    mir.insns[9].phi_pred1 = 1;
+    mir.insns[9].phi_pred2 = 2;
+    mir.insns[10].src1 = 3;
+    expect_spilled_candidate("PHI metadata valid control", 1);
+
+    mir.insns[9].phi_pred1 = 0;
+    expect_spilled_candidate("non-predecessor PHI label rejection", 0);
+
+    mir.insns[9].phi_pred1 = 1;
+    mir.insns[9].src1 = 2;
+    mir.insns[9].src2 = 1;
+    expect_spilled_candidate("non-dominating PHI source rejection", 0);
+
+    setup(3, 1, 1);
+    mir.local_bytes = 2;
+    mir.object_count = 1;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    mir.objects[0].storage = SC_LOCAL;
+    mir.objects[0].type = TYPE_INT;
+    mir.objects[0].offset = INT_MAX;
+    strcpy(mir.objects[0].name, "verify_spilled_offset");
+    mir.insns[1].opcode = MIR_LOAD;
+    mir.insns[1].object = 0;
+    mir.insns[1].immediate = 1;
+    strcpy(mir.insns[1].name, mir.objects[0].name);
+    expect_spilled_candidate("overflowing object offset rejection", 0);
+
+    setup(6, 3, 1);
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].immediate = '+';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[5].src1 = 2;
+    prepare_test_cfg_metadata();
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL spilled structural stream allocation\n");
+        ++failures;
+        mir_stream_close(control);
+        mir_stream_close(retry);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir.insns[2].opcode = MIR_NOP;
+    mir.insns[2].dst = -1;
+    label_id = first_label;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 0 &&
+         mir_stream_tell(retry) == 0 && mir_stream_size(retry) == 0 &&
+         label_id == first_label &&
+         mir_spilled_cfg_emitted_frame_bytes() == 0;
+
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 1;
+    mir_stream_rewind(retry);
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text) &&
+         retry_bytes == control_bytes &&
+         memcmp(retry_text, control_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL spilled structural preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    mir_stream_close(retry);
+    clear_liveness();
+}
+
 static void verify_spilled_vla_size_preflight_transaction(void)
 {
     MirStream *control;
@@ -5101,6 +5374,7 @@ int main(void)
     verify_spilled_branch_target_preflight_transaction();
     verify_spilled_cfg_metadata_preflight_transaction();
     verify_spilled_dimension_preflight_transaction();
+    verify_spilled_structural_preflight();
     verify_spilled_vla_size_preflight_transaction();
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
