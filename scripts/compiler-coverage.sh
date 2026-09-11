@@ -195,6 +195,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-matrix-add-%8m.profraw" \
     --output-dir "$build_dir/matrix-add-wave21-audit" \
     >"$campaign_dir/matrix-add.log" 2>&1 &
 matrix_add_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-divmod-%8m.profraw" \
+    python3 scripts/divmod-wave22-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/divmod-wave22-audit" \
+    >"$campaign_dir/divmod.log" 2>&1 &
+divmod_pid=$!
 LLVM_PROFILE_FILE="$raw_dir/dcc-do-while-%8m.profraw" \
     python3 scripts/do-while-wave21-campaign.py \
     --jobs "$campaign_jobs" --skip-runtime \
@@ -229,6 +235,7 @@ for campaign in \
     "packed-record:$packed_record_pid" \
     "fortran-fatal:$fortran_fatal_pid" \
     "matrix-add:$matrix_add_pid" \
+    "divmod:$divmod_pid" \
     "do-while:$do_while_pid" \
     "symbol-find:$symbol_find_pid" \
     "ctype-realloc:$ctype_realloc_pid" \
