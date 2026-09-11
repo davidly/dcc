@@ -1,11 +1,21 @@
 #include <stdio.h>
 #include <string.h>
 
-static int source_guard_before = 0x1357;
-static char source_buffer[64];
-static int source_guard_after = 0x2468;
-static char output_buffer[64];
-static int output_guard_after = 0x3579;
+#ifdef LONG_INDEX_EXTERNAL_STORAGE
+#define FILE_SCOPE
+#else
+#define FILE_SCOPE static
+#endif
+
+FILE_SCOPE int source_guard_before = 0x1357;
+FILE_SCOPE char source_buffer[64];
+FILE_SCOPE int source_guard_after = 0x2468;
+#ifdef LONG_INDEX_ALIAS_OUTPUT
+#define output_buffer source_buffer
+#else
+FILE_SCOPE char output_buffer[64];
+#endif
+FILE_SCOPE int output_guard_after = 0x3579;
 
 #ifdef LONG_INDEX_CHAR_VALUES
 typedef char index_value_t;
@@ -19,15 +29,28 @@ typedef int index_value_t;
 #define INLINE_UNSAFE_EXPECTED 6
 #endif
 
-static index_value_t inline_values[16];
-static int inline_guard_after = 0x468a;
-static int unsafe_call_count;
-static int count_calls;
-static int copy_calls;
-static int safe_sum_calls;
-static int unsafe_sum_calls;
-static int string_check_calls;
-static int long_check_calls;
+#ifdef LONG_INDEX_LARGER_ARRAY
+#define INLINE_VALUE_COUNT 17
+#else
+#define INLINE_VALUE_COUNT 16
+#endif
+
+#ifdef LONG_INDEX_VOLATILE_VALUES
+#define VALUE_QUALIFIER volatile
+#else
+#define VALUE_QUALIFIER
+#endif
+
+FILE_SCOPE VALUE_QUALIFIER index_value_t
+    inline_values[INLINE_VALUE_COUNT];
+FILE_SCOPE int inline_guard_after = 0x468a;
+FILE_SCOPE int unsafe_call_count;
+FILE_SCOPE int count_calls;
+FILE_SCOPE int copy_calls;
+FILE_SCOPE int safe_sum_calls;
+FILE_SCOPE int unsafe_sum_calls;
+FILE_SCOPE int string_check_calls;
+FILE_SCOPE int long_check_calls;
 
 static inline int safe_index(int index)
 {
@@ -46,7 +69,7 @@ static inline int unsafe_index(int index)
 }
 
 static unsigned int sum_inline_safe(
-    const index_value_t *values, int count)
+    const VALUE_QUALIFIER index_value_t *values, int count)
 {
     int i;
     unsigned int total;
@@ -59,7 +82,7 @@ static unsigned int sum_inline_safe(
 }
 
 static int sum_inline_unsafe(
-    const index_value_t *values, int count)
+    const VALUE_QUALIFIER index_value_t *values, int count)
 {
     int i;
     int total;
@@ -130,8 +153,8 @@ static void copy_long_index_alternate(const char *in)
 }
 #endif
 
-static int checks;
-static int failures;
+FILE_SCOPE int checks;
+FILE_SCOPE int failures;
 
 static void check_guards(void)
 {
