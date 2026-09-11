@@ -925,6 +925,193 @@ static int mir_machine_exact_payload_fingerprint(
     return 0;
 }
 
+static int mir_machine_fixed_wrapper_metadata_fingerprint(
+    unsigned long long expected_first,
+    unsigned long long expected_second)
+{
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int instruction;
+    int declaration;
+    int object;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int name_origin = -1;
+        int base_name_origin = -1;
+        int previous;
+
+        if (insn->name[0] != 0) {
+            name_origin = instruction;
+            for (previous = 0;
+                 previous < instruction; ++previous) {
+                if (!strcmp(
+                        mir.insns[previous].name, insn->name)) {
+                    name_origin = previous;
+                    break;
+                }
+            }
+        }
+        if (insn->base_name[0] != 0) {
+            base_name_origin = instruction;
+            for (previous = 0;
+                 previous < instruction; ++previous) {
+                if (!strcmp(
+                        mir.insns[previous].base_name,
+                        insn->base_name)) {
+                    base_name_origin = previous;
+                    break;
+                }
+            }
+        }
+
+        mir_machine_payload_hash_value(
+            &first, &second, insn->pointee_volatile_mask);
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)
+                insn->has_pointer_qualifiers);
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)
+                insn->divmod_cast_types);
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)name_origin);
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)base_name_origin);
+    }
+    mir_machine_payload_hash_value(
+        &first, &second,
+        (unsigned long long)(uint32_t)mir.is_variadic_function);
+    mir_machine_payload_hash_value(
+        &first, &second,
+        (unsigned long long)(uint32_t)mir.local_bytes);
+    mir_machine_payload_hash_value(
+        &first, &second,
+        (unsigned long long)(uint32_t)mir.aggregate_temp_bytes);
+    mir_machine_payload_hash_value(
+        &first, &second,
+        (unsigned long long)(uint32_t)mir.object_count);
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->storage);
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->type);
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->offset);
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->entry_value);
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)entry->is_register);
+    }
+    mir_machine_payload_hash_value(
+        &first, &second,
+        (unsigned long long)(uint32_t)mir.declared_count);
+    for (declaration = 0;
+         declaration < mir.declared_count; ++declaration) {
+        int dimension;
+        int prototype_argument;
+        unsigned long long values[] = {
+            (unsigned long long)(uint32_t)
+                mir.declared_types[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_type_unstable[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_storage[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_offsets[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_sizes[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_dim_counts[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_elem_sizes[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_vla_size_offsets[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_is_vla[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_is_array[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_is_volatile[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_pointee_is_volatile[declaration],
+            (unsigned long long)
+                mir.declared_pointee_volatile_masks[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_dynamic_strides[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_is_const[declaration],
+            (unsigned long long)
+                mir.declared_const_values[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_is_funcptr[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_funcptr_return_types[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_has_proto[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_proto_nargs[declaration],
+            (unsigned long long)(uint32_t)
+                mir.declared_proto_variadic[declaration]
+        };
+        size_t value;
+
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            mir_machine_payload_hash_value(
+                &first, &second, values[value]);
+        }
+        for (dimension = 0;
+             dimension < mir.declared_dim_counts[declaration];
+             ++dimension) {
+            mir_machine_payload_hash_value(
+                &first, &second,
+                (unsigned long long)(uint32_t)
+                    mir.declared_dims[declaration][dimension]);
+        }
+        for (prototype_argument = 0;
+             prototype_argument <
+                 mir.declared_proto_nargs[declaration];
+             ++prototype_argument) {
+            mir_machine_payload_hash_value(
+                &first, &second,
+                (unsigned long long)(uint32_t)
+                    mir.declared_proto_types[declaration]
+                                            [prototype_argument]);
+        }
+    }
+    mir_machine_payload_hash_value(
+        &first, &second,
+        (unsigned long long)(uint32_t)mir.alias_count);
+    for (declaration = 0;
+         declaration < mir.alias_count; ++declaration) {
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)
+                mir.alias_declaration_indices[declaration]);
+    }
+    if (first == expected_first && second == expected_second)
+        return 1;
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s "
+                "template=fixed-wrapper-init "
+                "reject=semantic-metadata "
+                "fingerprint=%016llx:%016llx\n",
+                mir.name, first, second);
+    return 0;
+}
+
 static int mir_machine_member_layout(
     int insn_index, int *offset, int size)
 {
@@ -3535,7 +3722,8 @@ static int mir_match_fixed_wrapper_init(
         sizeof(constant_values) /
             sizeof(constant_values[0]) ||
         mir.count != 527 || mir_cfg_block_count() != 22 ||
-        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.has_vla || mir.is_variadic_function ||
+        (mir.return_type & 15) != TYPE_VOID ||
         pointer->opcode != MIR_PARAM ||
         type_ptr_depth(pointer->type) != 1 ||
         mir_machine_pointee_is_volatile(pointer) ||
@@ -3751,11 +3939,17 @@ static int mir_match_fixed_wrapper_init(
         return mir_machine_reject(
             "fixed-wrapper-init", "flow");
     for (index = 0; index < mir.count; ++index) {
-        if (mir.insns[index].opcode == MIR_CALL)
+        if (mir.insns[index].opcode == MIR_CALL ||
+            mir.insns[index].opcode == MIR_CALL_AGGREGATE)
             return mir_machine_reject(
                 "fixed-wrapper-init", "call");
     }
-    return 1;
+    if (!mir_machine_exact_payload_fingerprint(
+            "fixed-wrapper-init",
+            0x9382ade0084cfdf1ULL, 0x7eef1e911610c639ULL))
+        return 0;
+    return mir_machine_fixed_wrapper_metadata_fingerprint(
+        0x5928fdbbaaebec8eULL, 0x0d78a7f34ef5bee8ULL);
 }
 
 static void mir_emit_fixed_wrapper_init(
@@ -9674,6 +9868,7 @@ int mir_try_emit_structural_checks(MirStream *out)
         return 1;
     }
     if (mir_match_fixed_wrapper_init(&fixed_wrapper_init)) {
+        mir_machine_accept("fixed-wrapper-init");
         mir_emit_fixed_wrapper_init(out, &fixed_wrapper_init);
         return 1;
     }
