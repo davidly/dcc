@@ -3,6 +3,16 @@
 typedef int model_value_t;
 typedef long weight_value_t;
 
+#ifndef MATADD_MATRIX_QUALIFIER
+#define MATADD_MATRIX_QUALIFIER
+#endif
+
+#ifdef MATADD_SIGNED_COUNTS
+typedef signed char matrix_count_t;
+#else
+typedef unsigned char matrix_count_t;
+#endif
+
 #define MODEL_VALUE_MAX 32767
 #define MODEL_VALUE_MIN (-32768)
 #define Q16_MODEL_MAX ((weight_value_t)MODEL_VALUE_MAX * 256L)
@@ -41,12 +51,13 @@ static inline void add_clamped(model_value_t *destination,
         (weight_value_t)*destination + value);
 }
 
-static void matrix_vector_add(model_value_t *matrix, model_value_t *input,
-                              model_value_t *output,
-                              unsigned char rows, unsigned char columns)
+static void matrix_vector_add(
+    MATADD_MATRIX_QUALIFIER model_value_t *matrix,
+    model_value_t *input, model_value_t *output,
+    matrix_count_t rows, matrix_count_t columns)
 {
     weight_value_t acc;
-    unsigned char i, j;
+    matrix_count_t i, j;
 
     for (i = 0; i < rows; i++) {
         acc = 0;
@@ -87,6 +98,12 @@ int main(void)
     struct guarded_vector empty = {
         7777, {1234, -2345, 0, 0}, 8888
     };
+#ifdef MATADD_ALIAS_ORACLE
+    model_value_t alias_input_matrix[] = {256, 0, 0, 256};
+    model_value_t alias_input[] = {100, -40};
+    model_value_t alias_matrix[] = {256, 0, 0, 256};
+    model_value_t alias_matrix_input[] = {100, -40};
+#endif
 
     matrix_vector_add(
         basic_matrix, basic_input, basic.values, 3, 2);
@@ -96,10 +113,20 @@ int main(void)
         saturation_matrix, saturation_input, saturation.values, 4, 1);
     matrix_vector_add(
         basic_matrix, basic_input, empty.values, 0, 2);
+#ifdef MATADD_ALIAS_ORACLE
+    matrix_vector_add(
+        alias_input_matrix, alias_input, alias_input, 2, 2);
+    matrix_vector_add(
+        alias_matrix, alias_matrix_input, alias_matrix + 2, 2, 2);
+#endif
 
     print_vector("basic", &basic, 3);
     print_vector("round", &round, 4);
     print_vector("saturation", &saturation, 4);
     print_vector("empty", &empty, 2);
+#ifdef MATADD_ALIAS_ORACLE
+    printf("alias-input %d %d\n", alias_input[0], alias_input[1]);
+    printf("alias-matrix %d %d\n", alias_matrix[2], alias_matrix[3]);
+#endif
     return 0;
 }

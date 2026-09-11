@@ -180,6 +180,18 @@ static int mir_match_matrix_product_count_type(int type)
            type_size(type) == 1;
 }
 
+static int mir_matrix_product_clean_auxiliary_metadata(
+    const struct MirInsn *insn)
+{
+    return insn->memory_flags == 0 &&
+           insn->pointee_volatile_mask == 0 &&
+           !insn->has_pointer_qualifiers &&
+           insn->bit_width == 0 &&
+           insn->bit_shift == 0 &&
+           insn->bit_mask == 0 &&
+           insn->divmod_cast_types == 0;
+}
+
 static int mir_match_matrix_product_parameter(
     int instruction, int expected_offset, int is_pointer,
     int *stack_offset)
@@ -190,6 +202,9 @@ static int mir_match_matrix_product_parameter(
         (is_pointer
              ? !mir_match_matrix_product_pointer_type(parameter->type)
              : !mir_match_matrix_product_count_type(parameter->type)) ||
+        parameter->src1 != -1 || parameter->src2 != -1 ||
+        parameter->immediate != 0 || parameter->memory_size != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(parameter) ||
         !mir_machine_parameter_value_offset(
             parameter->dst, stack_offset) ||
         *stack_offset != expected_offset)
@@ -204,13 +219,36 @@ static int mir_match_matrix_product_call(
 {
     struct Sym *function;
     int actual;
+    int instruction;
+    const struct MirInsn *argument_insn = NULL;
 
     if (!mir_attention_call_arguments(call, 1, &actual) ||
         actual != argument ||
         !mir_match_matrix_product_word_type(call->type) ||
+        call->src1 != -1 || call->src2 != -1 ||
+        call->immediate != 0 || call->memory_size != 0 ||
+        call->secondary_offset <= 0 ||
         (call->memory_flags &
-         (MIR_CALL_FLAG_VARIADIC |
-          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+         ~MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0 ||
+        call->pointee_volatile_mask != 0 ||
+        call->has_pointer_qualifiers ||
+        call->bit_width != 0 || call->bit_shift != 0 ||
+        call->bit_mask != 0 || call->divmod_cast_types != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_ARG &&
+            mir.insns[instruction].secondary_offset ==
+                call->secondary_offset) {
+            argument_insn = &mir.insns[instruction];
+            break;
+        }
+    if (argument_insn == NULL ||
+        argument_insn->src1 != argument ||
+        argument_insn->src2 != -1 ||
+        argument_insn->immediate != 0 ||
+        argument_insn->memory_size != 0 ||
+        !mir_match_matrix_product_long_type(argument_insn->type) ||
+        !mir_matrix_product_clean_auxiliary_metadata(argument_insn))
         return 0;
     function = find_global(call->name);
     if (function == NULL || !function->is_defined ||
@@ -218,6 +256,7 @@ static int mir_match_matrix_product_call(
         function->is_funcptr || function->is_noreturn ||
         !function->has_proto || function->proto_variadic ||
         function->proto_nargs != 1 ||
+        function->type != call->type ||
         !mir_match_matrix_product_long_type(
             function->proto_types[0]) ||
         (call->base_name[0] != 0 &&
@@ -225,6 +264,116 @@ static int mir_match_matrix_product_call(
                 asm_name_for(sym_asm_name(function)))))
         return 0;
     *function_out = function;
+    return 1;
+}
+
+static int mir_match_matrix_product_add_metadata(void)
+{
+    static const int count_constants[] = {7, 26, 61, 136};
+    static const int word_constants[] = {73};
+    static const int long_constants[] = {
+        23, 70, 82, 86, 92, 97, 105
+    };
+    static const int pointer_constants[] = {45, 119};
+    static const int comparison_results[] = {20, 41, 71, 83, 93};
+    static const int word_phis[] = {110, 113, 116};
+    int instruction;
+    int item;
+
+    if (mir.next_value != 99 || mir.next_label != 20 ||
+        mir.next_call_id != 2 || mir.next_inline_temp_id != 3 ||
+        mir.local_bytes != 38 || mir.object_count != 6 ||
+        mir.declared_count != 24 || mir.alias_count != 0 ||
+        mir.has_runtime_stride_param || mir.is_variadic_function ||
+        mir.has_indirect_incdec || mir.has_pointer_difference ||
+        mir.has_narrowed_for_counter || mir.has_compound_literal ||
+        mir.opaque_count != 0)
+        return 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const struct MirInsn *source;
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (insn->opcode == MIR_LOAD || insn->opcode == MIR_STORE) {
+            if (!mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                insn->type != memory_type ||
+                !mir_machine_named_nonvolatile(insn) ||
+                !mir_matrix_product_clean_auxiliary_metadata(insn))
+                return 0;
+            if (insn->opcode == MIR_LOAD) {
+                if (insn->memory_size != 0)
+                    return 0;
+            } else {
+                source = mir_definition(insn->src1);
+                if (source == NULL ||
+                    (source->type != memory_type &&
+                     !(instruction == 117 &&
+                       source == &mir.insns[116] &&
+                       source->type == 0)) ||
+                    insn->memory_size != type_size(memory_type))
+                    return 0;
+            }
+        }
+    }
+
+    for (item = 0;
+         item < (int)(sizeof(count_constants) /
+                      sizeof(count_constants[0]));
+         ++item)
+        if (!mir_match_matrix_product_count_type(
+                mir.insns[count_constants[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(word_constants) /
+                      sizeof(word_constants[0]));
+         ++item)
+        if (!mir_match_matrix_product_word_type(
+                mir.insns[word_constants[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(long_constants) /
+                      sizeof(long_constants[0]));
+         ++item)
+        if (!mir_match_matrix_product_long_type(
+                mir.insns[long_constants[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(pointer_constants) /
+                      sizeof(pointer_constants[0]));
+         ++item)
+        if (!mir_match_matrix_product_pointer_type(
+                mir.insns[pointer_constants[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(comparison_results) /
+                      sizeof(comparison_results[0]));
+         ++item)
+        if (!mir_match_matrix_product_word_type(
+                mir.insns[comparison_results[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(word_phis) / sizeof(word_phis[0]));
+         ++item)
+        if (mir.insns[word_phis[item]].type != 0)
+            return 0;
+
+    if (!mir_match_matrix_product_pointer_type(mir.insns[52].type) ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[52]) ||
+        mir.insns[48].immediate != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[48]) ||
+        mir.insns[53].immediate != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[53]) ||
+        mir.insns[125].immediate != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[125]) ||
+        !mir_match_matrix_product_word_type(mir.insns[132].type) ||
+        mir.insns[132].immediate != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[132]))
+        return 0;
     return 1;
 }
 
@@ -718,6 +867,9 @@ static int mir_match_matrix_product_add_schedule(
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "matrix-product-add-schedule", "opcodes");
+    if (!mir_match_matrix_product_add_metadata())
+        return mir_machine_reject(
+            "matrix-product-add-schedule", "metadata");
     if (!mir_match_matrix_product_parameter(
             1, 2, 1, &plan->matrix_stack_offset) ||
         !mir_match_matrix_product_parameter(
