@@ -33,6 +33,7 @@ $environmentNames = @(
     "DCC_MIR_GENERAL_CANDIDATES",
     "DCC_MIR_MACHINE_REPORT",
     "DCC_MIR_MACHINE_FUNCTION",
+    "DCC_MIR_MACHINE_TEMPLATE",
     "DCC_MIR_MACHINE_MUTATE",
     "DCC_MIR_MACHINE_MUTATE_FUNCTION",
     "DCC_MIR_REPORT",
@@ -259,6 +260,9 @@ __ctu:
     $savedMachineFunction =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_MACHINE_FUNCTION", "Process")
+    $savedMachineTemplate =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_MACHINE_TEMPLATE", "Process")
     $savedSelectReport =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_SELECT_REPORT", "Process")
@@ -297,6 +301,8 @@ __ctu:
         } else {
             $null
         })
+    Set-ProcessEnvironment "DCC_MIR_MACHINE_TEMPLATE" `
+        $(if ($needsMachineReport) { $ExactTemplate } else { $null })
     Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" `
         $(if ($needsSelectReport) { "1" } else { $null })
     Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT_FUNCTION" `
@@ -344,6 +350,7 @@ __ctu:
             $savedSelectReportFunction
         Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" $savedMachineReport
         Set-ProcessEnvironment "DCC_MIR_MACHINE_FUNCTION" $savedMachineFunction
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_TEMPLATE" $savedMachineTemplate
         Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" $savedSelectReport
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
