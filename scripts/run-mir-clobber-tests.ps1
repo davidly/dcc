@@ -28,12 +28,15 @@ $tempRoot = Join-Path $repoRoot (
 $environmentNames = @(
     "DCC_MIR_COST_REPORT",
     "DCC_MIR_CACHE_VERIFY",
+    "DCC_MIR_CANDIDATES",
     "DCC_MIR_EMIT_FUNCTION",
+    "DCC_MIR_GENERAL_CANDIDATES",
     "DCC_MIR_MACHINE_REPORT",
     "DCC_MIR_MACHINE_FUNCTION",
     "DCC_MIR_MACHINE_MUTATE",
     "DCC_MIR_MACHINE_MUTATE_FUNCTION",
     "DCC_MIR_REPORT",
+    "DCC_MIR_FUNCTION",
     "DCC_MIR_REQUIRE_COMPLETE",
     "DCC_MIR_REQUIRE_EMIT",
     "DCC_MIR_SELECT_CANDIDATE",
@@ -55,7 +58,7 @@ foreach ($name in $environmentNames) {
 
 function Set-ProcessEnvironment([string]$Name, [string]$Value) {
     if ([string]::IsNullOrEmpty($Value)) {
-        [Environment]::SetEnvironmentVariable($Name, $null, "Process")
+        Remove-Item -LiteralPath "Env:$Name" -ErrorAction SilentlyContinue
     } else {
         [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
     }
@@ -243,6 +246,12 @@ __ctu:
     $savedCostReport =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_COST_REPORT", "Process")
+    $savedMirReport =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_REPORT", "Process")
+    $savedMirFunction =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_FUNCTION", "Process")
     $savedMachineReport =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_MACHINE_REPORT", "Process")
@@ -252,6 +261,24 @@ __ctu:
     $savedSelectReport =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_SELECT_REPORT", "Process")
+    $savedCandidates =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_CANDIDATES", "Process")
+    $savedEmitFunction =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_EMIT_FUNCTION", "Process")
+    $savedGeneralCandidates =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_GENERAL_CANDIDATES", "Process")
+    $savedGeneralFunction =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_GENERAL_FUNCTION", "Process")
+    $savedSelectFunction =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_SELECT_FUNCTION", "Process")
+    $savedSelectCandidate =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_SELECT_CANDIDATE", "Process")
     $needsMachineReport = [bool]$ExactTemplate
     $needsSelectReport =
         $needsMachineReport -or
@@ -268,9 +295,20 @@ __ctu:
         })
     Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" `
         $(if ($needsSelectReport) { "1" } else { $null })
-    if ($RequiredCandidate) {
-        Set-ProcessEnvironment "DCC_MIR_COST_REPORT" "1"
+    Set-ProcessEnvironment "DCC_MIR_REPORT" $null
+    Set-ProcessEnvironment "DCC_MIR_FUNCTION" $null
+    Set-ProcessEnvironment "DCC_MIR_CANDIDATES" $null
+    Set-ProcessEnvironment "DCC_MIR_GENERAL_CANDIDATES" $null
+    if ($RequiredSelector -ne "specialized") {
+        Set-ProcessEnvironment "DCC_MIR_EMIT_FUNCTION" $null
     }
+    if (-not $RequiredCandidate) {
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $null
+        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $null
+    }
+    Set-ProcessEnvironment "DCC_MIR_GENERAL_FUNCTION" $null
+    Set-ProcessEnvironment "DCC_MIR_COST_REPORT" `
+        $(if ($RequiredCandidate) { "1" } else { $null })
     if ($MachineMutation) {
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $MachineMutation
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" `
@@ -280,6 +318,16 @@ __ctu:
         $build = Invoke-WithTimeout $dccmake $arguments $repoRoot 60
     } finally {
         Set-ProcessEnvironment "DCC_MIR_COST_REPORT" $savedCostReport
+        Set-ProcessEnvironment "DCC_MIR_REPORT" $savedMirReport
+        Set-ProcessEnvironment "DCC_MIR_FUNCTION" $savedMirFunction
+        Set-ProcessEnvironment "DCC_MIR_CANDIDATES" $savedCandidates
+        Set-ProcessEnvironment "DCC_MIR_EMIT_FUNCTION" $savedEmitFunction
+        Set-ProcessEnvironment "DCC_MIR_GENERAL_CANDIDATES" `
+            $savedGeneralCandidates
+        Set-ProcessEnvironment "DCC_MIR_GENERAL_FUNCTION" `
+            $savedGeneralFunction
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $savedSelectFunction
+        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $savedSelectCandidate
         Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" $savedMachineReport
         Set-ProcessEnvironment "DCC_MIR_MACHINE_FUNCTION" $savedMachineFunction
         Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" $savedSelectReport
@@ -2391,8 +2439,8 @@ try {
                 "-o", (Join-Path $tempRoot "SEMANTIC.MAC")
             ) $repoRoot 60
         } finally {
-            [Environment]::SetEnvironmentVariable("DCC_MIR_REPORT",
-                $savedEnvironment["DCC_MIR_REPORT"], "Process")
+            Set-ProcessEnvironment "DCC_MIR_REPORT" `
+                $savedEnvironment["DCC_MIR_REPORT"]
         }
         if ($proof.TimedOut -or $proof.ExitCode -ne 0) {
             throw "MIR $($proofCase.Name) proof failed:`n$($proof.Output)"
