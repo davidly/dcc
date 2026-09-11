@@ -30,6 +30,7 @@ $environmentNames = @(
     "DCC_MIR_CACHE_VERIFY",
     "DCC_MIR_EMIT_FUNCTION",
     "DCC_MIR_MACHINE_REPORT",
+    "DCC_MIR_MACHINE_FUNCTION",
     "DCC_MIR_MACHINE_MUTATE",
     "DCC_MIR_MACHINE_MUTATE_FUNCTION",
     "DCC_MIR_REPORT",
@@ -242,6 +243,31 @@ __ctu:
     $savedCostReport =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_COST_REPORT", "Process")
+    $savedMachineReport =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_MACHINE_REPORT", "Process")
+    $savedMachineFunction =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_MACHINE_FUNCTION", "Process")
+    $savedSelectReport =
+        [Environment]::GetEnvironmentVariable(
+            "DCC_MIR_SELECT_REPORT", "Process")
+    $needsMachineReport = [bool]$ExactTemplate
+    $needsSelectReport =
+        $needsMachineReport -or
+        [bool]$RequiredGenericFunction -or
+        [bool]$RequiredSelectorFunction -or
+        [bool]$RequiredCandidate
+    Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" `
+        $(if ($needsMachineReport) { "1" } else { $null })
+    Set-ProcessEnvironment "DCC_MIR_MACHINE_FUNCTION" `
+        $(if ($needsMachineReport -and $ExactFunction) {
+            $ExactFunction
+        } else {
+            $null
+        })
+    Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" `
+        $(if ($needsSelectReport) { "1" } else { $null })
     if ($RequiredCandidate) {
         Set-ProcessEnvironment "DCC_MIR_COST_REPORT" "1"
     }
@@ -254,6 +280,9 @@ __ctu:
         $build = Invoke-WithTimeout $dccmake $arguments $repoRoot 60
     } finally {
         Set-ProcessEnvironment "DCC_MIR_COST_REPORT" $savedCostReport
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" $savedMachineReport
+        Set-ProcessEnvironment "DCC_MIR_MACHINE_FUNCTION" $savedMachineFunction
+        Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" $savedSelectReport
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
     }

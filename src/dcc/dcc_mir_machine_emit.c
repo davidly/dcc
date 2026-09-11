@@ -77,9 +77,18 @@ void mir_machine_emit_global_word(
 void mir_machine_emit_float_bits(
     MirStream *out, unsigned long bits);
 
+static int mir_machine_report_enabled(void)
+{
+    const char *filter = getenv("DCC_MIR_MACHINE_FUNCTION");
+
+    return getenv("DCC_MIR_MACHINE_REPORT") != NULL &&
+           (filter == NULL || filter[0] == '\0' ||
+            !strcmp(filter, mir.name));
+}
+
 int mir_machine_reject(const char *template_name, const char *reason)
 {
-    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+    if (mir_machine_report_enabled())
         fprintf(stderr,
                 "; MIR machine function=%s template=%s reject=%s\n",
                 mir.name, template_name, reason);
@@ -88,7 +97,7 @@ int mir_machine_reject(const char *template_name, const char *reason)
 
 void mir_machine_accept(const char *template_name)
 {
-    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+    if (mir_machine_report_enabled())
         fprintf(stderr,
                 "; MIR machine function=%s template=%s accept=emitted\n",
                 mir.name, template_name);
