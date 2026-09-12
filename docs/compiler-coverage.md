@@ -250,6 +250,28 @@ This focused overlay is gap-selection evidence, not a replacement full
 checkpoint. All five normal and ASan/UBSan host tests and all 128 script tests
 pass.
 
+The first Wave 32 target-aware differential increment deliberately combines
+contracts previously exercised separately. Its byte and word functions each
+contain a two-input PHI, one aliasing call, maximum liveness seven, three
+spills, four cross-call values, and two PHI moves before selecting
+`spilled-scalar-cfg`. Eight independent target-width results cover both PHI
+arms, aliasing and disjoint writes, and 8/16-bit wrap boundaries. A source
+fault that flips the result bit causes all eight named oracle failures. The
+data-only campaign adds 26 configurations, moving the exact clobber inventory
+from 9,564 to 9,590; every stack/no-stack, peep/nopeep, full-debug, and
+line-debug configuration passes.
+
+A fresh current-tree instrumented compiler produced 27 non-empty profile
+files for these 26 configurations. Overlaying them on Wave 30 for unchanged
+production functions adds zero lines, branch outcomes, or regions: the full
+corpus had already executed those generic-emitter outcomes independently.
+That zero delta is retained as evidence rather than hidden. The increment's
+value is the asserted interaction among PHI transfer, spills, call clobbers,
+alias invalidation, and post-call reload. It does not replace the Wave 30
+four-metric checkpoint or change its denominator. The independent oracle test
+and all 129 repository script tests pass. Commit `ff638de3` contains the
+fixture, campaign, and oracle.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

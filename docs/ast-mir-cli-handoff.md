@@ -216,11 +216,14 @@ audits exercise 9,216 mutations with zero meaningful survivors; supported
 forms retain exact output and unsupported forms retain generated
 homed/spilled fallback.
 
-Latest integrated totals: 4,486/4,486 functions, 182,677/194,815 lines
-(93.77%), 95,622/149,058 native branch outcomes (64.15%), and
-165,083/175,115 regions (94.27%). The raw uncovered ledger is 53,192.
-The later historical sections retain the earlier checkpoints; use this
-parallel-wave summary for the current measurement.
+Wave 32 raises the locally verified exact inventory to 9,590 configurations
+with a combined PHI, spill, alias, call-clobber, and post-call reload proof.
+The authoritative Wave 30 LLVM checkpoint remains 4,608/4,608 functions
+(100.00%), 190,711/202,512 lines (94.17%), 104,229/155,732 native branch
+outcomes (66.93%), and 173,307/183,178 regions (94.61%). Its raw uncovered
+ledger is 51,245. The later historical sections retain earlier checkpoints;
+use Wave 30 for current full-collection metrics and Wave 32 for the current
+locally verified execution inventory.
 
 ## Publication State
 
@@ -230,7 +233,7 @@ parallel-wave summary for the current measurement.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest locally validated continuation implementation:
-  `1c15706c` (`Audit allocation lifetime MIR runner`).
+  `ff638de3` (`Add PHI alias call differential proof`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -430,6 +433,26 @@ parallel-wave summary for the current measurement.
   prioritization evidence, not a new authoritative full checkpoint. All five
   normal and sanitized host CTests and all 128 script tests pass; production
   code and release output are unchanged.
+- The first Wave 32 increment adds a target-aware interaction proof that was
+  absent from the separate alias and PHI controls. Both an unsigned-byte and
+  unsigned-word function merge a branch-selected value through a real
+  two-input PHI, keep four derived values live across an aliasing call, and
+  consume both the call result and a post-call reload. Each function has four
+  blocks, maximum liveness seven, three spills, four cross-call values, two PHI
+  moves, and selects `spilled-scalar-cfg`. Eight hardcoded target-width oracles
+  cover both PHI arms, aliasing and disjoint pointers, and byte/word wrap
+  boundaries; an independent Python oracle recomputes every result and the
+  final hash. A deliberate result-bit fault produces all eight named failures,
+  proving that the runtime discriminator is active. The campaign adds 26
+  stack/no-stack, peep/nopeep, full-debug, and line-debug configurations,
+  raising the exact inventory from 9,564 to 9,590. All 26 configurations and
+  all 129 repository script tests pass, and LLVM 18 accepts the fixture as
+  strict C89. An isolated 27-profile current-tree collection adds no outcomes
+  when overlaid on the unchanged-function Wave 30 evidence. This is therefore
+  a cross-contract semantic proof, not a raw percentage increase; the sealed
+  Wave 30 totals remain authoritative. Production code, release output,
+  coverage denominators, and performance baselines are unchanged. Commit
+  `ff638de3` publishes the fixture, campaign, and independent oracle.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
