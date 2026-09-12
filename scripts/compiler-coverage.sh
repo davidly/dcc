@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 37) / 38 ))
+campaign_jobs=$(( (mutation_jobs + 39) / 40 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -363,6 +363,12 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-callback-registration-%8m.profraw" \
     --output-dir "$build_dir/callback-registration-wave27-audit" \
     >"$campaign_dir/callback-registration.log" 2>&1 &
 callback_registration_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-allocation-lifetime-%8m.profraw" \
+    python3 scripts/allocation-lifetime-wave28-audit.py \
+    --jobs "$campaign_jobs" \
+    --output-dir "$build_dir/allocation-lifetime-wave28-audit" \
+    >"$campaign_dir/allocation-lifetime.log" 2>&1 &
+allocation_lifetime_pid=$!
 LLVM_PROFILE_FILE="$raw_dir/dcc-memory-exercise-%8m.profraw" \
     python3 scripts/memory-exercise-wave27-campaign.py \
     --jobs "$campaign_jobs" --skip-runtime \
@@ -417,6 +423,7 @@ for campaign in \
     "minimax:$minimax_pid" \
     "matrix-store:$matrix_store_pid" \
     "callback-registration:$callback_registration_pid" \
+    "allocation-lifetime:$allocation_lifetime_pid" \
     "memory-exercise:$memory_exercise_pid" \
     "buffered-console:$buffered_console_pid" \
     "nonlocal:$nonlocal_pid"

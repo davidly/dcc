@@ -2,15 +2,44 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef W28_RENAMED_RUNTIME
+extern void *w28_allocate(unsigned int size);
+extern void w28_release(void *pointer);
+extern int w28_print(const char *format, ...);
+#define malloc w28_allocate
+#define free w28_release
+#define printf w28_print
+#elif defined(W28_WIDE_SIZE_RUNTIME)
+extern void *w28la(unsigned long size);
+#define malloc w28la
+#elif defined(W28_FAST_RUNTIME)
+extern void *__fastcall w28fa(unsigned int size);
+extern void __fastcall w28fr(void *pointer);
+#define malloc w28fa
+#define free w28fr
+#endif
+
+#ifdef W28_VOLATILE_BYTES
+typedef volatile unsigned char *W28BytePointer;
+#else
+typedef unsigned char *W28BytePointer;
+#endif
+
+#ifdef W28_VOLATILE_LOCALS
+#define W28_LOCAL_QUALIFIER volatile
+#else
+#define W28_LOCAL_QUALIFIER
+#endif
+
 int main(void)
 {
-    unsigned char *p;
-    unsigned char *q;
+    W28BytePointer W28_LOCAL_QUALIFIER p;
+    W28BytePointer W28_LOCAL_QUALIFIER q;
     void *r;
     unsigned int i;
     unsigned long sum;
 
-    p = (unsigned char *)malloc(32768U);
+    p = (W28BytePointer)malloc(32768U);
     if (!p) {
         printf("tmallochi2: malloc32768 failed\n");
         return 1;
@@ -26,7 +55,7 @@ int main(void)
 
     free(p);
 
-    q = (unsigned char *)malloc(32U);
+    q = (W28BytePointer)malloc(32U);
     if (!q) {
         printf("FAIL malloc after large free returned null\n");
         return 1;

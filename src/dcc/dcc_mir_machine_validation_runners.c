@@ -1048,6 +1048,50 @@ static struct Sym *mir_allocation_runner_call_function(
     return find_global(call->name);
 }
 
+static struct Sym *mir_allocation_runner_typed_call_function(
+    int instruction, int variadic, int argument_count)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->secondary_offset < 0 ||
+        call->memory_flags !=
+            (variadic ? MIR_CALL_FLAG_VARIADIC : 0) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC ||
+        function->is_funcptr ||
+        function->is_noreturn ||
+        !function->has_proto ||
+        function->proto_variadic != variadic ||
+        function->proto_nargs != argument_count ||
+        call->type != function->type)
+        return NULL;
+    return function;
+}
+
+static int mir_allocation_runner_base_matches(
+    int instruction, struct Sym *function)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    const char *assembly_name = asm_name_for(sym_asm_name(function));
+
+    return call->base_name[0] == 0 ||
+        !strcmp(call->base_name, assembly_name);
+}
+
+static int mir_allocation_runner_print_base_matches(
+    int instruction, struct Sym *function)
+{
+    const char *base_name = mir.insns[instruction].base_name;
+
+    if (mir_allocation_runner_base_matches(instruction, function))
+        return 1;
+    return instruction == 52 &&
+        (!strcmp(base_name, "_pflng") ||
+         !strcmp(base_name, "_pflio"));
+}
+
 static int mir_allocation_runner_single_argument(
     int call_instruction, int argument_instruction)
 {
@@ -1056,6 +1100,72 @@ static int mir_allocation_runner_single_argument(
     return mir_machine_single_call_argument(
                &mir.insns[call_instruction], &argument) &&
            argument == mir.insns[argument_instruction].dst;
+}
+
+static int mir_allocation_runner_types(void)
+{
+    static const int untyped[] = {110, 122, 125, 127, 131};
+    static const int signed_words[] = {
+        8, 12, 13, 18, 30, 44, 52, 53, 68, 72,
+        73, 86, 102, 107, 114, 119, 135, 136, 150, 151,
+        165, 166, 170, 171, 181, 182, 186, 187, 197, 198
+    };
+    static const int void_values[] = {60, 143, 156, 194};
+    static const int string_pointers[] = {
+        10, 46, 70, 133, 168, 184, 195
+    };
+    static const int void_pointers[] = {3, 63, 146, 161, 177, 180};
+    static const int unsigned_bytes[] = {
+        21, 27, 32, 37, 78, 82, 96, 97, 104, 116
+    };
+    static const int unsigned_words[] = {
+        1, 24, 35, 61, 84, 85, 105,
+        106, 117, 118, 144, 159, 175
+    };
+    static const int unsigned_longs[] = {33, 38, 39, 43, 50};
+    static const int byte_pointers[] = {
+        5, 7, 17, 19, 23, 25, 29, 31, 34, 36,
+        57, 65, 67, 88, 90, 101, 103, 113, 115, 140,
+        147, 149, 153, 162, 164, 191
+    };
+    static const struct {
+        const int *instructions;
+        int count;
+        int type;
+    } groups[] = {
+        {untyped, sizeof(untyped) / sizeof(untyped[0]), 0},
+        {signed_words, sizeof(signed_words) / sizeof(signed_words[0]),
+         TYPE_INT},
+        {void_values, sizeof(void_values) / sizeof(void_values[0]),
+         TYPE_VOID},
+        {string_pointers,
+         sizeof(string_pointers) / sizeof(string_pointers[0]),
+         TYPE_CHAR | TYPE_PTR},
+        {void_pointers, sizeof(void_pointers) / sizeof(void_pointers[0]),
+         TYPE_VOID | TYPE_PTR},
+        {unsigned_bytes,
+         sizeof(unsigned_bytes) / sizeof(unsigned_bytes[0]),
+         TYPE_CHAR | TYPE_UNSIGNED},
+        {unsigned_words,
+         sizeof(unsigned_words) / sizeof(unsigned_words[0]),
+         TYPE_INT | TYPE_UNSIGNED},
+        {unsigned_longs,
+         sizeof(unsigned_longs) / sizeof(unsigned_longs[0]),
+         TYPE_LONG | TYPE_UNSIGNED},
+        {byte_pointers, sizeof(byte_pointers) / sizeof(byte_pointers[0]),
+         TYPE_CHAR | TYPE_PTR | TYPE_UNSIGNED}
+    };
+    int group;
+    int item;
+
+    for (group = 0;
+         group < (int)(sizeof(groups) / sizeof(groups[0]));
+         ++group)
+        for (item = 0; item < groups[group].count; ++item)
+            if (mir.insns[groups[group].instructions[item]].type !=
+                    groups[group].type)
+                return 0;
+    return 1;
 }
 
 static int mir_memory_runner_word_type(int type, int is_unsigned)
@@ -3735,6 +3845,32 @@ static int mir_match_allocation_lifetime_runner(
     static const int free_arguments[4] = {57, 140, 153, 191};
     static const int print_calls[7] = {12, 52, 72, 135, 170, 186, 197};
     static const int string_instructions[7] = {10, 46, 70, 133, 168, 184, 195};
+    static const int calls[16] = {
+        3, 12, 52, 60, 63, 72, 135, 143,
+        146, 156, 161, 170, 177, 186, 194, 197
+    };
+    static const int label_instructions[18] = {
+        0, 16, 56, 76, 80, 94, 100, 109, 112,
+        121, 124, 126, 128, 130, 139, 158, 174, 190
+    };
+    static const int local_representatives[5] = {6, 41, 66, 79, 179};
+    static const int direct_stores[8] = {6, 41, 66, 79, 98, 148, 163, 179};
+    static const int direct_store_widths[8] = {2, 4, 2, 1, 1, 2, 2, 2};
+    static const int index_addresses[7] = {19, 25, 31, 36, 90, 103, 115};
+    static const int binary_instructions[9] = {
+        39, 44, 86, 97, 107, 119, 151, 166, 182
+    };
+    static const int binary_operand_types[9] = {
+        TYPE_LONG | TYPE_UNSIGNED,
+        TYPE_LONG | TYPE_UNSIGNED,
+        TYPE_INT | TYPE_UNSIGNED,
+        TYPE_CHAR | TYPE_UNSIGNED,
+        TYPE_INT | TYPE_UNSIGNED,
+        TYPE_INT | TYPE_UNSIGNED,
+        TYPE_CHAR | TYPE_PTR | TYPE_UNSIGNED,
+        TYPE_CHAR | TYPE_PTR | TYPE_UNSIGNED,
+        TYPE_VOID | TYPE_PTR
+    };
     struct Sym *function;
     int arguments[3];
     int instruction;
@@ -3744,7 +3880,9 @@ static int mir_match_allocation_lifetime_runner(
     if (mir.count != 200 || mir_cfg_block_count() != 18 ||
         mir.has_vla || mir.local_bytes != 11 ||
         mir.aggregate_temp_bytes != 0 ||
+        type_ptr_depth(mir.return_type) != 0 ||
         (mir.return_type & 15) != TYPE_INT ||
+        (mir.return_type & TYPE_UNSIGNED) != 0 ||
         type_size(mir.return_type) != 2)
         return mir_machine_reject(
             "allocation-lifetime-runner", "shape");
@@ -3753,35 +3891,87 @@ static int mir_match_allocation_lifetime_runner(
                 expected_opcodes[instruction])
             return mir_machine_reject(
                 "allocation-lifetime-runner", "opcode");
+    if (!mir_allocation_runner_types())
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "types");
+    for (item = 0; item < 18; ++item) {
+        int previous;
+        int label = mir.insns[label_instructions[item]].label;
+
+        if (label < 0)
+            return mir_machine_reject(
+                "allocation-lifetime-runner", "label");
+        for (previous = 0; previous < item; ++previous)
+            if (label ==
+                    mir.insns[label_instructions[previous]].label)
+                return mir_machine_reject(
+                    "allocation-lifetime-runner", "label-alias");
+    }
+    for (item = 0; item < 16; ++item)
+        if (mir.insns[calls[item]].secondary_offset != item)
+            return mir_machine_reject(
+                "allocation-lifetime-runner", "call-id");
+    for (item = 0; item < 8; ++item)
+        if (mir.insns[direct_stores[item]].memory_size !=
+                direct_store_widths[item])
+            return mir_machine_reject(
+                "allocation-lifetime-runner", "local-width");
+    for (item = 0; item < 7; ++item)
+        if (mir.insns[index_addresses[item]].memory_size != 1)
+            return mir_machine_reject(
+                "allocation-lifetime-runner", "index-width");
+    for (item = 0; item < 9; ++item)
+        if (mir.insns[binary_instructions[item]].secondary_offset !=
+                binary_operand_types[item])
+            return mir_machine_reject(
+                "allocation-lifetime-runner", "binary-type");
+    for (item = 0; item < 5; ++item) {
+        int other;
+
+        for (other = 0; other < item; ++other)
+            if (mir_machine_same_location(
+                    &mir.insns[local_representatives[item]],
+                    &mir.insns[local_representatives[other]]))
+                return mir_machine_reject(
+                    "allocation-lifetime-runner", "local-alias");
+    }
 
     plan->allocate_function =
-        mir_allocation_runner_call_function(3, 0);
+        mir_allocation_runner_typed_call_function(3, 0, 1);
     plan->free_function =
-        mir_allocation_runner_call_function(60, 0);
+        mir_allocation_runner_typed_call_function(60, 0, 1);
     plan->print_function =
-        mir_allocation_runner_call_function(12, 1);
+        mir_allocation_runner_typed_call_function(12, 1, 1);
     if (plan->allocate_function == NULL ||
         plan->free_function == NULL ||
         plan->print_function == NULL ||
-        plan->allocate_function->storage != SC_FUNC ||
-        plan->free_function->storage != SC_FUNC ||
-        plan->print_function->storage != SC_FUNC ||
-        plan->allocate_function->is_funcptr ||
-        plan->free_function->is_funcptr ||
-        plan->print_function->is_funcptr ||
-        plan->allocate_function->is_noreturn ||
-        plan->free_function->is_noreturn ||
-        plan->print_function->is_noreturn ||
+        plan->print_function->is_fastcall ||
         plan->allocate_function == plan->free_function ||
         plan->allocate_function == plan->print_function ||
         plan->free_function == plan->print_function)
         return mir_machine_reject(
             "allocation-lifetime-runner", "functions");
+    if (!mir_memory_runner_pointer_type(
+            plan->allocate_function->type, 1, TYPE_VOID) ||
+        !mir_memory_runner_word_type(
+            plan->allocate_function->proto_types[0], 1) ||
+        type_ptr_depth(plan->free_function->type) != 0 ||
+        (plan->free_function->type & 15) != TYPE_VOID ||
+        type_size(plan->free_function->type) != 0 ||
+        !mir_memory_runner_pointer_type(
+            plan->free_function->proto_types[0], 1, TYPE_VOID) ||
+        !mir_memory_runner_word_type(
+            plan->print_function->type, 0) ||
+        !mir_memory_runner_pointer_type(
+            plan->print_function->proto_types[0], 1, TYPE_CHAR))
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "prototype");
     for (item = 0; item < 5; ++item) {
-        function = mir_allocation_runner_call_function(
-            allocation_calls[item], 0);
+        function = mir_allocation_runner_typed_call_function(
+            allocation_calls[item], 0, 1);
         if (function != plan->allocate_function ||
-            type_ptr_depth(mir.insns[allocation_calls[item]].type) == 0 ||
+            !mir_allocation_runner_base_matches(
+                allocation_calls[item], function) ||
             !mir_allocation_runner_single_argument(
                 allocation_calls[item],
                 allocation_arguments[item]))
@@ -3789,20 +3979,22 @@ static int mir_match_allocation_lifetime_runner(
                 "allocation-lifetime-runner", "allocation-call");
     }
     for (item = 0; item < 4; ++item) {
-        function = mir_allocation_runner_call_function(
-            free_calls[item], 0);
+        function = mir_allocation_runner_typed_call_function(
+            free_calls[item], 0, 1);
         if (function != plan->free_function ||
-            (mir.insns[free_calls[item]].type & 15) != TYPE_VOID ||
+            !mir_allocation_runner_base_matches(
+                free_calls[item], function) ||
             !mir_allocation_runner_single_argument(
                 free_calls[item], free_arguments[item]))
             return mir_machine_reject(
                 "allocation-lifetime-runner", "free-call");
     }
     for (item = 0; item < 7; ++item) {
-        function = mir_allocation_runner_call_function(
-            print_calls[item], 1);
+        function = mir_allocation_runner_typed_call_function(
+            print_calls[item], 1, 1);
         if (function != plan->print_function ||
-            type_size(mir.insns[print_calls[item]].type) != 2)
+            !mir_allocation_runner_print_base_matches(
+                print_calls[item], function))
             return mir_machine_reject(
                 "allocation-lifetime-runner", "print-call");
         plan->strings[item] =
@@ -3972,7 +4164,9 @@ static int mir_match_allocation_lifetime_runner(
         mir.insns[120].src1 != mir.insns[119].dst ||
         mir.insns[120].label != mir.insns[124].label ||
         !mir_machine_constant_equals(mir.insns[110].dst, 1) ||
+        mir.insns[111].label != mir.insns[130].label ||
         !mir_machine_constant_equals(mir.insns[122].dst, 1) ||
+        mir.insns[123].label != mir.insns[126].label ||
         !mir_machine_constant_equals(mir.insns[125].dst, 0) ||
         mir.insns[127].src1 != mir.insns[122].dst ||
         mir.insns[127].src2 != mir.insns[125].dst ||
@@ -3982,6 +4176,7 @@ static int mir_match_allocation_lifetime_runner(
         mir.insns[131].src2 != mir.insns[127].dst ||
         mir.insns[131].phi_pred1 != mir.insns[109].label ||
         mir.insns[131].phi_pred2 != mir.insns[128].label ||
+        mir.insns[129].label != mir.insns[130].label ||
         mir.insns[132].src1 != mir.insns[131].dst ||
         mir.insns[132].label != mir.insns[139].label ||
         !mir_machine_constant_equals(mir.insns[136].dst, 1) ||
