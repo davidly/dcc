@@ -367,7 +367,20 @@ parallel-wave summary for the current measurement.
   4, 8, 12, and 16 workers, with identical manifests. The next collection uses
   eight clobber workers and a global mutation token scheduler. A real
   four-worker scheduler smoke completed all 1,692 matrix-add mutations in
-  20.44 seconds with zero meaningful survivors.
+  20.44 seconds with zero meaningful survivors. Commit `4930df94` publishes
+  the scheduler and measured default.
+- Wave 29 begins with `6aa1f447`. The independent dominance verifier now
+  rejects PHIs whose declared labels do not correspond to real incoming CFG
+  edges, even when the missing edge is unreachable. The proof preserves
+  unreachable real predecessors, multiple physical arcs carrying one logical
+  input, repeated arcs from one predecessor, and arbitrary consecutive entry
+  label aliases. The original malformed diamond was reproduced before the
+  fix. Validation passed identical 3,039/3,039 stack and no-stack censuses,
+  both strict 506-application release modes with zero regressions, five normal
+  and five ASan/UBSan host tests, 11 compiler mutants, 392 strict extended
+  configurations, required-emission and runtime audits, all 128 script tests,
+  and all 10 debugger-host tests. The change only rejects malformed internal
+  MIR and does not alter debug metadata or valid generated output.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
