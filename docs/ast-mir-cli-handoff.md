@@ -397,6 +397,22 @@ parallel-wave summary for the current measurement.
   mutants, 392 extended configurations, 128 script tests, and all 10 debugger
   tests pass. The failed collection remains raw evidence only; restart from
   this new commit for the next authoritative ledger.
+- The immutable replacement Wave 30 collection is sealed at exact revision
+  `864573c38db01a01f2b944d77a26f9132cfaacd2`. Report-only regeneration
+  revalidated every recorded input, tool, binary, profile, and execution
+  manifest hash. Its 397 non-empty profile-pool files contain exactly 9,564
+  unique clobber executions; the manifest SHA-256 is
+  `89c8702842240ff322a8948a84314ccdf17841de3cc97fbadc1be3d837bfbfad`.
+  The authoritative function-scoped result is 4,608/4,608 functions
+  (100.00%), 190,711/202,512 lines (94.17%), 104,229/155,732 native branch
+  outcomes (66.93%), and 173,307/183,178 regions (94.61%). The raw ledger has
+  51,245 unreviewed branch outcomes and no unexecuted maintained functions.
+  All collection workloads passed, including both release modes, all four
+  3,039-function debug censuses, the mutation campaigns, and five host CTests.
+  This supersedes Wave 19 as the coverage ledger, but it does not complete the
+  broader justified-coverage objective. The recent deferred-metadata resolver
+  is the first evidence-backed review target: it has 60 uncovered regions and
+  182 uncovered branch outcomes around call and conversion repair.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
