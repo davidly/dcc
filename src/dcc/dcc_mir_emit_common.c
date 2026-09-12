@@ -1850,25 +1850,35 @@ static int mir_homed_values_share_home(int left, int right)
                mir_home_spill_width(right);
 }
 
-int mir_phi_source_for_edge(const struct MirInsn *phi,
-                                   int predecessor_label, int edge_label,
-                                   int successor, int phi_instruction)
+int mir_phi_slot_for_edge(const struct MirInsn *phi,
+                          int predecessor_label, int edge_label,
+                          int successor, int phi_instruction)
 {
     int instruction;
     if (predecessor_label == phi->phi_pred1 || edge_label == phi->phi_pred1)
-        return phi->src1;
+        return 0;
     if (predecessor_label == phi->phi_pred2 || edge_label == phi->phi_pred2)
-        return phi->src2;
+        return 1;
     for (instruction = successor;
          instruction >= 0 && instruction < phi_instruction;
          ++instruction)
         if (mir.insns[instruction].opcode == MIR_LABEL) {
             if (mir.insns[instruction].label == phi->phi_pred1)
-                return phi->src1;
+                return 0;
             if (mir.insns[instruction].label == phi->phi_pred2)
-                return phi->src2;
+                return 1;
         }
     return -1;
+}
+
+int mir_phi_source_for_edge(const struct MirInsn *phi,
+                            int predecessor_label, int edge_label,
+                            int successor, int phi_instruction)
+{
+    int slot = mir_phi_slot_for_edge(
+        phi, predecessor_label, edge_label, successor, phi_instruction);
+
+    return slot == 0 ? phi->src1 : slot == 1 ? phi->src2 : -1;
 }
 
 int mir_emit_homed_phi_copies(MirStream *out, int predecessor,

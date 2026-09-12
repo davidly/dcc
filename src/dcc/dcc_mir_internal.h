@@ -656,6 +656,9 @@ const char *mir_opcode_name(int opcode);
 int mir_phi_source_for_edge(const struct MirInsn *phi,
                                    int predecessor_label, int edge_label,
                                    int successor, int phi_instruction);
+int mir_phi_slot_for_edge(const struct MirInsn *phi,
+                          int predecessor_label, int edge_label,
+                          int successor, int phi_instruction);
 int mir_begin_lazy_parameter_allocation(void);
 void mir_end_lazy_parameter_allocation(void);
 int mir_begin_rematerialized_home_allocation(void);
