@@ -216,12 +216,13 @@ audits exercise 9,216 mutations with zero meaningful survivors; supported
 forms retain exact output and unsupported forms retain generated
 homed/spilled fallback.
 
-Wave 36 retains the locally verified exact inventory at 9,686 configurations.
+Waves 36-37 retain the locally verified exact inventory at 9,686 configurations.
 Wave 32 added a combined PHI, spill, alias, call-clobber, and post-call reload
 proof; Wave 33 preserves compatible callable prototypes through conditional
 expressions and MIR PHIs; Wave 34 snapshots resolved scalar-call signatures by
-call ID; and Waves 35-36 prove that narrow and wide values live across ordinary
-calls receive only safe homes.
+call ID; Waves 35-36 prove that narrow and wide values live across ordinary
+calls receive only safe homes; and Wave 37 proves the guarded narrow late-PHI
+exception preserves its caller-saved home.
 The authoritative Wave 30 LLVM checkpoint remains 4,608/4,608 functions
 (100.00%), 190,711/202,512 lines (94.17%), 104,229/155,732 native branch
 outcomes (66.93%), and 173,307/183,178 regions (94.61%). Its raw uncovered
@@ -536,6 +537,19 @@ locally verified execution inventory.
   target configurations pass. This test-only increment leaves the 9,686-leaf
   inventory and production output unchanged and makes no additive raw coverage
   claim. Commit `465ce55f` contains the invariant and mutant.
+- Wave 37 proves the narrow guarded exception for a late PHI physically crossing
+  a direct void call. Allocation deliberately retains the PHI in caller-saved
+  DE only because the general stack-call emitter surrounds the call with an
+  ordered `push de` and `pop de`. A clean-build mutation that suppresses DE
+  preservation is killed by the emitted-order assertion. Normal and
+  ASan/UBSan host suites pass 5/5; the complete mutation campaign has one
+  passing baseline plus 21/21 killed mutants; strict `tmirlife` stack/no-stack
+  runs pass peep and nopeep with zero performance regressions; and all 26
+  existing `phi-alias-wave32` target configurations pass. Specialized call
+  paths remain excluded by the production guard. This test-only increment
+  leaves the 9,686-leaf inventory and production output unchanged and makes no
+  additive raw coverage claim. Commit `ee97b296` contains the invariant and
+  mutant.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

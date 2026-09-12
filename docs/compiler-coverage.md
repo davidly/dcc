@@ -331,6 +331,18 @@ existing `phi-alias-wave32` target configurations pass. This remains a
 test-only semantic proof: the inventory stays 9,686 and no raw coverage
 increase is claimed. Commit `465ce55f` contains the proof.
 
+Wave 37 proves the allocator/emitter contract behind the exceptional narrow
+late-PHI path. A PHI physically after a direct void call may retain DE only
+when the general stack-call path preserves that home. The host control checks
+the DE allocation and ordered `push de`, call, and `pop de` output. A
+clean-build mutant suppressing DE preservation is killed by that exact
+assertion. Normal and ASan/UBSan host suites pass 5/5, the complete compiler
+suite has one passing baseline and 21/21 killed mutants, strict `tmirlife`
+passes both stack modes with no performance regression, and all 26 existing
+`phi-alias-wave32` target configurations pass. This test-only semantic proof
+leaves the exact inventory at 9,686 and makes no raw coverage claim. Commit
+`ee97b296` contains the proof.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
