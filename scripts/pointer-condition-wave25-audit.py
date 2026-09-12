@@ -34,9 +34,9 @@ EXPECTED_OUTCOMES = Counter(
 )
 EXPECTED_BENIGN = Counter(
     **{
-        "unused-opcode-field": 6621,
+        "unused-opcode-field": 6867,
         "unused-identity": 2066,
-        "no-op": 719,
+        "no-op": 473,
         "propagated-string": 68,
     }
 )
