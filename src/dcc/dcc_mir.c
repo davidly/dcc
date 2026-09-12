@@ -7486,8 +7486,8 @@ static int mir_try_resolve_deferred_member_address(struct MirInsn *insn)
     return 1;
 }
 
-static int mir_deferred_function_pointer_call_is_well_ordered(
-    int call_index, int declaration)
+static int mir_deferred_call_arguments_are_well_ordered(
+    int call_index, int has_proto, int parameter_count, int variadic)
 {
     const struct MirInsn *call;
     int argument_count = 0;
@@ -7498,12 +7498,11 @@ static int mir_deferred_function_pointer_call_is_well_ordered(
     /* Do not partially rewrite malformed calls: inserted conversions change
      * instruction indices, so a late/duplicate argument could otherwise make
      * the remainder of this pass skip or rewrite the wrong instruction. */
-    if (call_index < 0 || call_index >= mir.count ||
-        declaration < 0 || declaration >= mir.declared_count)
+    if (call_index < 0 || call_index >= mir.count)
         return 0;
     call = &mir.insns[call_index];
     if (call->secondary_offset < 0 ||
-        call->secondary_offset >= mir.next_call_id || call->src1 >= 0)
+        call->secondary_offset >= mir.next_call_id)
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -7530,16 +7529,26 @@ static int mir_deferred_function_pointer_call_is_well_ordered(
     if (matching_calls != 1 ||
         last_position != (long)argument_count - 1)
         return 0;
-    if (mir.declared_has_proto[declaration]) {
-        int parameter_count = mir.declared_proto_nargs[declaration];
-
+    if (has_proto) {
         if (parameter_count < 0 || parameter_count > MAX_PROTO_PARAMS ||
             argument_count < parameter_count ||
-            (!mir.declared_proto_variadic[declaration] &&
-             argument_count != parameter_count))
+            (!variadic && argument_count != parameter_count))
             return 0;
     }
     return 1;
+}
+
+static int mir_deferred_function_pointer_call_is_well_ordered(
+    int call_index, int declaration)
+{
+    if (declaration < 0 || declaration >= mir.declared_count ||
+        call_index < 0 || call_index >= mir.count ||
+        mir.insns[call_index].src1 >= 0)
+        return 0;
+    return mir_deferred_call_arguments_are_well_ordered(
+        call_index, mir.declared_has_proto[declaration],
+        mir.declared_proto_nargs[declaration],
+        mir.declared_proto_variadic[declaration]);
 }
 
 void mir_resolve_deferred_metadata(void)
@@ -7820,6 +7829,55 @@ scoped_type_repair_done:
             if (!comparison)
                 insn->type = right->type;
         }
+        /*
+         * Full debug restores a named load's declared type after AST
+         * coercion may have stamped the wider computation type on it.
+         * Recreate the conversion the binary would otherwise assume.
+         */
+        if (opt_debug && comparison &&
+            type_size(insn->secondary_offset) == 4) {
+            if (left != NULL && left->opcode != MIR_CONST &&
+                type_ptr_depth(left->type) == 0 &&
+                !type_is_float(left->type) &&
+                type_size(left->type) > 0 &&
+                type_size(left->type) < 4) {
+                int source_value = insn->src1;
+                int target_type = insn->secondary_offset;
+                int converted_value = mir_new_value();
+                struct MirInsn *conversion =
+                    mir_insert_instruction_before(i, MIR_UNARY);
+
+                conversion->dst = converted_value;
+                conversion->src1 = source_value;
+                conversion->type = target_type;
+                conversion->immediate = 0;
+                ++i;
+                insn = &mir.insns[i];
+                insn->src1 = converted_value;
+            }
+            right = mir_mutable_definition(insn->src2);
+            if (right != NULL && right->opcode != MIR_CONST &&
+                type_ptr_depth(right->type) == 0 &&
+                !type_is_float(right->type) &&
+                type_size(right->type) > 0 &&
+                type_size(right->type) < 4) {
+                int source_value = insn->src2;
+                int target_type = insn->secondary_offset;
+                int converted_value = mir_new_value();
+                struct MirInsn *conversion =
+                    mir_insert_instruction_before(i, MIR_UNARY);
+
+                conversion->dst = converted_value;
+                conversion->src1 = source_value;
+                conversion->type = target_type;
+                conversion->immediate = 0;
+                ++i;
+                insn = &mir.insns[i];
+                insn->src2 = converted_value;
+            }
+            left = mir_mutable_definition(insn->src1);
+            right = mir_mutable_definition(insn->src2);
+        }
         if (!type_is_float(insn->secondary_offset)) {
             if (left != NULL && left->opcode == MIR_CONST &&
                 type_size(left->type) < type_size(insn->secondary_offset))
@@ -7844,17 +7902,49 @@ scoped_type_repair_done:
              mir.insns[i].opcode == MIR_CALL_AGGREGATE) &&
             strcmp(mir.insns[i].name, "<indirect>") != 0) {
             struct Sym *callee = find_global(mir.insns[i].name);
+            int call_id = mir.insns[i].secondary_offset;
             int argument;
-            if (callee == NULL)
+            if (callee == NULL || callee->storage != SC_FUNC ||
+                mir.insns[i].src1 >= 0 || mir.insns[i].src2 >= 0 ||
+                !mir_deferred_call_arguments_are_well_ordered(
+                    i, callee->has_proto, callee->proto_nargs,
+                    callee->proto_variadic))
                 continue;
             for (argument = 0; argument < mir.count; ++argument)
                 if (mir.insns[argument].opcode == MIR_ARG &&
                     mir.insns[argument].secondary_offset ==
-                        mir.insns[i].secondary_offset &&
+                        call_id &&
                     mir.insns[argument].immediate >= 0 &&
-                    mir.insns[argument].immediate < callee->proto_nargs)
-                    mir.insns[argument].type = callee->proto_types[
+                    mir.insns[argument].immediate < callee->proto_nargs) {
+                    int argument_type = callee->proto_types[
                         mir.insns[argument].immediate];
+                    int source_value = mir.insns[argument].src1;
+                    const struct MirInsn *source =
+                        mir_definition(source_value);
+
+                    /*
+                     * As above, full debug can reveal the declared source
+                     * type after lowering folded the prototype conversion
+                     * into the named load.
+                     */
+                    if (opt_debug &&
+                        !type_is_struct_object(argument_type) &&
+                        source != NULL && source->type != 0 &&
+                        source->type != argument_type) {
+                        int converted_value = mir_new_value();
+                        struct MirInsn *conversion =
+                            mir_insert_instruction_before(argument, MIR_UNARY);
+
+                        conversion->dst = converted_value;
+                        conversion->src1 = source_value;
+                        conversion->type = argument_type;
+                        conversion->immediate = 0;
+                        ++argument;
+                        ++i;
+                        mir.insns[argument].src1 = converted_value;
+                    }
+                    mir.insns[argument].type = argument_type;
+                }
         }
 
     for (i = 0; i < mir.count; ++i)
