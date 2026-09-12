@@ -216,12 +216,12 @@ audits exercise 9,216 mutations with zero meaningful survivors; supported
 forms retain exact output and unsupported forms retain generated
 homed/spilled fallback.
 
-Wave 34 retains the locally verified exact inventory at 9,686 configurations.
+Wave 36 retains the locally verified exact inventory at 9,686 configurations.
 Wave 32 added a combined PHI, spill, alias, call-clobber, and post-call reload
 proof; Wave 33 preserves compatible callable prototypes through conditional
 expressions and MIR PHIs; Wave 34 snapshots resolved scalar-call signatures by
-call ID so MIR verification no longer depends on reconstructing every callee
-value shape.
+call ID; and Waves 35-36 prove that narrow and wide values live across ordinary
+calls receive only safe homes.
 The authoritative Wave 30 LLVM checkpoint remains 4,608/4,608 functions
 (100.00%), 190,711/202,512 lines (94.17%), 104,229/155,732 native branch
 outcomes (66.93%), and 173,307/183,178 regions (94.61%). Its raw uncovered
@@ -237,7 +237,7 @@ locally verified execution inventory.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest locally validated continuation implementation:
-  `9cdf818e` (`Prove call-crossing allocation safety`).
+  `465ce55f` (`Prove wide call-crossing spills`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -525,6 +525,17 @@ locally verified execution inventory.
   This test-only increment changes neither the 9,686-leaf inventory nor
   production output and does not claim a raw coverage increase. Commit
   `9cdf818e` contains the invariant and mutant.
+- Wave 36 extends the allocation proof to a derived 32-bit value live across an
+  ordinary direct call. The wide-coloring probe must assign that value a spill:
+  neither HL:DE nor BC:IY is wholly callee-saved. The valid host control passes,
+  while a clean-build mutation that admits cross-call wide pair colors is
+  killed by the exact spill assertion. Normal and ASan/UBSan host suites pass
+  5/5; the complete mutation campaign has one passing baseline plus 20/20
+  killed mutants; strict `tmirslot` stack/no-stack runs pass peep and nopeep
+  with zero performance regressions; and all 26 existing `phi-alias-wave32`
+  target configurations pass. This test-only increment leaves the 9,686-leaf
+  inventory and production output unchanged and makes no additive raw coverage
+  claim. Commit `465ce55f` contains the invariant and mutant.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
@@ -1277,16 +1288,17 @@ regenerate coverage before making claims about the current tree.
 After publication, choose a small falsifiable correctness gap from current
 source and a fresh ledger. High-value directions:
 
-1. Carry explicit callable signatures through MIR casts, fields, PHIs, and
-   returned callable expressions. Add valid/malformed controls and preserve
-   unprototyped behavior before broadening arity verification.
+1. Prove the guarded late-PHI call-crossing allocation path independently,
+   including the narrow DE and wide BC:IY exceptions and their boundary
+   save/restore behavior. Keep ordinary calls excluded from those homes.
 2. Extend near-match rejection and generic equivalence across more exact
    families. Assert rejection and selected fallback for the intended function,
    plus correct execution, not an unrelated selection marker elsewhere.
 3. Expand the generated grammar beyond bounded unsigned arithmetic and current
    memory/call forms. Define an independent target-correct oracle; avoid UB.
-4. Add compiler mutants for more PHI, clobber, spill, alias, and cache contracts.
-   Investigate survivors and require mutation-specific semantic failures.
+4. Add compiler mutants for remaining alias/store cache invalidation and
+   regional boundary contracts. Investigate survivors and require
+   mutation-specific semantic failures.
 5. Review uncovered outcomes and unexecuted functions. Add supported-source or
    malformed-IR assertions where meaningful; retain precise evidence for
    defensive/unreachable classifications and recheck exclusion guards.

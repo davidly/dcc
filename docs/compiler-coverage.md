@@ -320,6 +320,17 @@ both stack modes. The complete compiler suite now has one passing baseline and
 inventory remains 9,686, production output is unchanged, and no additive raw
 coverage is claimed. Commit `9cdf818e` contains the proof.
 
+Wave 36 proves the corresponding wide-value rule with a non-rematerializable
+derived `long` live across an ordinary direct call. Because neither HL:DE nor
+BC:IY is wholly callee-saved, the wide-coloring probe must spill that value. A
+clean-build mutant that incorrectly admits pair colors is killed by the exact
+host assertion. Normal and ASan/UBSan host suites pass 5/5, the complete
+compiler suite has one passing baseline and 20/20 killed mutants, strict
+`tmirslot` passes both stack modes with no performance regression, and all 26
+existing `phi-alias-wave32` target configurations pass. This remains a
+test-only semantic proof: the inventory stays 9,686 and no raw coverage
+increase is claimed. Commit `465ce55f` contains the proof.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
