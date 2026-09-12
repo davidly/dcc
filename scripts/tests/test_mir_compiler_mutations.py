@@ -283,6 +283,8 @@ int main(int argc, char **argv) {
             "callback-identity": "invalid", "phi-edge-liveness": "invalid",
             "call-argument-liveness": "killed", "phi-consumer-value": "invalid",
             "promotion-cache": "killed",
+            "deferred-call-transaction": "killed",
+            "debug-conversion-gate": "killed",
             "allocation-first-result": "killed",
             "allocation-store-width": "killed",
         })

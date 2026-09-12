@@ -14,6 +14,8 @@ function Get-MirCompilerMutations {
         @{ Name = "call-argument-liveness"; Before = 'insn_is_call && mir_call_uses_value(insn, value)'; After = '0 && insn_is_call && mir_call_uses_value(insn, value)'; ExpectedFailure = 'FAIL argument must remain live through its matching call' },
         @{ Name = "phi-consumer-value"; Before = 'phi_value = phi->dst;'; After = 'phi_value = -1;'; ExpectedFailure = 'FAIL immediate PHI consumer forwarding' },
         @{ Name = "promotion-cache"; CompileProbe = $true },
+        @{ Name = "deferred-call-transaction"; Before = 'matching_calls != 1 ||'; After = '0 && matching_calls != 1 ||'; ExpectedFailure = 'FAIL repeated-ID deferred direct-call transaction' },
+        @{ Name = "debug-conversion-gate"; Before = 'if (opt_debug && comparison &&'; After = 'if (1 && comparison &&'; ExpectedFailure = 'FAIL release deferred binary conversion gating' },
         @{
             Name = "allocation-first-result"
             Source = "src/dcc/dcc_mir_machine_validation_runners.c"

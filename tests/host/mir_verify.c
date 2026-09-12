@@ -2012,6 +2012,7 @@ static void setup_deferred_direct_call_conversion(struct Sym *callee)
 static void verify_deferred_direct_call_conversion(void)
 {
     struct MirInsn argument;
+    struct MirInsn call;
     struct Sym *callee;
     int saved_debug = opt_debug;
     int ok = 1;
@@ -2114,7 +2115,181 @@ static void verify_deferred_direct_call_conversion(void)
                 "FAIL sparse deferred direct-call transaction\n");
         ++failures;
     }
+
+    setup_deferred_direct_call_conversion(callee);
+    mir.insns[4] = mir.insns[3];
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[3].opcode == MIR_CALL;
+    ok = ok && mir.insns[4].opcode == MIR_CALL;
+    ok = ok && mir.debug_events[0].point == 3;
+    mir.insns[4].opcode = MIR_NOP;
+    mir.insns[4].dst = -1;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 7 && mir.next_value == 3;
+    ok = ok && mir.insns[2].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].opcode == MIR_CALL;
+    ok = ok && mir.debug_events[0].point == 4;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL repeated-ID deferred direct-call transaction\n");
+        ++failures;
+    }
+
+    setup_deferred_direct_call_conversion(callee);
+    mir.insns[2].immediate = -1;
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    ok = ok && mir.debug_events[0].point == 3;
+    mir.insns[2].immediate = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 7 && mir.next_value == 3;
+    ok = ok && mir.insns[2].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].opcode == MIR_CALL;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL negative-position deferred direct-call transaction\n");
+        ++failures;
+    }
+
+    setup_deferred_direct_call_conversion(callee);
+    callee->proto_nargs = 2;
+    callee->proto_types[1] = TYPE_LONG;
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    ok = ok && mir.debug_events[0].point == 3;
+    callee->proto_nargs = 1;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 7 && mir.next_value == 3;
+    ok = ok && mir.insns[2].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].opcode == MIR_CALL;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL short fixed deferred direct-call transaction\n");
+        ++failures;
+    }
+
+    setup_deferred_direct_call_conversion(callee);
+    argument = mir.insns[2];
+    call = mir.insns[3];
+    mir.insns[3] = argument;
+    mir.insns[3].immediate = 1;
+    mir.insns[4] = call;
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    ok = ok && mir.insns[3].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].opcode == MIR_CALL;
+    ok = ok && mir.debug_events[0].point == 3;
+    callee->proto_variadic = 1;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 7 && mir.next_value == 3;
+    ok = ok && mir.insns[2].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].opcode == MIR_ARG;
+    ok = ok && mir.insns[3].type == TYPE_INT;
+    ok = ok && mir.insns[4].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].type == TYPE_LONG;
+    ok = ok && mir.insns[5].opcode == MIR_CALL;
+    ok = ok && mir.debug_events[0].point == 4;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL fixed/variadic deferred direct-call transaction\n");
+        ++failures;
+    }
+    callee->proto_variadic = 0;
+
+    setup_deferred_direct_call_conversion(callee);
+    mir.insns[3].src1 = 0;
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    mir.insns[3].src1 = -1;
+    mir.insns[3].src2 = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    mir.insns[3].src2 = -1;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 7 && mir.next_value == 3;
+    ok = ok && mir.insns[2].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].opcode == MIR_CALL;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL sourced deferred direct-call transaction\n");
+        ++failures;
+    }
+
+    setup_deferred_direct_call_conversion(callee);
+    callee->storage = SC_GLOBAL;
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    callee->storage = SC_FUNC;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 7 && mir.next_value == 3;
+    ok = ok && mir.insns[2].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].opcode == MIR_CALL;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL non-function deferred direct-call transaction\n");
+        ++failures;
+    }
+
+    opt_debug = 0;
+    setup_deferred_direct_call_conversion(callee);
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[1].type == TYPE_LONG;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    ok = ok && mir.insns[2].src1 == 0;
+    ok = ok && mir.insns[2].type == TYPE_INT;
+    ok = ok && mir.insns[3].opcode == MIR_CALL;
+    ok = ok && mir.debug_events[0].point == 3;
+    if (!ok) {
+        fprintf(stderr, "FAIL release deferred direct-call gating\n");
+        ++failures;
+    }
     opt_debug = saved_debug;
+}
+
+static void setup_deferred_binary_conversion(struct Sym *local,
+                                             int narrow_on_right)
+{
+    setup(5, 3, 1);
+    memset(local, 0, sizeof(*local));
+    strcpy(local->name, "verify_deferred_narrow");
+    local->type = TYPE_INT;
+    local->storage = SC_LOCAL;
+    local->offset = -2;
+    local->size = 2;
+    mir_note_declared_symbol(local);
+    mir.insns[1].opcode = narrow_on_right ? MIR_CONST : MIR_LOAD;
+    mir.insns[1].dst = 0;
+    mir.insns[1].type = TYPE_LONG;
+    mir.insns[1].immediate = 32;
+    if (!narrow_on_right)
+        strcpy(mir.insns[1].name, local->name);
+    mir.insns[2].opcode = narrow_on_right ? MIR_LOAD : MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[2].type = TYPE_LONG;
+    mir.insns[2].immediate = 32;
+    if (narrow_on_right)
+        strcpy(mir.insns[2].name, local->name);
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].type = TYPE_INT;
+    mir.insns[3].secondary_offset = TYPE_LONG;
+    mir.insns[3].immediate = '<';
+    mir.insns[4].src1 = 2;
 }
 
 static void verify_deferred_binary_conversion(void)
@@ -2124,30 +2299,7 @@ static void verify_deferred_binary_conversion(void)
     int ok = 1;
 
     opt_debug = 1;
-    setup(5, 3, 1);
-    memset(&local, 0, sizeof(local));
-    strcpy(local.name, "verify_deferred_narrow");
-    local.type = TYPE_INT;
-    local.storage = SC_LOCAL;
-    local.offset = -2;
-    local.size = 2;
-    mir_note_declared_symbol(&local);
-    mir.insns[1].opcode = MIR_LOAD;
-    mir.insns[1].dst = 0;
-    mir.insns[1].type = TYPE_LONG;
-    strcpy(mir.insns[1].name, local.name);
-    mir.insns[2].opcode = MIR_CONST;
-    mir.insns[2].dst = 1;
-    mir.insns[2].type = TYPE_LONG;
-    mir.insns[2].immediate = 32;
-    mir.insns[3].opcode = MIR_BINARY;
-    mir.insns[3].dst = 2;
-    mir.insns[3].src1 = 0;
-    mir.insns[3].src2 = 1;
-    mir.insns[3].type = TYPE_INT;
-    mir.insns[3].secondary_offset = TYPE_LONG;
-    mir.insns[3].immediate = '<';
-    mir.insns[4].src1 = 2;
+    setup_deferred_binary_conversion(&local, 0);
 
     mir_resolve_deferred_metadata();
     ok = ok && mir.count == 6 && mir.next_value == 4;
@@ -2170,6 +2322,45 @@ static void verify_deferred_binary_conversion(void)
         ++failures;
     }
     clear_liveness();
+
+    setup_deferred_binary_conversion(&local, 1);
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 4;
+    ok = ok && mir.insns[1].opcode == MIR_CONST;
+    ok = ok && mir.insns[1].type == TYPE_LONG;
+    ok = ok && mir.insns[2].opcode == MIR_LOAD;
+    ok = ok && mir.insns[2].type == TYPE_INT;
+    ok = ok && mir.insns[3].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].src1 == 1;
+    ok = ok && mir.insns[3].dst == 3;
+    ok = ok && mir.insns[3].type == TYPE_LONG;
+    ok = ok && mir.insns[4].opcode == MIR_BINARY;
+    ok = ok && mir.insns[4].src1 == 0;
+    ok = ok && mir.insns[4].src2 == 3;
+    ok = ok && mir.insns[5].opcode == MIR_RETURN;
+    ok = ok && mir.insns[5].src1 == 2;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 6 && mir.next_value == 4;
+    ok = ok && mir_verify_and_dump();
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred right binary conversion repair\n");
+        ++failures;
+    }
+    clear_liveness();
+
+    opt_debug = 0;
+    setup_deferred_binary_conversion(&local, 0);
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 5 && mir.next_value == 3;
+    ok = ok && mir.insns[1].opcode == MIR_LOAD;
+    ok = ok && mir.insns[1].type == TYPE_INT;
+    ok = ok && mir.insns[3].opcode == MIR_BINARY;
+    ok = ok && mir.insns[3].src1 == 0;
+    ok = ok && mir.insns[3].src2 == 1;
+    if (!ok) {
+        fprintf(stderr, "FAIL release deferred binary conversion gating\n");
+        ++failures;
+    }
     opt_debug = saved_debug;
 }
 
@@ -2290,6 +2481,15 @@ static void verify_deferred_metadata_call_ordering(void)
     ok = ok && mir.count == 9 && mir.next_value == 2;
     ok = ok && mir.insns[5].opcode == MIR_CALL;
     ok = ok && !strcmp(mir.insns[5].name, "verify_deferred_callback");
+    ok = ok && mir.debug_events[0].point == 5;
+
+    setup_deferred_function_pointer_call(0);
+    mir.insns[5].src1 = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 9 && mir.next_value == 2;
+    ok = ok && mir.insns[5].opcode == MIR_CALL;
+    ok = ok && !strcmp(mir.insns[5].name, "verify_deferred_callback");
+    ok = ok && mir.insns[5].src1 == 0;
     ok = ok && mir.debug_events[0].point == 5;
     if (!ok) {
         fprintf(stderr, "FAIL malformed deferred metadata call ordering\n");

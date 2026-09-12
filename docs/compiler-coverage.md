@@ -225,6 +225,26 @@ unexecuted maintained functions. This checkpoint supersedes the Wave 19
 four-metric table for prioritization; it is not completion of the justified
 coverage objective.
 
+The first Wave 31 proof increment targets the recent full-debug metadata
+repair rather than broad matcher short-circuit counts. Host invariants now
+cover repeated call IDs, negative argument positions, short and excess fixed
+arity, accepted variadic excess arguments, direct-call source operands,
+non-function callees, release-mode non-repair, right-hand comparison repair,
+and function-pointer calls that already have a callee value. Two clean-build
+compiler mutants independently remove repeated-ID rejection and the full-debug
+comparison gate; both are killed by their specific new invariant, raising the
+compiler suite to 13/13 killed mutants.
+
+Combining only the new instrumented host profile with the sealed Wave 30
+profile shows the intended local effect without changing production source or
+coverage denominators: `dcc_mir.c` gains 15 covered lines, nine covered branch
+outcomes, and three covered regions. The shared call validator rises from
+40/50 to 44/50 covered branch outcomes, its function-pointer wrapper from
+5/10 to 6/10, and `mir_resolve_deferred_metadata` from 698/880 to 702/880.
+This focused overlay is gap-selection evidence, not a replacement full
+checkpoint. All five normal and ASan/UBSan host tests and all 128 script tests
+pass.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

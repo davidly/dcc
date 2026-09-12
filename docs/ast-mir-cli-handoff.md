@@ -413,6 +413,20 @@ parallel-wave summary for the current measurement.
   broader justified-coverage objective. The recent deferred-metadata resolver
   is the first evidence-backed review target: it has 60 uncovered regions and
   182 uncovered branch outcomes around call and conversion repair.
+- The first Wave 31 increment adds permanent host invariants for repeated call
+  IDs, negative positions, fixed and variadic arity, sourced and non-function
+  direct calls, release-mode gating, right-hand wide-comparison conversion,
+  and already-sourced function-pointer calls. Two clean-build mutants remove
+  repeated-ID rejection and the full-debug comparison gate; both are killed,
+  taking the compiler mutation suite from 11 to 13 killed mutants. A focused
+  profile overlay on sealed Wave 30 data adds 15 covered `dcc_mir.c` lines,
+  nine branch outcomes, and three regions with unchanged production-source
+  denominators. The shared call validator moves from 40/50 to 44/50 branch
+  outcomes, its function-pointer wrapper from 5/10 to 6/10, and the resolver
+  from 698/880 to 702/880. This overlay is prioritization evidence, not a new
+  authoritative full checkpoint. All five normal and sanitized host CTests
+  and all 128 script tests pass; production code and release output are
+  unchanged.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
