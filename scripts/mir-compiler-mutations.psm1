@@ -16,6 +16,9 @@ function Get-MirCompilerMutations {
         @{ Name = "promotion-cache"; CompileProbe = $true },
         @{ Name = "deferred-call-transaction"; Before = 'matching_calls != 1 ||'; After = '0 && matching_calls != 1 ||'; ExpectedFailure = 'FAIL repeated-ID deferred direct-call transaction' },
         @{ Name = "debug-conversion-gate"; Before = 'if (opt_debug && comparison &&'; After = 'if (1 && comparison &&'; ExpectedFailure = 'FAIL release deferred binary conversion gating' },
+        @{ Name = "phi-call-prototype"; Before = 'if (source->opcode == MIR_PHI) {'; After = 'if (0 && source->opcode == MIR_PHI) {'; ExpectedFailure = 'FAIL PHI callback rejects excess argument' },
+        @{ Name = "conditional-call-prototype"; Source = "src/dcc/dcc_ast_gen_support.c"; Before = 'if (callee != NULL && callee->kind == AST_COND) {'; After = 'if (0 && callee != NULL && callee->kind == AST_COND) {'; ExpectedFailure = 'FAIL matching conditional callback prototype' },
+        @{ Name = "conditional-call-compatibility"; Source = "src/dcc/dcc_ast_gen_support.c"; Before = 'return *prototype != NULL ? 1 : -1;'; After = 'return *prototype != NULL ? 1 : 0;'; ExpectedFailure = 'FAIL incompatible conditional callback support' },
         @{
             Name = "allocation-first-result"
             Source = "src/dcc/dcc_mir_machine_validation_runners.c"

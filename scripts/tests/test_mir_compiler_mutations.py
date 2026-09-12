@@ -285,6 +285,9 @@ int main(int argc, char **argv) {
             "promotion-cache": "killed",
             "deferred-call-transaction": "killed",
             "debug-conversion-gate": "killed",
+            "phi-call-prototype": "killed",
+            "conditional-call-prototype": "killed",
+            "conditional-call-compatibility": "killed",
             "allocation-first-result": "killed",
             "allocation-store-width": "killed",
         })

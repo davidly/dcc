@@ -1438,31 +1438,200 @@ const struct AstNode *ast_call_star_indirect_base(const struct AstNode *n)
     return saw_star ? callee : NULL;
 }
 
-struct Sym *ast_indirect_call_proto_sym(const struct AstNode *n)
+static int ast_callable_parameter_survives_default_promotion(int type)
 {
-    const struct AstNode *callee;
+    if (type_ptr_depth(type) > 0)
+        return 1;
+    return !type_is_float(type) && !type_is_struct_object(type) &&
+        type_size(type) >= 2;
+}
 
-    if (n == NULL || n->kind != AST_CALL || n->a == NULL)
+static int ast_callable_prototypes_compatible(
+    const struct Sym *left, const struct Sym *right, int depth)
+{
+    const struct Sym *prototype;
+    int parameter;
+    int left_return;
+    int right_return;
+
+    if (left == NULL || right == NULL || depth > 64 ||
+        left->is_fastcall != right->is_fastcall)
+        return 0;
+    left_return = left->storage == SC_FUNC
+        ? left->type
+        : (left->funcptr_return_type != 0
+           ? left->funcptr_return_type : type_decay_ptr(left->type));
+    right_return = right->storage == SC_FUNC
+        ? right->type
+        : (right->funcptr_return_type != 0
+           ? right->funcptr_return_type : type_decay_ptr(right->type));
+    if (left_return != right_return)
+        return 0;
+    if (left->funcptr_result_prototype !=
+        right->funcptr_result_prototype) {
+        if (left->funcptr_result_prototype == NULL ||
+            right->funcptr_result_prototype == NULL ||
+            !ast_callable_prototypes_compatible(
+                left->funcptr_result_prototype,
+                right->funcptr_result_prototype, depth + 1))
+            return 0;
+    }
+    if (left->has_proto != right->has_proto) {
+        prototype = left->has_proto ? left : right;
+        if (prototype->proto_variadic ||
+            prototype->proto_nargs < 0 ||
+            prototype->proto_nargs > MAX_PROTO_PARAMS)
+            return 0;
+        for (parameter = 0; parameter < prototype->proto_nargs; ++parameter)
+            if (!ast_callable_parameter_survives_default_promotion(
+                    prototype->proto_types[parameter]))
+                return 0;
+        return 1;
+    }
+    if (!left->has_proto)
+        return 1;
+    if (left->proto_nargs != right->proto_nargs ||
+        left->proto_variadic != right->proto_variadic ||
+        left->proto_nargs < 0 || left->proto_nargs > MAX_PROTO_PARAMS)
+        return 0;
+    for (parameter = 0; parameter < left->proto_nargs; ++parameter)
+        if (left->proto_types[parameter] != right->proto_types[parameter])
+            return 0;
+    return 1;
+}
+
+static struct Sym *ast_callable_composite_prototype(
+    struct Sym *left, struct Sym *right, int depth)
+{
+    struct Sym *prototype;
+
+    if (!ast_callable_prototypes_compatible(left, right, depth))
         return NULL;
-    callee = n->a;
+    prototype = left->has_proto ? left : right;
+    if (left->funcptr_result_prototype !=
+        right->funcptr_result_prototype) {
+        struct Sym *result = ast_callable_composite_prototype(
+            left->funcptr_result_prototype,
+            right->funcptr_result_prototype, depth + 1);
+
+        if (result == NULL)
+            return NULL;
+        if (left->has_proto != right->has_proto &&
+            ((prototype == left &&
+              result != left->funcptr_result_prototype) ||
+             (prototype == right &&
+              result != right->funcptr_result_prototype)))
+            return NULL;
+        prototype = result == left->funcptr_result_prototype ? left : right;
+    }
+    return prototype;
+}
+
+static int ast_callable_null_pointer(const struct AstNode *node)
+{
+    return ast_null_pointer_const(node) ||
+        (node != NULL && node->kind == AST_CAST &&
+         type_ptr_depth(node->type) == 1 &&
+         (type_decay_ptr(node->type) & 15) == TYPE_VOID &&
+         ast_null_pointer_const(node->a));
+}
+
+static int ast_callable_expr_prototype(
+    const struct AstNode *callee, int depth, struct Sym **prototype)
+{
+    *prototype = NULL;
+    if (callee == NULL || depth > 64)
+        return 0;
+    if (callee->kind == AST_UNARY && callee->op == '&') {
+        const struct AstNode *addressed = callee->a;
+        struct Sym *symbol;
+
+        if (addressed != NULL && addressed->kind == AST_UNARY &&
+            addressed->op == '*') {
+            callee = addressed->a;
+        } else if (addressed != NULL && addressed->kind == AST_IDENT) {
+            symbol = addressed->sym != NULL
+                ? addressed->sym : find_sym(addressed->sval);
+            if (symbol == NULL || symbol->storage != SC_FUNC)
+                return 0;
+            callee = addressed;
+        } else {
+            return 0;
+        }
+    }
     while (callee != NULL && callee->kind == AST_UNARY && callee->op == '*')
         callee = callee->a;
     while (callee != NULL && callee->kind == AST_INDEX)
         callee = callee->a;
-    if (callee != NULL && callee->kind == AST_CAST)
-        return callee->sym;
+    if (callee != NULL && callee->kind == AST_CAST) {
+        *prototype = callee->sym;
+        return *prototype != NULL;
+    }
     if (callee != NULL && callee->kind == AST_CALL) {
-        struct Sym *producer = ast_indirect_call_proto_sym(callee);
-        return producer != NULL ? producer->funcptr_result_prototype : NULL;
+        struct Sym *producer;
+        int status =
+            ast_callable_expr_prototype(callee->a, depth + 1, &producer);
+
+        if (status <= 0)
+            return status;
+        *prototype = producer->funcptr_result_prototype;
+        return *prototype != NULL;
+    }
+    if (callee != NULL && callee->kind == AST_COND) {
+        struct Sym *left;
+        struct Sym *right;
+        int left_status =
+            ast_callable_expr_prototype(callee->b, depth + 1, &left);
+        int right_status =
+            ast_callable_expr_prototype(callee->c, depth + 1, &right);
+
+        if (left_status < 0 || right_status < 0)
+            return -1;
+        if (left_status == 0 && ast_callable_null_pointer(callee->b)) {
+            *prototype = right;
+            return right_status;
+        }
+        if (right_status == 0 && ast_callable_null_pointer(callee->c)) {
+            *prototype = left;
+            return left_status;
+        }
+        if (left_status == 0 || right_status == 0)
+            return -1;
+        *prototype =
+            ast_callable_composite_prototype(left, right, depth + 1);
+        return *prototype != NULL ? 1 : -1;
     }
     if (callee != NULL && callee->kind == AST_MEMBER) {
         int base_type = ast_expr_type_for_sizeof(callee->a);
-        struct FieldDef *field = find_field_def(type_struct_id(base_type), callee->sval);
-        return field != NULL ? field->funcptr_prototype : NULL;
+        struct FieldDef *field =
+            find_field_def(type_struct_id(base_type), callee->sval);
+
+        *prototype = field != NULL ? field->funcptr_prototype : NULL;
+        return *prototype != NULL;
     }
-    if (callee != NULL && callee->kind == AST_IDENT)
-        return callee->sym != NULL ? callee->sym : find_sym(callee->sval);
-    return NULL;
+    if (callee != NULL && callee->kind == AST_IDENT) {
+        *prototype =
+            callee->sym != NULL ? callee->sym : find_sym(callee->sval);
+        return *prototype != NULL;
+    }
+    return 0;
+}
+
+static int ast_indirect_call_prototype(
+    const struct AstNode *n, struct Sym **prototype)
+{
+    *prototype = NULL;
+    if (n == NULL || n->kind != AST_CALL || n->a == NULL)
+        return 0;
+    return ast_callable_expr_prototype(n->a, 0, prototype);
+}
+
+struct Sym *ast_indirect_call_proto_sym(const struct AstNode *n)
+{
+    struct Sym *prototype;
+
+    return ast_indirect_call_prototype(n, &prototype) > 0
+        ? prototype : NULL;
 }
 
 int ast_call_star_indirect_supported(const struct AstNode *n)
@@ -1473,6 +1642,7 @@ int ast_call_star_indirect_supported(const struct AstNode *n)
     int no_deref;
     int i;
     struct Sym *proto;
+    int prototype_status;
 
     base = ast_call_star_indirect_base(n);
     if (base == NULL)
@@ -1495,7 +1665,11 @@ int ast_call_star_indirect_supported(const struct AstNode *n)
         if (type_ptr_depth(callee_type) <= 0 || type_size(callee_type) != 2)
             return 0;
     }
-    proto = ast_indirect_call_proto_sym(n);
+    prototype_status = ast_indirect_call_prototype(n, &proto);
+    if (prototype_status < 0)
+        return 0;
+    if (proto != NULL && proto->is_fastcall)
+        return 0;
     if (proto != NULL && proto->has_proto &&
         ((!proto->proto_variadic && n->list_len != proto->proto_nargs) ||
          (proto->proto_variadic && n->list_len < proto->proto_nargs)))
@@ -1514,6 +1688,7 @@ int ast_call_indirect_supported(const struct AstNode *n)
     int no_deref;
     int i;
     struct Sym *proto;
+    int prototype_status;
 
     if (n == NULL || n->kind != AST_CALL || n->a == NULL)
         return 0;
@@ -1529,7 +1704,11 @@ int ast_call_indirect_supported(const struct AstNode *n)
         return 0;
     if (type_is_struct_object(type_decay_ptr(callee_type)))
         return 0;
-    proto = ast_indirect_call_proto_sym(n);
+    prototype_status = ast_indirect_call_prototype(n, &proto);
+    if (prototype_status < 0)
+        return 0;
+    if (proto != NULL && proto->is_fastcall)
+        return 0;
     if (proto != NULL && proto->has_proto &&
         ((!proto->proto_variadic && n->list_len != proto->proto_nargs) ||
          (proto->proto_variadic && n->list_len < proto->proto_nargs)))

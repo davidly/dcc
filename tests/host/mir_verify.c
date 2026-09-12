@@ -101,6 +101,81 @@ static void expect_verification(const char *name, int valid)
     clear_liveness();
 }
 
+static void setup_phi_indirect_call(
+    int left_has_proto, int left_nargs,
+    int right_has_proto, int right_nargs, int argument_type)
+{
+    struct Sym left;
+    struct Sym right;
+
+    memset(&left, 0, sizeof(left));
+    strcpy(left.name, "phi_callback_left");
+    left.type = TYPE_INT | TYPE_PTR;
+    left.storage = SC_LOCAL;
+    left.offset = -2;
+    left.is_funcptr = 1;
+    left.funcptr_return_type = TYPE_INT;
+    left.has_proto = left_has_proto;
+    left.proto_nargs = left_nargs;
+    left.proto_types[0] = TYPE_LONG;
+    memset(&right, 0, sizeof(right));
+    strcpy(right.name, "phi_callback_right");
+    right.type = TYPE_INT | TYPE_PTR;
+    right.storage = SC_LOCAL;
+    right.offset = -4;
+    right.is_funcptr = 1;
+    right.funcptr_return_type = TYPE_INT;
+    right.has_proto = right_has_proto;
+    right.proto_nargs = right_nargs;
+    right.proto_types[0] = TYPE_LONG;
+    right.proto_types[1] = TYPE_LONG;
+
+    setup(14, 6, 4);
+    mir_note_declared_symbol(&left);
+    mir_note_declared_symbol(&right);
+    mir.next_call_id = 1;
+    mir.insns[2].opcode = MIR_BRANCH_FALSE;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].label = 2;
+    mir.insns[4].opcode = MIR_LOAD;
+    mir.insns[4].dst = 1;
+    mir.insns[4].type = left.type;
+    strcpy(mir.insns[4].name, left.name);
+    mir.insns[5].opcode = MIR_JUMP;
+    mir.insns[5].label = 3;
+    mir.insns[6].opcode = MIR_LABEL;
+    mir.insns[6].label = 1;
+    mir.insns[7].opcode = MIR_LOAD;
+    mir.insns[7].dst = 2;
+    mir.insns[7].type = right.type;
+    strcpy(mir.insns[7].name, right.name);
+    mir.insns[8].opcode = MIR_LABEL;
+    mir.insns[8].label = 3;
+    mir.insns[9].opcode = MIR_PHI;
+    mir.insns[9].dst = 3;
+    mir.insns[9].src1 = 1;
+    mir.insns[9].src2 = 2;
+    mir.insns[9].type = left.type;
+    mir.insns[9].phi_pred1 = 2;
+    mir.insns[9].phi_pred2 = 1;
+    mir.insns[10].opcode = MIR_CONST;
+    mir.insns[10].dst = 4;
+    mir.insns[10].type = argument_type;
+    mir.insns[11].opcode = MIR_ARG;
+    mir.insns[11].src1 = 4;
+    mir.insns[11].type = argument_type;
+    mir.insns[11].secondary_offset = 0;
+    mir.insns[12].opcode = MIR_CALL;
+    mir.insns[12].dst = 5;
+    mir.insns[12].src1 = 3;
+    mir.insns[12].type = TYPE_INT;
+    mir.insns[12].secondary_offset = 0;
+    strcpy(mir.insns[12].name, "<indirect>");
+    mir.insns[13].src1 = 5;
+}
+
 static int ast_assignment_probe(
     struct AstNode *assign, struct AstNode *lhs,
     struct AstNode *rhs, int op)
@@ -6069,6 +6144,254 @@ static void verify_diamond_mutations(void)
     printf("MIR diamond mutations=%d\n", mutation_count);
 }
 
+static void verify_conditional_callable_prototypes(void)
+{
+    struct Sym left;
+    struct Sym right;
+    struct AstNode left_node;
+    struct AstNode right_node;
+    struct AstNode condition;
+    struct AstNode callee;
+    struct AstNode call;
+    struct AstNode null_pointer;
+    struct AstNode null_pointer_cast;
+    struct AstNode left_address;
+    struct AstNode right_address;
+    struct AstNode nested_call;
+    struct AstNode argument;
+    struct AstNode *arguments[1];
+    struct Sym left_result;
+    struct Sym right_result;
+
+    memset(&left, 0, sizeof(left));
+    memset(&right, 0, sizeof(right));
+    memset(&left_node, 0, sizeof(left_node));
+    memset(&right_node, 0, sizeof(right_node));
+    memset(&condition, 0, sizeof(condition));
+    memset(&callee, 0, sizeof(callee));
+    memset(&call, 0, sizeof(call));
+    memset(&null_pointer, 0, sizeof(null_pointer));
+    memset(&null_pointer_cast, 0, sizeof(null_pointer_cast));
+    memset(&left_address, 0, sizeof(left_address));
+    memset(&right_address, 0, sizeof(right_address));
+    memset(&nested_call, 0, sizeof(nested_call));
+    memset(&argument, 0, sizeof(argument));
+    memset(&left_result, 0, sizeof(left_result));
+    memset(&right_result, 0, sizeof(right_result));
+    left.storage = SC_FUNC;
+    left.type = TYPE_LONG;
+    left.has_proto = 1;
+    left.proto_nargs = 1;
+    left.proto_types[0] = TYPE_LONG;
+    right = left;
+    left_node.kind = AST_IDENT;
+    left_node.type = type_add_ptr(TYPE_LONG);
+    left_node.sym = &left;
+    left_node.sval = left.name;
+    right_node.kind = AST_IDENT;
+    right_node.type = type_add_ptr(TYPE_LONG);
+    right_node.sym = &right;
+    right_node.sval = right.name;
+    callee.kind = AST_COND;
+    condition.kind = AST_INT_LIT;
+    condition.type = TYPE_INT;
+    condition.ival = 1;
+    callee.a = &condition;
+    callee.b = &left_node;
+    callee.c = &right_node;
+    callee.type = type_add_ptr(TYPE_LONG);
+    call.kind = AST_CALL;
+    call.a = &callee;
+    argument.kind = AST_INT_LIT;
+    argument.type = TYPE_LONG;
+    argument.ival = 7;
+    arguments[0] = &argument;
+    call.list = arguments;
+    call.list_len = 1;
+    call.list_cap = 1;
+
+    if (ast_indirect_call_proto_sym(&call) != &left) {
+        fprintf(stderr, "FAIL matching conditional callback prototype\n");
+        ++failures;
+    }
+    right.proto_types[0] = TYPE_INT;
+    if (ast_indirect_call_proto_sym(&call) != NULL) {
+        fprintf(stderr, "FAIL conflicting conditional callback argument type\n");
+        ++failures;
+    }
+    right.proto_types[0] = TYPE_LONG;
+    right.type = TYPE_INT;
+    if (ast_indirect_call_proto_sym(&call) != NULL) {
+        fprintf(stderr, "FAIL conflicting conditional callback return type\n");
+        ++failures;
+    }
+    right.type = TYPE_LONG;
+    right.proto_variadic = 1;
+    if (ast_indirect_call_proto_sym(&call) != NULL) {
+        fprintf(stderr, "FAIL conflicting conditional callback variadic type\n");
+        ++failures;
+    }
+    right.proto_variadic = 0;
+    right.has_proto = 0;
+    if (ast_indirect_call_proto_sym(&call) != &left) {
+        fprintf(stderr, "FAIL partly unprototyped conditional callback\n");
+        ++failures;
+    }
+    left.has_proto = 0;
+    if (ast_indirect_call_proto_sym(&call) != &right) {
+        fprintf(stderr, "FAIL unprototyped conditional callback preservation\n");
+        ++failures;
+    }
+    right.has_proto = 1;
+    if (ast_indirect_call_proto_sym(&call) != &right) {
+        fprintf(stderr, "FAIL compatible mixed conditional callback prototype\n");
+        ++failures;
+    }
+    right.proto_types[0] = TYPE_CHAR;
+    if (ast_indirect_call_proto_sym(&call) != NULL) {
+        fprintf(stderr, "FAIL promoted mixed conditional callback conflict\n");
+        ++failures;
+    }
+    left.has_proto = 1;
+    left.proto_types[0] = TYPE_LONG;
+    right.proto_types[0] = TYPE_LONG;
+    null_pointer.kind = AST_INT_LIT;
+    null_pointer.type = TYPE_INT;
+    null_pointer.ival = 0;
+    callee.c = &null_pointer;
+    if (ast_indirect_call_proto_sym(&call) != &left) {
+        fprintf(stderr, "FAIL null-arm conditional callback prototype\n");
+        ++failures;
+    }
+    null_pointer_cast.kind = AST_CAST;
+    null_pointer_cast.type = type_add_ptr(TYPE_VOID);
+    null_pointer_cast.a = &null_pointer;
+    callee.c = &null_pointer_cast;
+    if (ast_indirect_call_proto_sym(&call) != &left) {
+        fprintf(stderr, "FAIL cast-null-arm conditional callback prototype\n");
+        ++failures;
+    }
+    callee.c = &right_node;
+    left_result.storage = SC_LOCAL;
+    left_result.type = type_add_ptr(TYPE_LONG);
+    left_result.funcptr_return_type = TYPE_LONG;
+    left_result.has_proto = 0;
+    left_result.proto_nargs = 1;
+    left_result.proto_types[0] = TYPE_LONG;
+    right_result = left_result;
+    right_result.has_proto = 1;
+    left.type = type_add_ptr(TYPE_LONG);
+    right.type = type_add_ptr(TYPE_LONG);
+    left.funcptr_result_prototype = &left_result;
+    right.funcptr_result_prototype = &right_result;
+    if (ast_indirect_call_proto_sym(&call) != &right) {
+        fprintf(stderr, "FAIL structural returned-callback prototype\n");
+        ++failures;
+    }
+    nested_call.kind = AST_CALL;
+    nested_call.a = &call;
+    if (ast_indirect_call_proto_sym(&nested_call) != &right_result) {
+        fprintf(stderr, "FAIL nested composite callback prototype\n");
+        ++failures;
+    }
+    left.funcptr_result_prototype = NULL;
+    right.funcptr_result_prototype = NULL;
+    left.type = TYPE_LONG;
+    right.type = TYPE_LONG;
+    left.proto_nargs = 1;
+    right.proto_nargs = 1;
+    left.is_fastcall = 1;
+    right.is_fastcall = 1;
+    left.is_fastcall = 0;
+    right.is_fastcall = 0;
+    left.proto_nargs = 1;
+    right.proto_nargs = 1;
+    left_address.kind = AST_UNARY;
+    left_address.op = '&';
+    left_address.a = &left_node;
+    right_address.kind = AST_UNARY;
+    right_address.op = '&';
+    right_address.a = &right_node;
+    callee.b = &left_address;
+    callee.c = &right_address;
+    if (ast_indirect_call_proto_sym(&call) != &left) {
+        fprintf(stderr, "FAIL addressed conditional callback prototype\n");
+        ++failures;
+    }
+    {
+        struct Sym *support_left =
+            add_global("conditional_support_left", TYPE_LONG, SC_FUNC);
+        struct Sym *support_right =
+            add_global("conditional_support_right", TYPE_LONG, SC_FUNC);
+        struct AstNode support_left_node;
+        struct AstNode support_right_node;
+        struct AstNode support_condition;
+        struct AstNode support_callee;
+        struct AstNode support_argument;
+        struct AstNode support_call;
+        struct AstNode *support_arguments[1];
+
+        support_left->has_proto = 1;
+        support_left->proto_nargs = 1;
+        support_left->proto_types[0] = TYPE_LONG;
+        support_right->has_proto = 1;
+        support_right->proto_nargs = 1;
+        support_right->proto_types[0] = TYPE_LONG;
+        memset(&support_left_node, 0, sizeof(support_left_node));
+        memset(&support_right_node, 0, sizeof(support_right_node));
+        memset(&support_condition, 0, sizeof(support_condition));
+        memset(&support_callee, 0, sizeof(support_callee));
+        memset(&support_argument, 0, sizeof(support_argument));
+        memset(&support_call, 0, sizeof(support_call));
+        support_left_node.kind = AST_IDENT;
+        support_left_node.type = type_add_ptr(TYPE_LONG);
+        support_left_node.sym = support_left;
+        support_left_node.sval = support_left->name;
+        support_right_node.kind = AST_IDENT;
+        support_right_node.type = type_add_ptr(TYPE_LONG);
+        support_right_node.sym = support_right;
+        support_right_node.sval = support_right->name;
+        support_condition.kind = AST_INT_LIT;
+        support_condition.type = TYPE_INT;
+        support_condition.ival = 1;
+        support_callee.kind = AST_COND;
+        support_callee.type = type_add_ptr(TYPE_LONG);
+        support_callee.a = &support_condition;
+        support_callee.b = &support_left_node;
+        support_callee.c = &support_right_node;
+        support_argument.kind = AST_INT_LIT;
+        support_argument.type = TYPE_LONG;
+        support_argument.ival = 7;
+        support_arguments[0] = &support_argument;
+        support_call.kind = AST_CALL;
+        support_call.type = TYPE_LONG;
+        support_call.a = &support_callee;
+        support_call.list = support_arguments;
+        support_call.list_len = 1;
+        support_call.list_cap = 1;
+        if (!ast_call_indirect_supported(&support_call)) {
+            fprintf(stderr, "FAIL matching conditional callback support\n");
+            ++failures;
+        }
+        support_right->proto_types[0] = TYPE_INT;
+        if (ast_call_indirect_supported(&support_call)) {
+            fprintf(stderr, "FAIL incompatible conditional callback support\n");
+            ++failures;
+        }
+        support_right->proto_types[0] = TYPE_LONG;
+        support_right->is_fastcall = 1;
+        if (ast_call_indirect_supported(&support_call)) {
+            fprintf(stderr, "FAIL mixed fastcall conditional callback support\n");
+            ++failures;
+        }
+        support_left->is_fastcall = 1;
+        if (ast_call_indirect_supported(&support_call)) {
+            fprintf(stderr, "FAIL conditional fastcall callback support\n");
+            ++failures;
+        }
+    }
+}
+
 int main(void)
 {
     struct Sym *callee;
@@ -6091,6 +6414,7 @@ int main(void)
     }
     verify_diamond_mutations();
     verify_ast_binary_folds();
+    verify_conditional_callable_prototypes();
     verify_ast_assignment_support();
     verify_call_lowering_preflight();
     verify_expression_lowering_preflight();
@@ -6511,6 +6835,45 @@ int main(void)
     mir.insns[3].opcode = MIR_NOP;
     mir.insns[3].src1 = -1;
     expect_verification("indirect prototype requires its argument", 0);
+    setup_phi_indirect_call(1, 0, 1, 0, TYPE_LONG);
+    expect_verification("PHI callback rejects excess argument", 0);
+    setup_phi_indirect_call(1, 1, 1, 1, TYPE_LONG);
+    expect_verification("PHI callback accepts matching prototype", 1);
+    mir.insns[10].type = TYPE_INT;
+    mir.insns[11].type = TYPE_INT;
+    expect_verification("PHI callback rejects incorrect argument type", 0);
+    setup_phi_indirect_call(1, 1, 1, 2, TYPE_LONG);
+    expect_verification("conflicting PHI callback prototypes remain unknown", 1);
+    setup_phi_indirect_call(1, 1, 0, 0, TYPE_LONG);
+    expect_verification("partly unprototyped PHI callback remains unknown", 1);
+    setup_phi_indirect_call(0, 0, 1, 1, TYPE_LONG);
+    expect_verification("reverse unprototyped PHI callback remains unknown", 1);
+    setup_phi_indirect_call(1, 1, 1, 1, TYPE_LONG);
+    mir.declared_proto_variadic[1] = 1;
+    expect_verification("variadic PHI callback conflict remains unknown", 1);
+    mir.declared_proto_variadic[1] = 0;
+    mir.declared_funcptr_return_types[1] = TYPE_LONG;
+    expect_verification("return-type PHI callback conflict remains unknown", 1);
+    mir.declared_funcptr_return_types[1] = TYPE_INT;
+    mir.declared_proto_types[1][0] = TYPE_INT;
+    expect_verification("parameter-type PHI callback conflict remains unknown", 1);
+    {
+        struct Sym *left_function =
+            add_global("phi_direct_left", TYPE_INT, SC_FUNC);
+        struct Sym *right_function =
+            add_global("phi_direct_right", TYPE_INT, SC_FUNC);
+
+        left_function->has_proto = 1;
+        left_function->proto_nargs = 0;
+        right_function->has_proto = 1;
+        right_function->proto_nargs = 0;
+        setup_phi_indirect_call(0, 0, 0, 0, TYPE_LONG);
+        mir.insns[4].opcode = MIR_ADDRESS;
+        strcpy(mir.insns[4].name, left_function->name);
+        mir.insns[7].opcode = MIR_ADDRESS;
+        strcpy(mir.insns[7].name, right_function->name);
+        expect_verification("PHI function designators reject excess argument", 0);
+    }
     {
         struct Sym local_callback;
         memset(&local_callback, 0, sizeof(local_callback));

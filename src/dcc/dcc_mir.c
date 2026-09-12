@@ -12102,8 +12102,108 @@ struct MirCallPrototype {
     int has_proto;
     int parameter_count;
     int variadic;
+    int return_type;
     const int *parameter_types;
 };
+
+static int mir_call_prototypes_match(const struct MirCallPrototype *left,
+                                     const struct MirCallPrototype *right)
+{
+    int parameter;
+
+    if (!left->has_proto || !right->has_proto ||
+        left->parameter_count != right->parameter_count ||
+        left->variadic != right->variadic ||
+        left->return_type != right->return_type ||
+        left->parameter_count < 0 ||
+        left->parameter_count > MAX_PROTO_PARAMS)
+        return 0;
+    for (parameter = 0; parameter < left->parameter_count; ++parameter)
+        if (left->parameter_types[parameter] !=
+            right->parameter_types[parameter])
+            return 0;
+    return 1;
+}
+
+static void mir_resolve_value_call_prototype(
+    int value, int call_instruction, int depth,
+    unsigned char *states, struct MirCallPrototype *cache,
+    struct MirCallPrototype *prototype)
+{
+    const struct MirInsn *source = NULL;
+    const struct Sym *callee;
+    int declared;
+    int definition;
+
+    memset(prototype, 0, sizeof(*prototype));
+    if (value < 0 || value >= mir.next_value || depth > mir.next_value)
+        return;
+    if (states[value] == 2) {
+        *prototype = cache[value];
+        return;
+    }
+    if (states[value] == 1)
+        return;
+    states[value] = 1;
+    for (definition = 0; definition < call_instruction; ++definition)
+        if (mir.insns[definition].dst == value) {
+            source = &mir.insns[definition];
+            break;
+        }
+    if (source == NULL)
+        goto resolved;
+    if (source->opcode == MIR_PHI) {
+        struct MirCallPrototype left;
+        struct MirCallPrototype right;
+
+        mir_resolve_value_call_prototype(
+            source->src1, call_instruction, depth + 1, states, cache, &left);
+        mir_resolve_value_call_prototype(
+            source->src2, call_instruction, depth + 1, states, cache, &right);
+        if (mir_call_prototypes_match(&left, &right))
+            *prototype = left;
+        goto resolved;
+    }
+    if (source->opcode == MIR_ADDRESS) {
+        callee = find_global(source->name);
+        if (callee != NULL && callee->storage == SC_FUNC &&
+            callee->has_proto) {
+            prototype->has_proto = 1;
+            prototype->parameter_count = callee->proto_nargs;
+            prototype->variadic = callee->proto_variadic;
+            prototype->return_type = callee->type;
+            prototype->parameter_types = callee->proto_types;
+        }
+        goto resolved;
+    }
+    if (source->opcode != MIR_LOAD && source->opcode != MIR_PARAM)
+        goto resolved;
+    declared = mir_declared_index(source->name);
+    if (declared >= 0) {
+        if (mir.declared_has_proto[declared]) {
+            prototype->has_proto = 1;
+            prototype->parameter_count = mir.declared_proto_nargs[declared];
+            prototype->variadic = mir.declared_proto_variadic[declared];
+            prototype->return_type =
+                mir.declared_funcptr_return_types[declared];
+            prototype->parameter_types =
+                mir.declared_proto_types[declared];
+        }
+    } else {
+        callee = find_global(source->name);
+        if (callee != NULL && callee->has_proto) {
+            prototype->has_proto = 1;
+            prototype->parameter_count = callee->proto_nargs;
+            prototype->variadic = callee->proto_variadic;
+            prototype->return_type = callee->is_funcptr
+                ? callee->funcptr_return_type : callee->type;
+            prototype->parameter_types = callee->proto_types;
+        }
+    }
+resolved:
+    cache[value] = *prototype;
+    states[value] = 2;
+}
 
 static void mir_resolve_call_prototype(const struct MirInsn *call,
                                        int call_instruction,
@@ -12113,39 +12213,25 @@ static void mir_resolve_call_prototype(const struct MirInsn *call,
 
     memset(prototype, 0, sizeof(*prototype));
     if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
-        int definition;
+        unsigned char *states = (unsigned char *)calloc(
+            (size_t)mir.next_value, sizeof(*states));
+        struct MirCallPrototype *cache = (struct MirCallPrototype *)calloc(
+            (size_t)mir.next_value, sizeof(*cache));
 
-        for (definition = 0; definition < call_instruction; ++definition) {
-            const struct MirInsn *source = &mir.insns[definition];
-            int declared;
-
-            if (source->dst != call->src1 ||
-                (source->opcode != MIR_LOAD &&
-                 source->opcode != MIR_PARAM))
-                continue;
-            declared = mir_declared_index(source->name);
-            if (declared >= 0) {
-                if (mir.declared_has_proto[declared]) {
-                    prototype->has_proto = 1;
-                    prototype->parameter_count =
-                        mir.declared_proto_nargs[declared];
-                    prototype->variadic =
-                        mir.declared_proto_variadic[declared];
-                    prototype->parameter_types =
-                        mir.declared_proto_types[declared];
-                }
-                return;
-            }
-            callee = find_global(source->name);
-            break;
-        }
-    } else {
-        callee = find_global(call->name);
+        if (mir.next_value > 0 && (states == NULL || cache == NULL))
+            fatal("out of memory resolving MIR call prototype");
+        mir_resolve_value_call_prototype(
+            call->src1, call_instruction, 0, states, cache, prototype);
+        free(states);
+        free(cache);
+        return;
     }
+    callee = find_global(call->name);
     if (callee != NULL && callee->has_proto) {
         prototype->has_proto = 1;
         prototype->parameter_count = callee->proto_nargs;
         prototype->variadic = callee->proto_variadic;
+        prototype->return_type = callee->type;
         prototype->parameter_types = callee->proto_types;
     }
 }
