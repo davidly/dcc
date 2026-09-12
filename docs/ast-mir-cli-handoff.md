@@ -420,13 +420,16 @@ parallel-wave summary for the current measurement.
   repeated-ID rejection and the full-debug comparison gate; both are killed,
   taking the compiler mutation suite from 11 to 13 killed mutants. A focused
   profile overlay on sealed Wave 30 data adds 15 covered `dcc_mir.c` lines,
-  nine branch outcomes, and three regions with unchanged production-source
+  13 branch outcomes, and three regions with unchanged production-source
   denominators. The shared call validator moves from 40/50 to 44/50 branch
-  outcomes, its function-pointer wrapper from 5/10 to 6/10, and the resolver
-  from 698/880 to 702/880. This overlay is prioritization evidence, not a new
-  authoritative full checkpoint. All five normal and sanitized host CTests
-  and all 128 script tests pass; production code and release output are
-  unchanged.
+  outcomes in the first increment and then 48/50 after negative-ID,
+  prototype-bound, unprototyped, and reverse-position controls. Its only
+  remaining outcomes are defensive `call_index` bounds that the private
+  in-range loop caller cannot violate. The function-pointer wrapper moves from
+  5/10 to 6/10 and the resolver from 698/880 to 702/880. This overlay is
+  prioritization evidence, not a new authoritative full checkpoint. All five
+  normal and sanitized host CTests and all 128 script tests pass; production
+  code and release output are unchanged.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -237,10 +237,15 @@ compiler suite to 13/13 killed mutants.
 
 Combining only the new instrumented host profile with the sealed Wave 30
 profile shows the intended local effect without changing production source or
-coverage denominators: `dcc_mir.c` gains 15 covered lines, nine covered branch
+coverage denominators: `dcc_mir.c` gains 15 covered lines, 13 covered branch
 outcomes, and three covered regions. The shared call validator rises from
-40/50 to 44/50 covered branch outcomes, its function-pointer wrapper from
+40/50 to 48/50 covered branch outcomes, its function-pointer wrapper from
 5/10 to 6/10, and `mir_resolve_deferred_metadata` from 698/880 to 702/880.
+The follow-up controls cover negative call IDs, both prototype-count bounds,
+unprototyped preservation, and accepted reverse physical order for unique
+contiguous argument positions. The validator's only two remaining uncovered
+outcomes are its defensive negative and past-end `call_index` checks; its sole
+private caller passes the current instruction index from an in-range loop.
 This focused overlay is gap-selection evidence, not a replacement full
 checkpoint. All five normal and ASan/UBSan host tests and all 128 script tests
 pass.

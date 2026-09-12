@@ -2256,6 +2256,96 @@ static void verify_deferred_direct_call_conversion(void)
         fprintf(stderr, "FAIL release deferred direct-call gating\n");
         ++failures;
     }
+
+    opt_debug = 1;
+    setup_deferred_direct_call_conversion(callee);
+    mir.insns[2].secondary_offset = -1;
+    mir.insns[3].secondary_offset = -1;
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    ok = ok && mir.debug_events[0].point == 3;
+    mir.insns[2].secondary_offset = 0;
+    mir.insns[3].secondary_offset = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 7 && mir.next_value == 3;
+    ok = ok && mir.insns[2].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].opcode == MIR_CALL;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL negative-ID deferred direct-call transaction\n");
+        ++failures;
+    }
+
+    setup_deferred_direct_call_conversion(callee);
+    callee->proto_nargs = -1;
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    callee->proto_nargs = MAX_PROTO_PARAMS + 1;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    callee->proto_nargs = 1;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.count == 7 && mir.next_value == 3;
+    ok = ok && mir.insns[2].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].opcode == MIR_CALL;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL prototype-bound deferred direct-call transaction\n");
+        ++failures;
+    }
+
+    setup_deferred_direct_call_conversion(callee);
+    callee->has_proto = 0;
+    callee->proto_nargs = 0;
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 6 && mir.next_value == 2;
+    ok = ok && mir.insns[1].type == TYPE_LONG;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    ok = ok && mir.insns[2].src1 == 0;
+    ok = ok && mir.insns[2].type == TYPE_LONG;
+    ok = ok && mir.insns[3].opcode == MIR_CALL;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL unprototyped deferred direct-call preservation\n");
+        ++failures;
+    }
+    callee->has_proto = 1;
+    callee->proto_nargs = 1;
+
+    setup_deferred_direct_call_conversion(callee);
+    argument = mir.insns[2];
+    call = mir.insns[3];
+    mir.insns[2].immediate = 1;
+    mir.insns[3] = argument;
+    mir.insns[4] = call;
+    callee->proto_nargs = 2;
+    callee->proto_types[1] = TYPE_LONG;
+    mir_resolve_deferred_metadata();
+    ok = mir.count == 7 && mir.next_value == 3;
+    ok = ok && mir.insns[2].opcode == MIR_ARG;
+    ok = ok && mir.insns[2].immediate == 1;
+    ok = ok && mir.insns[2].type == TYPE_LONG;
+    ok = ok && mir.insns[3].opcode == MIR_UNARY;
+    ok = ok && mir.insns[3].src1 == 0;
+    ok = ok && mir.insns[3].type == TYPE_INT;
+    ok = ok && mir.insns[4].opcode == MIR_ARG;
+    ok = ok && mir.insns[4].immediate == 0;
+    ok = ok && mir.insns[4].src1 == mir.insns[3].dst;
+    ok = ok && mir.insns[4].type == TYPE_INT;
+    ok = ok && mir.insns[5].opcode == MIR_CALL;
+    ok = ok && mir_verify_and_dump();
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL reverse-order deferred direct-call repair\n");
+        ++failures;
+    }
+    clear_liveness();
+    callee->proto_nargs = 1;
     opt_debug = saved_debug;
 }
 
