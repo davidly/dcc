@@ -176,6 +176,29 @@ static void setup_phi_indirect_call(
     mir.insns[13].src1 = 5;
 }
 
+static void setup_recorded_indirect_call(
+    const struct Sym *prototype, int argument_type)
+{
+    setup(6, 3, 1);
+    mir.next_call_id = 1;
+    mir_record_call_signature(0, prototype);
+    mir.insns[2].opcode = MIR_UNARY;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    mir.insns[3].opcode = MIR_ARG;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].type = argument_type;
+    mir.insns[3].secondary_offset = 0;
+    mir.insns[4].opcode = MIR_CALL;
+    mir.insns[4].dst = 2;
+    mir.insns[4].src1 = 1;
+    mir.insns[4].type = TYPE_INT;
+    mir.insns[4].secondary_offset = 0;
+    strcpy(mir.insns[4].name, "<indirect>");
+    mir.insns[5].src1 = 2;
+}
+
 static int ast_assignment_probe(
     struct AstNode *assign, struct AstNode *lhs,
     struct AstNode *rhs, int op)
@@ -6179,11 +6202,13 @@ static void verify_conditional_callable_prototypes(void)
     memset(&left_result, 0, sizeof(left_result));
     memset(&right_result, 0, sizeof(right_result));
     left.storage = SC_FUNC;
+    strcpy(left.name, "conditional_left");
     left.type = TYPE_LONG;
     left.has_proto = 1;
     left.proto_nargs = 1;
     left.proto_types[0] = TYPE_LONG;
     right = left;
+    strcpy(right.name, "conditional_right");
     left_node.kind = AST_IDENT;
     left_node.type = type_add_ptr(TYPE_LONG);
     left_node.sym = &left;
@@ -6201,6 +6226,7 @@ static void verify_conditional_callable_prototypes(void)
     callee.c = &right_node;
     callee.type = type_add_ptr(TYPE_LONG);
     call.kind = AST_CALL;
+    call.type = TYPE_LONG;
     call.a = &callee;
     argument.kind = AST_INT_LIT;
     argument.type = TYPE_LONG;
@@ -6212,6 +6238,19 @@ static void verify_conditional_callable_prototypes(void)
 
     if (ast_indirect_call_proto_sym(&call) != &left) {
         fprintf(stderr, "FAIL matching conditional callback prototype\n");
+        ++failures;
+    }
+    mir_begin_function(
+        "conditional_call_snapshot", "_conditional_call_snapshot",
+        EMIT_SINK_FINAL, 0, 0, 0);
+    mir_capture_discarded_expr(&call);
+    if (mir.next_call_id != 1 || mir.call_signature_capacity <= 0 ||
+        !mir.call_signatures[0].present ||
+        !mir.call_signatures[0].has_proto ||
+        mir.call_signatures[0].parameter_count != 1 ||
+        mir.call_signatures[0].parameter_types[0] != TYPE_LONG ||
+        mir.call_signatures[0].return_type != TYPE_LONG) {
+        fprintf(stderr, "FAIL conditional call signature snapshot\n");
         ++failures;
     }
     right.proto_types[0] = TYPE_INT;
@@ -6873,6 +6912,39 @@ int main(void)
         mir.insns[7].opcode = MIR_ADDRESS;
         strcpy(mir.insns[7].name, right_function->name);
         expect_verification("PHI function designators reject excess argument", 0);
+    }
+    {
+        struct Sym recorded_callback;
+        struct Sym *fallback_callback;
+
+        memset(&recorded_callback, 0, sizeof(recorded_callback));
+        recorded_callback.type = TYPE_INT | TYPE_PTR;
+        recorded_callback.storage = SC_LOCAL;
+        recorded_callback.is_funcptr = 1;
+        recorded_callback.funcptr_return_type = TYPE_INT;
+        recorded_callback.has_proto = 1;
+        recorded_callback.proto_nargs = 1;
+        recorded_callback.proto_types[0] = TYPE_LONG;
+        setup_recorded_indirect_call(&recorded_callback, TYPE_INT);
+        expect_verification("recorded indirect call argument ABI", 0);
+        mir.insns[3].type = TYPE_LONG;
+        expect_verification("recorded indirect call matching ABI", 1);
+        mir.insns[3].opcode = MIR_NOP;
+        mir.insns[3].src1 = -1;
+        expect_verification("recorded indirect call arity", 0);
+        fallback_callback = add_global(
+            "recorded_fallback_callback", TYPE_INT | TYPE_PTR, SC_GLOBAL);
+        fallback_callback->is_funcptr = 1;
+        fallback_callback->funcptr_return_type = TYPE_INT;
+        fallback_callback->has_proto = 1;
+        fallback_callback->proto_nargs = 1;
+        fallback_callback->proto_types[0] = TYPE_LONG;
+        recorded_callback.has_proto = 0;
+        setup_recorded_indirect_call(&recorded_callback, TYPE_INT);
+        mir.insns[2].opcode = MIR_LOAD;
+        strcpy(mir.insns[2].name, fallback_callback->name);
+        expect_verification(
+            "recorded unprototyped call overrides inferred prototype", 1);
     }
     {
         struct Sym local_callback;

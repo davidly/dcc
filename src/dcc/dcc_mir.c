@@ -238,6 +238,46 @@ static int mir_new_value(void)
     return mir.next_value++;
 }
 
+void mir_record_call_signature(int call_id, const struct Sym *prototype)
+{
+    struct MirCallSignature *signature;
+
+    if (call_id < 0)
+        return;
+    if (call_id >= mir.call_signature_capacity) {
+        int old_capacity = mir.call_signature_capacity;
+        int new_capacity = old_capacity > 0 ? old_capacity : 16;
+        struct MirCallSignature *grown;
+
+        while (new_capacity <= call_id)
+            new_capacity *= 2;
+        grown = (struct MirCallSignature *)realloc(
+            mir.call_signatures, (size_t)new_capacity * sizeof(*grown));
+        if (grown == NULL)
+            fatal("out of memory recording MIR call signatures");
+        mir.call_signatures = grown;
+        memset(mir.call_signatures + old_capacity, 0,
+               (size_t)(new_capacity - old_capacity) *
+                   sizeof(*mir.call_signatures));
+        mir.call_signature_capacity = new_capacity;
+    }
+    signature = &mir.call_signatures[call_id];
+    memset(signature, 0, sizeof(*signature));
+    if (prototype == NULL)
+        return;
+    signature->present = 1;
+    signature->has_proto = prototype->has_proto;
+    signature->parameter_count = prototype->proto_nargs;
+    signature->variadic = prototype->proto_variadic;
+    signature->return_type = prototype->storage == SC_FUNC
+        ? prototype->type
+        : (prototype->funcptr_return_type != 0
+           ? prototype->funcptr_return_type
+           : type_decay_ptr(prototype->type));
+    memcpy(signature->parameter_types, prototype->proto_types,
+           sizeof(signature->parameter_types));
+}
+
 static int mir_new_label(void)
 {
     return mir.next_label++;
@@ -3801,6 +3841,7 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             call_prototype = ast_indirect_call_proto_sym(node);
             callee_value = mir_lower_expr(callee);
         }
+        mir_record_call_signature(call_id, call_prototype);
         if (function_symbol != NULL && node->list_len >= 3) {
             int conditional_argument_count = 0;
 
@@ -4260,6 +4301,10 @@ void mir_begin_function(const char *name, const char *assembly_name,
     mir.next_value = 0;
     mir.next_label = 0;
     mir.next_call_id = 0;
+    if (mir.call_signature_capacity > 0)
+        memset(mir.call_signatures, 0,
+               (size_t)mir.call_signature_capacity *
+                   sizeof(*mir.call_signatures));
     mir.next_inline_temp_id = 1;
     mir.has_indirect_incdec = 0;
     mir.has_pointer_difference = 0;
@@ -12212,6 +12257,22 @@ static void mir_resolve_call_prototype(const struct MirInsn *call,
     const struct Sym *callee = NULL;
 
     memset(prototype, 0, sizeof(*prototype));
+    if (call->secondary_offset >= 0 &&
+        call->secondary_offset < mir.next_call_id &&
+        call->secondary_offset < mir.call_signature_capacity &&
+        mir.call_signatures[call->secondary_offset].present) {
+        const struct MirCallSignature *signature =
+            &mir.call_signatures[call->secondary_offset];
+
+        if (signature->has_proto) {
+            prototype->has_proto = 1;
+            prototype->parameter_count = signature->parameter_count;
+            prototype->variadic = signature->variadic;
+            prototype->return_type = signature->return_type;
+            prototype->parameter_types = signature->parameter_types;
+        }
+        return;
+    }
     if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
         unsigned char *states = (unsigned char *)calloc(
             (size_t)mir.next_value, sizeof(*states));

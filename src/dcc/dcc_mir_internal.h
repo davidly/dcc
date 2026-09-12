@@ -164,6 +164,15 @@ struct MirDebugEvent {
     char *text;
 };
 
+struct MirCallSignature {
+    int present;
+    int has_proto;
+    int parameter_count;
+    int variadic;
+    int return_type;
+    int parameter_types[MAX_PROTO_PARAMS];
+};
+
 #define MIR_OBJECT_UNDEFINED (-1)
 #define MIR_OBJECT_AMBIGUOUS (-2)
 #define MIR_OBJECT_UNREACHED (-3)
@@ -175,6 +184,8 @@ struct MirFunction {
     int next_value;
     int next_label;
     int next_call_id;
+    struct MirCallSignature *call_signatures;
+    int call_signature_capacity;
     int next_inline_temp_id;
     int active;
     int sink_purpose;
@@ -688,6 +699,7 @@ void mir_regional_begin_emission(void);
 int mir_regional_before_instruction(MirStream *out, int instruction);
 void mir_regional_after_instruction(int instruction);
 void mir_resolve_deferred_metadata(void);
+void mir_record_call_signature(int call_id, const struct Sym *prototype);
 int mir_prune_constant_unreachable(void);
 int mir_extended_integer_constant_conversion_folds(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,

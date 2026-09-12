@@ -288,6 +288,8 @@ int main(int argc, char **argv) {
             "phi-call-prototype": "killed",
             "conditional-call-prototype": "killed",
             "conditional-call-compatibility": "killed",
+            "call-signature-snapshot": "killed",
+            "scalar-call-signature": "killed",
             "allocation-first-result": "killed",
             "allocation-store-width": "killed",
         })
