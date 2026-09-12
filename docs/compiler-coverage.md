@@ -293,6 +293,24 @@ unsupported-source defenses. These are focused current-tree measurements, not
 an overlay claim against changed source mappings and not a replacement for
 Wave 30. Commit `5d1bf884` contains the implementation and permanent controls.
 
+Wave 34 records the AST-resolved scalar-call signature by call ID and makes
+that owned snapshot authoritative during MIR verification. This covers casts,
+fields, conditional values, and returned callables without requiring the
+verifier to reverse-engineer every possible callee value graph. A present
+unprototyped snapshot deliberately suppresses fallback name inference. The
+existing 96 callable-PHI plus 12 `qualexpr` configurations all pass, so the
+exact inventory remains 9,686.
+
+Focused current-tree coverage reaches `mir_record_call_signature` at 21/23
+regions, 34/36 lines, and 14/16 branch outcomes, and
+`mir_resolve_call_prototype` at 26/27 regions, 39/40 lines, and 20/24 branch
+outcomes. The complete compiler mutation suite has one passing baseline and
+18/18 killed mutants; new independent mutations clear the stored signature
+and remove the scalar lowering call site. Exact parent censuses have zero
+stack or no-stack output changes. These measurements do not replace Wave 30,
+and aggregate-call signature snapshots remain explicitly unresolved. Commit
+`b4f870d8` contains the implementation and host proofs.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

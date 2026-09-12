@@ -216,10 +216,12 @@ audits exercise 9,216 mutations with zero meaningful survivors; supported
 forms retain exact output and unsupported forms retain generated
 homed/spilled fallback.
 
-Wave 33 raises the locally verified exact inventory to 9,686 configurations.
+Wave 34 retains the locally verified exact inventory at 9,686 configurations.
 Wave 32 added a combined PHI, spill, alias, call-clobber, and post-call reload
 proof; Wave 33 preserves compatible callable prototypes through conditional
-expressions and MIR PHIs.
+expressions and MIR PHIs; Wave 34 snapshots resolved scalar-call signatures by
+call ID so MIR verification no longer depends on reconstructing every callee
+value shape.
 The authoritative Wave 30 LLVM checkpoint remains 4,608/4,608 functions
 (100.00%), 190,711/202,512 lines (94.17%), 104,229/155,732 native branch
 outcomes (66.93%), and 173,307/183,178 regions (94.61%). Its raw uncovered
@@ -235,7 +237,7 @@ locally verified execution inventory.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest locally validated continuation implementation:
-  `5d1bf884` (`Preserve callable prototypes through PHIs`).
+  `b4f870d8` (`Record MIR call signature snapshots`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -489,6 +491,29 @@ locally verified execution inventory.
   15/15 lines, and 16/18 branch outcomes; its remaining pair guards malformed
   negative or excessive parameter counts. This focused profile does not
   replace Wave 30. Commit `5d1bf884` contains the production fix and proofs.
+- Wave 34 closes the remaining scalar-call verification gap for casts, fields,
+  PHIs, and returned callable expressions. Lowering now stores an owned
+  signature snapshot by call ID before lowering arguments; verification gives
+  that snapshot precedence over best-effort value-graph reconstruction.
+  Explicit unprototyped snapshots also prevent an unrelated same-named global
+  prototype from being borrowed. Per-function storage grows geometrically,
+  is cleared at every `mir_begin_function`, and is retained only as compiler
+  metadata; selection and emitted bytes are unchanged. Aggregate-call
+  signature snapshots remain separate future work.
+- Wave 34 reuses the 96 callable-PHI and 12 `qualexpr` configurations, all 108
+  of which pass; the complete inventory therefore remains 9,686. Normal and
+  ASan/UBSan host suites pass 5/5. Exact parent comparisons retain all
+  3,039 functions with zero selector, output-hash, or app changes in stack and
+  no-stack modes. Both strict 506-app release modes pass 482 with 24 documented
+  skips, zero failures, and zero performance regressions; all four debug
+  censuses emit 3,039/3,039 functions; 392 extended configurations, seven
+  required-emission controls, 10 debugger-host tests, runtime safety audits,
+  and all 129 script tests pass. The mutation suite has one passing baseline
+  plus 18/18 killed mutants; the two new mutants independently disable stored
+  signatures and the scalar lowering call site. Focused coverage reaches
+  `mir_record_call_signature` at 21/23 regions, 34/36 lines, and 14/16 branch
+  outcomes, and `mir_resolve_call_prototype` at 26/27 regions, 39/40 lines,
+  and 20/24 branch outcomes. Commit `b4f870d8` contains the snapshot and proofs.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
