@@ -51,10 +51,12 @@ isolated background workers and consolidated integration gates:
   checkpoint. `DCC_COVERAGE_JOBS` defaults to all online CPUs for builds,
   runall, and host CTest; mutation and census concurrency can be overridden
   with `DCC_COVERAGE_MUTATION_JOBS` and `DCC_COVERAGE_CENSUS_JOBS`. The
-  diagnostic-heavy clobber runner defaults to a separately safe four workers
-  and can be tuned with `DCC_COVERAGE_CLOBBER_JOBS`. Exhaustive mutation
-  campaigns run concurrently within the combined mutation budget and use
-  separate `%8m` profile pools to avoid serialization on profile-file locks.
+  diagnostic-heavy clobber runner defaults to the measured optimum of eight
+  workers and can be tuned with `DCC_COVERAGE_CLOBBER_JOBS`. Exhaustive
+  mutation campaigns use a longest-first token scheduler: ordinary campaigns
+  default to four workers, enforced caps remain at two, and completed campaigns
+  immediately release capacity within the combined mutation budget. Separate
+  `%8m` profile pools avoid serialization on profile-file locks.
   Report-only runs verify recorded input/tool/profile hashes and do not rerun
   targets. Do not merge worker revisions or faulty compiler profiles.
 
@@ -353,6 +355,19 @@ parallel-wave summary for the current measurement.
   audits. This inventory does not replace the authoritative Wave 19 full LLVM
   collection; a fresh immutable full collection remains the next coverage
   measurement.
+- The first immutable Wave 28 attempt at `c924ea08` exercised all 40 mutation
+  campaigns but was not sealed. After 4 hours 8 minutes it correctly rejected
+  a stale pointer-condition audit expectation: all 14,706 mutations completed,
+  but 246 label `immediate` mutations were classified as unused opcode fields
+  rather than no-ops. MIR labels use their `label` member, so commit `2f657c2a`
+  corrects the expectation and adds a focused regression. No profiles from the
+  failed collection are authoritative or reused.
+- A post-run clobber benchmark found eight workers fastest: the same 476
+  `allocmut` configurations took 16.90, 14.51, 16.85, and 17.99 seconds at
+  4, 8, 12, and 16 workers, with identical manifests. The next collection uses
+  eight clobber workers and a global mutation token scheduler. A real
+  four-worker scheduler smoke completed all 1,692 matrix-add mutations in
+  20.44 seconds with zero meaningful survivors.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

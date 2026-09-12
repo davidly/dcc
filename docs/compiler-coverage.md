@@ -11,18 +11,21 @@ unchanged release/debugger gates.
 `DCC_COVERAGE_JOBS` bounds the coverage build, main/extended runners, and host
 CTest processes; it defaults to the online CPU count. Mutation audits and
 debug censuses use the same value unless `DCC_COVERAGE_MUTATION_JOBS` or
-`DCC_COVERAGE_CENSUS_JOBS` overrides them. The clobber runner is independently
-capped at four workers by default because instrumented diagnostic-heavy cases
-can exceed their fixed compile timeout under higher contention; override that
-cap with `DCC_COVERAGE_CLOBBER_JOBS` after measuring the host. Clobber workers
-are separate processes, so diagnostic environment variables cannot race
-between tests.
+`DCC_COVERAGE_CENSUS_JOBS` overrides them. The clobber runner defaults to eight
+workers after a 4/8/12/16-worker instrumented benchmark found 8 fastest with
+identical execution manifests. Override it with `DCC_COVERAGE_CLOBBER_JOBS`
+after measuring a different host. Clobber workers are separate processes, so
+diagnostic environment variables cannot race between tests.
 
-The exhaustive mutation campaigns run concurrently. The mutation job
-budget is divided across them, and each campaign receives its own `%8m` LLVM
-profile pool so profile-file locking does not serialize otherwise independent
-compiler processes. `DCC_COVERAGE_MUTATION_JOBS` is the combined budget, not a
-per-campaign multiplier.
+The exhaustive mutation campaigns use a longest-first token scheduler. Four
+workers are assigned to each ordinary campaign by default, while campaigns
+with an enforced two-worker cap consume only two tokens. Completed campaigns
+release their tokens immediately so queued work can use the full combined
+budget instead of leaving a serial long tail. Override the ordinary campaign
+size with `DCC_COVERAGE_CAMPAIGN_JOBS`. Each campaign receives its own `%8m`
+LLVM profile pool so profile-file locking does not serialize otherwise
+independent compiler processes. `DCC_COVERAGE_MUTATION_JOBS` is the combined
+budget, not a per-campaign multiplier.
 
 The one-command workflow remains the default. Alternatively split a checkpoint
 into stages, always using the same absolute build directory and toolchain:
@@ -30,7 +33,8 @@ into stages, always using the same absolute build directory and toolchain:
 ```sh
 export DCC_COVERAGE_BUILD_DIR="$PWD/build/compiler-coverage"
 export DCC_COVERAGE_JOBS="$(getconf _NPROCESSORS_ONLN)"
-export DCC_COVERAGE_CLOBBER_JOBS=4
+export DCC_COVERAGE_CLOBBER_JOBS=8
+export DCC_COVERAGE_CAMPAIGN_JOBS=4
 DCC_COVERAGE_STAGE=build sh scripts/compiler-coverage.sh
 DCC_COVERAGE_STAGE=collect sh scripts/compiler-coverage.sh
 DCC_COVERAGE_STAGE=report sh scripts/compiler-coverage.sh
@@ -56,6 +60,12 @@ regeneration preserved the collection stamp and profile hashes. Independent
 compiler mutation measurements with two build jobs per worker were 335.09
 seconds serial and 205.30 seconds with two workers; both baseline controls
 passed and all nine mutants were killed with identical outcomes.
+
+On the current 24-CPU host, the later 476-configuration `allocmut` benchmark
+completed in 16.90, 14.51, 16.85, and 17.99 seconds with 4, 8, 12, and 16
+workers respectively. All four manifests were identical. Eight workers are
+therefore the measured default; adding workers beyond that increased CPU time
+and wall time.
 
 The same wave adds accepted/rejected sliding-maximum controls and fixes an
 overflow in generic `MIR_VA_ARG` preflight: testing `offset > 126` avoids

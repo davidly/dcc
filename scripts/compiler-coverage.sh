@@ -21,11 +21,12 @@ case "$detected_jobs" in
 esac
 jobs=${DCC_COVERAGE_JOBS:-$detected_jobs}
 default_clobber_jobs=$jobs
-if [ "$default_clobber_jobs" -gt 4 ]; then
-    default_clobber_jobs=4
+if [ "$default_clobber_jobs" -gt 8 ]; then
+    default_clobber_jobs=8
 fi
 clobber_jobs=${DCC_COVERAGE_CLOBBER_JOBS:-$default_clobber_jobs}
 mutation_jobs=${DCC_COVERAGE_MUTATION_JOBS:-$jobs}
+default_campaign_jobs=${DCC_COVERAGE_CAMPAIGN_JOBS:-4}
 census_jobs=${DCC_COVERAGE_CENSUS_JOBS:-$jobs}
 case "$stage" in
     all|build|collect|report) ;;
@@ -42,6 +43,7 @@ validate_jobs() {
 validate_jobs DCC_COVERAGE_JOBS "$jobs"
 validate_jobs DCC_COVERAGE_CLOBBER_JOBS "$clobber_jobs"
 validate_jobs DCC_COVERAGE_MUTATION_JOBS "$mutation_jobs"
+validate_jobs DCC_COVERAGE_CAMPAIGN_JOBS "$default_campaign_jobs"
 validate_jobs DCC_COVERAGE_CENSUS_JOBS "$census_jobs"
 mkdir -p "$build_dir"
 if ! mkdir "$build_dir/.coverage-lock" 2>/dev/null; then
@@ -139,6 +141,9 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
+# Retain one opt-in reference path until the new scheduler has a complete
+# immutable timing comparison.
+if [ "${DCC_COVERAGE_LEGACY_CAMPAIGNS:-0}" = 1 ]; then
 campaign_jobs=$(( (mutation_jobs + 39) / 40 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
@@ -440,6 +445,14 @@ done
 if [ "$campaign_status" -ne 0 ]; then
     echo "compiler-coverage: one or more mutation campaigns failed" >&2
     exit 1
+fi
+else
+python3 "$repo_root/scripts/compiler-coverage-campaigns.py" \
+    --jobs "$mutation_jobs" \
+    --campaign-jobs "$default_campaign_jobs" \
+    --build-dir "$build_dir" \
+    --raw-dir "$raw_dir" \
+    --campaign-dir "$report_dir/mutation-campaigns"
 fi
 env -u DCC_MIR_MACHINE_MUTATE DCC_MIR_MACHINE_MUTATE_FUNCTION=main \
     "$DCC" -c "$repo_root/tests/mir-clobber/logserie.c" \
