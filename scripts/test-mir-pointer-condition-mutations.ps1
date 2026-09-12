@@ -96,7 +96,7 @@ try {
             throw "Pointer-condition mutation $index escaped exact rejection"
         }
     }
-    Write-Host "Pointer-condition exact matcher rejected $($mutations.Count) semantic mutations"
+    Write-Host "Pointer-condition matcher validated $($mutations.Count) source mutations"
 } finally {
     foreach ($name in $environmentNames) {
         [Environment]::SetEnvironmentVariable(
