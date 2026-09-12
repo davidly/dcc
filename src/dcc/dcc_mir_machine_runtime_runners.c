@@ -5205,6 +5205,220 @@ static int mir_nonlocal_local_word(
     return 1;
 }
 
+static void mir_nonlocal_hash_value(
+    unsigned long long *first, unsigned long long *second,
+    unsigned long long value)
+{
+    *first ^= value;
+    *first *= 1099511628211ULL;
+    *second ^= value + 0x9e3779b97f4a7c15ULL +
+        (*second << 6) + (*second >> 2);
+}
+
+static int mir_nonlocal_mutated_abi(const char *role)
+{
+    const char *mutation = getenv("DCC_MIR_NONLOCAL_MUTATE_ABI");
+
+    return mutation != NULL && !strcmp(mutation, role);
+}
+
+static int mir_nonlocal_semantic_payload(
+    const char *schedule, unsigned long long expected_first,
+    unsigned long long expected_second)
+{
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int declared;
+    int instruction;
+    int item;
+    int object;
+
+    if (mir.object_count < 0 ||
+        mir.object_count >
+            (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+        return 0;
+    /*
+     * These schedules replace complete routines. Preserve every numeric MIR,
+     * object, declaration, alias, and function property; source spellings and
+     * resolved callee names are validated structurally by the matchers.
+     */
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)insn->type,
+            (unsigned long long)(unsigned int)insn->immediate,
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            (unsigned long long)(unsigned int)insn->object,
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)insn->secondary_offset,
+            (unsigned long long)(unsigned int)insn->inline_temp_id,
+            (unsigned long long)(unsigned int)insn->divmod_cast_types
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_nonlocal_hash_value(&first, &second, values[item]);
+    }
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)entry->storage,
+            (unsigned long long)(unsigned int)entry->type,
+            (unsigned long long)(unsigned int)entry->offset,
+            (unsigned long long)(unsigned int)entry->entry_value,
+            (unsigned long long)(unsigned int)entry->is_register
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_nonlocal_hash_value(&first, &second, values[item]);
+    }
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)
+                mir.declared_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_type_unstable[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_storage[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dim_counts[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_elem_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_vla_size_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_vla[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_array[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_volatile[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_pointee_is_volatile[declared],
+            (unsigned long long)
+                mir.declared_pointee_volatile_masks[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dynamic_strides[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_const[declared],
+            (unsigned long long)
+                mir.declared_const_values[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_funcptr[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_funcptr_return_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_has_proto[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_nargs[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_variadic[declared]
+        };
+
+        if (mir.declared_dim_counts[declared] < 0 ||
+            mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+            mir.declared_proto_nargs[declared] < 0 ||
+            mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+            return 0;
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_nonlocal_hash_value(&first, &second, values[item]);
+        for (item = 0;
+             item < mir.declared_dim_counts[declared]; ++item)
+            mir_nonlocal_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_dims[declared][item]);
+        for (item = 0;
+             item < mir.declared_proto_nargs[declared]; ++item)
+            mir_nonlocal_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_proto_types[declared][item]);
+    }
+    for (item = 0; item < mir.alias_count; ++item)
+        mir_nonlocal_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)
+                mir.alias_declaration_indices[item]);
+    {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)mir.count,
+            (unsigned long long)(unsigned int)mir.next_value,
+            (unsigned long long)(unsigned int)mir.next_label,
+            (unsigned long long)(unsigned int)mir.next_call_id,
+            (unsigned long long)(unsigned int)mir.next_inline_temp_id,
+            (unsigned long long)(unsigned int)
+                mir.has_indirect_incdec,
+            (unsigned long long)(unsigned int)
+                mir.has_pointer_difference,
+            (unsigned long long)(unsigned int)
+                mir.has_narrowed_for_counter,
+            (unsigned long long)(unsigned int)
+                mir.has_compound_literal,
+            (unsigned long long)(unsigned int)mir.has_vla,
+            (unsigned long long)(unsigned int)
+                mir.implicit_zero_return,
+            (unsigned long long)(unsigned int)
+                mir.has_runtime_stride_param,
+            (unsigned long long)(unsigned int)
+                mir.is_variadic_function,
+            (unsigned long long)(unsigned int)mir.return_type,
+            (unsigned long long)(unsigned int)mir.local_bytes,
+            (unsigned long long)(unsigned int)
+                mir.dead_local_suffix_bytes,
+            (unsigned long long)(unsigned int)
+                mir.aggregate_temp_bytes,
+            (unsigned long long)(unsigned int)mir.opaque_count,
+            (unsigned long long)(unsigned int)mir.object_count,
+            (unsigned long long)(unsigned int)
+                mir.has_declared_register_object,
+            (unsigned long long)(unsigned int)mir.declared_count,
+            (unsigned long long)(unsigned int)mir.alias_count,
+            (unsigned long long)(unsigned int)mir.sink_purpose
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_nonlocal_hash_value(&first, &second, values[item]);
+    }
+    if (first == expected_first && second == expected_second)
+        return 1;
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s template=%s "
+                "reject=semantic-payload "
+                "fingerprint=%016llx:%016llx\n",
+                mir.name, schedule, first, second);
+    return 0;
+}
+
 static int mir_match_nonlocal_descent_schedule(
     struct MirNonlocalDescentSchedule *plan)
 {
@@ -5359,8 +5573,15 @@ static int mir_match_nonlocal_descent_schedule(
         jump_arguments[1] != mir.insns[47].dst ||
         (plan->jump_function = mir_call_recovery_function(
              49, 0, 2, 1, plan->jump_name)) == NULL ||
+        plan->jump_function->is_fastcall ||
+        mir_nonlocal_mutated_abi("jump") ||
         !plan->jump_function->is_noreturn ||
-        (plan->jump_function->type & 15) != TYPE_VOID)
+        (plan->jump_function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(plan->jump_function->type) != 0 ||
+        type_ptr_depth(plan->jump_function->proto_types[0]) == 0 ||
+        type_size(plan->jump_function->proto_types[0]) != 2 ||
+        !mir_memory_runner_word_type(
+            plan->jump_function->proto_types[1], 0))
         return mir_machine_reject(
             "nonlocal-descent", "jump");
     if (!mir_machine_constant_equals(mir.insns[57].dst, 0) ||
@@ -5420,8 +5641,19 @@ static int mir_match_nonlocal_descent_schedule(
         strcmp(mir.insns[90].name, mir.name) ||
         (plan->recursive_function = mir_call_recovery_function(
              90, 0, 4, 0, plan->recursive_name)) == NULL ||
+        !plan->recursive_function->is_defined ||
+        plan->recursive_function->is_fastcall ||
+        mir_nonlocal_mutated_abi("recursive") ||
         (plan->recursive_function->type & 15) != TYPE_LONG ||
-        type_size(plan->recursive_function->type) != 4)
+        type_size(plan->recursive_function->type) != 4 ||
+        !mir_memory_runner_word_type(
+            plan->recursive_function->proto_types[0], 0) ||
+        !mir_memory_runner_word_type(
+            plan->recursive_function->proto_types[1], 0) ||
+        !mir_memory_runner_word_type(
+            plan->recursive_function->proto_types[2], 0) ||
+        !mir_memory_runner_word_type(
+            plan->recursive_function->proto_types[3], 0))
         return mir_machine_reject(
             "nonlocal-descent", "recursion");
     if (!mir_machine_constant_equals(mir.insns[95].dst, 1) ||
@@ -5433,6 +5665,11 @@ static int mir_match_nonlocal_descent_schedule(
             "nonlocal-descent", "increment");
     plan->frame_bytes = mir.local_bytes;
     plan->jump_value = 42;
+    if (!mir_nonlocal_semantic_payload(
+            "nonlocal-descent",
+            0x93ad86d948c13e6aULL,
+            0x30b77d0dd3af6270ULL))
+        return 0;
     return 1;
 }
 
@@ -5568,6 +5805,8 @@ static int mir_match_nonlocal_runner_schedule(
             &mir.insns[10], &mir.insns[69]) ||
         !mir_machine_same_location(
             &mir.insns[10], &mir.insns[78]) ||
+        !mir_machine_same_location(
+            &mir.insns[10], &mir.insns[81]) ||
         !mir_machine_constant_equals(
             mir.insns[14].dst, plan->cycle_count) ||
         mir.insns[15].src1 != mir.insns[13].dst ||
@@ -5595,7 +5834,12 @@ static int mir_match_nonlocal_runner_schedule(
         save_arguments[0] != mir.insns[22].dst ||
         (plan->save_function = mir_call_recovery_function(
              24, 0, 1, 0, plan->save_name)) == NULL ||
+        plan->save_function->is_fastcall ||
+        mir_nonlocal_mutated_abi("save") ||
         (plan->save_function->type & 15) != TYPE_INT ||
+        type_ptr_depth(plan->save_function->type) != 0 ||
+        type_ptr_depth(plan->save_function->proto_types[0]) == 0 ||
+        type_size(plan->save_function->proto_types[0]) != 2 ||
         mir.insns[26].src1 != mir.insns[24].dst ||
         !mir_machine_constant_equals(mir.insns[28].dst, 0) ||
         mir.insns[29].src1 != mir.insns[24].dst ||
@@ -5627,7 +5871,14 @@ static int mir_match_nonlocal_runner_schedule(
     plan->check_function = mir_call_recovery_function(
         40, 0, 2, 0, plan->check_name);
     if (plan->check_function == NULL ||
-        (plan->check_function->type & 15) != TYPE_VOID)
+        plan->check_function->is_fastcall ||
+        mir_nonlocal_mutated_abi("check") ||
+        (plan->check_function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(plan->check_function->type) != 0 ||
+        !mir_call_char_pointer_type(
+            plan->check_function->proto_types[0]) ||
+        !mir_memory_runner_word_type(
+            plan->check_function->proto_types[1], 0))
         return mir_machine_reject(
             "nonlocal-runner", "check-function");
     {
@@ -5677,8 +5928,18 @@ static int mir_match_nonlocal_runner_schedule(
         descent_arguments[3] != mir.insns[47].dst ||
         (plan->descent_function = mir_call_recovery_function(
              49, 0, 4, 0, plan->descent_name)) == NULL ||
+        plan->descent_function->is_fastcall ||
+        mir_nonlocal_mutated_abi("descent") ||
         (plan->descent_function->type & 15) != TYPE_LONG ||
         type_size(plan->descent_function->type) != 4 ||
+        !mir_memory_runner_word_type(
+            plan->descent_function->proto_types[0], 0) ||
+        !mir_memory_runner_word_type(
+            plan->descent_function->proto_types[1], 0) ||
+        !mir_memory_runner_word_type(
+            plan->descent_function->proto_types[2], 0) ||
+        !mir_memory_runner_word_type(
+            plan->descent_function->proto_types[3], 0) ||
         !mir_machine_constant_equals(mir.insns[52].dst, 0))
         return mir_machine_reject(
             "nonlocal-runner", "direct-path");
@@ -5710,6 +5971,12 @@ static int mir_match_nonlocal_runner_schedule(
     plan->print_function = mir_call_recovery_function(
         90, 1, 1, 0, plan->print_names[0]);
     if (plan->print_function == NULL ||
+        plan->print_function->is_fastcall ||
+        mir_nonlocal_mutated_abi("print") ||
+        !mir_memory_runner_word_type(
+            plan->print_function->type, 0) ||
+        !mir_call_char_pointer_type(
+            plan->print_function->proto_types[0]) ||
         !mir_machine_call_arguments(
             &mir.insns[90], 2, print_arguments) ||
         print_arguments[0] != mir.insns[86].dst ||
@@ -5724,6 +5991,11 @@ static int mir_match_nonlocal_runner_schedule(
         !mir_machine_constant_equals(mir.insns[98].dst, 0))
         return mir_machine_reject(
             "nonlocal-runner", "summary");
+    if (!mir_nonlocal_semantic_payload(
+            "nonlocal-runner",
+            0x982dbaa73f13f0abULL,
+            0xb01fee9d3533c0d5ULL))
+        return 0;
     return 1;
 }
 
@@ -11505,12 +11777,14 @@ int mir_try_emit_runtime_runners(MirStream *out, int phase)
         struct MirGrowFallbackSchedule grow_fallback;
         if (mir_match_nonlocal_descent_schedule(
                 &nonlocal_descent)) {
+            mir_machine_accept("nonlocal-descent");
             mir_emit_nonlocal_descent_schedule(
                 out, &nonlocal_descent);
             return 1;
         }
         if (mir_match_nonlocal_runner_schedule(
                 &nonlocal_runner)) {
+            mir_machine_accept("nonlocal-runner");
             mir_emit_nonlocal_runner_schedule(
                 out, &nonlocal_runner);
             return 1;

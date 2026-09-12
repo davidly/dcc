@@ -139,7 +139,7 @@ cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
-campaign_jobs=$(( (mutation_jobs + 36) / 37 ))
+campaign_jobs=$(( (mutation_jobs + 37) / 38 ))
 campaign_dir="$report_dir/mutation-campaigns"
 mkdir -p "$campaign_dir"
 LLVM_PROFILE_FILE="$raw_dir/dcc-endgame-%8m.profraw" \
@@ -364,6 +364,11 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-buffered-console-%8m.profraw" \
     --output-dir "$build_dir/buffered-console-wave27-audit" \
     >"$campaign_dir/buffered-console.log" 2>&1 &
 buffered_console_pid=$!
+LLVM_PROFILE_FILE="$raw_dir/dcc-nonlocal-%8m.profraw" \
+    python3 scripts/nonlocal-wave28-campaign.py \
+    --jobs "$campaign_jobs" --skip-runtime \
+    >"$campaign_dir/nonlocal.log" 2>&1 &
+nonlocal_pid=$!
 campaign_status=0
 for campaign in \
     "endgame:$endgame_pid" \
@@ -402,7 +407,8 @@ for campaign in \
     "matrix-store:$matrix_store_pid" \
     "callback-registration:$callback_registration_pid" \
     "memory-exercise:$memory_exercise_pid" \
-    "buffered-console:$buffered_console_pid"
+    "buffered-console:$buffered_console_pid" \
+    "nonlocal:$nonlocal_pid"
 do
     campaign_name=${campaign%%:*}
     campaign_pid=${campaign#*:}
