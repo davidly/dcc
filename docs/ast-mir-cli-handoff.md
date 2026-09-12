@@ -216,8 +216,10 @@ audits exercise 9,216 mutations with zero meaningful survivors; supported
 forms retain exact output and unsupported forms retain generated
 homed/spilled fallback.
 
-Wave 32 raises the locally verified exact inventory to 9,590 configurations
-with a combined PHI, spill, alias, call-clobber, and post-call reload proof.
+Wave 33 raises the locally verified exact inventory to 9,686 configurations.
+Wave 32 added a combined PHI, spill, alias, call-clobber, and post-call reload
+proof; Wave 33 preserves compatible callable prototypes through conditional
+expressions and MIR PHIs.
 The authoritative Wave 30 LLVM checkpoint remains 4,608/4,608 functions
 (100.00%), 190,711/202,512 lines (94.17%), 104,229/155,732 native branch
 outcomes (66.93%), and 173,307/183,178 regions (94.61%). Its raw uncovered
@@ -233,7 +235,7 @@ locally verified execution inventory.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest locally validated continuation implementation:
-  `ff638de3` (`Add PHI alias call differential proof`).
+  `5d1bf884` (`Preserve callable prototypes through PHIs`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -453,6 +455,40 @@ locally verified execution inventory.
   Wave 30 totals remain authoritative. Production code, release output,
   coverage denominators, and performance baselines are unchanged. Commit
   `ff638de3` publishes the fixture, campaign, and independent oracle.
+- Wave 33 reproduces and fixes two callable-signature failures. First, MIR
+  verification recovered prototypes only from directly named loads or
+  parameters, so a PHI of two identical callbacks accepted excess arguments
+  and wrong-width argument records. It now follows PHIs transactionally with
+  per-value memoization and cycle detection, accepts only identical signatures,
+  and also recognizes direct function-address leaves. Conflicting or partly
+  unprototyped MIR inputs remain unknown rather than borrowing one arm's
+  signature. Second, verifier recovery exposed that AST lowering had already
+  lost the common prototype of a conditional callee: a valid
+  `long(long)` conditional call was reproduced failing strict MIR emission
+  because its `int` argument had not been widened. AST callable resolution now
+  forms a conservative C-compatible composite across function designators,
+  local pointers, explicit function addresses, null and cast-null arms,
+  compatible old-style/prototyped declarations, and separately allocated
+  returned-callable prototypes. Incompatible conditional signatures are
+  rejected explicitly. Indirect `__fastcall` remains rejected because the
+  indirect emitter does not implement its register ABI.
+- The Wave 33 real-source campaign covers direct, local-pointer, explicit
+  address, null, cast-null, returned, old-style/prototyped, and nested returned
+  callable PHIs. Its 96 stack/no-stack, peep/nopeep, full-debug, and line-debug
+  configurations pass, raising the exact inventory from 9,590 to 9,686.
+  Normal and ASan/UBSan host suites pass 5/5; exact parent comparisons retain
+  all 3,039 functions with zero selector, output-hash, or app changes in stack
+  and no-stack modes; all four debug censuses emit 3,039/3,039 functions; both
+  strict 506-app release modes pass 482 with 24 documented skips, zero failures,
+  and zero performance regressions; 392 extended configurations, seven
+  required-emission controls, 10 debugger-host tests, runtime safety audits,
+  and all 129 script tests pass. The mutation suite has one passing baseline
+  and 16/16 specifically killed mutants, including PHI prototype transport,
+  conditional prototype recovery, and incompatible-conditional rejection.
+  Focused current-tree coverage gives the signature matcher 23/23 regions,
+  15/15 lines, and 16/18 branch outcomes; its remaining pair guards malformed
+  negative or excessive parameter counts. This focused profile does not
+  replace Wave 30. Commit `5d1bf884` contains the production fix and proofs.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

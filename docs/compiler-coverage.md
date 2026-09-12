@@ -272,6 +272,27 @@ four-metric checkpoint or change its denominator. The independent oracle test
 and all 129 repository script tests pass. Commit `ff638de3` contains the
 fixture, campaign, and oracle.
 
+Wave 33 adds 96 callable-PHI configurations, raising the exact inventory to
+9,686. The campaign proves target-correct calls through conditional direct
+function designators, local function pointers, explicit addresses, null and
+cast-null alternatives, returned callables, compatible old-style/prototyped
+functions, and nested returned-callable composites. The verifier's independent
+MIR proof follows PHIs only when both source signatures match; incompatible or
+partly unprototyped inputs remain unknown. Three clean-build mutants remove
+PHI signature transport, conditional prototype recovery, and incompatible
+conditional rejection; all three are killed, and the complete suite passes
+one baseline plus 16/16 killed mutants.
+
+The focused current-tree host and 96-case profiles cover
+`mir_call_prototypes_match` at 23/23 regions, 15/15 lines, and 16/18 branch
+outcomes. The two missing outcomes are bounds guards for malformed negative or
+past-`MAX_PROTO_PARAMS` metadata, not supported-source paths. The broader value
+resolver is 51/56 regions, 67/73 lines, and 30/42 branches; its remaining
+outcomes include invalid value/definition, allocation-failure, cycle, and
+unsupported-source defenses. These are focused current-tree measurements, not
+an overlay claim against changed source mappings and not a replacement for
+Wave 30. Commit `5d1bf884` contains the implementation and permanent controls.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
