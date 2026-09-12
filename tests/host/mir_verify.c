@@ -6864,6 +6864,74 @@ int main(void)
         clear_liveness();
     }
     {
+        unsigned char rematerializable[4] = {0, 1, 1, 0};
+        MirStream *output;
+        char text[4096];
+        size_t bytes;
+        const char *push;
+        const char *call;
+        const char *pop;
+        int emitted;
+
+        diamond();
+        mir.count = 12;
+        mir.return_type = TYPE_LONG;
+        mir.next_call_id = 1;
+        mir.insns[4].type = TYPE_LONG;
+        mir.insns[7].type = TYPE_LONG;
+        mir.insns[11] = mir.insns[10];
+        mir.insns[11].type = TYPE_LONG;
+        mir.insns[10] = mir.insns[9];
+        mir.insns[10].type = TYPE_LONG;
+        memset(&mir.insns[9], 0, sizeof(mir.insns[9]));
+        mir.insns[9].opcode = MIR_CALL;
+        mir.insns[9].src1 = -1;
+        mir.insns[9].src2 = -1;
+        mir.insns[9].dst = -1;
+        mir.insns[9].object = -1;
+        mir.insns[9].label = -1;
+        mir.insns[9].phi_pred1 = -1;
+        mir.insns[9].phi_pred2 = -1;
+        mir.insns[9].type = TYPE_VOID;
+        mir.insns[9].secondary_offset = 0;
+        strcpy(mir.insns[9].name, callee->name);
+        if (!mir_verify_and_dump()) {
+            fprintf(stderr, "FAIL wide guarded call allocation control\n");
+            ++failures;
+        } else if (!mir_probe_wide_colors_for_homed(
+                       rematerializable, 1)) {
+            fprintf(stderr, "FAIL wide guarded call allocation probe\n");
+            ++failures;
+        } else if (mir.allocation_colors[3] != MIR_COLOR_BC_IY) {
+            fprintf(stderr, "FAIL late wide PHI guarded call allocation\n");
+            ++failures;
+        } else {
+            output = mir_stream_open();
+            if (output == NULL)
+                fatal("cannot open wide guarded call output");
+            mir_extrn_begin_attempt();
+            emitted = mir_try_emit_compacted_regional_homed_cfg(output);
+            mir_stream_rewind(output);
+            bytes = mir_stream_read(text, 1, sizeof(text) - 1, output);
+            text[bytes] = '\0';
+            push = strstr(text, "\tpush iy\n\tpush bc\n");
+            call = push != NULL
+                ? strstr(push, "\tcall _guarded_call_target\n")
+                : NULL;
+            pop = call != NULL
+                ? strstr(call, "\tpop bc\n\tpop iy\n")
+                : NULL;
+            if (!emitted || bytes >= sizeof(text) - 1 ||
+                push == NULL || call == NULL || pop == NULL ||
+                push >= call || call >= pop) {
+                fprintf(stderr, "FAIL guarded call BC:IY preservation\n");
+                ++failures;
+            }
+            mir_stream_close(output);
+        }
+        clear_liveness();
+    }
+    {
         unsigned char rematerializable[4] = {1, 0, 0, 0};
 
         setup(6, 4, 1);
