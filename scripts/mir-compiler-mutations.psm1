@@ -22,6 +22,7 @@ function Get-MirCompilerMutations {
         @{ Name = "call-signature-snapshot"; Before = 'signature->present = 1;'; After = 'signature->present = 0;'; ExpectedFailure = 'FAIL recorded indirect call argument ABI' },
         @{ Name = "scalar-call-signature"; Before = '        mir_record_call_signature(call_id, call_prototype);'; After = '        (void)call_prototype;'; ExpectedFailure = 'FAIL conditional call signature snapshot' },
         @{ Name = "call-crossing-allocation"; Before = 'cross_call[value] = 1;'; After = '(void)value;'; ExpectedFailure = 'FAIL caller-saved home across call' },
+        @{ Name = "wide-call-crossing-allocation"; Before = '            if (cross_call[value]) {'; After = '            if (0 && cross_call[value]) {'; ExpectedFailure = 'FAIL wide value retained caller-clobbered home across call' },
         @{
             Name = "allocation-first-result"
             Source = "src/dcc/dcc_mir_machine_validation_runners.c"

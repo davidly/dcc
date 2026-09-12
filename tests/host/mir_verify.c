@@ -6806,6 +6806,47 @@ int main(void)
         fprintf(stderr, "FAIL caller-saved home across call\n");
         ++failures;
     }
+    {
+        unsigned char rematerializable[4] = {1, 0, 0, 0};
+
+        setup(6, 4, 1);
+        mir.return_type = TYPE_LONG;
+        mir.next_call_id = 1;
+        mir.insns[1].type = TYPE_LONG;
+        mir.insns[2].opcode = MIR_BINARY;
+        mir.insns[2].dst = 1;
+        mir.insns[2].src1 = 0;
+        mir.insns[2].src2 = 0;
+        mir.insns[2].type = TYPE_LONG;
+        mir.insns[2].immediate = '+';
+        mir.insns[2].secondary_offset = TYPE_LONG;
+        mir.insns[3].opcode = MIR_CALL;
+        mir.insns[3].dst = 2;
+        mir.insns[3].secondary_offset = 0;
+        strcpy(mir.insns[3].name, callee->name);
+        mir.insns[4].opcode = MIR_BINARY;
+        mir.insns[4].dst = 3;
+        mir.insns[4].src1 = 1;
+        mir.insns[4].src2 = 0;
+        mir.insns[4].type = TYPE_LONG;
+        mir.insns[4].immediate = '+';
+        mir.insns[4].secondary_offset = TYPE_LONG;
+        mir.insns[5].src1 = 3;
+        mir.insns[5].type = TYPE_LONG;
+        if (!mir_verify_and_dump()) {
+            fprintf(stderr, "FAIL wide call-crossing allocation control\n");
+            ++failures;
+        } else if (!mir_probe_wide_colors_for_homed(
+                       rematerializable, 1)) {
+            fprintf(stderr, "FAIL wide call-crossing allocation probe\n");
+            ++failures;
+        } else if (mir.allocation_spills[1] < 0) {
+            fprintf(stderr,
+                    "FAIL wide value retained caller-clobbered home across call\n");
+            ++failures;
+        }
+        clear_liveness();
+    }
     setup(6, 1, 1);
     mir.next_call_id = 1;
     mir.insns[2].opcode = MIR_ARG;
