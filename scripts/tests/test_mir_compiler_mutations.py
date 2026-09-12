@@ -290,6 +290,7 @@ int main(int argc, char **argv) {
             "conditional-call-compatibility": "killed",
             "call-signature-snapshot": "killed",
             "scalar-call-signature": "killed",
+            "call-crossing-allocation": "killed",
             "allocation-first-result": "killed",
             "allocation-store-width": "killed",
         })

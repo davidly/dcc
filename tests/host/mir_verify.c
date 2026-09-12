@@ -6784,6 +6784,28 @@ int main(void)
     mir.insns[2].opcode = MIR_CALL_AGGREGATE;
     strcpy(mir.insns[2].name, "<indirect>");
     expect_verification("aggregate indirect call requires a callee value", 0);
+    callee = add_global("cross_call_home_target", TYPE_INT, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 0;
+    setup(5, 3, 1);
+    mir.next_call_id = 1;
+    mir.insns[2].opcode = MIR_CALL;
+    mir.insns[2].dst = 1;
+    mir.insns[2].secondary_offset = 0;
+    strcpy(mir.insns[2].name, callee->name);
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 1;
+    mir.insns[3].src2 = 0;
+    mir.insns[3].immediate = '+';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[4].src1 = 2;
+    expect_verification("call-crossing allocation control", 1);
+    if (mir.allocation_colors[0] != MIR_COLOR_IY &&
+        mir.allocation_spills[0] < 0) {
+        fprintf(stderr, "FAIL caller-saved home across call\n");
+        ++failures;
+    }
     setup(6, 1, 1);
     mir.next_call_id = 1;
     mir.insns[2].opcode = MIR_ARG;
