@@ -381,6 +381,22 @@ parallel-wave summary for the current measurement.
   configurations, required-emission and runtime audits, all 128 script tests,
   and all 10 debugger-host tests. The change only rejects malformed internal
   MIR and does not alter debug metadata or valid generated output.
+- The first immutable Wave 29 collection completed every mutation campaign,
+  then stopped honestly at the first strict full-debug census: `tarray` could
+  not emit `ShowBinaryData`. This pre-existing defect was reproduced at the
+  pre-PHI `4930df94` compiler. An attempted emitter-side relaxation compiled
+  but produced an empty CP/M hexdump and was discarded. Commit `e33bfb34`
+  instead repairs the source invariant: when full `-g` metadata restores a
+  named load's declared type, deferred metadata also reconstructs the erased
+  call-argument and wide-comparison conversions. Direct calls are fully
+  prevalidated before insertion, so late, duplicate, or sparse arguments
+  remain transactional. Focused `tarray` full-debug and stack-debug binaries
+  match the checked baseline; all four 3,039-function debug censuses emit MIR;
+  optimized stack/no-stack censuses remain byte-identical; both strict
+  506-application release modes, five ASan/UBSan compiler tests, 11 compiler
+  mutants, 392 extended configurations, 128 script tests, and all 10 debugger
+  tests pass. The failed collection remains raw evidence only; restart from
+  this new commit for the next authoritative ledger.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
