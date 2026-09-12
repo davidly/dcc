@@ -314,6 +314,16 @@ LLVM_PROFILE_FILE="$raw_dir/dcc-abort-%8m.profraw" \
     --output-dir "$build_dir/abort-wave27-audit" \
     >"$campaign_dir/abort.log" 2>&1 &
 abort_pid=$!
+byte_equality_jobs=$campaign_jobs
+if [ "$byte_equality_jobs" -gt 2 ]; then
+    byte_equality_jobs=2
+fi
+LLVM_PROFILE_FILE="$raw_dir/dcc-byte-equality-%8m.profraw" \
+    python3 scripts/byte-equality-wave28-audit.py \
+    --jobs "$byte_equality_jobs" \
+    --output-dir "$build_dir/byte-equality-wave28-audit" \
+    >"$campaign_dir/byte-equality.log" 2>&1 &
+byte_equality_pid=$!
 affine_jobs=$campaign_jobs
 if [ "$affine_jobs" -lt 4 ]; then
     affine_jobs=4
@@ -400,6 +410,7 @@ for campaign in \
     "fileio:$fileio_pid" \
     "for-increment:$for_increment_pid" \
     "abort:$abort_pid" \
+    "byte-equality:$byte_equality_pid" \
     "affine-fill:$affine_fill_pid" \
     "pointer-condition:$pointer_condition_pid" \
     "cast-logical:$cast_logical_pid" \
