@@ -292,6 +292,7 @@ int main(int argc, char **argv) {
             "scalar-call-signature": "killed",
             "call-crossing-allocation": "killed",
             "wide-call-crossing-allocation": "killed",
+            "guarded-call-preservation": "killed",
             "allocation-first-result": "killed",
             "allocation-store-width": "killed",
         })

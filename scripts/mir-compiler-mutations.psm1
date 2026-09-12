@@ -23,6 +23,7 @@ function Get-MirCompilerMutations {
         @{ Name = "scalar-call-signature"; Before = '        mir_record_call_signature(call_id, call_prototype);'; After = '        (void)call_prototype;'; ExpectedFailure = 'FAIL conditional call signature snapshot' },
         @{ Name = "call-crossing-allocation"; Before = 'cross_call[value] = 1;'; After = '(void)value;'; ExpectedFailure = 'FAIL caller-saved home across call' },
         @{ Name = "wide-call-crossing-allocation"; Before = '            if (cross_call[value]) {'; After = '            if (0 && cross_call[value]) {'; ExpectedFailure = 'FAIL wide value retained caller-clobbered home across call' },
+        @{ Name = "guarded-call-preservation"; Source = "src/dcc/dcc_mir_homed_cfg.c"; Before = '                preserve_de = mir_home_color_live_across('; After = '                preserve_de = 0 && mir_home_color_live_across('; ExpectedFailure = 'FAIL guarded call DE preservation' },
         @{
             Name = "allocation-first-result"
             Source = "src/dcc/dcc_mir_machine_validation_runners.c"

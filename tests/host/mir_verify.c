@@ -6806,6 +6806,63 @@ int main(void)
         fprintf(stderr, "FAIL caller-saved home across call\n");
         ++failures;
     }
+    callee = add_global("guarded_call_target", TYPE_VOID, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 0;
+    {
+        MirStream *output;
+        char text[2048];
+        size_t bytes;
+        const char *push;
+        const char *call;
+        const char *pop;
+        int emitted;
+
+        diamond();
+        mir.count = 12;
+        mir.next_call_id = 1;
+        mir.insns[11] = mir.insns[10];
+        mir.insns[10] = mir.insns[9];
+        memset(&mir.insns[9], 0, sizeof(mir.insns[9]));
+        mir.insns[9].opcode = MIR_CALL;
+        mir.insns[9].src1 = -1;
+        mir.insns[9].src2 = -1;
+        mir.insns[9].dst = -1;
+        mir.insns[9].object = -1;
+        mir.insns[9].label = -1;
+        mir.insns[9].phi_pred1 = -1;
+        mir.insns[9].phi_pred2 = -1;
+        mir.insns[9].type = TYPE_VOID;
+        mir.insns[9].secondary_offset = 0;
+        strcpy(mir.insns[9].name, callee->name);
+        if (!mir_verify_and_dump()) {
+            fprintf(stderr, "FAIL guarded call allocation control\n");
+            ++failures;
+        } else if (mir.allocation_colors[3] != MIR_COLOR_DE) {
+            fprintf(stderr, "FAIL late PHI guarded call allocation\n");
+            ++failures;
+        } else {
+            output = mir_stream_open();
+            if (output == NULL)
+                fatal("cannot open guarded call output");
+            mir_extrn_begin_attempt();
+            emitted = mir_try_emit_homed_scalar_cfg(output);
+            mir_stream_rewind(output);
+            bytes = mir_stream_read(text, 1, sizeof(text) - 1, output);
+            text[bytes] = '\0';
+            push = strstr(text, "\tpush de\n");
+            call = strstr(text, "\tcall _guarded_call_target\n");
+            pop = call != NULL ? strstr(call, "\tpop de\n") : NULL;
+            if (!emitted || bytes >= sizeof(text) - 1 ||
+                push == NULL || call == NULL || pop == NULL ||
+                push >= call || call >= pop) {
+                fprintf(stderr, "FAIL guarded call DE preservation\n");
+                ++failures;
+            }
+            mir_stream_close(output);
+        }
+        clear_liveness();
+    }
     {
         unsigned char rematerializable[4] = {1, 0, 0, 0};
 
