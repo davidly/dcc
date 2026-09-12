@@ -216,7 +216,7 @@ audits exercise 9,216 mutations with zero meaningful survivors; supported
 forms retain exact output and unsupported forms retain generated
 homed/spilled fallback.
 
-Waves 36-38 retain the locally verified exact inventory at 9,686 configurations.
+Waves 36-39 retain the locally verified exact inventory at 9,686 configurations.
 Wave 32 added a combined PHI, spill, alias, call-clobber, and post-call reload
 proof; Wave 33 preserves compatible callable prototypes through conditional
 expressions and MIR PHIs; Wave 34 snapshots resolved scalar-call signatures by
@@ -562,6 +562,19 @@ locally verified execution inventory.
   pass. This test-only increment leaves the 9,686-leaf inventory and
   production output unchanged and makes no additive raw coverage claim. Commit
   `e65393ab` contains the invariant and mutant.
+- Wave 39 proves the def-use cache boundary after isolated global-field value
+  numbering. The existing valid graph now primes the definition cache, removes
+  a redundant field load, and requires the eliminated value's definition to
+  disappear before any later verifier reset. A clean-build mutation removes
+  only the pass's final invalidation and is killed by the exact
+  `mir_definition` cached-versus-uncached mismatch; the harness classifies that
+  controlled fatal separately from crashes and ordinary assertion failures.
+  Normal and ASan/UBSan host suites pass 5/5; all mutation-harness unit tests
+  pass; the complete campaign has one passing baseline plus 23/23 killed
+  mutants; and 72 generated fuzz target configurations pass with cache
+  verification enabled. This test-only increment leaves the 9,686-leaf
+  inventory and production output unchanged and makes no additive raw coverage
+  claim. Commit `df67f458` contains the invariant and mutant.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

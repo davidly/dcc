@@ -355,6 +355,20 @@ target configurations pass. This test-only semantic proof leaves the exact
 inventory at 9,686 and makes no raw coverage claim. Commit `e65393ab` contains
 the proof.
 
+Wave 39 proves that isolated global-field value numbering invalidates the
+def-use cache after replacing uses and turning a redundant load into a NOP.
+The host graph primes the old value's cached definition and requires it to be
+absent immediately after the pass, before a later verifier can mask the stale
+entry by resetting caches. A clean-build mutant removes only that final
+invalidation and is killed by the built-in cached-versus-uncached
+`mir_definition` diagnostic. The mutation harness now distinguishes this
+controlled cache-verifier failure from crashes and assertion kills. Normal and
+ASan/UBSan host suites pass 5/5, all mutation-harness unit tests pass, the
+complete compiler suite has one passing baseline and 23/23 killed mutants, and
+72 generated fuzz target configurations pass with cache verification enabled.
+This test-only semantic proof leaves the exact inventory at 9,686 and makes no
+raw coverage claim. Commit `df67f458` contains the proof.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
