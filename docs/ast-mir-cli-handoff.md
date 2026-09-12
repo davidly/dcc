@@ -1,6 +1,6 @@
 # AST/MIR Correctness: Copilot CLI Handoff
 
-Snapshot: 2026-09-11. This handoff requires no prior chat history, VS Code
+Snapshot: 2026-09-12. This handoff requires no prior chat history, VS Code
 session, local memory, or existing build artifacts. GitHub and the current
 checkout are authoritative if the snapshot becomes stale.
 
@@ -206,6 +206,14 @@ acceptance, signedness and cached-state errors, invalid string targets,
 recursive matcher hangs, and incomplete value/CFG/type proofs. Unsupported
 forms retain generated homed/spilled fallback.
 
+Wave 28 raises the exact inventory to 9,564 unique configurations. It hardens
+allocation lifetime, byte-equality, and nonlocal `_setjmp`/`_longjmp` exact
+schedules with complete type, width, storage, volatility, alias, CFG, PHI,
+dataflow, call-ID, prototype, ABI, return, stack, and debug proofs. The three
+audits exercise 9,216 mutations with zero meaningful survivors; supported
+forms retain exact output and unsupported forms retain generated
+homed/spilled fallback.
+
 Latest integrated totals: 4,486/4,486 functions, 182,677/194,815 lines
 (93.77%), 95,622/149,058 native branch outcomes (64.15%), and
 165,083/175,115 regions (94.27%). The raw uncovered ledger is 53,192.
@@ -219,8 +227,8 @@ parallel-wave summary for the current measurement.
 - Continuation PR: <https://github.com/davidly/dcc/pull/194>.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
-- Latest validated and pushed continuation implementation:
-  `708f5b14` (`Reject fastcall buffered console callees`).
+- Latest locally validated continuation implementation:
+  `1c15706c` (`Audit allocation lifetime MIR runner`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -294,7 +302,10 @@ parallel-wave summary for the current measurement.
   - `a63128dc` — compound-runner structural and ABI hardening;
   - `cfdbecd1` / `c1d6e591` — repeated-invariant-add proof hardening and
     boolean-counter rejection; and
-  - `a3cab0df` — updated exact built-in inventory contract.
+  - `a3cab0df` — updated exact built-in inventory contract;
+  - `a33e0856` — nonlocal exact schedule and ABI hardening;
+  - `4356ba24` — byte-equality exact-runner proof hardening; and
+  - `1c15706c` — allocation-lifetime ownership and error-path proof hardening.
 - Wave 14 passed both strict 506-application release modes with no regressions,
   an independent release build, normal and ASan/UBSan host CTests, selector
   isolation, 11 compiler mutants, 10 debugger-host tests, two line-debug
@@ -331,6 +342,17 @@ parallel-wave summary for the current measurement.
   `44c207fcb6bdc47ffb1d121e160d3d089749f06ca91640beede20075de05021d`.
   The most recent authoritative full LLVM collection remains the duplicate-free
   Wave 19 collection above; no later failed or partial profiles are reused.
+- Wave 28 is locally validated through `1c15706c`. Its three semantic audits
+  exercise 9,216 mutations with zero meaningful survivors, and its 9,564-leaf
+  execution inventory has SHA-256
+  `89c8702842240ff322a8948a84314ccdf17841de3cc97fbadc1be3d837bfbfad`.
+  The integrated tree passed both strict 506-application release modes with
+  zero regressions, canonical and independent builds, normal and sanitized
+  focused audits, all 120 script tests, all 11 compiler mutation controls,
+  all 10 debugger-host tests, runtime IY/coverage audits, and module export
+  audits. This inventory does not replace the authoritative Wave 19 full LLVM
+  collection; a fresh immutable full collection remains the next coverage
+  measurement.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
