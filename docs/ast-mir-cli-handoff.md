@@ -196,6 +196,16 @@ dominance/result ownership gaps, cyclic AST traversal, valid-type
 over-rejection, indirect-call acceptance, and several performance regressions.
 Exhaustive committed campaigns now cover more than 25,000 semantic mutations.
 
+Waves 20-27 raise the locally verified exact inventory to 9,336 unique
+configurations. They extend exact and generic proofs across long-index,
+packed/flagged records, file and directory I/O, matrix and softmax kernels,
+symbol operations, pointer conditions, casts and promotions, nontrivial
+loops, recursion, abort handling, callback registration, memory exercise, and
+buffered console I/O. Reviews found and fixed additional fastcall ABI false
+acceptance, signedness and cached-state errors, invalid string targets,
+recursive matcher hangs, and incomplete value/CFG/type proofs. Unsupported
+forms retain generated homed/spilled fallback.
+
 Latest integrated totals: 4,486/4,486 functions, 182,677/194,815 lines
 (93.77%), 95,622/149,058 native branch outcomes (64.15%), and
 165,083/175,115 regions (94.27%). The raw uncovered ledger is 53,192.
@@ -209,8 +219,8 @@ parallel-wave summary for the current measurement.
 - Continuation PR: <https://github.com/davidly/dcc/pull/194>.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
-- Latest validated continuation implementation:
-  `3fc259c8` (`Restore Wave 3 directory schedule`).
+- Latest validated and pushed continuation implementation:
+  `708f5b14` (`Reject fastcall buffered console callees`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -313,6 +323,14 @@ parallel-wave summary for the current measurement.
   `afa127b37d9096d1a4e5233d81a0c540b04894638e1c3353c8fbeed8120e149a`.
   Parallel mutation campaigns with distinct profile pools reduced collection
   time from about 116 minutes to about 67 minutes on this 24-CPU host.
+- Waves 20-27 are published through `708f5b14`. The final Wave 27 tree passed
+  both strict 506-application release modes with zero regressions, five normal
+  and five ASan/UBSan host tests, 262 focused target configurations, candidate
+  and required-emission controls, all 120 repository script tests, and an
+  exact 9,336-leaf inventory with SHA-256
+  `44c207fcb6bdc47ffb1d121e160d3d089749f06ca91640beede20075de05021d`.
+  The most recent authoritative full LLVM collection remains the duplicate-free
+  Wave 19 collection above; no later failed or partial profiles are reused.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

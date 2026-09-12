@@ -186,6 +186,13 @@ contains 85 profile-pool files and manifest SHA-256
 The raw ledger has 53,192 uncovered outcomes. This is a checkpoint, not
 completion of the broader four-metric objective.
 
+Later correctness waves are published through `708f5b14` and expand the
+locally verified execution inventory to 9,336 unique leaves (SHA-256
+`44c207fcb6bdc47ffb1d121e160d3d089749f06ca91640beede20075de05021d`).
+Both strict release modes pass with zero regressions. These later inventories
+do not replace the table above: a fresh immutable full collection is still
+required before updating the authoritative four-metric totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
