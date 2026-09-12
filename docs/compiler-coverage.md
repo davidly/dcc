@@ -311,6 +311,15 @@ stack or no-stack output changes. These measurements do not replace Wave 30,
 and aggregate-call signature snapshots remain explicitly unresolved. Commit
 `b4f870d8` contains the implementation and host proofs.
 
+Wave 35 adds a mutation-specific allocation proof: a narrow SSA value live
+across an ordinary call must receive callee-saved IY or a spill slot. Removing
+the allocator's `cross_call` classification is killed by the host assertion,
+while the existing `tmirslot.cross_call` target oracle passes peep/nopeep in
+both stack modes. The complete compiler suite now has one passing baseline and
+19/19 killed mutants. This is a test-only semantic invariant: the exact
+inventory remains 9,686, production output is unchanged, and no additive raw
+coverage is claimed. Commit `9cdf818e` contains the proof.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

@@ -237,7 +237,7 @@ locally verified execution inventory.
 - PR #193 was merged as
   `74079b980a282e966b99d878256f89f799b63a64` on 2026-09-08.
 - Latest locally validated continuation implementation:
-  `b4f870d8` (`Record MIR call signature snapshots`).
+  `9cdf818e` (`Prove call-crossing allocation safety`).
 - Parallel-wave implementation checkpoints:
   - `3c85d83d` — allocation-lifetime matcher coverage;
   - `3d109f26` — accepted/rejected sliding-maximum controls;
@@ -514,6 +514,17 @@ locally verified execution inventory.
   `mir_record_call_signature` at 21/23 regions, 34/36 lines, and 14/16 branch
   outcomes, and `mir_resolve_call_prototype` at 26/27 regions, 39/40 lines,
   and 20/24 branch outcomes. Commit `b4f870d8` contains the snapshot and proofs.
+- Wave 35 adds a direct allocation invariant for a narrow value live across an
+  ordinary call. After liveness and allocation, the value must be in
+  callee-saved IY or a spill slot, never caller-saved HL, DE, or BC. A
+  clean-build compiler mutant removes the `cross_call` classification and is
+  killed by that exact assertion. The unchanged `tmirslot.cross_call` runtime
+  oracle passes peep and nopeep in stack and no-stack modes. Normal and
+  ASan/UBSan host suites pass 5/5, and the mutation suite now has one passing
+  baseline plus 19/19 killed mutants with no survivors or invalid results.
+  This test-only increment changes neither the 9,686-leaf inventory nor
+  production output and does not claim a raw coverage increase. Commit
+  `9cdf818e` contains the invariant and mutant.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
