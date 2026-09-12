@@ -28,7 +28,15 @@ static int mir_cost_regional_candidate_is_validated(void);
 static int mir_cost_regional_candidate_is_diagnostic_validated(void);
 static int mir_large_dense_switch_phi_candidate_is_eligible(void);
 static int mir_boolean_candidate_is_validated(void);
-static int mir_try_selector(MirStream *out, int (*selector)(MirStream *));
+
+int mir_select_report_enabled(void)
+{
+    const char *filter = getenv("DCC_MIR_SELECT_REPORT_FUNCTION");
+
+    return getenv("DCC_MIR_SELECT_REPORT") != NULL &&
+           (filter == NULL || filter[0] == '\0' ||
+            !strcmp(filter, mir.name));
+}
 
 static int mir_cost_policy_selects_alternative(void)
 {
@@ -903,7 +911,23 @@ static int mir_try_emit_unsigned_division_loop(MirStream *out)
  *     }
  *
  * IY holds the loop-invariant 2*factor, BC holds i and DE holds total. */
-static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
+static int mir_repeated_add_plain_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 && !type_is_float(type) &&
+           (type & 15) == TYPE_INT && type_size(type) == 2;
+}
+
+static int mir_repeated_add_phi_matches(
+    const struct MirInsn *phi, int initial_value, int update_value,
+    int entry_label, int backedge_label)
+{
+    return (phi->src1 == initial_value && phi->phi_pred1 == entry_label &&
+            phi->src2 == update_value && phi->phi_pred2 == backedge_label) ||
+           (phi->src2 == initial_value && phi->phi_pred2 == entry_label &&
+            phi->src1 == update_value && phi->phi_pred1 == backedge_label);
+}
+
+int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
 {
     const struct MirInsn *parameter = NULL;
     const struct MirInsn *total_phi = NULL;
@@ -912,17 +936,43 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
     const struct MirInsn *second_add = NULL;
     const struct MirInsn *index_update = NULL;
     const struct MirInsn *compare = NULL;
+    const struct MirInsn *branch = NULL;
+    const struct MirInsn *backedge = NULL;
     const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *first_store = NULL;
+    const struct MirInsn *second_store = NULL;
+    const struct MirInsn *index_store = NULL;
     int factor_values[2];
     int factor_load_count = 0;
     int factor_object = -1;
     int total_object = -1;
     int index_object = -1;
+    int branch_count = 0;
+    int jump_count = 0;
+    int return_count = 0;
+    int label_count = 0;
+    int factor_stack_offset;
+    int header_label;
+    int entry_label;
+    int backedge_label;
+    int total_initial_value;
+    int index_initial_value;
+    int branch_index;
+    int backedge_index;
+    int target_index;
+    int first_store_count = 0;
+    int second_store_count = 0;
+    int index_store_count = 0;
+    int total_initial_store_count = 0;
+    int index_initial_store_count = 0;
+    int index_size;
     long limit;
     int top_label;
     int end_label;
     int i;
 
+    if (mir.has_vla || !mir_repeated_add_plain_word_type(mir.return_type))
+        return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
         if (insn->opcode == MIR_PARAM) {
@@ -930,15 +980,21 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
                 return 0;
             parameter = insn;
             factor_object = insn->object;
-        } else if (insn->opcode == MIR_LOAD &&
-                   insn->object == factor_object) {
+        }
+    }
+    if (parameter == NULL || factor_object < 0 ||
+        factor_object >= mir.object_count)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_LOAD) {
+            if (insn->object != factor_object)
+                return 0;
             if (factor_load_count >= 2)
                 return 0;
             factor_values[factor_load_count++] = insn->dst;
         }
     }
-    if (parameter == NULL || factor_object < 0)
-        return 0;
     if (factor_load_count == 0) {
         factor_values[0] = parameter->dst;
         factor_values[1] = parameter->dst;
@@ -974,19 +1030,34 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
             }
         } else if (insn->opcode == MIR_BRANCH_FALSE) {
             const struct MirInsn *candidate = mir_definition(insn->src1);
+            ++branch_count;
+            branch = insn;
             if (candidate != NULL && candidate->opcode == MIR_BINARY &&
                 candidate->immediate == '<')
                 compare = candidate;
+        } else if (insn->opcode == MIR_JUMP) {
+            ++jump_count;
+            backedge = insn;
         } else if (insn->opcode == MIR_RETURN) {
+            ++return_count;
             return_insn = insn;
-        } else if (insn->opcode == MIR_CALL || insn->opcode == MIR_OPAQUE ||
-                   insn->opcode == MIR_INDEX_LOAD || insn->opcode == MIR_ARG) {
+        } else if (insn->opcode == MIR_LABEL) {
+            ++label_count;
+        } else if (insn->opcode != MIR_NOP && insn->opcode != MIR_PARAM &&
+                   insn->opcode != MIR_LOAD && insn->opcode != MIR_STORE &&
+                   insn->opcode != MIR_CONST && insn->opcode != MIR_UNARY &&
+                   insn->opcode != MIR_BINARY) {
             return 0;
         }
     }
     if (total_phi == NULL || index_phi == NULL || first_add == NULL ||
         second_add == NULL || index_update == NULL || compare == NULL ||
         return_insn == NULL || total_object < 0 || index_object < 0)
+        return 0;
+    if (total_object >= mir.object_count || index_object >= mir.object_count ||
+        total_object == index_object || factor_object == total_object ||
+        factor_object == index_object || branch_count != 1 ||
+        jump_count != 1 || return_count != 1 || label_count != 4)
         return 0;
     if (first_add->immediate != '+' ||
         !((first_add->src1 == total_phi->dst &&
@@ -1005,36 +1076,156 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
         !mir_is_const_value(index_update->src2, 1) ||
         compare->src1 != index_phi->dst || return_insn->src1 != total_phi->dst)
         return 0;
+    if (!mir_repeated_add_plain_word_type(parameter->type) ||
+        !mir_repeated_add_plain_word_type(mir.objects[factor_object].type) ||
+        !mir_repeated_add_plain_word_type(total_phi->type) ||
+        !mir_repeated_add_plain_word_type(mir.objects[total_object].type) ||
+        !mir_repeated_add_plain_word_type(first_add->type) ||
+        !mir_repeated_add_plain_word_type(first_add->secondary_offset) ||
+        !mir_repeated_add_plain_word_type(second_add->type) ||
+        !mir_repeated_add_plain_word_type(second_add->secondary_offset))
+        return 0;
+    index_size = type_size(index_phi->type);
+    if ((index_size != 1 && index_size != 2) ||
+        type_is_bool(index_phi->type) ||
+        type_ptr_depth(index_phi->type) != 0 ||
+        type_is_float(index_phi->type) ||
+        type_size(mir.objects[index_object].type) != index_size ||
+        type_is_bool(mir.objects[index_object].type) ||
+        type_ptr_depth(mir.objects[index_object].type) != 0 ||
+        type_is_float(mir.objects[index_object].type) ||
+        ((mir.objects[index_object].type & TYPE_UNSIGNED) != 0) !=
+            ((index_phi->type & TYPE_UNSIGNED) != 0) ||
+        type_is_bool(index_update->type) ||
+        index_update->type != index_phi->type ||
+        type_size(index_update->secondary_offset) != index_size ||
+        type_is_bool(index_update->secondary_offset) ||
+        type_ptr_depth(index_update->secondary_offset) != 0 ||
+        type_is_float(index_update->secondary_offset) ||
+        ((index_update->secondary_offset & TYPE_UNSIGNED) != 0) !=
+            ((index_phi->type & TYPE_UNSIGNED) != 0) ||
+        type_size(compare->secondary_offset) != index_size ||
+        type_is_bool(compare->type) ||
+        type_is_bool(compare->secondary_offset) ||
+        type_ptr_depth(compare->secondary_offset) != 0 ||
+        type_is_float(compare->secondary_offset) ||
+        ((compare->secondary_offset & TYPE_UNSIGNED) != 0) !=
+            ((index_phi->type & TYPE_UNSIGNED) != 0))
+        return 0;
     {
         const struct MirInsn *limit_definition = mir_definition(compare->src2);
         if (limit_definition == NULL || limit_definition->opcode != MIR_CONST)
             return 0;
         limit = limit_definition->immediate;
     }
-    if (limit <= 0 || limit > 32768)
+    if (limit <= 0 || limit > 32768 ||
+        (index_size == 2 && (index_phi->type & TYPE_UNSIGNED) == 0 &&
+         limit > 32767) ||
+        (index_size == 1 &&
+         limit > ((index_phi->type & TYPE_UNSIGNED) != 0 ? 255 : 127)))
         return 0;
-    if (!((mir_is_const_value(total_phi->src1, 0) &&
-           total_phi->src2 == second_add->dst) ||
-          (mir_is_const_value(total_phi->src2, 0) &&
-           total_phi->src1 == second_add->dst)) ||
-        !((mir_is_const_value(index_phi->src1, 0) &&
-           index_phi->src2 == index_update->dst) ||
-          (mir_is_const_value(index_phi->src2, 0) &&
-           index_phi->src1 == index_update->dst)))
+    branch_index = (int)(branch - mir.insns);
+    backedge_index = (int)(backedge - mir.insns);
+    target_index = mir_find_label(branch->label);
+    header_label = mir_block_label_before((int)(total_phi - mir.insns));
+    backedge_label = mir_block_label_before(backedge_index);
+    if (header_label < 0 || backedge_label < 0 ||
+        mir_find_label(backedge->label) != mir_find_label(header_label) ||
+        target_index <= backedge_index ||
+        branch_index >= (int)(first_add - mir.insns) ||
+        (int)(first_add - mir.insns) >= (int)(second_add - mir.insns) ||
+        (int)(second_add - mir.insns) >= backedge_index ||
+        (int)(index_update - mir.insns) >= backedge_index ||
+        (int)(return_insn - mir.insns) <= target_index)
         return 0;
-    if (mir.objects[factor_object].storage != SC_PARAM ||
-        type_size(mir.objects[factor_object].type) != 2 ||
-        type_size(mir.objects[total_object].type) != 2 ||
-        (type_size(mir.objects[index_object].type) != 2 &&
-         type_size(mir.objects[index_object].type) != 1) ||
-        (type_size(mir.objects[index_object].type) == 1 && limit > 255))
+    if (total_phi->phi_pred1 == backedge_label)
+        entry_label = total_phi->phi_pred2;
+    else if (total_phi->phi_pred2 == backedge_label)
+        entry_label = total_phi->phi_pred1;
+    else
         return 0;
+    if (mir_is_const_value(total_phi->src1, 0))
+        total_initial_value = total_phi->src1;
+    else if (mir_is_const_value(total_phi->src2, 0))
+        total_initial_value = total_phi->src2;
+    else
+        return 0;
+    if (mir_is_const_value(index_phi->src1, 0))
+        index_initial_value = index_phi->src1;
+    else if (mir_is_const_value(index_phi->src2, 0))
+        index_initial_value = index_phi->src2;
+    else
+        return 0;
+    if (mir_find_label(entry_label) < 0 ||
+        mir_find_label(entry_label) >= mir_find_label(header_label) ||
+        !mir_repeated_add_phi_matches(
+            total_phi, total_initial_value,
+            second_add->dst, entry_label, backedge_label) ||
+        !mir_repeated_add_phi_matches(
+            index_phi, index_initial_value,
+            index_update->dst, entry_label, backedge_label))
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        const struct MirInsn *definition;
+
+        if (insn->opcode != MIR_STORE)
+            continue;
+        definition = mir_definition(insn->src1);
+        if (insn->object < 0 || insn->object >= mir.object_count ||
+            insn->memory_size != type_size(mir.objects[insn->object].type) ||
+            !mir_machine_unobservable_local_store(insn))
+            return 0;
+        if (insn->object == total_object) {
+            if (definition == first_add) {
+                first_store = insn;
+                ++first_store_count;
+            } else if (definition == second_add) {
+                second_store = insn;
+                ++second_store_count;
+            } else if (mir_is_const_value(insn->src1, 0)) {
+                ++total_initial_store_count;
+            } else {
+                return 0;
+            }
+        } else if (insn->object == index_object) {
+            if (definition == index_update) {
+                index_store = insn;
+                ++index_store_count;
+            } else if (mir_is_const_value(insn->src1, 0)) {
+                ++index_initial_store_count;
+            } else {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+    }
+    if (first_store_count != 1 || second_store_count != 1 ||
+        index_store_count != 1 || total_initial_store_count > 1 ||
+        index_initial_store_count > 1 ||
+        first_store <= first_add || second_store <= second_add ||
+        index_store <= index_update || second_store >= backedge ||
+        index_store >= backedge)
+        return 0;
+    if (!mir_machine_named_nonvolatile(parameter) ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &factor_stack_offset) ||
+        factor_stack_offset > 122)
+        return 0;
+    for (i = 0; i < factor_load_count; ++i) {
+        const struct MirInsn *load = mir_definition(factor_values[i]);
+        if (load == NULL || !mir_repeated_add_plain_word_type(load->type) ||
+            !mir_machine_named_nonvolatile(load) ||
+            !mir_machine_same_location(load, parameter))
+            return 0;
+    }
 
     top_label = new_label();
     end_label = new_label();
     mir_emit_iy_prologue(out);
-    mir_stream_printf(out, "\tld l,(ix%+d)\n", mir.objects[factor_object].offset + 2);
-    mir_stream_printf(out, "\tld h,(ix%+d)\n", mir.objects[factor_object].offset + 3);
+    mir_stream_printf(out, "\tld l,(ix%+d)\n", factor_stack_offset + 4);
+    mir_stream_printf(out, "\tld h,(ix%+d)\n", factor_stack_offset + 5);
     mir_stream_puts("\tadd hl,hl\n\tpush hl\n\tpop iy\n", out);
     mir_stream_puts("\tld bc,0\n\tld de,0\n", out);
     mir_stream_printf(out, "L%d:\n", top_label);
@@ -1047,6 +1238,52 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
     return 1;
 }
 
+static int mir_comparison_param_fits(
+    const struct MirInsn *parameter, int type)
+{
+    const struct MirObject *object;
+    int width = type_size(type);
+
+    if (parameter == NULL || parameter->opcode != MIR_PARAM ||
+        parameter->object < 0 || parameter->object >= mir.object_count ||
+        parameter->type != type ||
+        (width != 2 && width != 4))
+        return 0;
+    object = &mir.objects[parameter->object];
+    return object->storage == SC_PARAM &&
+           object->type == type &&
+           mir_machine_named_nonvolatile(parameter) &&
+           object->offset >= -128 &&
+           object->offset <= 128 - width;
+}
+
+static int mir_comparison_operand_type_supported(int type)
+{
+    if (type_ptr_depth(type) > 0)
+        return type_size(type) == 2;
+    return type == TYPE_INT ||
+           type == (TYPE_INT | TYPE_UNSIGNED) ||
+           type == TYPE_LONG ||
+           type == (TYPE_LONG | TYPE_UNSIGNED) ||
+           type == TYPE_FLOAT;
+}
+
+static int mir_comparison_semantic_instructions(
+    int *indices, int capacity)
+{
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir.insns[instruction].opcode == MIR_NOP)
+            continue;
+        if (count >= capacity)
+            return -1;
+        indices[count++] = instruction;
+    }
+    return count;
+}
+
 /* Strict first CFG selector:
  *
  *     if (a == b) return C1; return C2;
@@ -1055,77 +1292,92 @@ static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
  * multiple exits without claiming general relational/comparison support. */
 static int mir_try_emit_comparison_branch(MirStream *out)
 {
-    const struct MirInsn *branch = NULL;
+    const struct MirInsn *branch;
     const struct MirInsn *compare;
     const struct MirInsn *left;
     const struct MirInsn *right;
-    const struct MirInsn *true_return = NULL;
-    const struct MirInsn *false_return = NULL;
+    const struct MirInsn *true_return;
+    const struct MirInsn *false_return;
     const struct MirInsn *true_value;
     const struct MirInsn *false_value;
-    int branch_index = -1;
-    int target_index;
+    int semantic[10];
+    int semantic_count;
+    int operand_type;
+    int operand_width;
     int false_label;
     int operation;
     int unsigned_compare;
     int i;
 
-    for (i = 0; i < mir.count; ++i) {
-        if (mir.insns[i].opcode == MIR_BRANCH_FALSE) {
-            if (branch != NULL)
-                return 0;
-            branch = &mir.insns[i];
-            branch_index = i;
-        }
-    }
-    if (branch == NULL)
+    if (mir.has_vla || mir.local_bytes != 0 ||
+        mir.aggregate_temp_bytes != 0 ||
+        mir_cfg_block_count() != 2 ||
+        (mir.return_type != TYPE_INT &&
+         mir.return_type != (TYPE_INT | TYPE_UNSIGNED)))
         return 0;
-    target_index = mir_find_label(branch->label);
-    if (target_index <= branch_index)
+    semantic_count = mir_comparison_semantic_instructions(semantic, 10);
+    if (semantic_count != 8 && semantic_count != 10)
         return 0;
-    compare = mir_definition(branch->src1);
-    if (compare == NULL)
+    if (mir.insns[semantic[0]].opcode != MIR_LABEL ||
+        mir.insns[semantic[semantic_count - 3]].opcode != MIR_LABEL ||
+        mir.insns[semantic[semantic_count - 2]].opcode != MIR_CONST ||
+        mir.insns[semantic[semantic_count - 1]].opcode != MIR_RETURN ||
+        mir.insns[semantic[semantic_count - 5]].opcode != MIR_CONST ||
+        mir.insns[semantic[semantic_count - 4]].opcode != MIR_RETURN ||
+        mir.insns[semantic[0]].label ==
+            mir.insns[semantic[semantic_count - 3]].label)
         return 0;
-    if (compare->opcode == MIR_PARAM) {
+    true_value = &mir.insns[semantic[semantic_count - 5]];
+    true_return = &mir.insns[semantic[semantic_count - 4]];
+    false_value = &mir.insns[semantic[semantic_count - 2]];
+    false_return = &mir.insns[semantic[semantic_count - 1]];
+    if (true_return->src1 != true_value->dst ||
+        false_return->src1 != false_value->dst ||
+        true_value->type != mir.return_type ||
+        false_value->type != mir.return_type)
+        return 0;
+
+    if (semantic_count == 8) {
+        if (mir.insns[semantic[1]].opcode != MIR_PARAM ||
+            mir.insns[semantic[2]].opcode != MIR_BRANCH_FALSE)
+            return 0;
+        left = &mir.insns[semantic[1]];
+        right = NULL;
+        compare = left;
+        branch = &mir.insns[semantic[2]];
+        if (branch->src1 != left->dst)
+            return 0;
         /* Item T72 (mir-text-size-plan.md): `if (param) return A;
          * return B;` - a bare truthiness test with no explicit
          * comparison instruction at all (the branch tests the
          * parameter's value directly), found via tests/tctxflt.c's
          * `truth_if(float f) { if (f) return 1; return 0; }`. `right`
          * has no counterpart in this shape. */
-        left = compare;
-        right = NULL;
-    } else if (compare->opcode == MIR_BINARY &&
-               (compare->immediate == TOK_EQ || compare->immediate == TOK_NE ||
-                compare->immediate == '<' || compare->immediate == TOK_GE ||
-                compare->immediate == '>' || compare->immediate == TOK_LE)) {
-        left = mir_definition(compare->src1);
-        right = mir_definition(compare->src2);
-        if (left == NULL || right == NULL || left->opcode != MIR_PARAM ||
-            right->opcode != MIR_PARAM)
-            return 0;
     } else {
-        return 0;
+        if (mir.insns[semantic[1]].opcode != MIR_PARAM ||
+            mir.insns[semantic[2]].opcode != MIR_PARAM ||
+            mir.insns[semantic[3]].opcode != MIR_BINARY ||
+            mir.insns[semantic[4]].opcode != MIR_BRANCH_FALSE)
+            return 0;
+        left = &mir.insns[semantic[1]];
+        right = &mir.insns[semantic[2]];
+        compare = &mir.insns[semantic[3]];
+        branch = &mir.insns[semantic[4]];
+        if ((compare->immediate != TOK_EQ &&
+             compare->immediate != TOK_NE &&
+             compare->immediate != '<' &&
+             compare->immediate != TOK_GE &&
+             compare->immediate != '>' &&
+             compare->immediate != TOK_LE) ||
+            compare->src1 != left->dst ||
+            compare->src2 != right->dst ||
+            compare->type != TYPE_INT ||
+            branch->src1 != compare->dst)
+            return 0;
     }
-    if (left->object < 0 || left->object >= mir.object_count)
+    if (branch->label !=
+            mir.insns[semantic[semantic_count - 3]].label)
         return 0;
-    for (i = branch_index + 1; i < target_index; ++i)
-        if (mir.insns[i].opcode == MIR_RETURN)
-            true_return = &mir.insns[i];
-    for (i = target_index + 1; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_RETURN) {
-            false_return = &mir.insns[i];
-            break;
-        }
-    if (true_return == NULL || false_return == NULL)
-        return 0;
-    true_value = mir_definition(true_return->src1);
-    false_value = mir_definition(false_return->src1);
-    if (true_value == NULL || false_value == NULL ||
-        true_value->opcode != MIR_CONST || false_value->opcode != MIR_CONST)
-        return 0;
-
-    /* Reject any operation outside this exact graph shape. */
     for (i = 0; i < mir.count; ++i) {
         int opcode = mir.insns[i].opcode;
         if (opcode != MIR_PARAM && opcode != MIR_NOP && opcode != MIR_CONST &&
@@ -1147,11 +1399,15 @@ static int mir_try_emit_comparison_branch(MirStream *out)
      * unexpected width falls back to the general selector instead of
      * emitting nothing. */
     if (compare->opcode == MIR_PARAM) {
-        int width = type_size(mir.objects[left->object].type);
-        int is_float = type_is_float(mir.objects[left->object].type);
+        int width;
+        int is_float;
 
-        if (width != 2 && width != 4)
+        operand_type = left->type;
+        if (!mir_comparison_operand_type_supported(operand_type) ||
+            !mir_comparison_param_fits(left, operand_type))
             return 0;
+        width = type_size(operand_type);
+        is_float = operand_type == TYPE_FLOAT;
         false_label = new_label();
         mir_emit_prologue(out);
         if (width == 4) {
@@ -1189,7 +1445,22 @@ static int mir_try_emit_comparison_branch(MirStream *out)
      * needed (unlike the narrow path's sign-bias trick below, which
      * only exists to reuse a single unsigned 16-bit `sbc`). Left/right
      * are used exactly as `compare` originally defined them - no swap. */
-    if (type_size(compare->secondary_offset) == 4) {
+    operand_type = compare->secondary_offset;
+    if (!mir_comparison_operand_type_supported(operand_type) ||
+        !mir_comparison_param_fits(left, operand_type) ||
+        !mir_comparison_param_fits(right, operand_type) ||
+        left->object == right->object)
+        return 0;
+    operand_width = type_size(operand_type);
+    if (mir.objects[left->object].offset <
+            mir.objects[right->object].offset + operand_width &&
+        mir.objects[right->object].offset <
+            mir.objects[left->object].offset + operand_width)
+        return 0;
+
+    if (operand_width == 4) {
+        if (type_ptr_depth(operand_type) != 0)
+            return 0;
         false_label = new_label();
         mir_emit_prologue(out);
         if (!mir_emit_load_param_wide(out, left))
@@ -1225,9 +1496,11 @@ static int mir_try_emit_comparison_branch(MirStream *out)
         right = temporary;
         operation = TOK_GE;
     }
+    if (operand_width != 2)
+        return 0;
     unsigned_compare =
-        (mir.objects[left->object].type & TYPE_UNSIGNED) != 0 ||
-        type_ptr_depth(mir.objects[left->object].type) > 0;
+        (operand_type & TYPE_UNSIGNED) != 0 ||
+        type_ptr_depth(operand_type) > 0;
 
     false_label = new_label();
     mir_emit_prologue(out);
@@ -1357,11 +1630,12 @@ void mir_emit_runtime_call(MirStream *out, const char *name)
 
 /* Isolate every selector attempt in its own stream so partial output from a
  * declining candidate cannot contaminate the next generated candidate. */
-static int mir_try_selector(MirStream *out, int (*selector)(MirStream *))
+int mir_try_selector(MirStream *out, int (*selector)(MirStream *))
 {
     MirStream *candidate = mir_stream_open();
     int accepted;
     int character;
+    int label_base = label_id;
 
     if (candidate == NULL)
         fatal("cannot create MIR selector stream");
@@ -1371,7 +1645,8 @@ static int mir_try_selector(MirStream *out, int (*selector)(MirStream *))
         mir_stream_rewind(candidate);
         while ((character = mir_stream_getc(candidate)) != EOF)
             mir_stream_putc(character, out);
-    }
+    } else
+        label_id = label_base;
     mir_stream_close(candidate);
     return accepted;
 }
@@ -2715,10 +2990,13 @@ static int mir_cost_regional_candidate_is_diagnostic_validated(void)
         return 1;
     return mir.sink_purpose == EMIT_SINK_DEFERRED &&
            (mir.return_type & 15) == TYPE_INT &&
-           mir.count == 31 && mir.next_value == 20 &&
-           mir_cfg_block_count() == 2 && mir_call_count() == 1 &&
-           mir.local_bytes == 5 && !mir_has_cfg_backedge() &&
-           !mir_has_wide_values() && !mir_has_member_address();
+           ((mir.count == 31 && mir.next_value == 20 &&
+             mir_cfg_block_count() == 2 && mir_call_count() == 1 &&
+             mir.local_bytes == 5 && !mir_has_member_address()) ||
+            (mir.count == 20 && mir.next_value == 14 &&
+             mir_cfg_block_count() == 1 && mir_call_count() == 1 &&
+             mir.local_bytes == 4 && mir_has_member_address())) &&
+           !mir_has_cfg_backedge() && !mir_has_wide_values();
 }
 
 static int mir_cost_candidate_is_selectable(
@@ -3411,7 +3689,9 @@ static int mir_has_bool_value(void)
     return 0;
 }
 
-static int mir_try_emit_z80(MirStream *out)
+/* Parameter-home validation happens after the prologue, so callers must run
+ * this fallback through mir_try_selector(). */
+int mir_try_emit_affine_return(MirStream *out)
 {
     const struct MirInsn *return_insn = NULL;
     const struct MirInsn *parameter;
@@ -3422,29 +3702,6 @@ static int mir_try_emit_z80(MirStream *out)
     int two_parameters = 0;
     int two_parameter_operation = 0;
     int i;
-
-    if (mir_try_selector(out, mir_try_emit_homed_scalar_cfg))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_spilled_scalar_cfg))
-        return 1;
-
-    /* The current selectors implement only the ordinary 16-bit HL result
-     * convention. Other return ABIs remain with the existing backend. */
-    if ((mir.return_type & 15) != TYPE_INT)
-        return 0;
-
-    if (mir_try_selector(out, mir_try_emit_accumulator_loop))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_unsigned_division_loop))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_repeated_invariant_add_loop))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_countdown_loop))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_comparison_branch))
-        return 1;
-    if (mir_try_selector(out, mir_try_emit_scalar_dag))
-        return 1;
 
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
@@ -3499,6 +3756,32 @@ static int mir_try_emit_z80(MirStream *out)
         mir_stream_printf(out, "\tld de,%ld\n\tadd hl,de\n", constant);
     mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
     return 1;
+}
+
+int mir_try_emit_z80(MirStream *out)
+{
+    /* This path is selected only by DCC_MIR_EMIT_FUNCTION. Exercise the
+     * narrow structural diagnostics before the universal generated emitters;
+     * putting homed/spilled first made every later probe unreachable. */
+    if ((mir.return_type & 15) == TYPE_INT) {
+        if (mir_try_selector(out, mir_try_emit_accumulator_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_unsigned_division_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_repeated_invariant_add_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_countdown_loop))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_comparison_branch))
+            return 1;
+        if (mir_try_selector(out, mir_try_emit_scalar_dag))
+            return 1;
+    }
+    if (mir_try_selector(out, mir_try_emit_homed_scalar_cfg))
+        return 1;
+    if (mir_try_selector(out, mir_try_emit_spilled_scalar_cfg))
+        return 1;
+    return mir_try_selector(out, mir_try_emit_affine_return);
 }
 
 static int mir_try_generated_candidate(
@@ -3755,7 +4038,7 @@ void mir_end_function(void)
         goto finish;
     }
     if (!mir_dense_analysis_is_bounded()) {
-        if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+        if (mir_select_report_enabled())
             fprintf(stderr,
                     "; MIR selection function=%s selector=none result=error "
                     "reason=oversized generated-bytes=-1 captured-bytes=-1 "
@@ -3932,7 +4215,7 @@ void mir_end_function(void)
                 "; MIR cost-selected function=%s candidate=%s "
                 "selector=%s selected-hash=%08lx\n",
                 mir.name, candidate_name, selector_name, selected_hash);
-    if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
+    if (mir_select_report_enabled())
         fprintf(stderr,
                 "; MIR selection function=%s selector=%s result=mir "
                 "reason=accepted generated-bytes=%ld captured-bytes=-1 "

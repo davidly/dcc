@@ -164,6 +164,15 @@ struct MirDebugEvent {
     char *text;
 };
 
+struct MirCallSignature {
+    int present;
+    int has_proto;
+    int parameter_count;
+    int variadic;
+    int return_type;
+    int parameter_types[MAX_PROTO_PARAMS];
+};
+
 #define MIR_OBJECT_UNDEFINED (-1)
 #define MIR_OBJECT_AMBIGUOUS (-2)
 #define MIR_OBJECT_UNREACHED (-3)
@@ -175,6 +184,8 @@ struct MirFunction {
     int next_value;
     int next_label;
     int next_call_id;
+    struct MirCallSignature *call_signatures;
+    int call_signature_capacity;
     int next_inline_temp_id;
     int active;
     int sink_purpose;
@@ -547,6 +558,11 @@ void mir_extrn_begin_attempt(void);
 int mir_extrn_should_emit(struct Sym *sym);
 int mir_extrn_should_emit_name(const char *name);
 void mir_emit_runtime_call(MirStream *out, const char *name);
+int mir_try_selector(MirStream *out, int (*selector)(MirStream *));
+int mir_try_emit_affine_return(MirStream *out);
+int mir_try_emit_repeated_invariant_add_loop(MirStream *out);
+int mir_try_emit_z80(MirStream *out);
+int mir_select_report_enabled(void);
 void mir_clear_debug_events(void);
 void mir_emit_debug_events(MirStream *out, int point);
 void mir_emit_first_debug_location(MirStream *out);
@@ -651,6 +667,9 @@ const char *mir_opcode_name(int opcode);
 int mir_phi_source_for_edge(const struct MirInsn *phi,
                                    int predecessor_label, int edge_label,
                                    int successor, int phi_instruction);
+int mir_phi_slot_for_edge(const struct MirInsn *phi,
+                          int predecessor_label, int edge_label,
+                          int successor, int phi_instruction);
 int mir_begin_lazy_parameter_allocation(void);
 void mir_end_lazy_parameter_allocation(void);
 int mir_begin_rematerialized_home_allocation(void);
@@ -680,6 +699,7 @@ void mir_regional_begin_emission(void);
 int mir_regional_before_instruction(MirStream *out, int instruction);
 void mir_regional_after_instruction(int instruction);
 void mir_resolve_deferred_metadata(void);
+void mir_record_call_signature(int call_id, const struct Sym *prototype);
 int mir_prune_constant_unreachable(void);
 int mir_extended_integer_constant_conversion_folds(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,

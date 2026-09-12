@@ -1,0 +1,4 @@
+<source>:9: error DCC-E1002: unsupported expression statement near 'bits'
+        bits.value = &value;
+        ^
+dcc: 1 error(s)

@@ -1,0 +1,388 @@
+[
+  {
+    "Name": "lcsw24-mixed-char-signedness",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [
+      "LCSW24_MIXED_CHAR_SIGNEDNESS"
+    ],
+    "Expected": [
+      "high-byte got=0 want=0 guards=1",
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      true,
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "lcsw24-volatile-input",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [
+      "LCSW24_VOLATILE_INPUT"
+    ],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "lcsw24-volatile-table",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [
+      "LCSW24_VOLATILE_TABLE"
+    ],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "lcsw24-unsigned-table",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [
+      "LCSW24_UNSIGNED_TABLE"
+    ],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "RequiredGenericFunction": "lcs_wave6"
+  },
+  {
+    "Name": "lcsw24-dimension-nine",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [
+      "LCSW24_DIMENSION_9"
+    ],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "RequiredGenericFunction": "lcs_wave6"
+  },
+  {
+    "Name": "lcsw24-commuted-equality",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [
+      "LCSW24_COMMUTED_EQUALITY"
+    ],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "lcsw24-greater-equal-max",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [
+      "LCSW24_GREATER_EQUAL_MAX"
+    ],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "lcsw24-unsigned-return",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [
+      "LCSW24_UNSIGNED_RETURN"
+    ],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "RequiredGenericFunction": "lcs_wave6"
+  },
+  {
+    "Name": "lcsw24-constant-type",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "3:type:4",
+    "MachineMutationFunction": "lcs_wave6"
+  },
+  {
+    "Name": "lcsw24-character-signedness",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "15:type:33",
+    "MachineMutationFunction": "lcs_wave6"
+  },
+  {
+    "Name": "lcsw24-parameter-signedness",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "1:type:49",
+    "MachineMutationFunction": "lcs_wave6"
+  },
+  {
+    "Name": "lcsw24-local-store-width",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "4:memory_size:1",
+    "MachineMutationFunction": "lcs_wave6"
+  },
+  {
+    "Name": "lcsw24-local-load-width",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "lcs_wave6",
+    "RequiredSelectorFunction": "lcs_wave6",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "120:memory_size:1",
+    "MachineMutationFunction": "lcs_wave6"
+  },
+  {
+    "Name": "lcsw24-derived-store-width",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireExact": true,
+    "MachineMutation": "4:memory_size:0",
+    "MachineMutationFunction": "lcs_wave6"
+  },
+  {
+    "Name": "lcsw24-explicit-load-width",
+    "Group": "lcs-wave24",
+    "Sources": [
+      "tests/mir-clobber/lcsw6.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "LCSW6 oracle hash=83 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "lcs-dp",
+    "ExactFunction": "lcs_wave6",
+    "RequireExact": true,
+    "MachineMutation": "120:memory_size:2",
+    "MachineMutationFunction": "lcs_wave6"
+  }
+]

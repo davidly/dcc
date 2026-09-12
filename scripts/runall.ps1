@@ -2270,12 +2270,17 @@ $perfCheckSw.Stop()
 $diagnosticsPassed = $null
 $diagnosticsSw = [System.Diagnostics.Stopwatch]::StartNew()
 if (-not $Apps) {
+    $diagnosticDcc = if ($env:DCC) {
+        $env:DCC
+    } else {
+        Join-Path $script:RepoRoot "dcc"
+    }
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "RUNNING DIAGNOSTICS SUITE" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     if ($FailuresOnly) {
-        $diagnosticsOutput = & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc") 2>&1
+        $diagnosticsOutput = & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc $diagnosticDcc 2>&1
         $diagnosticsExitCode = $LASTEXITCODE
         if ($diagnosticsExitCode -ne 0) {
             foreach ($line in @($diagnosticsOutput)) { Write-Host $line }
@@ -2285,7 +2290,7 @@ if (-not $Apps) {
         }
     }
     else {
-        & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc")
+        & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc $diagnosticDcc
         $diagnosticsExitCode = $LASTEXITCODE
     }
     $diagnosticsPassed = ($diagnosticsExitCode -eq 0)

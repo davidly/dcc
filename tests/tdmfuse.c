@@ -14,6 +14,49 @@
 
 static int checks = 0, failures = 0;
 
+/* Selector controls use DCC's defined 16-bit two's-complement wrap rules. */
+#if defined(TDMFUSE_NEGATIVE_INITIAL)
+#define TDMFUSE_INITIAL_X (-32767 - 1)
+#define TDMFUSE_SCALE 10
+#define TDMFUSE_EXPECT_0 27
+#define TDMFUSE_EXPECT_1 0
+#define TDMFUSE_EXPECT_2 9
+#define TDMFUSE_EXPECT_3 2
+#define TDMFUSE_EXPECT_4 8
+#define TDMFUSE_EXPECT_5 3
+#define TDMFUSE_EXPECT_6 5
+#elif defined(TDMFUSE_POSITIVE_INITIAL)
+#define TDMFUSE_INITIAL_X 32767
+#define TDMFUSE_SCALE 10
+#define TDMFUSE_EXPECT_0 27
+#define TDMFUSE_EXPECT_1 2
+#define TDMFUSE_EXPECT_2 7
+#define TDMFUSE_EXPECT_3 3
+#define TDMFUSE_EXPECT_4 0
+#define TDMFUSE_EXPECT_5 0
+#define TDMFUSE_EXPECT_6 0
+#elif defined(TDMFUSE_WRAP_SCALE)
+#define TDMFUSE_INITIAL_X 0
+#define TDMFUSE_SCALE 32767
+#define TDMFUSE_EXPECT_0 12052
+#define TDMFUSE_EXPECT_1 (-1139)
+#define TDMFUSE_EXPECT_2 11879
+#define TDMFUSE_EXPECT_3 16082
+#define TDMFUSE_EXPECT_4 (-16261)
+#define TDMFUSE_EXPECT_5 15579
+#define TDMFUSE_EXPECT_6 2596
+#else
+#define TDMFUSE_INITIAL_X 0
+#define TDMFUSE_SCALE 10
+#define TDMFUSE_EXPECT_0 27
+#define TDMFUSE_EXPECT_1 1
+#define TDMFUSE_EXPECT_2 8
+#define TDMFUSE_EXPECT_3 2
+#define TDMFUSE_EXPECT_4 7
+#define TDMFUSE_EXPECT_5 5
+#define TDMFUSE_EXPECT_6 0
+#endif
+
 static void ck(int got, int want, const char *label)
 {
     checks++;
@@ -52,17 +95,30 @@ static void test_for_plain_int(void)
 static void test_while_register_narrowed(void)
 {
     int N;
+#ifdef TDMFUSE_UNSIGNED_COUNTER
+    register unsigned int n;
+#else
     register int n;
+#endif
     int x;
+#ifdef TDMFUSE_VOLATILE_ARRAY
+    volatile int a[10];
+#else
     int a[10];
+#endif
     int expect[7];
     int idx;
 
-    expect[0] = 27; expect[1] = 1; expect[2] = 8; expect[3] = 2;
-    expect[4] = 7;  expect[5] = 5; expect[6] = 0;
+    expect[0] = TDMFUSE_EXPECT_0;
+    expect[1] = TDMFUSE_EXPECT_1;
+    expect[2] = TDMFUSE_EXPECT_2;
+    expect[3] = TDMFUSE_EXPECT_3;
+    expect[4] = TDMFUSE_EXPECT_4;
+    expect[5] = TDMFUSE_EXPECT_5;
+    expect[6] = TDMFUSE_EXPECT_6;
 
     N = 10;
-    x = 0;
+    x = TDMFUSE_INITIAL_X;
     for (n = N - 1; n > 0; --n)
         a[n] = 1;
     a[1] = 2;
@@ -73,7 +129,7 @@ static void test_while_register_narrowed(void)
         n = N--;
         while (--n) {
             a[n] = x % n;
-            x = 10 * a[n-1] + x / n;
+            x = TDMFUSE_SCALE * a[n-1] + x / n;
         }
         ck(x, expect[idx], "t2x");
         idx++;

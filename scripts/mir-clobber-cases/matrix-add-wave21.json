@@ -1,0 +1,80 @@
+[
+  {
+    "Name": "mxaddalias",
+    "Group": "matrix-add-wave21",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": ["MATADD_ALIAS_ORACLE"],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888",
+      "alias-input 200 -80",
+      "alias-matrix 100 256"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireExact": true
+  },
+  {
+    "Name": "mxaddvolatile",
+    "Group": "matrix-add-wave21",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": ["MATADD_MATRIX_QUALIFIER=volatile"],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_vector_add",
+    "RequiredSelectorFunction": "matrix_vector_add",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "mxaddvolatiledbg",
+    "Group": "matrix-add-wave21",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": ["MATADD_MATRIX_QUALIFIER=volatile"],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  },
+  {
+    "Name": "mxaddsigned",
+    "Group": "matrix-add-wave21",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": ["MATADD_SIGNED_COUNTS"],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_vector_add",
+    "RequiredSelectorFunction": "matrix_vector_add",
+    "RequiredSelector": "spilled-scalar-cfg"
+  }
+]

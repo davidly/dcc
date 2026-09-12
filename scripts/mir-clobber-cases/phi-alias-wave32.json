@@ -1,0 +1,44 @@
+[
+  {
+    "Name": "pa32word",
+    "Group": "phi-alias-wave32",
+    "Sources": ["tests/mir-clobber/phial32.c"],
+    "Defines": [],
+    "Expected": ["PHIAL32 checks=8 failures=0 hash=65265"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"],
+    "RequiredGenericFunction": "phi_alias_word",
+    "RequiredSelectorFunction": "phi_alias_word",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "pa32byte",
+    "Group": "phi-alias-wave32",
+    "Sources": ["tests/mir-clobber/phial32.c"],
+    "Defines": [],
+    "Expected": ["PHIAL32 checks=8 failures=0 hash=65265"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"],
+    "RequiredGenericFunction": "phi_alias_byte",
+    "RequiredSelectorFunction": "phi_alias_byte",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "pa32fault",
+    "Group": "phi-alias-wave32",
+    "Sources": ["tests/mir-clobber/phial32.c"],
+    "Defines": ["PHI_ALIAS_FAULT=1"],
+    "Expected": [
+      "FAIL word-alias-true got=21504 expected=21505",
+      "FAIL byte-disjoint-true got=42866 expected=42867",
+      "PHIAL32 checks=8 failures=8"
+    ],
+    "Exit": 8,
+    "StackBytes": 512,
+    "StackModes": [false]
+  }
+]

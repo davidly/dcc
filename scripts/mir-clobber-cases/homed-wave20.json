@@ -1,0 +1,63 @@
+[
+  {
+    "Name": "home20-base",
+    "Group": "homed-wave20",
+    "Sources": ["tests/mir-clobber/homedw20.c"],
+    "Defines": [],
+    "Expected": ["PASS homed_wave20"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredSelectorFunction": "homed_wave20",
+    "RequiredSelector": "homed-scalar-cfg"
+  },
+  {
+    "Name": "home20-signed-byte",
+    "Group": "homed-wave20",
+    "Sources": ["tests/mir-clobber/homedw20.c"],
+    "Defines": ["H20_SIGNED_BYTE"],
+    "Expected": ["PASS homed_wave20"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredSelectorFunction": "homed_wave20",
+    "RequiredSelector": "homed-scalar-cfg"
+  },
+  {
+    "Name": "home20-indirect-byte",
+    "Group": "homed-wave20",
+    "Sources": ["tests/mir-clobber/homedw20.c"],
+    "Defines": ["H20_INDIRECT_BYTE"],
+    "Expected": ["PASS homed_wave20"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "homed_wave20",
+    "RequiredSelectorFunction": "homed_wave20",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "home20-debug-full",
+    "Group": "homed-wave20",
+    "Sources": ["tests/mir-clobber/homedw20.c"],
+    "Defines": [],
+    "Expected": ["PASS homed_wave20"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "DebugModes": ["true"]
+  },
+  {
+    "Name": "home20-debug-lines",
+    "Group": "homed-wave20",
+    "Sources": ["tests/mir-clobber/homedw20.c"],
+    "Defines": [],
+    "Expected": ["PASS homed_wave20"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "DebugModes": ["lines"],
+    "RequiredSelectorFunction": "homed_wave20",
+    "RequiredSelector": "homed-scalar-cfg"
+  }
+]

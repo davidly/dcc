@@ -1,0 +1,321 @@
+[
+  {
+    "Name": "a13exact",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "a13debug",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "DebugModes": ["true", "lines"]
+  },
+  {
+    "Name": "a13fast",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW13_FAST_OPEN"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true
+  },
+  {
+    "Name": "a13swap",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW13_SWAP_PUTS"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true
+  },
+  {
+    "Name": "a13close",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW13_VOID_CLOSE"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true
+  },
+  {
+    "Name": "a13format",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW13_PRINT_PAIR"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true
+  },
+  {
+    "Name": "a13noret",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW13_RETURNING_ABORT"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true
+  },
+  {
+    "Name": "a13branch",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW13_BRANCH_GUARD"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true
+  },
+  {
+    "Name": "a13wide",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW13_WIDE_FAILURES"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true
+  },
+  {
+    "Name": "a13return",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW13_RETURN_TWO"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true
+  },
+  {
+    "Name": "a13argtype",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "2:type:2",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "a13putarg",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "11:type:17",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "a13filewid",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "7:memory_size:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "a13bufwid",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "50:type:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "a13message",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "251:immediate:99",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "a13branchw",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "35:type:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "a13graphw",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "97:type:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "a13vararg",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "254:type:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "a13retwid",
+    "Group": "abort-wave13",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": [],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "256:type:1",
+    "MachineMutationFunction": "main"
+  }
+]

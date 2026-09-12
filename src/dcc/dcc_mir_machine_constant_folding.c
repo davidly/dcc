@@ -135,7 +135,9 @@ static int mir_machine_fold_integer_binary(
     unsigned long long rhs;
     unsigned long long bits;
 
-    if (width != 1 && width != 2 && width != 4)
+    if (type_ptr_depth(type) != 0 || type_is_float(type) ||
+        (type & 15) == TYPE_BOOL ||
+        (width != 1 && width != 2 && width != 4))
         return 0;
     mask = width == 1 ? 0xffULL :
            width == 2 ? 0xffffULL : 0xffffffffULL;
@@ -357,21 +359,134 @@ static int mir_machine_fold_constant_comparison(
 {
     int operand_type = insn->secondary_offset != 0
         ? insn->secondary_offset : insn->type;
+    int width = type_size(operand_type);
+    int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
+    unsigned long long mask;
+    unsigned long long unsigned_lhs;
+    unsigned long long unsigned_rhs;
     long lhs;
     long rhs;
 
     if (!mir_machine_convert_integer(left, operand_type, &lhs) ||
         !mir_machine_convert_integer(right, operand_type, &rhs))
         return 0;
+    mask = width == 1 ? 0xffULL :
+           width == 2 ? 0xffffULL : 0xffffffffULL;
+    unsigned_lhs = (unsigned long long)(unsigned long)lhs & mask;
+    unsigned_rhs = (unsigned long long)(unsigned long)rhs & mask;
     switch (insn->immediate) {
-    case TOK_EQ: *result = lhs == rhs; return 1;
-    case TOK_NE: *result = lhs != rhs; return 1;
-    case '<': *result = lhs < rhs; return 1;
-    case '>': *result = lhs > rhs; return 1;
-    case TOK_LE: *result = lhs <= rhs; return 1;
-    case TOK_GE: *result = lhs >= rhs; return 1;
+    case TOK_EQ:
+        *result = unsigned_lhs == unsigned_rhs;
+        return 1;
+    case TOK_NE:
+        *result = unsigned_lhs != unsigned_rhs;
+        return 1;
+    case '<':
+        *result = is_unsigned ? unsigned_lhs < unsigned_rhs : lhs < rhs;
+        return 1;
+    case '>':
+        *result = is_unsigned ? unsigned_lhs > unsigned_rhs : lhs > rhs;
+        return 1;
+    case TOK_LE:
+        *result = is_unsigned ? unsigned_lhs <= unsigned_rhs : lhs <= rhs;
+        return 1;
+    case TOK_GE:
+        *result = is_unsigned ? unsigned_lhs >= unsigned_rhs : lhs >= rhs;
+        return 1;
     default: return 0;
     }
+}
+
+static int mir_machine_constant_integer_type(int type)
+{
+    int base = type & 15;
+    int width = type_size(type);
+
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & ~(TYPE_UNSIGNED | 15)) == 0 &&
+           (base == TYPE_CHAR || base == TYPE_INT || base == TYPE_LONG) &&
+           (width == 1 || width == 2 || width == 4);
+}
+
+static int mir_machine_constant_pointer_type(int type)
+{
+    return type_ptr_depth(type) > 0 && type_size(type) == 2;
+}
+
+static int mir_machine_constant_scalar_type(int type)
+{
+    return mir_machine_constant_integer_type(type) ||
+           mir_machine_constant_pointer_type(type);
+}
+
+static int mir_machine_constant_effective_integer_type(int type)
+{
+    /* Lowering leaves context-inferred int constants/arithmetic untyped. */
+    return type == 0 ? TYPE_INT : type;
+}
+
+static int mir_machine_constant_implicit_integer_type(int type)
+{
+    return mir_machine_constant_integer_type(
+        mir_machine_constant_effective_integer_type(type));
+}
+
+static int mir_machine_constant_value_has_type(int value, int type)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           mir_machine_constant_effective_integer_type(
+               definition->type) ==
+           mir_machine_constant_effective_integer_type(type);
+}
+
+static int mir_machine_constant_value_is_integer(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           mir_machine_constant_implicit_integer_type(definition->type);
+}
+
+static int mir_machine_constant_value_converts_to_integer_type(
+    int value, int type)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int definition_type;
+
+    if (definition == NULL ||
+        !mir_machine_constant_integer_type(type))
+        return 0;
+    definition_type = mir_machine_constant_effective_integer_type(
+        definition->type);
+    return mir_machine_constant_integer_type(definition_type) &&
+           (definition_type == type ||
+            type_size(definition_type) < type_size(type));
+}
+
+static int mir_machine_constant_value_points_to_type(int value, int type)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           mir_machine_constant_pointer_type(definition->type) &&
+           type_decay_ptr(definition->type) == type;
+}
+
+static int mir_machine_constant_value_has_integer_width(
+    int value, int width)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int type;
+
+    if (definition == NULL)
+        return 0;
+    type = mir_machine_constant_effective_integer_type(
+        definition->type);
+    return mir_machine_constant_integer_type(type) &&
+           type_size(type) == width;
 }
 
 static int mir_machine_evaluate_constant_flow(
@@ -827,7 +942,8 @@ static int mir_machine_evaluate_constant_function(int *result)
         (mir.return_type & 15) != TYPE_INT ||
         type_size(mir.return_type) != 2 ||
         mir_cfg_block_count() < 2)
-        return 0;
+        return mir_machine_reject(
+            "constant-function-evaluator", "eligibility");
     values = (long *)calloc((size_t)value_capacity, sizeof(*values));
     objects = (long *)calloc((size_t)object_capacity, sizeof(*objects));
     value_known = (unsigned char *)calloc(
@@ -863,7 +979,8 @@ static int mir_machine_evaluate_constant_function(int *result)
             ++instruction;
             break;
         case MIR_CONST:
-            if (insn->dst < 0 || insn->dst >= value_capacity)
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                !mir_machine_constant_implicit_integer_type(insn->type))
                 goto done;
             values[insn->dst] = insn->immediate;
             value_known[insn->dst] = 1;
@@ -878,6 +995,7 @@ static int mir_machine_evaluate_constant_function(int *result)
             int object;
 
             if (insn->dst < 0 || insn->dst >= value_capacity ||
+                !mir_machine_constant_pointer_type(insn->type) ||
                 !mir_scalar_memory_location(
                     insn, &address_type, &address_storage,
                     &address_offset) ||
@@ -888,7 +1006,9 @@ static int mir_machine_evaluate_constant_function(int *result)
                     mir.objects[object].offset == address_offset &&
                     !strcmp(mir.objects[object].name, insn->name))
                     break;
-            if (object >= mir.object_count)
+            if (insn->type != type_add_ptr(address_type) ||
+                object >= mir.object_count ||
+                mir.objects[object].type != address_type)
                 goto done;
             values[insn->dst] = 0;
             value_known[insn->dst] = 1;
@@ -901,6 +1021,13 @@ static int mir_machine_evaluate_constant_function(int *result)
                 !value_known[insn->src1] ||
                 insn->object < 0 || insn->object >= mir.object_count ||
                 mir.objects[insn->object].storage != SC_LOCAL ||
+                !mir_machine_constant_scalar_type(
+                    mir.objects[insn->object].type) ||
+                insn->type != mir.objects[insn->object].type ||
+                insn->memory_size !=
+                    type_size(mir.objects[insn->object].type) ||
+                !mir_machine_constant_value_has_type(
+                    insn->src1, mir.objects[insn->object].type) ||
                 (insn->memory_flags & (1 | 8)) != 0)
                 goto done;
             objects[insn->object] = values[insn->src1];
@@ -913,6 +1040,9 @@ static int mir_machine_evaluate_constant_function(int *result)
             if (insn->dst < 0 || insn->dst >= value_capacity ||
                 insn->object < 0 || insn->object >= mir.object_count ||
                 mir.objects[insn->object].storage != SC_LOCAL ||
+                !mir_machine_constant_scalar_type(
+                    mir.objects[insn->object].type) ||
+                insn->type != mir.objects[insn->object].type ||
                 insn->memory_flags != 0 ||
                 !object_known[insn->object])
                 goto done;
@@ -927,7 +1057,16 @@ static int mir_machine_evaluate_constant_function(int *result)
                       insn->src1 < value_capacity)
                 ? value_addresses[insn->src1] : -1;
             if (insn->dst < 0 || insn->dst >= value_capacity ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                !value_known[insn->src1] ||
                 source < 0 || source >= mir.object_count ||
+                !mir_machine_constant_scalar_type(
+                    mir.objects[source].type) ||
+                !mir_machine_constant_value_points_to_type(
+                    insn->src1, mir.objects[source].type) ||
+                insn->type != mir.objects[source].type ||
+                insn->memory_size != type_size(mir.objects[source].type) ||
+                insn->bit_width != 0 ||
                 (insn->memory_flags & (1 | 8)) != 0 ||
                 !object_known[source])
                 goto done;
@@ -941,8 +1080,18 @@ static int mir_machine_evaluate_constant_function(int *result)
                       insn->src1 < value_capacity)
                 ? value_addresses[insn->src1] : -1;
             if (target < 0 || target >= mir.object_count ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                !value_known[insn->src1] ||
                 insn->src2 < 0 || insn->src2 >= value_capacity ||
                 !value_known[insn->src2] ||
+                !mir_machine_constant_scalar_type(
+                    mir.objects[target].type) ||
+                !mir_machine_constant_value_points_to_type(
+                    insn->src1, mir.objects[target].type) ||
+                insn->memory_size != type_size(mir.objects[target].type) ||
+                insn->bit_width != 0 ||
+                !mir_machine_constant_value_has_type(
+                    insn->src2, mir.objects[target].type) ||
                 (insn->memory_flags & (1 | 8)) != 0)
                 goto done;
             objects[target] = values[insn->src2];
@@ -959,7 +1108,12 @@ static int mir_machine_evaluate_constant_function(int *result)
                 goto done;
             if (insn->dst < 0 || insn->dst >= value_capacity ||
                 source < 0 || source >= value_capacity ||
-                !value_known[source])
+                !value_known[source] ||
+                !mir_machine_constant_scalar_type(insn->type) ||
+                !mir_machine_constant_value_has_type(
+                    insn->src1, insn->type) ||
+                !mir_machine_constant_value_has_type(
+                    insn->src2, insn->type))
                 goto done;
             values[insn->dst] = values[source];
             value_known[insn->dst] = 1;
@@ -971,6 +1125,9 @@ static int mir_machine_evaluate_constant_function(int *result)
                 insn->dst < 0 || insn->dst >= value_capacity ||
                 insn->src1 < 0 || insn->src1 >= value_capacity ||
                 !value_known[insn->src1] ||
+                value_addresses[insn->src1] >= 0 ||
+                !mir_machine_constant_integer_type(insn->type) ||
+                !mir_machine_constant_value_is_integer(insn->src1) ||
                 !mir_machine_convert_integer(
                     values[insn->src1], insn->type,
                     &values[insn->dst]))
@@ -981,18 +1138,37 @@ static int mir_machine_evaluate_constant_function(int *result)
             ++instruction;
             break;
         case MIR_BINARY:
+        {
+            int comparison;
+            int result_type =
+                mir_machine_constant_effective_integer_type(insn->type);
+            int operand_type = mir_machine_constant_effective_integer_type(
+                insn->secondary_offset != 0
+                ? insn->secondary_offset : insn->type);
+
             if (insn->dst < 0 || insn->dst >= value_capacity ||
                 insn->src1 < 0 || insn->src1 >= value_capacity ||
                 insn->src2 < 0 || insn->src2 >= value_capacity ||
                 !value_known[insn->src1] ||
-                !value_known[insn->src2])
+                !value_known[insn->src2] ||
+                value_addresses[insn->src1] >= 0 ||
+                value_addresses[insn->src2] >= 0 ||
+                !mir_machine_constant_integer_type(operand_type) ||
+                !mir_machine_constant_value_converts_to_integer_type(
+                    insn->src1, operand_type) ||
+                !mir_machine_constant_value_converts_to_integer_type(
+                    insn->src2, operand_type))
                 goto done;
-            if (insn->immediate == TOK_EQ ||
-                insn->immediate == TOK_NE ||
-                insn->immediate == '<' ||
-                insn->immediate == '>' ||
-                insn->immediate == TOK_LE ||
-                insn->immediate == TOK_GE) {
+            comparison = insn->immediate == TOK_EQ ||
+                         insn->immediate == TOK_NE ||
+                         insn->immediate == '<' ||
+                         insn->immediate == '>' ||
+                         insn->immediate == TOK_LE ||
+                         insn->immediate == TOK_GE;
+            if ((comparison && insn->type != TYPE_INT) ||
+                (!comparison && result_type != operand_type))
+                goto done;
+            if (comparison) {
                 if (!mir_machine_fold_constant_comparison(
                         insn, values[insn->src1],
                         values[insn->src2], &values[insn->dst]))
@@ -1000,16 +1176,19 @@ static int mir_machine_evaluate_constant_function(int *result)
             } else if (!mir_machine_fold_integer_binary(
                            (int)insn->immediate,
                            values[insn->src1], values[insn->src2],
-                           insn->type, &values[insn->dst])) {
+                           result_type, &values[insn->dst])) {
                 goto done;
             }
             value_known[insn->dst] = 1;
             value_addresses[insn->dst] = -1;
             ++instruction;
             break;
+        }
         case MIR_BRANCH_FALSE:
             if (insn->src1 < 0 || insn->src1 >= value_capacity ||
-                !value_known[insn->src1])
+                !value_known[insn->src1] ||
+                value_addresses[insn->src1] >= 0 ||
+                !mir_machine_constant_value_is_integer(insn->src1))
                 goto done;
             if (values[insn->src1] == 0) {
                 target = mir_find_label(insn->label);
@@ -1034,7 +1213,9 @@ static int mir_machine_evaluate_constant_function(int *result)
             if (!saw_backedge ||
                 insn->src1 < 0 || insn->src1 >= value_capacity ||
                 !value_known[insn->src1] ||
-                value_addresses[insn->src1] >= 0)
+                value_addresses[insn->src1] >= 0 ||
+                !mir_machine_constant_value_has_integer_width(
+                    insn->src1, type_size(mir.return_type)))
                 goto done;
             *result = (int)((unsigned long)values[insn->src1] &
                             0xffffUL);
@@ -1051,6 +1232,10 @@ done:
     free(value_known);
     free(objects);
     free(values);
+    if (!ok)
+        mir_machine_reject(
+            "constant-function-evaluator",
+            steps >= 100000 ? "step-limit" : "evaluation");
     return ok;
 }
 
@@ -2368,6 +2553,7 @@ int mir_try_emit_constant_folding_kernels(MirStream *out)
     }
     if (mir_machine_evaluate_constant_function(
             &constant_function_result)) {
+        mir_machine_accept("constant-function-evaluator");
         mir_emit_constant_function(
             out, constant_function_result);
         return 1;

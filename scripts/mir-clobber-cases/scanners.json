@@ -1,0 +1,116 @@
+[
+  {
+    "Name": "smvalid",
+    "Group": "scanner-proof",
+    "Sources": ["tests/mir-clobber/tsmproof.c"],
+    "Defines": [],
+    "Expected": [
+      "descending 6: 9 8 7 6 5 4 guard=12345",
+      "mixed 6: 3 3 5 5 6 7 guard=12345",
+      "extremes 6: 32767 0 0 32767 32767 32767 guard=12345",
+      "empty 0: guard=12345",
+      "short 0: guard=12345",
+      "single 1: 32767 guard=12345"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "sliding-maximum-schedule",
+    "ExactFunction": "sliding_max",
+    "RequireExact": true
+  },
+  {
+    "Name": "smfront",
+    "Group": "scanner-proof",
+    "Sources": ["tests/mir-clobber/tsmproof.c"],
+    "Defines": ["FRONT_INCLUSIVE"],
+    "Expected": [
+      "descending 6: 8 7 6 5 4 3 guard=12345",
+      "mixed 6: 3 -1 5 5 6 7 guard=12345",
+      "extremes 6: -1 0 0 32767 32767 32767 guard=12345",
+      "empty 0: guard=12345",
+      "short 0: guard=12345",
+      "single 1: 32767 guard=12345"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "sliding-maximum-schedule",
+    "ExactFunction": "sliding_max",
+    "RequireRejected": true
+  },
+  {
+    "Name": "smback",
+    "Group": "scanner-proof",
+    "Sources": ["tests/mir-clobber/tsmproof.c"],
+    "Defines": ["BACK_MINIMUM"],
+    "Expected": [
+      "descending 6: 7 6 5 4 3 2 guard=12345",
+      "mixed 6: -1 -3 -3 -3 3 3 guard=12345",
+      "extremes 6: -32768 -32768 -32768 -32768 -32768 -1 guard=12345",
+      "empty 0: guard=12345",
+      "short 0: guard=12345",
+      "single 1: 32767 guard=12345"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "sliding-maximum-schedule",
+    "ExactFunction": "sliding_max",
+    "RequireRejected": true
+  },
+  {
+    "Name": "smident",
+    "Group": "scanner-proof",
+    "Sources": ["tests/mir-clobber/tsmproof.c"],
+    "Defines": [],
+    "Expected": [
+      "descending 6: 9 8 7 6 5 4 guard=12345",
+      "mixed 6: 3 3 5 5 6 7 guard=12345",
+      "extremes 6: 32767 0 0 32767 32767 32767 guard=12345",
+      "empty 0: guard=12345",
+      "short 0: guard=12345",
+      "single 1: 32767 guard=12345"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "sliding-maximum-schedule",
+    "ExactFunction": "sliding_max",
+    "RequireRejected": true,
+    "MachineMutation": "70:identity:120",
+    "MachineMutationFunction": "sliding_max"
+  },
+  {
+    "Name": "smsame",
+    "Group": "scanner-proof",
+    "Sources": ["tests/mir-clobber/tsmproof.c"],
+    "Defines": [],
+    "Expected": [
+      "descending 6: 9 8 7 6 5 4 guard=12345",
+      "mixed 6: 3 3 5 5 6 7 guard=12345",
+      "extremes 6: 32767 0 0 32767 32767 32767 guard=12345",
+      "empty 0: guard=12345",
+      "short 0: guard=12345",
+      "single 1: 32767 guard=12345"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "sliding-maximum-schedule",
+    "ExactFunction": "sliding_max",
+    "RequireRejected": true,
+    "MachineMutation": "104:src2:70",
+    "MachineMutationFunction": "sliding_max"
+  },
+  {
+    "Name": "smstride",
+    "Group": "scanner-proof",
+    "Sources": ["tests/mir-clobber/tsmproof.c"],
+    "Defines": [],
+    "Expected": [
+      "descending 6: 9 8 7 6 5 4 guard=12345",
+      "mixed 6: 3 3 5 5 6 7 guard=12345",
+      "extremes 6: 32767 0 0 32767 32767 32767 guard=12345",
+      "empty 0: guard=12345",
+      "short 0: guard=12345",
+      "single 1: 32767 guard=12345"
+    ],
+    "Exit": 0,
+    "ExactTemplate": "sliding-maximum-schedule",
+    "ExactFunction": "sliding_max",
+    "RequireRejected": true,
+    "MachineMutation": "102:immediate:1",
+    "MachineMutationFunction": "sliding_max"
+  }
+]

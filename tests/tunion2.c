@@ -1,5 +1,9 @@
 #include <stdio.h>
 
+#ifndef MIR_CLOBBER_MAKE_B
+#define MIR_CLOBBER_MAKE_B 5000
+#endif
+
 struct Pair {
     unsigned char a;
     unsigned int b;
@@ -51,7 +55,11 @@ static void copy_through_pointer(union UPair *dst, union UPair *src)
 int main(int argc, char **argv)
 {
     union UPair l_up = { { 6, 4000, 10 } };
+#ifdef MIR_CLOBBER_LOCAL_NAME_W
+    union UName l_name = { "xyzw" };
+#else
     union UName l_name = { "xyz" };
+#endif
     union UPair a;
     union UPair b;
 
@@ -61,12 +69,26 @@ int main(int argc, char **argv)
     printf("local union %d %u %d %lu\n", l_up.p.a, l_up.p.b, l_up.p.c, upair_sum(l_up));
     printf("local name %d %d %d %lu\n", l_name.name[0], l_name.name[1], l_name.name[2], l_name.l);
 
-    a = make_upair(7, 5000, 11);
+    a = make_upair(7, MIR_CLOBBER_MAKE_B, 11);
+#ifdef MIR_CLOBBER_ASSIGN_LOCAL
+    b = l_up;
+#else
     b = a;
+#endif
     printf("return/assign %d %u %d %lu\n", b.p.a, b.p.b, b.p.c, upair_sum(b));
 
+#ifdef MIR_CLOBBER_COPY_TO_A
+    copy_through_pointer(&a, &g_arr[1]);
+#else
     copy_through_pointer(&b, &g_arr[1]);
+#endif
+#ifdef MIR_CLOBBER_FINAL_SUM_A
+    printf("ptr copy %d %u %d %lu\n", b.p.a, b.p.b, b.p.c, upair_sum(a));
+#elif defined(MIR_CLOBBER_FINAL_B_FROM_A)
+    printf("ptr copy %d %u %d %lu\n", b.p.a, a.p.b, b.p.c, upair_sum(b));
+#else
     printf("ptr copy %d %u %d %lu\n", b.p.a, b.p.b, b.p.c, upair_sum(b));
+#endif
 
     printf("tunion completed\n");
     return 0;

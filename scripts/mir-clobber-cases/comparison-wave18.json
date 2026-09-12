@@ -1,0 +1,12 @@
+[
+  {
+    "Name": "comparison18",
+    "Group": "comparison-wave18",
+    "Sources": ["tests/mir-clobber/cmp18.c"],
+    "Defines": [],
+    "Expected": ["comparison18 failures=0"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false]
+  }
+]

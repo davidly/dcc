@@ -1,0 +1,11 @@
+[
+  {
+    "Name": "pasn13",
+    "Group": "pointer-compound-assign-wave13",
+    "Sources": ["tests/mir-clobber/pasn13.c"],
+    "Defines": [],
+    "Expected": ["pointer compound assignment failures=0"],
+    "Exit": 0,
+    "StackModes": [true, false]
+  }
+]

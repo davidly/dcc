@@ -1,0 +1,31 @@
+[
+  {
+    "Name": "derefnar",
+    "Group": "assign-deref-wave6",
+    "Sources": ["tests/mir-clobber/derefnar.c"],
+    "Defines": [],
+    "Expected": [
+      "deref float=3,253,-3,259",
+      "deref bool positive=1",
+      "deref bool negative=1",
+      "deref bool zero=0"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false]
+  },
+  {
+    "Name": "dfbool",
+    "Group": "assign-deref-wave6",
+    "Sources": ["tests/mir-clobber/dfbool.c"],
+    "Defines": [],
+    "Expected": [
+      "bool pointer positive=1",
+      "bool pointer negative=1",
+      "bool pointer zero=0"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "AssemblyPatterns": ["and 127\\s+or e\\s+or h\\s+or l"],
+    "ForbiddenAssemblyPatterns": ["call\\s+__(ffi|ffu|ffl|fful)"]
+  }
+]

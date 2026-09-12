@@ -1,0 +1,388 @@
+[
+  {
+    "Name": "mw8exact", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "recursive-byte-minimax-schedule",
+    "ExactFunction": "MinMax", "RequireExact": true
+  },
+  {
+    "Name": "mw8br013", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "13:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br025", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "25:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br030", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "30:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br044", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "44:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br055", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "55:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br089", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "89:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br097", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "97:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br128", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "128:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br131", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "131:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br136", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "136:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br144", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "144:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br154", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "154:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br159", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "159:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br165", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "165:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br174", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "174:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br187", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "187:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br192", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "192:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br200", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "200:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br210", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "210:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br215", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "215:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br221", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "221:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8br230", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "230:src1:999", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8ty014", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "14:type:1", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8ty016", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "16:type:1", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8ty017", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "17:type:1", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8ty091", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "91:type:1", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8ty093", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "93:type:1", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8ty098", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "98:type:1", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8ty100", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "100:type:1", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8ty118", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "118:type:1", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8ty120", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "120:type:1", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8arg04", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "104:immediate:3", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8arg14", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "114:immediate:0", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8at104", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "104:type:4", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8at106", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "106:type:4", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8at112", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "112:type:4", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8at114", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "ExactTemplate": "recursive-byte-minimax-schedule", "ExactFunction": "MinMax",
+    "RequireRejected": true, "RequiredGenericFunction": "MinMax",
+    "RequiredSelectorFunction": "MinMax", "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "114:type:4", "MachineMutationFunction": "MinMax"
+  },
+  {
+    "Name": "mw8debug", "Group": "minimax-wave8",
+    "Sources": ["tests/mir-clobber/mmw8.c"], "Defines": [],
+    "Expected": ["MINIMAX-WAVE8 checks=50 failures=0 signature=1385923871 moves=6493"],
+    "Exit": 0, "StackBytes": 512, "StackModes": [true, false],
+    "DebugModes": ["true"]
+  }
+]

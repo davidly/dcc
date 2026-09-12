@@ -1,0 +1,162 @@
+[
+  {
+    "Name": "smxfw22-prefix-increment",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"],
+    "Defines": ["SMXFW22_PREFIX_INCREMENT"],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireExact": true
+  },
+  {
+    "Name": "smxfw22-debug",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"], "Defines": [],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [false], "DebugModes": ["true", "lines"]
+  },
+  {
+    "Name": "smxfw22-volatile-vector",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"],
+    "Defines": ["SMXFW22_VOLATILE_VECTOR"],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-volatile-table",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"],
+    "Defines": ["SMXFW22_VOLATILE_TABLE"],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-indirect-clamp",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"],
+    "Defines": ["SMXFW22_INDIRECT_CLAMP"],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [true, false],
+    "RequiredGenericFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-unsigned-weight",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"],
+    "Defines": ["SMXFW22_UNSIGNED_WEIGHT"],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=3809207365"],
+    "Exit": 0, "StackModes": [true, false],
+    "RequiredGenericFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-scale-128",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"],
+    "Defines": ["SMXFW22_SCALE_128"],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=2277278411"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-clamp-127",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"],
+    "Defines": ["SMXFW22_CLAMP_127"],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=129805949"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-nonvoid-return",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"],
+    "Defines": ["SMXFW22_NONVOID_RETURN"],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [true, false],
+    "RequiredGenericFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-call-src1",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"], "Defines": [],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10",
+    "MachineMutation": "141:src1:999",
+    "MachineMutationFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-call-src2",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"], "Defines": [],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10",
+    "MachineMutation": "141:src2:999",
+    "MachineMutationFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-call-immediate",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"], "Defines": [],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10",
+    "MachineMutation": "141:immediate:999",
+    "MachineMutationFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-call-width",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"], "Defines": [],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10",
+    "MachineMutation": "141:memory_size:4",
+    "MachineMutationFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-arg-src2",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"], "Defines": [],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10",
+    "MachineMutation": "140:src2:999",
+    "MachineMutationFunction": "fixed_softmax_wave10"
+  },
+  {
+    "Name": "smxfw22-arg-width",
+    "Group": "softmax-wave22",
+    "Sources": ["tests/mir-clobber/smxfw10.c"], "Defines": [],
+    "Expected": ["SMXFW10 failures=0 checks=36 hash=4276041031"],
+    "Exit": 0, "StackModes": [false],
+    "ExactTemplate": "fixed-softmax-schedule",
+    "ExactFunction": "fixed_softmax_wave10", "RequireRejected": true,
+    "RequiredGenericFunction": "fixed_softmax_wave10",
+    "MachineMutation": "140:memory_size:4",
+    "MachineMutationFunction": "fixed_softmax_wave10"
+  }
+]

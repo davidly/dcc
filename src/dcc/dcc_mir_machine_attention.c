@@ -55,6 +55,13 @@ struct MirFixedSoftmaxSchedule {
     int length;
 };
 
+enum MirSoftmaxLocalKind {
+    MIR_SOFTMAX_LOCAL_WORD,
+    MIR_SOFTMAX_LOCAL_COUNT,
+    MIR_SOFTMAX_LOCAL_POINTER,
+    MIR_SOFTMAX_LOCAL_LONG
+};
+
 struct MirBackwardLocation {
     struct Sym *root;
     int offset;
@@ -173,16 +180,40 @@ static int mir_match_matrix_product_count_type(int type)
            type_size(type) == 1;
 }
 
+static int mir_matrix_product_clean_auxiliary_metadata(
+    const struct MirInsn *insn)
+{
+    return insn->memory_flags == 0 &&
+           insn->pointee_volatile_mask == 0 &&
+           !insn->has_pointer_qualifiers &&
+           insn->bit_width == 0 &&
+           insn->bit_shift == 0 &&
+           insn->bit_mask == 0 &&
+           insn->divmod_cast_types == 0;
+}
+
 static int mir_match_matrix_product_parameter(
     int instruction, int expected_offset, int is_pointer,
     int *stack_offset)
 {
     const struct MirInsn *parameter = &mir.insns[instruction];
+    int declared;
 
+    if (mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        memchr(parameter->name, 0, sizeof(parameter->name)) == NULL)
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (memchr(mir.declared_names[declared], 0,
+                   sizeof(mir.declared_names[declared])) == NULL)
+            return 0;
     if (parameter->opcode != MIR_PARAM ||
         (is_pointer
              ? !mir_match_matrix_product_pointer_type(parameter->type)
              : !mir_match_matrix_product_count_type(parameter->type)) ||
+        parameter->src1 != -1 || parameter->src2 != -1 ||
+        parameter->immediate != 0 || parameter->memory_size != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(parameter) ||
+        !mir_machine_named_nonvolatile(parameter) ||
         !mir_machine_parameter_value_offset(
             parameter->dst, stack_offset) ||
         *stack_offset != expected_offset)
@@ -197,13 +228,36 @@ static int mir_match_matrix_product_call(
 {
     struct Sym *function;
     int actual;
+    int instruction;
+    const struct MirInsn *argument_insn = NULL;
 
     if (!mir_attention_call_arguments(call, 1, &actual) ||
         actual != argument ||
         !mir_match_matrix_product_word_type(call->type) ||
+        call->src1 != -1 || call->src2 != -1 ||
+        call->immediate != 0 || call->memory_size != 0 ||
+        call->secondary_offset <= 0 ||
         (call->memory_flags &
-         (MIR_CALL_FLAG_VARIADIC |
-          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+         ~MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0 ||
+        call->pointee_volatile_mask != 0 ||
+        call->has_pointer_qualifiers ||
+        call->bit_width != 0 || call->bit_shift != 0 ||
+        call->bit_mask != 0 || call->divmod_cast_types != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_ARG &&
+            mir.insns[instruction].secondary_offset ==
+                call->secondary_offset) {
+            argument_insn = &mir.insns[instruction];
+            break;
+        }
+    if (argument_insn == NULL ||
+        argument_insn->src1 != argument ||
+        argument_insn->src2 != -1 ||
+        argument_insn->immediate != 0 ||
+        argument_insn->memory_size != 0 ||
+        !mir_match_matrix_product_long_type(argument_insn->type) ||
+        !mir_matrix_product_clean_auxiliary_metadata(argument_insn))
         return 0;
     function = find_global(call->name);
     if (function == NULL || !function->is_defined ||
@@ -211,6 +265,7 @@ static int mir_match_matrix_product_call(
         function->is_funcptr || function->is_noreturn ||
         !function->has_proto || function->proto_variadic ||
         function->proto_nargs != 1 ||
+        function->type != call->type ||
         !mir_match_matrix_product_long_type(
             function->proto_types[0]) ||
         (call->base_name[0] != 0 &&
@@ -218,6 +273,328 @@ static int mir_match_matrix_product_call(
                 asm_name_for(sym_asm_name(function)))))
         return 0;
     *function_out = function;
+    return 1;
+}
+
+static int mir_match_matrix_product_add_metadata(void)
+{
+    static const int count_constants[] = {7, 26, 61, 136};
+    static const int word_constants[] = {73};
+    static const int long_constants[] = {
+        23, 70, 82, 86, 92, 97, 105
+    };
+    static const int pointer_constants[] = {45, 119};
+    static const int comparison_results[] = {20, 41, 71, 83, 93};
+    static const int word_phis[] = {110, 113, 116};
+    int instruction;
+    int item;
+
+    if (mir.next_value != 99 || mir.next_label != 20 ||
+        mir.next_call_id != 2 || mir.next_inline_temp_id != 3 ||
+        mir.local_bytes != 38 || mir.object_count != 6 ||
+        mir.declared_count != 24 || mir.alias_count != 0 ||
+        mir.has_runtime_stride_param || mir.is_variadic_function ||
+        mir.has_indirect_incdec || mir.has_pointer_difference ||
+        mir.has_narrowed_for_counter || mir.has_compound_literal ||
+        mir.opaque_count != 0)
+        return 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const struct MirInsn *source;
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (insn->opcode == MIR_LOAD || insn->opcode == MIR_STORE) {
+            if (!mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                insn->type != memory_type ||
+                !mir_machine_named_nonvolatile(insn) ||
+                !mir_matrix_product_clean_auxiliary_metadata(insn))
+                return 0;
+            if (insn->opcode == MIR_LOAD) {
+                if (insn->memory_size != 0)
+                    return 0;
+            } else {
+                source = mir_definition(insn->src1);
+                if (source == NULL ||
+                    (source->type != memory_type &&
+                     !(instruction == 117 &&
+                       source == &mir.insns[116] &&
+                       source->type == 0)) ||
+                    insn->memory_size != type_size(memory_type))
+                    return 0;
+            }
+        }
+    }
+
+    for (item = 0;
+         item < (int)(sizeof(count_constants) /
+                      sizeof(count_constants[0]));
+         ++item)
+        if (!mir_match_matrix_product_count_type(
+                mir.insns[count_constants[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(word_constants) /
+                      sizeof(word_constants[0]));
+         ++item)
+        if (!mir_match_matrix_product_word_type(
+                mir.insns[word_constants[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(long_constants) /
+                      sizeof(long_constants[0]));
+         ++item)
+        if (!mir_match_matrix_product_long_type(
+                mir.insns[long_constants[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(pointer_constants) /
+                      sizeof(pointer_constants[0]));
+         ++item)
+        if (!mir_match_matrix_product_pointer_type(
+                mir.insns[pointer_constants[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(comparison_results) /
+                      sizeof(comparison_results[0]));
+         ++item)
+        if (!mir_match_matrix_product_word_type(
+                mir.insns[comparison_results[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(word_phis) / sizeof(word_phis[0]));
+         ++item)
+        if (mir.insns[word_phis[item]].type != 0)
+            return 0;
+
+    if (!mir_match_matrix_product_pointer_type(mir.insns[52].type) ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[52]) ||
+        mir.insns[48].immediate != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[48]) ||
+        mir.insns[53].immediate != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[53]) ||
+        mir.insns[125].immediate != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[125]) ||
+        !mir_match_matrix_product_word_type(mir.insns[132].type) ||
+        mir.insns[132].immediate != 0 ||
+        !mir_matrix_product_clean_auxiliary_metadata(&mir.insns[132]))
+        return 0;
+    return 1;
+}
+
+static int mir_matrix_product_store_cfg_valid(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected[2];
+        int expected_count = 0;
+        int label_instruction = -1;
+        int label_matches = 0;
+        int candidate;
+        int successor;
+
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE) {
+            if (insn->label < 0 || insn->label >= mir.next_label)
+                return 0;
+            for (candidate = 0; candidate < mir.count; ++candidate)
+                if (mir.insns[candidate].opcode == MIR_LABEL &&
+                    mir.insns[candidate].label == insn->label) {
+                    label_instruction = candidate;
+                    ++label_matches;
+                }
+            if (label_matches != 1)
+                return 0;
+            expected[expected_count++] = label_instruction;
+        }
+        if (insn->opcode == MIR_BRANCH_FALSE) {
+            if (instruction + 1 >= mir.count)
+                return 0;
+            expected[expected_count++] = instruction + 1;
+        } else if (insn->opcode != MIR_JUMP &&
+                   instruction + 1 < mir.count) {
+            expected[expected_count++] = instruction + 1;
+        }
+        if (insn->successor_count != expected_count)
+            return 0;
+        for (successor = 0; successor < expected_count; ++successor)
+            if (insn->successors[successor] != expected[successor])
+                return 0;
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int other;
+
+        if (mir.insns[instruction].opcode != MIR_LABEL)
+            continue;
+        if (mir.insns[instruction].label < 0 ||
+            mir.insns[instruction].label >= mir.next_label)
+            return 0;
+        for (other = instruction + 1; other < mir.count; ++other)
+            if (mir.insns[other].opcode == MIR_LABEL &&
+                mir.insns[other].label ==
+                    mir.insns[instruction].label)
+                return 0;
+    }
+    return mir.insns[mir.count - 1].opcode == MIR_LABEL &&
+        mir.insns[mir.count - 1].successor_count == 0;
+}
+
+static int mir_match_matrix_product_store_metadata(void)
+{
+    static const int count_types[] = {
+        7, 8, 15, 26, 27, 37, 51, 60, 61, 62, 63, 125, 126, 127
+    };
+    static const int word_types[] = {
+        18, 19, 20, 39, 40, 41, 48, 53, 75, 77, 87, 97,
+        104, 111, 121
+    };
+    static const int long_types[] = {
+        23, 24, 43, 49, 54, 55, 56, 58, 70, 74, 81, 86,
+        90, 94, 96, 99, 100, 101, 102, 103, 108, 109, 110
+    };
+    static const int pointer_types[] = {
+        10, 12, 29, 31, 44, 45, 46, 47, 52, 66, 67, 68, 69
+    };
+    static const int zero_types[] = {114, 117, 120};
+    static const int word_binary_types[] = {20, 41};
+    static const int long_comparison_types[] = {75, 87, 97};
+    static const int long_binary_types[] = {55, 56, 102, 110};
+    static const int pointer_binary_types[] = {46, 68};
+    static const int count_binary_types[] = {62, 126};
+    int declared;
+    int instruction;
+    int item;
+
+    if (mir.next_value != 91 || mir.next_label != 20 ||
+        mir.next_call_id != 1 || mir.next_inline_temp_id != 1 ||
+        mir.local_bytes != 38 || mir.object_count != 6 ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count != 0 ||
+        mir.has_runtime_stride_param || mir.is_variadic_function ||
+        mir.has_indirect_incdec || mir.has_pointer_difference ||
+        mir.has_narrowed_for_counter || mir.has_compound_literal ||
+        mir.opaque_count != 0 ||
+        memchr(mir.name, 0, sizeof(mir.name)) == NULL)
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (memchr(mir.declared_names[declared], 0,
+                   sizeof(mir.declared_names[declared])) == NULL)
+            return 0;
+    if (!mir_matrix_product_store_cfg_valid())
+        return 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const struct MirInsn *source;
+        int expected_flags = 0;
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (instruction == 7 || instruction == 23 ||
+            instruction == 26 || instruction == 57)
+            expected_flags = 512;
+        else if (instruction == 74 || instruction == 86)
+            expected_flags = MIR_MEMORY_FLAG_DEFERRED_WIDE_CONST;
+        if (insn->memory_flags != expected_flags ||
+            insn->pointee_volatile_mask != 0 ||
+            insn->has_pointer_qualifiers ||
+            insn->bit_width != 0 || insn->bit_shift != 0 ||
+            insn->bit_mask != 0 || insn->divmod_cast_types != 0)
+            return 0;
+        if (insn->opcode != MIR_LOAD && insn->opcode != MIR_STORE)
+            continue;
+        if (!mir_scalar_memory_location(
+                insn, &memory_type, &memory_storage,
+                &memory_offset) ||
+            insn->type != memory_type ||
+            !mir_machine_named_nonvolatile(insn))
+            return 0;
+        if (insn->opcode == MIR_LOAD) {
+            if (insn->memory_size != 0)
+                return 0;
+        } else {
+            source = mir_definition(insn->src1);
+            if (source == NULL || source->type != memory_type ||
+                insn->memory_size != type_size(memory_type))
+                return 0;
+        }
+    }
+
+    for (item = 0;
+         item < (int)(sizeof(count_types) / sizeof(count_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_count_type(
+                mir.insns[count_types[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(word_types) / sizeof(word_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_word_type(
+                mir.insns[word_types[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(long_types) / sizeof(long_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_long_type(
+                mir.insns[long_types[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(pointer_types) /
+                      sizeof(pointer_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_pointer_type(
+                mir.insns[pointer_types[item]].type))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(zero_types) / sizeof(zero_types[0]));
+         ++item)
+        if (mir.insns[zero_types[item]].type != 0)
+            return 0;
+
+    for (item = 0;
+         item < (int)(sizeof(word_binary_types) /
+                      sizeof(word_binary_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_word_type(
+                mir.insns[word_binary_types[item]].secondary_offset))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(long_comparison_types) /
+                      sizeof(long_comparison_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_long_type(
+                mir.insns[
+                    long_comparison_types[item]].secondary_offset))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(long_binary_types) /
+                      sizeof(long_binary_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_long_type(
+                mir.insns[long_binary_types[item]].secondary_offset))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(pointer_binary_types) /
+                      sizeof(pointer_binary_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_pointer_type(
+                mir.insns[
+                    pointer_binary_types[item]].secondary_offset))
+            return 0;
+    for (item = 0;
+         item < (int)(sizeof(count_binary_types) /
+                      sizeof(count_binary_types[0]));
+         ++item)
+        if (!mir_match_matrix_product_count_type(
+                mir.insns[count_binary_types[item]].secondary_offset))
+            return 0;
     return 1;
 }
 
@@ -711,6 +1088,9 @@ static int mir_match_matrix_product_add_schedule(
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "matrix-product-add-schedule", "opcodes");
+    if (!mir_match_matrix_product_add_metadata())
+        return mir_machine_reject(
+            "matrix-product-add-schedule", "metadata");
     if (!mir_match_matrix_product_parameter(
             1, 2, 1, &plan->matrix_stack_offset) ||
         !mir_match_matrix_product_parameter(
@@ -997,11 +1377,14 @@ static int mir_match_matrix_product_store_schedule(
     int instruction;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 130 || mir.next_value != 91 ||
+    if (mir.count != 130 ||
         mir_cfg_block_count() != 19 || mir.local_bytes != 38 ||
-        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.has_vla || mir.return_type != TYPE_VOID ||
         mir.aggregate_temp_bytes != 0)
         return 0;
+    if (!mir_match_matrix_product_store_metadata())
+        return mir_machine_reject(
+            "matrix-product-store-schedule", "metadata");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
             expected_opcodes[instruction])
@@ -1355,12 +1738,175 @@ static int mir_match_softmax_call(
     function = find_global(call->name);
     if (function == NULL || !function->is_defined ||
         function->storage != SC_FUNC || function->is_funcptr ||
-        function->is_noreturn || !function->has_proto ||
+        function->is_noreturn || function->is_fastcall ||
+        !function->has_proto || call->type != function->type ||
+        !mir_match_matrix_product_word_type(function->type) ||
         function->proto_variadic ||
         function->proto_nargs != argument_count ||
         (call->base_name[0] != 0 &&
          strcmp(call->base_name,
                 asm_name_for(sym_asm_name(function)))))
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_match_softmax_local_store(
+    const struct MirInsn *store, enum MirSoftmaxLocalKind kind)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (!mir_machine_unobservable_local_store(store) ||
+        !mir_scalar_memory_location(
+            store, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL ||
+        store->memory_size != type_size(memory_type))
+        return 0;
+    if (kind == MIR_SOFTMAX_LOCAL_WORD)
+        return mir_match_matrix_product_word_type(memory_type);
+    if (kind == MIR_SOFTMAX_LOCAL_COUNT)
+        return mir_match_matrix_product_count_type(memory_type);
+    if (kind == MIR_SOFTMAX_LOCAL_LONG)
+        return mir_match_matrix_product_long_type(memory_type);
+    return mir_match_matrix_product_pointer_type(memory_type);
+}
+
+static int mir_match_softmax_value_type(
+    int type, enum MirSoftmaxLocalKind kind)
+{
+    if (kind == MIR_SOFTMAX_LOCAL_WORD)
+        return mir_match_matrix_product_word_type(type);
+    if (kind == MIR_SOFTMAX_LOCAL_COUNT)
+        return mir_match_matrix_product_count_type(type);
+    if (kind == MIR_SOFTMAX_LOCAL_LONG)
+        return mir_match_matrix_product_long_type(type);
+    return mir_match_matrix_product_pointer_type(type);
+}
+
+static int mir_match_softmax_unary(
+    const struct MirInsn *insn, int source,
+    enum MirSoftmaxLocalKind result_kind)
+{
+    return insn->opcode == MIR_UNARY &&
+           insn->immediate == 0 &&
+           insn->src1 == source &&
+           mir_match_softmax_value_type(insn->type, result_kind);
+}
+
+static int mir_match_softmax_binary(
+    const struct MirInsn *insn, long operation, int left, int right,
+    enum MirSoftmaxLocalKind result_kind,
+    enum MirSoftmaxLocalKind operand_kind)
+{
+    return insn->opcode == MIR_BINARY &&
+           insn->immediate == operation &&
+           insn->src1 == left &&
+           insn->src2 == right &&
+           mir_match_softmax_value_type(insn->type, result_kind) &&
+           mir_match_softmax_value_type(
+               insn->secondary_offset, operand_kind);
+}
+
+static int mir_match_softmax_index_address(
+    const struct MirInsn *insn, int base, int index)
+{
+    return insn->opcode == MIR_INDEX_ADDRESS &&
+           insn->src1 == base &&
+           insn->src2 == index &&
+           insn->immediate == 2 &&
+           insn->memory_size == 2 &&
+           mir_match_matrix_product_pointer_type(insn->type);
+}
+
+static int mir_match_softmax_word_load(
+    const struct MirInsn *insn, int address)
+{
+    return insn->opcode == MIR_LOAD_INDIRECT &&
+           insn->src1 == address &&
+           insn->memory_size == 2 &&
+           (insn->memory_flags & (1 | 8)) == 0 &&
+           mir_match_matrix_product_word_type(insn->type);
+}
+
+static int mir_match_softmax_branch(
+    const struct MirInsn *insn, int condition, int target_instruction)
+{
+    return insn->opcode == MIR_BRANCH_FALSE &&
+           insn->src1 == condition &&
+           insn->label == mir.insns[target_instruction].label;
+}
+
+static int mir_match_softmax_argument(
+    const struct MirInsn *call, const struct MirInsn *argument,
+    int ordinal, int value, int type)
+{
+    return argument->opcode == MIR_ARG &&
+           argument->src1 == value &&
+           argument->type == type &&
+           argument->immediate == ordinal &&
+           argument->secondary_offset == call->secondary_offset;
+}
+
+static int mir_match_fixed_softmax_unique_definition(
+    int value, const struct MirInsn *expected)
+{
+    int definitions = 0;
+    int instruction;
+
+    if (value < 0 || value >= mir.next_value ||
+        mir_definition(value) != expected)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].dst == value)
+            ++definitions;
+    return definitions == 1;
+}
+
+static int mir_match_fixed_softmax_call(
+    const struct MirInsn *call, const struct MirInsn *argument,
+    const struct MirInsn *value_definition,
+    struct Sym **function_out)
+{
+    const struct MirInsn *source;
+    struct Sym *function;
+    int call_index;
+    int argument_index;
+    int value;
+
+    value = value_definition->dst;
+    if (!mir_match_softmax_call(call, 1, &function) ||
+        call->src1 != -1 || call->src2 != -1 ||
+        call->immediate != 0 || call->memory_size != 0 ||
+        call->secondary_offset <= 0 ||
+        (call->memory_flags &
+         ~MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0 ||
+        call->pointee_volatile_mask != 0 ||
+        call->has_pointer_qualifiers ||
+        call->bit_width != 0 || call->bit_shift != 0 ||
+        call->bit_mask != 0 || call->divmod_cast_types != 0 ||
+        !mir_match_fixed_softmax_unique_definition(
+            call->dst, call))
+        return 0;
+    call_index = (int)(call - mir.insns);
+    argument_index = (int)(argument - mir.insns);
+    source = mir_definition(argument->src1);
+    if (argument_index < 0 || argument_index >= call_index ||
+        source != value_definition || source >= argument ||
+        !mir_match_fixed_softmax_unique_definition(
+            value, value_definition) ||
+        argument->dst >= 0 || argument->src2 >= 0 ||
+        argument->memory_size != 0 ||
+        argument->memory_flags != 0 ||
+        argument->pointee_volatile_mask != 0 ||
+        argument->has_pointer_qualifiers ||
+        argument->bit_width != 0 || argument->bit_shift != 0 ||
+        argument->bit_mask != 0 ||
+        argument->divmod_cast_types != 0 ||
+        !mir_match_softmax_argument(
+            call, argument, 0, value,
+            function->proto_types[0]))
         return 0;
     *function_out = function;
     return 1;
@@ -1430,44 +1976,343 @@ static int mir_match_fixed_softmax_schedule(
         mir_machine_pointee_is_volatile(vector) ||
         !mir_machine_parameter_value_offset(
             vector->dst, &plan->vector_stack_offset) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[2].type) ||
         !mir_machine_same_location(vector, &mir.insns[2]) ||
-        !mir_machine_same_location(vector, &mir.insns[12]) ||
-        !mir_machine_same_location(vector, &mir.insns[47]) ||
-        !mir_machine_same_location(vector, &mir.insns[51]) ||
-        !mir_machine_same_location(vector, &mir.insns[114]) ||
-        !mir_machine_same_location(vector, &mir.insns[118]) ||
         !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_match_matrix_product_word_type(mir.insns[3].type) ||
+        !mir_match_softmax_index_address(
+            &mir.insns[4], mir.insns[2].dst, mir.insns[3].dst) ||
+        !mir_match_softmax_word_load(
+            &mir.insns[5], mir.insns[4].dst) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[7], MIR_SOFTMAX_LOCAL_WORD) ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
         !mir_machine_constant_equals(mir.insns[9].dst, 1) ||
-        !mir_machine_constant_equals(mir.insns[16].dst, 8) ||
-        !mir_machine_constant_equals(mir.insns[36].dst, 1) ||
-        !mir_machine_constant_equals(mir.insns[41].dst, 0) ||
-        !mir_machine_constant_equals(mir.insns[45].dst, 0) ||
-        !mir_machine_constant_equals(mir.insns[56].dst, 8) ||
-        !mir_machine_constant_equals(mir.insns[67].dst, 0) ||
-        !mir_machine_constant_equals(mir.insns[75].dst, 3) ||
-        !mir_machine_constant_equals(mir.insns[80].dst, 255) ||
-        !mir_machine_constant_equals(mir.insns[83].dst, 255) ||
-        !mir_machine_constant_equals(mir.insns[102].dst, 1) ||
-        !mir_machine_constant_equals(mir.insns[112].dst, 0) ||
-        !mir_machine_constant_equals(mir.insns[125].dst, 8) ||
-        !mir_machine_constant_equals(mir.insns[135].dst, 256) ||
-        !mir_machine_constant_equals(mir.insns[145].dst, 1))
+        !mir_match_matrix_product_count_type(mir.insns[9].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[10], MIR_SOFTMAX_LOCAL_COUNT) ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[12].type) ||
+        !mir_machine_same_location(vector, &mir.insns[12]))
         return mir_machine_reject(
-            "fixed-softmax-schedule", "semantics");
+            "fixed-softmax-schedule", "maximum-entry");
+
+    if (mir.insns[14].src1 != mir.insns[9].dst ||
+        mir.insns[14].src2 != mir.insns[37].dst ||
+        mir.insns[14].phi_pred1 != mir.insns[0].label ||
+        mir.insns[14].phi_pred2 != mir.insns[34].label ||
+        mir.insns[14].object != mir.insns[10].object ||
+        !mir_match_matrix_product_count_type(mir.insns[14].type) ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 8) ||
+        !mir_match_matrix_product_word_type(mir.insns[16].type) ||
+        !mir_match_softmax_unary(
+            &mir.insns[17], mir.insns[14].dst,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_binary(
+            &mir.insns[18], '<', mir.insns[17].dst,
+            mir.insns[16].dst, MIR_SOFTMAX_LOCAL_WORD,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_branch(
+            &mir.insns[19], mir.insns[18].dst, 40) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[20].type) ||
+        !mir_machine_same_location(vector, &mir.insns[20]) ||
+        !mir_match_softmax_index_address(
+            &mir.insns[22], mir.insns[20].dst, mir.insns[14].dst) ||
+        !mir_match_softmax_word_load(
+            &mir.insns[23], mir.insns[22].dst) ||
+        !mir_match_matrix_product_word_type(mir.insns[24].type) ||
+        !mir_machine_same_location(&mir.insns[7], &mir.insns[24]) ||
+        !mir_match_softmax_binary(
+            &mir.insns[25], '>', mir.insns[23].dst,
+            mir.insns[24].dst, MIR_SOFTMAX_LOCAL_WORD,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_branch(
+            &mir.insns[26], mir.insns[25].dst, 33) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[27].type) ||
+        !mir_machine_same_location(vector, &mir.insns[27]) ||
+        !mir_match_softmax_index_address(
+            &mir.insns[29], mir.insns[27].dst, mir.insns[14].dst) ||
+        !mir_match_softmax_word_load(
+            &mir.insns[30], mir.insns[29].dst) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[32], MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_machine_same_location(&mir.insns[7], &mir.insns[32]) ||
+        mir.insns[32].src1 != mir.insns[30].dst ||
+        !mir_machine_constant_equals(mir.insns[36].dst, 1) ||
+        !mir_match_matrix_product_count_type(mir.insns[36].type) ||
+        !mir_match_softmax_binary(
+            &mir.insns[37], '+', mir.insns[14].dst,
+            mir.insns[36].dst, MIR_SOFTMAX_LOCAL_COUNT,
+            MIR_SOFTMAX_LOCAL_COUNT) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[38], MIR_SOFTMAX_LOCAL_COUNT) ||
+        !mir_machine_same_location(&mir.insns[10], &mir.insns[38]) ||
+        mir.insns[38].src1 != mir.insns[37].dst)
+        return mir_machine_reject(
+            "fixed-softmax-schedule", "maximum-loop");
+
+    if (!mir_machine_constant_equals(mir.insns[41].dst, 0) ||
+        !mir_match_matrix_product_word_type(mir.insns[41].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[43], MIR_SOFTMAX_LOCAL_WORD) ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        !mir_machine_constant_equals(mir.insns[45].dst, 0) ||
+        !mir_match_matrix_product_count_type(mir.insns[45].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[46], MIR_SOFTMAX_LOCAL_COUNT) ||
+        !mir_machine_same_location(&mir.insns[10], &mir.insns[46]) ||
+        mir.insns[46].src1 != mir.insns[45].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[47].type) ||
+        !mir_machine_same_location(vector, &mir.insns[47]) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[49], MIR_SOFTMAX_LOCAL_POINTER) ||
+        mir.insns[49].src1 != mir.insns[47].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[51].type) ||
+        !mir_machine_same_location(vector, &mir.insns[51]))
+        return mir_machine_reject(
+            "fixed-softmax-schedule", "exponential-entry");
+
+    if (mir.insns[53].src1 != mir.insns[45].dst ||
+        mir.insns[53].src2 != mir.insns[103].dst ||
+        mir.insns[53].phi_pred1 != mir.insns[40].label ||
+        mir.insns[53].phi_pred2 != mir.insns[100].label ||
+        mir.insns[53].object != mir.insns[46].object ||
+        !mir_match_matrix_product_count_type(mir.insns[53].type) ||
+        mir.insns[54].src1 != mir.insns[41].dst ||
+        mir.insns[54].src2 != mir.insns[96].dst ||
+        mir.insns[54].phi_pred1 != mir.insns[40].label ||
+        mir.insns[54].phi_pred2 != mir.insns[100].label ||
+        mir.insns[54].object != mir.insns[43].object ||
+        !mir_match_matrix_product_word_type(mir.insns[54].type) ||
+        !mir_machine_constant_equals(mir.insns[56].dst, 8) ||
+        !mir_match_matrix_product_word_type(mir.insns[56].type) ||
+        !mir_match_softmax_unary(
+            &mir.insns[57], mir.insns[53].dst,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_binary(
+            &mir.insns[58], '<', mir.insns[57].dst,
+            mir.insns[56].dst, MIR_SOFTMAX_LOCAL_WORD,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_branch(
+            &mir.insns[59], mir.insns[58].dst, 110) ||
+        !mir_match_matrix_product_word_type(mir.insns[60].type) ||
+        !mir_machine_same_location(&mir.insns[7], &mir.insns[60]) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[61].type) ||
+        !mir_machine_same_location(&mir.insns[49], &mir.insns[61]) ||
+        !mir_match_softmax_word_load(
+            &mir.insns[62], mir.insns[61].dst) ||
+        !mir_match_softmax_binary(
+            &mir.insns[63], '-', mir.insns[60].dst,
+            mir.insns[62].dst, MIR_SOFTMAX_LOCAL_WORD,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[65], MIR_SOFTMAX_LOCAL_WORD) ||
+        mir.insns[65].src1 != mir.insns[63].dst ||
+        !mir_machine_constant_equals(mir.insns[67].dst, 0) ||
+        !mir_match_matrix_product_word_type(mir.insns[67].type) ||
+        !mir_match_softmax_binary(
+            &mir.insns[68], '<', mir.insns[63].dst,
+            mir.insns[67].dst, MIR_SOFTMAX_LOCAL_WORD,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_branch(
+            &mir.insns[69], mir.insns[68].dst, 73) ||
+        !mir_machine_constant_equals(mir.insns[70].dst, 0) ||
+        !mir_match_matrix_product_word_type(mir.insns[70].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[72], MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_machine_same_location(&mir.insns[65], &mir.insns[72]) ||
+        mir.insns[72].src1 != mir.insns[70].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[74].type) ||
+        !mir_machine_same_location(&mir.insns[65], &mir.insns[74]) ||
+        !mir_machine_constant_equals(mir.insns[75].dst, 3) ||
+        !mir_match_matrix_product_word_type(mir.insns[75].type) ||
+        !mir_match_softmax_binary(
+            &mir.insns[76], TOK_SHR, mir.insns[74].dst,
+            mir.insns[75].dst, MIR_SOFTMAX_LOCAL_WORD,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[78], MIR_SOFTMAX_LOCAL_WORD) ||
+        mir.insns[78].src1 != mir.insns[76].dst ||
+        !mir_machine_constant_equals(mir.insns[80].dst, 255) ||
+        !mir_match_matrix_product_word_type(mir.insns[80].type) ||
+        !mir_match_softmax_binary(
+            &mir.insns[81], '>', mir.insns[76].dst,
+            mir.insns[80].dst, MIR_SOFTMAX_LOCAL_WORD,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_branch(
+            &mir.insns[82], mir.insns[81].dst, 86) ||
+        !mir_machine_constant_equals(mir.insns[83].dst, 255) ||
+        !mir_match_matrix_product_word_type(mir.insns[83].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[85], MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_machine_same_location(&mir.insns[78], &mir.insns[85]) ||
+        mir.insns[85].src1 != mir.insns[83].dst)
+        return mir_machine_reject(
+            "fixed-softmax-schedule", "exponential-index");
+
     if (!mir_machine_global_address_offset(
             mir.insns[88].dst, &plan->table,
             &table_offset, 0) ||
-        plan->table == NULL || table_offset < -32768 ||
-        table_offset > 32767 ||
-        mir.insns[90].immediate != 2 ||
-        !mir_match_softmax_call(
-            &mir.insns[141], 1, &plan->clamp_function) ||
-        mir.insns[140].src1 != mir.insns[139].dst ||
-        mir.insns[142].src1 != mir.insns[129].dst ||
-        mir.insns[142].src2 != mir.insns[141].dst)
+        table_offset < 0 || table_offset > 32767 ||
+        plan->table == NULL || !plan->table->is_defined ||
+        plan->table->storage != SC_GLOBAL ||
+        !plan->table->is_array || plan->table->is_vla ||
+        plan->table->is_volatile ||
+        plan->table->pointee_is_volatile ||
+        !mir_match_matrix_product_word_type(plan->table->type) ||
+        plan->table->elem_size != 2 ||
+        plan->table->dim_count != 1 ||
+        plan->table->array_len < 256 ||
+        table_offset % plan->table->elem_size != 0 ||
+        table_offset >
+            (long)plan->table->array_len * plan->table->elem_size -
+                256L * plan->table->elem_size ||
+        !mir_match_matrix_product_pointer_type(mir.insns[87].type) ||
+        !mir_machine_same_location(&mir.insns[49], &mir.insns[87]) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[88].type) ||
+        !mir_match_matrix_product_word_type(mir.insns[89].type) ||
+        !mir_machine_same_location(&mir.insns[78], &mir.insns[89]) ||
+        !mir_match_softmax_index_address(
+            &mir.insns[90], mir.insns[88].dst, mir.insns[89].dst) ||
+        !mir_match_softmax_word_load(
+            &mir.insns[91], mir.insns[90].dst) ||
+        mir.insns[92].src1 != mir.insns[87].dst ||
+        mir.insns[92].src2 != mir.insns[91].dst ||
+        mir.insns[92].memory_size != type_size(vector->type) ||
+        (mir.insns[92].memory_flags & (1 | 8)) != 0 ||
+        !mir_match_matrix_product_pointer_type(mir.insns[94].type) ||
+        !mir_machine_same_location(&mir.insns[49], &mir.insns[94]) ||
+        !mir_match_softmax_word_load(
+            &mir.insns[95], mir.insns[94].dst) ||
+        !mir_match_softmax_binary(
+            &mir.insns[96], '+', mir.insns[54].dst,
+            mir.insns[95].dst, MIR_SOFTMAX_LOCAL_WORD,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[98], MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_machine_same_location(&mir.insns[43], &mir.insns[98]) ||
+        mir.insns[98].src1 != mir.insns[96].dst ||
+        !mir_machine_constant_equals(mir.insns[102].dst, 1) ||
+        !mir_match_matrix_product_count_type(mir.insns[102].type) ||
+        !mir_match_softmax_binary(
+            &mir.insns[103], '+', mir.insns[53].dst,
+            mir.insns[102].dst, MIR_SOFTMAX_LOCAL_COUNT,
+            MIR_SOFTMAX_LOCAL_COUNT) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[104], MIR_SOFTMAX_LOCAL_COUNT) ||
+        !mir_machine_same_location(&mir.insns[46], &mir.insns[104]) ||
+        mir.insns[104].src1 != mir.insns[103].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[105].type) ||
+        !mir_machine_same_location(&mir.insns[49], &mir.insns[105]) ||
+        !mir_machine_constant_equals(mir.insns[106].dst, 2) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[106].type) ||
+        !mir_match_softmax_binary(
+            &mir.insns[107], '+', mir.insns[105].dst,
+            mir.insns[106].dst, MIR_SOFTMAX_LOCAL_POINTER,
+            MIR_SOFTMAX_LOCAL_POINTER) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[108], MIR_SOFTMAX_LOCAL_POINTER) ||
+        !mir_machine_same_location(&mir.insns[49], &mir.insns[108]) ||
+        mir.insns[108].src1 != mir.insns[107].dst)
         return mir_machine_reject(
-            "fixed-softmax-schedule", "table-and-call");
+            "fixed-softmax-schedule", "table-and-sum");
     plan->table_offset = (int)table_offset;
+
+    if (!mir_machine_constant_equals(mir.insns[112].dst, 0) ||
+        !mir_match_matrix_product_count_type(mir.insns[112].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[113], MIR_SOFTMAX_LOCAL_COUNT) ||
+        !mir_machine_same_location(&mir.insns[10], &mir.insns[113]) ||
+        mir.insns[113].src1 != mir.insns[112].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[114].type) ||
+        !mir_machine_same_location(vector, &mir.insns[114]) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[116], MIR_SOFTMAX_LOCAL_POINTER) ||
+        !mir_machine_same_location(&mir.insns[49], &mir.insns[116]) ||
+        mir.insns[116].src1 != mir.insns[114].dst ||
+        mir.insns[120].src1 != mir.insns[112].dst ||
+        mir.insns[120].src2 != mir.insns[146].dst ||
+        mir.insns[120].phi_pred1 != mir.insns[110].label ||
+        mir.insns[120].phi_pred2 != mir.insns[143].label ||
+        mir.insns[120].object != mir.insns[113].object ||
+        !mir_match_matrix_product_count_type(mir.insns[120].type) ||
+        !mir_machine_constant_equals(mir.insns[125].dst, 8) ||
+        !mir_match_matrix_product_word_type(mir.insns[125].type) ||
+        !mir_match_softmax_unary(
+            &mir.insns[126], mir.insns[120].dst,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_binary(
+            &mir.insns[127], '<', mir.insns[126].dst,
+            mir.insns[125].dst, MIR_SOFTMAX_LOCAL_WORD,
+            MIR_SOFTMAX_LOCAL_WORD) ||
+        !mir_match_softmax_branch(
+            &mir.insns[128], mir.insns[127].dst, 153))
+        return mir_machine_reject(
+            "fixed-softmax-schedule", "normalization-loop");
+
+    if (!mir_match_matrix_product_pointer_type(mir.insns[129].type) ||
+        !mir_machine_same_location(&mir.insns[116], &mir.insns[129]) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[130].type) ||
+        !mir_machine_same_location(&mir.insns[116], &mir.insns[130]) ||
+        !mir_match_softmax_word_load(
+            &mir.insns[131], mir.insns[130].dst) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[132], MIR_SOFTMAX_LOCAL_WORD) ||
+        mir.insns[132].src1 != mir.insns[131].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[133].type) ||
+        !mir_machine_same_location(&mir.insns[132], &mir.insns[133]) ||
+        !mir_match_softmax_unary(
+            &mir.insns[134], mir.insns[133].dst,
+            MIR_SOFTMAX_LOCAL_LONG) ||
+        !mir_machine_constant_equals(mir.insns[135].dst, 256) ||
+        !mir_match_matrix_product_long_type(mir.insns[135].type) ||
+        !mir_match_softmax_binary(
+            &mir.insns[136], '*', mir.insns[134].dst,
+            mir.insns[135].dst, MIR_SOFTMAX_LOCAL_LONG,
+            MIR_SOFTMAX_LOCAL_LONG) ||
+        !mir_match_softmax_unary(
+            &mir.insns[138], mir.insns[54].dst,
+            MIR_SOFTMAX_LOCAL_LONG) ||
+        !mir_match_softmax_binary(
+            &mir.insns[139], '/', mir.insns[136].dst,
+            mir.insns[138].dst, MIR_SOFTMAX_LOCAL_LONG,
+            MIR_SOFTMAX_LOCAL_LONG) ||
+        !mir_match_fixed_softmax_call(
+            &mir.insns[141], &mir.insns[140],
+            &mir.insns[139], &plan->clamp_function) ||
+        !mir_match_matrix_product_long_type(
+            plan->clamp_function->proto_types[0]) ||
+        mir.insns[142].src1 != mir.insns[129].dst ||
+        mir.insns[142].src2 != mir.insns[141].dst ||
+        mir.insns[142].memory_size != type_size(vector->type) ||
+        (mir.insns[142].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "fixed-softmax-schedule", "normalization");
+
+    if (!mir_machine_constant_equals(mir.insns[145].dst, 1) ||
+        !mir_match_matrix_product_count_type(mir.insns[145].type) ||
+        !mir_match_softmax_binary(
+            &mir.insns[146], '+', mir.insns[120].dst,
+            mir.insns[145].dst, MIR_SOFTMAX_LOCAL_COUNT,
+            MIR_SOFTMAX_LOCAL_COUNT) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[147], MIR_SOFTMAX_LOCAL_COUNT) ||
+        !mir_machine_same_location(&mir.insns[113], &mir.insns[147]) ||
+        mir.insns[147].src1 != mir.insns[146].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[148].type) ||
+        !mir_machine_same_location(&mir.insns[116], &mir.insns[148]) ||
+        !mir_machine_constant_equals(mir.insns[149].dst, 2) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[149].type) ||
+        !mir_match_softmax_binary(
+            &mir.insns[150], '+', mir.insns[148].dst,
+            mir.insns[149].dst, MIR_SOFTMAX_LOCAL_POINTER,
+            MIR_SOFTMAX_LOCAL_POINTER) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[151], MIR_SOFTMAX_LOCAL_POINTER) ||
+        !mir_machine_same_location(&mir.insns[116], &mir.insns[151]) ||
+        mir.insns[151].src1 != mir.insns[150].dst)
+        return mir_machine_reject(
+            "fixed-softmax-schedule", "normalization-increment");
     plan->length = 8;
     return 1;
 }
@@ -1528,6 +2373,7 @@ static int mir_match_softmax_schedule(
             1, 2, 1, &plan->vector_stack_offset) ||
         !mir_match_matrix_product_parameter(
             2, 4, 0, &plan->length_stack_offset) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[3].type) ||
         !mir_machine_same_location(
             &mir.insns[1], &mir.insns[3]) ||
         !mir_attention_call_arguments(
@@ -1540,8 +2386,8 @@ static int mir_match_softmax_schedule(
             &dummy_offset) ||
         dummy_storage != SC_LOCAL || dummy_offset >= 0 ||
         !mir_match_matrix_product_word_type(dummy_type) ||
-        type_ptr_depth(mir.insns[7].type) != 1 ||
-        type_size(mir.insns[7].type) != 2 ||
+        !mir_match_matrix_product_pointer_type(mir.insns[7].type) ||
+        mir.insns[10].src1 >= 0 ||
         !mir_match_softmax_call(
             &mir.insns[10], 3, &plan->maximum_function) ||
         !mir_match_matrix_product_pointer_type(
@@ -1550,10 +2396,25 @@ static int mir_match_softmax_schedule(
             plan->maximum_function->proto_types[1]) ||
         !mir_match_matrix_product_pointer_type(
             plan->maximum_function->proto_types[2]) ||
-        !mir_machine_unobservable_local_store(&mir.insns[12]) ||
+        !mir_match_softmax_argument(
+            &mir.insns[10], &mir.insns[4], 0,
+            mir.insns[3].dst,
+            plan->maximum_function->proto_types[0]) ||
+        !mir_match_softmax_argument(
+            &mir.insns[10], &mir.insns[6], 1,
+            mir.insns[2].dst,
+            plan->maximum_function->proto_types[1]) ||
+        !mir_match_softmax_argument(
+            &mir.insns[10], &mir.insns[9], 2,
+            mir.insns[7].dst,
+            plan->maximum_function->proto_types[2]) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[12], MIR_SOFTMAX_LOCAL_WORD) ||
         mir.insns[12].src1 != mir.insns[10].dst ||
         !mir_machine_constant_equals(mir.insns[13].dst, 0) ||
-        !mir_machine_unobservable_local_store(&mir.insns[15]) ||
+        !mir_match_matrix_product_word_type(mir.insns[13].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[15], MIR_SOFTMAX_LOCAL_WORD) ||
         mir.insns[15].src1 != mir.insns[13].dst ||
         mir_machine_same_location(
             &mir.insns[7], &mir.insns[12]) ||
@@ -1565,11 +2426,15 @@ static int mir_match_softmax_schedule(
             "softmax-schedule", "entry");
 
     if (!mir_machine_constant_equals(mir.insns[17].dst, 0) ||
-        !mir_machine_unobservable_local_store(&mir.insns[18]) ||
+        !mir_match_matrix_product_count_type(mir.insns[17].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[18], MIR_SOFTMAX_LOCAL_COUNT) ||
         mir.insns[18].src1 != mir.insns[17].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[19].type) ||
         !mir_machine_same_location(
             &mir.insns[1], &mir.insns[19]) ||
-        !mir_machine_unobservable_local_store(&mir.insns[21]) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[21], MIR_SOFTMAX_LOCAL_POINTER) ||
         mir.insns[21].src1 != mir.insns[19].dst ||
         sum_phi->src1 != mir.insns[13].dst ||
         sum_phi->src2 != mir.insns[71].dst ||
@@ -1594,6 +2459,7 @@ static int mir_match_softmax_schedule(
         mir.insns[33].immediate != '<' ||
         mir.insns[33].src1 != mir.insns[31].dst ||
         mir.insns[33].src2 != mir.insns[32].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[33].type) ||
         !mir_match_matrix_product_word_type(
             mir.insns[33].secondary_offset) ||
         mir.insns[34].src1 != mir.insns[33].dst ||
@@ -1603,6 +2469,7 @@ static int mir_match_softmax_schedule(
 
     if (!mir_machine_same_location(
             &mir.insns[21], &mir.insns[36]) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[36].type) ||
         mir.insns[37].src1 != mir.insns[36].dst ||
         mir.insns[37].memory_size != 2 ||
         (mir.insns[37].memory_flags & (1 | 8)) != 0 ||
@@ -1611,34 +2478,56 @@ static int mir_match_softmax_schedule(
         mir.insns[38].src1 != mir.insns[10].dst ||
         mir.insns[38].src2 != mir.insns[37].dst ||
         !mir_match_matrix_product_word_type(mir.insns[38].type) ||
-        !mir_machine_unobservable_local_store(&mir.insns[40]) ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[38].secondary_offset) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[40], MIR_SOFTMAX_LOCAL_WORD) ||
         mir.insns[40].src1 != mir.insns[38].dst ||
         !mir_machine_constant_equals(mir.insns[42].dst, 0) ||
+        !mir_match_matrix_product_word_type(mir.insns[42].type) ||
         mir.insns[43].immediate != '<' ||
         mir.insns[43].src1 != mir.insns[38].dst ||
         mir.insns[43].src2 != mir.insns[42].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[43].type) ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[43].secondary_offset) ||
         mir.insns[44].src1 != mir.insns[43].dst ||
         mir.insns[44].label != mir.insns[48].label ||
         !mir_machine_constant_equals(mir.insns[45].dst, 0) ||
+        !mir_match_matrix_product_word_type(mir.insns[45].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[47], MIR_SOFTMAX_LOCAL_WORD) ||
         !mir_machine_same_location(
             &mir.insns[40], &mir.insns[47]) ||
         mir.insns[47].src1 != mir.insns[45].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[49].type) ||
         !mir_machine_same_location(
             &mir.insns[40], &mir.insns[49]) ||
         !mir_machine_constant_equals(mir.insns[50].dst, 3) ||
+        !mir_match_matrix_product_word_type(mir.insns[50].type) ||
         mir.insns[51].immediate != TOK_SHR ||
         mir.insns[51].src1 != mir.insns[49].dst ||
         mir.insns[51].src2 != mir.insns[50].dst ||
         !mir_match_matrix_product_word_type(mir.insns[51].type) ||
-        !mir_machine_unobservable_local_store(&mir.insns[53]) ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[51].secondary_offset) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[53], MIR_SOFTMAX_LOCAL_WORD) ||
         mir.insns[53].src1 != mir.insns[51].dst ||
         !mir_machine_constant_equals(mir.insns[55].dst, 255) ||
+        !mir_match_matrix_product_word_type(mir.insns[55].type) ||
         mir.insns[56].immediate != '>' ||
         mir.insns[56].src1 != mir.insns[51].dst ||
         mir.insns[56].src2 != mir.insns[55].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[56].type) ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[56].secondary_offset) ||
         mir.insns[57].src1 != mir.insns[56].dst ||
         mir.insns[57].label != mir.insns[61].label ||
         !mir_machine_constant_equals(mir.insns[58].dst, 255) ||
+        !mir_match_matrix_product_word_type(mir.insns[58].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[60], MIR_SOFTMAX_LOCAL_WORD) ||
         !mir_machine_same_location(
             &mir.insns[53], &mir.insns[60]) ||
         mir.insns[60].src1 != mir.insns[58].dst)
@@ -1647,35 +2536,56 @@ static int mir_match_softmax_schedule(
 
     if (!mir_machine_same_location(
             &mir.insns[21], &mir.insns[62]) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[62].type) ||
         !mir_machine_global_address_offset(
             mir.insns[63].dst, &plan->table,
             &table_offset, 0) ||
-        table_offset < -32768 || table_offset > 32767 ||
-        plan->table == NULL || plan->table->storage == SC_FUNC ||
+        table_offset < 0 || table_offset > 32767 ||
+        plan->table == NULL || !plan->table->is_defined ||
+        plan->table->storage != SC_GLOBAL ||
+        !plan->table->is_array || plan->table->is_vla ||
         plan->table->is_volatile ||
+        plan->table->pointee_is_volatile ||
+        !mir_match_matrix_product_word_type(plan->table->type) ||
+        plan->table->elem_size != 2 ||
+        plan->table->dim_count != 1 ||
+        plan->table->array_len < 256 ||
+        table_offset % plan->table->elem_size != 0 ||
+        table_offset >
+            (long)plan->table->array_len * plan->table->elem_size -
+                256L * plan->table->elem_size ||
+        !mir_match_matrix_product_pointer_type(mir.insns[63].type) ||
+        !mir_match_matrix_product_word_type(mir.insns[64].type) ||
         !mir_machine_same_location(
             &mir.insns[53], &mir.insns[64]) ||
         mir.insns[65].src1 != mir.insns[63].dst ||
         mir.insns[65].src2 != mir.insns[64].dst ||
-        mir.insns[65].immediate != 2 ||
-        mir.insns[65].memory_size != 2 ||
+        mir.insns[65].immediate != plan->table->elem_size ||
+        mir.insns[65].memory_size != plan->table->elem_size ||
+        !mir_match_matrix_product_pointer_type(mir.insns[65].type) ||
         mir.insns[66].src1 != mir.insns[65].dst ||
-        mir.insns[66].memory_size != 2 ||
+        mir.insns[66].memory_size != plan->table->elem_size ||
         (mir.insns[66].memory_flags & (1 | 8)) != 0 ||
         !mir_match_matrix_product_word_type(mir.insns[66].type) ||
         mir.insns[67].src1 != mir.insns[62].dst ||
         mir.insns[67].src2 != mir.insns[66].dst ||
-        mir.insns[67].memory_size != 2 ||
+        mir.insns[67].memory_size != type_size(mir.insns[1].type) ||
         (mir.insns[67].memory_flags & (1 | 8)) != 0 ||
+        !mir_match_matrix_product_pointer_type(mir.insns[69].type) ||
         !mir_machine_same_location(
             &mir.insns[21], &mir.insns[69]) ||
         mir.insns[70].src1 != mir.insns[69].dst ||
         mir.insns[70].memory_size != 2 ||
         (mir.insns[70].memory_flags & (1 | 8)) != 0 ||
+        !mir_match_matrix_product_word_type(mir.insns[70].type) ||
         mir.insns[71].immediate != '+' ||
         mir.insns[71].src1 != sum_phi->dst ||
         mir.insns[71].src2 != mir.insns[70].dst ||
         !mir_match_matrix_product_word_type(mir.insns[71].type) ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[71].secondary_offset) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[73], MIR_SOFTMAX_LOCAL_WORD) ||
         !mir_machine_same_location(
             &mir.insns[15], &mir.insns[73]) ||
         mir.insns[73].src1 != mir.insns[71].dst)
@@ -1684,20 +2594,31 @@ static int mir_match_softmax_schedule(
     plan->table_offset = (int)table_offset;
 
     if (!mir_machine_constant_equals(mir.insns[77].dst, 1) ||
+        !mir_match_matrix_product_count_type(mir.insns[77].type) ||
         mir.insns[78].immediate != '+' ||
         mir.insns[78].src1 != first_index_phi->dst ||
         mir.insns[78].src2 != mir.insns[77].dst ||
         !mir_match_matrix_product_count_type(mir.insns[78].type) ||
+        !mir_match_matrix_product_count_type(
+            mir.insns[78].secondary_offset) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[79], MIR_SOFTMAX_LOCAL_COUNT) ||
         !mir_machine_same_location(
             &mir.insns[18], &mir.insns[79]) ||
         mir.insns[79].src1 != mir.insns[78].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[80].type) ||
         !mir_machine_same_location(
             &mir.insns[21], &mir.insns[80]) ||
         !mir_machine_constant_equals(mir.insns[81].dst, 2) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[81].type) ||
         mir.insns[82].immediate != '+' ||
         mir.insns[82].src1 != mir.insns[80].dst ||
         mir.insns[82].src2 != mir.insns[81].dst ||
         !mir_match_matrix_product_pointer_type(mir.insns[82].type) ||
+        !mir_match_matrix_product_pointer_type(
+            mir.insns[82].secondary_offset) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[83], MIR_SOFTMAX_LOCAL_POINTER) ||
         !mir_machine_same_location(
             &mir.insns[21], &mir.insns[83]) ||
         mir.insns[83].src1 != mir.insns[82].dst ||
@@ -1706,11 +2627,17 @@ static int mir_match_softmax_schedule(
             "softmax-schedule", "first-increment");
 
     if (!mir_machine_constant_equals(mir.insns[87].dst, 0) ||
+        !mir_match_matrix_product_count_type(mir.insns[87].type) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[88], MIR_SOFTMAX_LOCAL_COUNT) ||
         !mir_machine_same_location(
             &mir.insns[18], &mir.insns[88]) ||
         mir.insns[88].src1 != mir.insns[87].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[89].type) ||
         !mir_machine_same_location(
             &mir.insns[1], &mir.insns[89]) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[91], MIR_SOFTMAX_LOCAL_POINTER) ||
         !mir_machine_same_location(
             &mir.insns[21], &mir.insns[91]) ||
         mir.insns[91].src1 != mir.insns[89].dst ||
@@ -1729,6 +2656,9 @@ static int mir_match_softmax_schedule(
         mir.insns[105].immediate != '<' ||
         mir.insns[105].src1 != mir.insns[103].dst ||
         mir.insns[105].src2 != mir.insns[104].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[105].type) ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[105].secondary_offset) ||
         mir.insns[106].src1 != mir.insns[105].dst ||
         mir.insns[106].label != mir.insns[131].label)
         return mir_machine_reject(
@@ -1736,16 +2666,20 @@ static int mir_match_softmax_schedule(
 
     if (!mir_machine_same_location(
             &mir.insns[21], &mir.insns[107]) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[107].type) ||
         !mir_machine_same_location(
             &mir.insns[21], &mir.insns[108]) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[108].type) ||
         mir.insns[109].src1 != mir.insns[108].dst ||
         mir.insns[109].memory_size != 2 ||
         (mir.insns[109].memory_flags & (1 | 8)) != 0 ||
         !mir_match_matrix_product_word_type(mir.insns[109].type) ||
-        !mir_machine_unobservable_local_store(&mir.insns[110]) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[110], MIR_SOFTMAX_LOCAL_WORD) ||
         mir.insns[110].src1 != mir.insns[109].dst ||
         !mir_machine_same_location(
             &mir.insns[110], &mir.insns[111]) ||
+        !mir_match_matrix_product_word_type(mir.insns[111].type) ||
         mir.insns[112].immediate != 0 ||
         mir.insns[112].src1 != mir.insns[111].dst ||
         !mir_match_matrix_product_long_type(mir.insns[112].type) ||
@@ -1755,6 +2689,8 @@ static int mir_match_softmax_schedule(
         mir.insns[114].src1 != mir.insns[112].dst ||
         mir.insns[114].src2 != mir.insns[113].dst ||
         !mir_match_matrix_product_long_type(mir.insns[114].type) ||
+        !mir_match_matrix_product_long_type(
+            mir.insns[114].secondary_offset) ||
         mir.insns[116].immediate != 0 ||
         mir.insns[116].src1 != sum_phi->dst ||
         !mir_match_matrix_product_long_type(mir.insns[116].type) ||
@@ -1762,35 +2698,53 @@ static int mir_match_softmax_schedule(
         mir.insns[117].src1 != mir.insns[114].dst ||
         mir.insns[117].src2 != mir.insns[116].dst ||
         !mir_match_matrix_product_long_type(mir.insns[117].type) ||
+        !mir_match_matrix_product_long_type(
+            mir.insns[117].secondary_offset) ||
         !mir_attention_call_arguments(
             &mir.insns[119], 1, &clamp_argument) ||
         clamp_argument != mir.insns[117].dst ||
+        mir.insns[119].src1 >= 0 ||
         !mir_match_softmax_call(
             &mir.insns[119], 1, &plan->clamp_function) ||
         !mir_match_matrix_product_long_type(
             plan->clamp_function->proto_types[0]) ||
+        !mir_match_softmax_argument(
+            &mir.insns[119], &mir.insns[118], 0,
+            mir.insns[117].dst,
+            plan->clamp_function->proto_types[0]) ||
         mir.insns[120].src1 != mir.insns[107].dst ||
         mir.insns[120].src2 != mir.insns[119].dst ||
-        mir.insns[120].memory_size != 2 ||
+        mir.insns[120].memory_size != type_size(mir.insns[1].type) ||
         (mir.insns[120].memory_flags & (1 | 8)) != 0)
         return mir_machine_reject(
             "softmax-schedule", "normalization");
 
     if (!mir_machine_constant_equals(mir.insns[123].dst, 1) ||
+        !mir_match_matrix_product_count_type(mir.insns[123].type) ||
         mir.insns[124].immediate != '+' ||
         mir.insns[124].src1 != second_index_phi->dst ||
         mir.insns[124].src2 != mir.insns[123].dst ||
         !mir_match_matrix_product_count_type(mir.insns[124].type) ||
+        !mir_match_matrix_product_count_type(
+            mir.insns[124].secondary_offset) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[125], MIR_SOFTMAX_LOCAL_COUNT) ||
         !mir_machine_same_location(
             &mir.insns[18], &mir.insns[125]) ||
         mir.insns[125].src1 != mir.insns[124].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[126].type) ||
         !mir_machine_same_location(
             &mir.insns[21], &mir.insns[126]) ||
         !mir_machine_constant_equals(mir.insns[127].dst, 2) ||
+        !mir_match_matrix_product_pointer_type(mir.insns[127].type) ||
         mir.insns[128].immediate != '+' ||
         mir.insns[128].src1 != mir.insns[126].dst ||
         mir.insns[128].src2 != mir.insns[127].dst ||
         !mir_match_matrix_product_pointer_type(mir.insns[128].type) ||
+        !mir_match_matrix_product_pointer_type(
+            mir.insns[128].secondary_offset) ||
+        !mir_match_softmax_local_store(
+            &mir.insns[129], MIR_SOFTMAX_LOCAL_POINTER) ||
         !mir_machine_same_location(
             &mir.insns[21], &mir.insns[129]) ||
         mir.insns[129].src1 != mir.insns[128].dst ||
@@ -3307,6 +4261,10 @@ int mir_try_emit_attention_kernels(MirStream *out)
             &matrix_product_schedule)) {
         mir_emit_matrix_product_schedule(
             out, &matrix_product_schedule);
+        if (matrix_product_schedule.kind == MIR_MATRIX_PRODUCT_ADD)
+            mir_machine_accept("matrix-product-add-schedule");
+        else if (matrix_product_schedule.kind == MIR_MATRIX_PRODUCT_STORE)
+            mir_machine_accept("matrix-product-store-schedule");
         return 1;
     }
     if (mir_match_vector_maximum_schedule(
@@ -3319,10 +4277,12 @@ int mir_try_emit_attention_kernels(MirStream *out)
             &fixed_softmax_schedule)) {
         mir_emit_fixed_softmax_schedule(
             out, &fixed_softmax_schedule);
+        mir_machine_accept("fixed-softmax-schedule");
         return 1;
     }
     if (mir_match_softmax_schedule(&softmax_schedule)) {
         mir_emit_softmax_schedule(out, &softmax_schedule);
+        mir_machine_accept("softmax-schedule");
         return 1;
     }
     if (mir_match_backward_pass_schedule(

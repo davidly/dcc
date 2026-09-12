@@ -1,0 +1,13 @@
+<source>:15: error DCC-E1002: unsupported expression statement near 'slots'
+        slots[0] *= 2;
+        ^
+<source>:16: error DCC-E1002: unsupported expression statement near 'slots'
+        slots[0] += data;
+        ^
+<source>:17: error DCC-E1002: unsupported expression statement near 'holder'
+        holder.slots[0] &= 1;
+        ^
+<source>:18: error DCC-E1002: unsupported expression statement near '*'
+        *cursor <<= 1;
+        ^
+dcc: 4 error(s)

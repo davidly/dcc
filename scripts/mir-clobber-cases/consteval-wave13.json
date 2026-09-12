@@ -1,0 +1,192 @@
+[
+  {
+    "Name": "ce13exact",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": [
+      "consteval13 int=44 uint=29 long=-7883 ulong=36",
+      "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_integer_ops",
+    "RequireExact": true
+  },
+  {
+    "Name": "ce13ovf",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": [
+      "consteval13 int=44 uint=29 long=-7883 ulong=36",
+      "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_signed_overflow",
+    "RequireExact": true
+  },
+  {
+    "Name": "ce13sub",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": [
+      "consteval13 int=44 uint=29 long=-7883 ulong=36",
+      "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_signed_sub_overflow",
+    "RequireExact": true
+  },
+  {
+    "Name": "ce13mul",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": [
+      "consteval13 int=44 uint=29 long=-7883 ulong=36",
+      "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_signed_mul_overflow",
+    "RequireExact": true
+  },
+  {
+    "Name": "ce13lovf",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": [
+      "consteval13 int=44 uint=29 long=-7883 ulong=36",
+      "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_long_overflow",
+    "RequireExact": true
+  },
+  {
+    "Name": "ce13lsub",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": [
+      "consteval13 int=44 uint=29 long=-7883 ulong=36",
+      "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_long_sub_overflow",
+    "RequireExact": true
+  },
+  {
+    "Name": "ce13lmul",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": [
+      "consteval13 int=44 uint=29 long=-7883 ulong=36",
+      "consteval13 wrap=-32768,32767,-25536 longwrap=1,-2,3"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_long_mul_overflow",
+    "RequireExact": true
+  },
+  {
+    "Name": "ce13zero",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": ["consteval13 int=44 uint=29 long=-7883 ulong=36"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_divide_zero",
+    "RequireRejected": true
+  },
+  {
+    "Name": "ce13mind",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": ["consteval13 int=44 uint=29 long=-7883 ulong=36"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_divide_minimum",
+    "RequireRejected": true
+  },
+  {
+    "Name": "ce13call",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": ["consteval13 int=44 uint=29 long=-7883 ulong=36"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_call",
+    "RequireRejected": true
+  },
+  {
+    "Name": "ce13parm",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": ["consteval13 int=44 uint=29 long=-7883 ulong=36"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_parameter",
+    "RequireRejected": true
+  },
+  {
+    "Name": "ce13ret",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": ["consteval13 int=44 uint=29 long=-7883 ulong=36"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_wide_return",
+    "RequireRejected": true
+  },
+  {
+    "Name": "ce13bound",
+    "Group": "consteval-wave13",
+    "Sources": ["tests/mir-clobber/ceval13.c"],
+    "Defines": [],
+    "Expected": ["consteval13 int=44 uint=29 long=-7883 ulong=36"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [false],
+    "ExactTemplate": "constant-function-evaluator",
+    "ExactFunction": "ce_bounded",
+    "RequireRejected": true
+  }
+]
