@@ -343,6 +343,18 @@ passes both stack modes with no performance regression, and all 26 existing
 leaves the exact inventory at 9,686 and makes no raw coverage claim. Commit
 `ee97b296` contains the proof.
 
+Wave 38 proves the corresponding wide exception through the production
+regional homed candidate. A late `long` PHI physically crossing a direct void
+call receives BC:IY, and the call is surrounded by ordered IY/BC saves and
+BC/IY restores. A clean-build mutant that disables the unique general-call
+BC:IY preservation computation is killed by that exact assertion. Normal and
+ASan/UBSan host suites pass 5/5, the complete compiler suite has one passing
+baseline and 22/22 killed mutants, strict `tmirlife` passes both stack modes
+with no performance regression, and all 26 existing `phi-alias-wave32`
+target configurations pass. This test-only semantic proof leaves the exact
+inventory at 9,686 and makes no raw coverage claim. Commit `e65393ab` contains
+the proof.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
