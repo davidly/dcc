@@ -1879,11 +1879,18 @@ static void verify_member_metadata_and_address(void)
     mir.insns[5].secondary_offset = TYPE_INT;
     mir.insns[6].src1 = 4;
     if (!mir_verify_and_dump() ||
+        mir_definition(3) != &mir.insns[4] ||
         mir_value_number_global_field_loads() != 1 ||
         mir_global_field_value_numbering_count() != 1 ||
         mir.insns[4].opcode != MIR_NOP ||
-        mir.insns[5].src1 != 2 || mir.insns[5].src2 != 2 ||
-        !mir_verify_and_dump()) {
+        mir.insns[5].src1 != 2 || mir.insns[5].src2 != 2) {
+        fprintf(stderr, "FAIL isolated global field value numbering\n");
+        ++failures;
+    } else if (mir_definition(3) != NULL) {
+        fprintf(stderr,
+                "FAIL global field value-numbering cache invalidation\n");
+        ++failures;
+    } else if (!mir_verify_and_dump()) {
         fprintf(stderr, "FAIL isolated global field value numbering\n");
         ++failures;
     }

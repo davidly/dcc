@@ -146,6 +146,11 @@ int main(int argc, char **argv) {
     if (!strcmp(MODE, "mixed") && !strcmp(MUTATION, "dominance")) {
         puts("MIR verifier failures=0"); return 0;
     }
+    if (!strcmp(MUTATION, "global-field-vn-cache")) {
+        puts("; MIR CACHE MISMATCH mir_definition function=probe value=3 cached=4 uncached=-1");
+        puts("dcc: fatal: MIR use-cache mismatch");
+        return 1;
+    }
     if (!strcmp(MODE, "mixed") && !strcmp(MUTATION, "call-arity"))
         puts("FAIL unrelated assertion");
     else puts(DIAGNOSTIC);
@@ -283,6 +288,7 @@ int main(int argc, char **argv) {
             "callback-identity": "invalid", "phi-edge-liveness": "invalid",
             "call-argument-liveness": "killed", "phi-consumer-value": "invalid",
             "promotion-cache": "killed",
+            "global-field-vn-cache": "killed",
             "deferred-call-transaction": "killed",
             "debug-conversion-gate": "killed",
             "phi-call-prototype": "killed",
@@ -304,6 +310,8 @@ int main(int argc, char **argv) {
 $hostMutation = @(Get-MirCompilerMutations)[1]
 $cacheMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "promotion-cache"
+$fieldCacheMutation = Get-MirCompilerMutations |
+    Where-Object Name -eq "global-field-vn-cache"
 $matcherMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "allocation-first-result"
 $hostLog = "FAIL branch value cannot escape join`nMIR verifier failures=1`n"
@@ -321,6 +329,8 @@ foreach ($case in @(
     @($cacheMutation, $cacheLog, 1, $true, "invalid"),
     @($cacheMutation, $cacheLog.Replace("mir_definition", "other"), 1, $false, "invalid"),
     @($cacheMutation, "", 0, $false, "survived"),
+    @($fieldCacheMutation, $cacheLog, 1, $false, "killed"),
+    @($fieldCacheMutation, "FAIL global field value-numbering cache invalidation`nMIR verifier failures=1`n", 1, $false, "invalid"),
     @($matcherMutation, $matcherLog, 1, $false, "killed"),
     @($matcherMutation, $matcherLog, 134, $false, "invalid"),
     @($matcherMutation, $matcherLog.Replace("first result", "other"), 1, $false, "invalid"),

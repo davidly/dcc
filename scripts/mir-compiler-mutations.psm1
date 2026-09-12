@@ -14,6 +14,7 @@ function Get-MirCompilerMutations {
         @{ Name = "call-argument-liveness"; Before = 'insn_is_call && mir_call_uses_value(insn, value)'; After = '0 && insn_is_call && mir_call_uses_value(insn, value)'; ExpectedFailure = 'FAIL argument must remain live through its matching call' },
         @{ Name = "phi-consumer-value"; Before = 'phi_value = phi->dst;'; After = 'phi_value = -1;'; ExpectedFailure = 'FAIL immediate PHI consumer forwarding' },
         @{ Name = "promotion-cache"; CompileProbe = $true },
+        @{ Name = "global-field-vn-cache"; Before = "    mir_global_field_vn_count = replaced;`n    mir_invalidate_use_cache();"; After = "    mir_global_field_vn_count = replaced;`n    (void)replaced;"; CacheVerifier = $true; ExpectedFailure = 'FAIL global field value-numbering cache invalidation' },
         @{ Name = "deferred-call-transaction"; Before = 'matching_calls != 1 ||'; After = '0 && matching_calls != 1 ||'; ExpectedFailure = 'FAIL repeated-ID deferred direct-call transaction' },
         @{ Name = "debug-conversion-gate"; Before = 'if (opt_debug && comparison &&'; After = 'if (1 && comparison &&'; ExpectedFailure = 'FAIL release deferred binary conversion gating' },
         @{ Name = "phi-call-prototype"; Before = 'if (source->opcode == MIR_PHI) {'; After = 'if (0 && source->opcode == MIR_PHI) {'; ExpectedFailure = 'FAIL PHI callback rejects excess argument' },
@@ -83,7 +84,7 @@ function Complete-MirMutationProcess($Command, [double]$TimeoutSeconds = 60) {
 
 function Get-MirMutationOutcome($Execution, $Mutation) {
     if ($Execution.TimedOut) { return "invalid" }
-    if ($Mutation.CompileProbe) {
+    if ($Mutation.CompileProbe -or $Mutation.CacheVerifier) {
         $mismatch = $Execution.Output -cmatch (
             '(?m)^; MIR CACHE MISMATCH mir_definition function=\S+ value=-?\d+ ' +
             'cached=-?\d+ uncached=-?\d+\r?$')
@@ -271,9 +272,7 @@ function Invoke-MirMutationWorker(
                 DCC_MIR_CACHE_VERIFY = "1"
             } -ParentScope $processScope) 60
         $result.exitCode = $execution.ExitCode
-        $result.outcome = Get-MirMutationOutcome $execution @{
-            ExpectedFailure = $mutation.ExpectedFailure
-        }
+        $result.outcome = Get-MirMutationOutcome $execution $mutation
         if ($Name -eq "baseline") {
             $result.outcome = if ($result.outcome -eq "survived") { "passed" } else { "invalid" }
         }
