@@ -165,8 +165,8 @@ try {
     $keys = @(Get-Content $inventory -Raw | ConvertFrom-Json)
     $digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
         [Text.Encoding]::UTF8.GetBytes(($keys -join "`n") + "`n"))).ToLowerInvariant()
-    Assert-True ($keys.Count -eq 5068 -and
-        $digest -eq "6425f5af3d04397ab3bcfa3d27065719d225b89a4c5aaefba8690d083ced766b") `
+    Assert-True ($keys.Count -eq 5076 -and
+        $digest -eq "cda5a814995e48f1ebff6f259975b5c41520afada1f521f0f2d1fe036cb68077") `
         "Frozen built-in leaf inventory changed"
     $legacyPlan = & {
         . $runner -Cases ptrcond -ListExecutions $inventory

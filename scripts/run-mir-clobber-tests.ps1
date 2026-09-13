@@ -473,7 +473,9 @@ function Assert-ForcedRegionalSafe(
     [string]$Function,
     [string]$Expected,
     [bool]$StackCheck,
-    [bool]$Peep
+    [bool]$Peep,
+    [string[]]$Defines = @(),
+    [switch]$RequireReject
 ) {
     $configuration = @(
         if ($StackCheck) { "stack" } else { "nostack" }
@@ -497,6 +499,9 @@ function Assert-ForcedRegionalSafe(
         "dcc-stack-check=$([string]$StackCheck)",
         "dcc-stack-bytes=512"
     )
+    foreach ($define in $Defines) {
+        $arguments += "dcc-define=$define"
+    }
 
     Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $Function
     Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "regional"
@@ -510,6 +515,25 @@ function Assert-ForcedRegionalSafe(
     }
     if ($build.TimedOut) {
         throw "$Name forced regional build timed out ($configuration)"
+    }
+    if ($RequireReject) {
+        if ($build.ExitCode -eq 0) {
+            throw "$Name forced regional unexpectedly accepted " +
+                "($configuration)"
+        }
+        if (-not $build.Output.Contains(
+                "MIR regional candidate is not validated for function $Function") -or
+            -not $build.Output.Contains(
+                "DCC_MIR_SELECT_CANDIDATE rejected unsafe regional stream")) {
+            throw "$Name forced regional failed without the exact function " +
+                "rejection ($configuration):`n$($build.Output)"
+        }
+        if (-not $executedConfigurations.Add(
+                "$Name-forced|$configuration")) {
+            throw "duplicate MIR forced-regional execution: " +
+                "$Name-forced|$configuration"
+        }
+        return
     }
     if ($build.ExitCode -ne 0) {
         if ($build.Output -notmatch '(?i)regional.*(invalid|reject|safe|valid)') {
@@ -2749,6 +2773,20 @@ try {
                 $savedEnvironment["DCC_MIR_SELECT_FUNCTION"]
             Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" `
                 $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
+        }
+        foreach ($stackCheck in @($true, $false)) {
+            foreach ($peep in @($true, $false)) {
+                Assert-RunCase -Name "pairedbytes-branch" `
+                    -Sources @(Join-Path $fixtureRoot "pairbyte.c") `
+                    -Defines @("MIR_CLOBBER_PAIRED_BRANCH=1") `
+                    -Expected @("paired bytes passed") -ExpectedExit 0 `
+                    -StackCheck $stackCheck -Peep $peep `
+                    -RequiredGenericFunction "read_pair"
+                Assert-ForcedRegionalSafe "pairedbytes-branch-reject" `
+                    (Join-Path $fixtureRoot "pairbyte.c") "read_pair" `
+                    "paired bytes passed" $stackCheck $peep `
+                    -Defines @("MIR_CLOBBER_PAIRED_BRANCH=1") -RequireReject
+            }
         }
     }
     if ($Cases.Count -eq 0 -or

@@ -21,6 +21,10 @@ static int read_pair(const struct BytePair *value)
     int bias = bias_seed;
     int result = combine(value->low, value->high);
 
+#ifdef MIR_CLOBBER_PAIRED_BRANCH
+    if (value->low == 0xff)
+        return 0;
+#endif
     return result + bias;
 }
 

@@ -380,6 +380,15 @@ executes the adjacent and field-gap forms in all stack/no-stack and peep/nopeep
 modes, including forced regional fallback. This proof changes no production
 code and makes no additive raw coverage claim.
 
+Wave 41 adds a CFG near match to the same paired-byte source. The harmless
+branch preserves target output but changes the MIR fingerprint. Normal
+selection must use a named generic emitter and pass on target; explicitly
+forcing `regional` must fail with both the intended `read_pair` validation
+diagnostic and the unsafe-stream fatal. All five paired-byte controls pass in
+stack/no-stack and peep/nopeep modes, for 20 executions. The frozen built-in
+clobber inventory is 5,076 leaves. Production selection is unchanged, and the
+latest exact coverage snapshot predates this test-only increment.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

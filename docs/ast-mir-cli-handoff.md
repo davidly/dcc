@@ -107,9 +107,11 @@ selected AST/MIR result remains 4,617/4,617 functions (100.00%),
 51,301 branch outcomes still unreviewed. These generated artifacts are local
 evidence, not tracked files or a claim that broader correctness work is done.
 The subsequent paired-byte increment adds four forced-regional field-gap
-controls. All 12 paired-byte stack/no-stack and peep/nopeep configurations and
+controls. A second CFG near match executes through a named generic emitter and
+requires an exact `read_pair` rejection when `regional` is forced. All 20
+paired-byte stack/no-stack and peep/nopeep configurations and
 the 134-test script suite pass; the frozen built-in clobber inventory is now
-5,068 leaves. A dedicated compile probe also requires the adjacent control to
+5,076 leaves. A dedicated compile probe also requires the adjacent control to
 emit the paired-byte marker and the field-gap form to omit it. A clean-build
 mutant that disables only the nonadjacent-offset guard is killed by that exact
 assertion; the complete mutation campaign now has one passing baseline and
@@ -640,6 +642,13 @@ locally verified execution inventory.
   this proves both the guard's necessity and correct forced-regional fallback.
   Production code is unchanged, and this increment makes no additive raw
   coverage claim.
+- Wave 41 adds a harmless CFG branch near match to the paired-byte fixture.
+  Normal selection must name and execute a generic emitter; forcing `regional`
+  must fail with both the intended `read_pair` validation message and the
+  unsafe-stream fatal. All five controls pass in stack/no-stack and peep/nopeep
+  modes, for 20 executions. The frozen built-in inventory is 5,076 leaves.
+  Production code is unchanged, and the latest exact coverage snapshot
+  predates this test-only increment.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
