@@ -108,7 +108,7 @@ speed:
     which needs no separate pass at all.
 
 .PARAMETER ReportFile
-    CSV path for -Report output (default: "perf_results.csv").
+    CSV path for -Report output (default: "build/perf_results.csv").
 
 .PARAMETER ReportClockHz
     Nominal clock speed (Hz) used to compute the "ms" figure recorded in
@@ -263,7 +263,7 @@ param(
     [switch]$Serial,
     [int]$ThrottleLimit = [Environment]::ProcessorCount,
     [switch]$Report,
-    [string]$ReportFile = "perf_results.csv",
+    [string]$ReportFile = "build/perf_results.csv",
     [long]$ReportClockHz = 400000000,
     [switch]$NoPerfCheck,
     [switch]$UpdatePerfBaseline,

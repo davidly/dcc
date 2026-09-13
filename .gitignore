@@ -28,6 +28,7 @@
 /dcc-debug-io-adapter-example.dll
 /build
 /scratch/
+/perf_results.csv
 /test_dcc.txt
 /test_dccu.txt
 

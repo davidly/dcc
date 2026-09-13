@@ -464,7 +464,7 @@ With no options, the suite runs in parallel, enables `-fstack-check`, and uses
 ./scripts/runall.ps1 -FailuresOnly:$false  # include PASS lines
 ./scripts/runall.ps1 -Extended             # also run extended c-testsuite
 ./scripts/runall.ps1 -KeepBuild            # keep the per-run build folder
-./scripts/runall.ps1 -Report               # also append perf_results.csv
+./scripts/runall.ps1 -Report               # also append build/perf_results.csv
 ./scripts/runall.ps1 -Mode full -UpdatePerfBaseline
 ```
 
@@ -503,7 +503,7 @@ The `-Mode` parameter selects which optimization pass(es) to build and verify.
 | `-FailFast` | (off) | Stop dispatching new apps after the first correctness or performance failure |
 | `-FailuresOnly` | on | Suppress PASS lines; pass `-FailuresOnly:$false` for full output |
 | `-Report` | (off) | Append cycle, normalized-time, and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
-| `-ReportFile` | `perf_results.csv` | CSV path used by `-Report` |
+| `-ReportFile` | `build/perf_results.csv` | CSV path used by `-Report` |
 | `-ReportClockHz` | `400000000` | Nominal clock used to derive report milliseconds from Z80 cycles; does not throttle execution |
 | `-NoPerfCheck` | (off) | Skip the default cycle-count and `.COM` size regression check |
 | `-UpdatePerfBaseline` | (off) | Update checked performance columns for the modes built by this run |
@@ -772,8 +772,8 @@ the derived millisecond fields empty while retaining cycles and sizes.
 ./scripts/runall.ps1 -Report -ReportClockHz 0
 ```
 
-Results are written to `perf_results.csv` by default. **Results append to the
-file**, so each report run adds a new row per app:
+Results are written to `build/perf_results.csv` by default. **Results append
+to the file**, so each report run adds a new row per app:
 
 ```csv
 machine,os,utc-timestamp,app,peep_ms,peep_cycles,peep_size,nopeep_ms,nopeep_cycles,nopeep_size,clock_hz

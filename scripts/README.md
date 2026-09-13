@@ -478,7 +478,7 @@ build mode. Use `-Mode full` when you want both fast and nopeep builds.
 | `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
 | `-KeepBuild` | (off) | Keep the per-invocation `build/run-<pid>/` folder instead of removing it on exit (parallel mode) |
 | `-Report` | (off) | Append per-app execution time and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
-| `-ReportFile` | `perf_results.csv` | CSV path used by `-Report` |
+| `-ReportFile` | `build/perf_results.csv` | CSV path used by `-Report` |
 | `-ReportClockHz` | `400000000` | ntvcm clock speed used for measured report runs; set to `0` for full-speed report runs |
 
 ### Build modes
@@ -505,7 +505,7 @@ pwsh ./scripts/runall.ps1 -Mode fast            # optimized build only
 pwsh ./scripts/runall.ps1 -Mode nopeep          # unoptimized build only
 pwsh ./scripts/runall.ps1 -Extended             # also run extended c-testsuite
 pwsh ./scripts/runall.ps1 -KeepBuild            # keep build/run-<pid>/ for debugging
-pwsh ./scripts/runall.ps1 -Report               # append perf_results.csv
+pwsh ./scripts/runall.ps1 -Report               # append build/perf_results.csv
 pwsh ./scripts/runall.ps1 -ReportClockHz 0 -Report  # full-speed report run
 ```
 
