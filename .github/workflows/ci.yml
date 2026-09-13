@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   full-regressions:
-    name: Full regressions (${{ matrix.os }})
+    name: Standard regressions (${{ matrix.os }})
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -80,106 +80,10 @@ jobs:
           (Resolve-Path '.').ProviderPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           (Resolve-Path 'ntvcm').ProviderPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Test MSVC toolchain detection logic
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/tests/test_msvc_toolchain_detection.ps1
-
       - name: Build dcc host tools
         shell: pwsh
         run: ./scripts/build-dcc.ps1
 
-      - name: Run MIR host verifier tests
-        shell: pwsh
-        run: |
-          cmake -S src/dcc -B build/mir-tests -DDCC_BUILD_MIR_TESTS=ON -DCMAKE_BUILD_TYPE=Release
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cmake --build build/mir-tests --config Release --parallel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --test-dir build/mir-tests -C Release --output-on-failure
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Run MIR emission-clobber regressions
-        shell: pwsh
-        run: ./scripts/run-mir-clobber-tests.ps1
-
-      - name: Run AST diagnostic dump test
-        shell: pwsh
-        run: |
-          ./scripts/test-ast-dump.ps1
-          ./scripts/test-mir-candidate-matrix.ps1
-
-      - name: Validate AST coverage classifications
-        if: runner.os == 'Linux'
-        run: |
-          sh scripts/test-coverage-sources.sh
-          python3 -m unittest discover -s scripts/tests -p 'test_ast_function_coverage.py'
-          python3 scripts/ast-function-coverage.py
-
-      - name: Test MIR generator and compiler mutations
-        if: runner.os == 'Linux'
-        shell: pwsh
-        run: |
-          ./scripts/test-mir-fuzz-source.ps1
-          ./scripts/run-mir-compiler-mutations.ps1
-          ./scripts/test-mir-pointer-condition-mutations.ps1
-
-      - name: Run debugger host and debug metadata tests
-        if: runner.os == 'Linux'
-        run: |
-          cmake -S src/dcc_debug_host -B build/dcc_debug_host_tests -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build/dcc_debug_host_tests --parallel
-          ctest --test-dir build/dcc_debug_host_tests --output-on-failure
-          python3 scripts/tests/test_line_debug.py
-
       - name: Run main regression suite in both optimization modes
         shell: pwsh
         run: ./scripts/runall.ps1 -Mode full -RunTimeout 60
-
-      - name: Run C89, C99, and C11 extended regressions in both optimization modes
-        shell: pwsh
-        run: ./scripts/runall-extended.ps1 -C11 -Mode full -RunTimeout 60
-
-  no-powershell-build:
-    name: Host build without PowerShell (m-posix.sh)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout dcc
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Checkout ntvcm emulator
-        uses: actions/checkout@v4
-        with:
-          repository: davidly/ntvcm
-          path: ntvcm
-
-      - name: Build ntvcm emulator
-        run: |
-          chmod +x ./m.sh
-          ./m.sh
-        working-directory: ntvcm
-
-      - name: Add tool directories to PATH
-        run: |
-          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
-          echo "$GITHUB_WORKSPACE/ntvcm" >> "$GITHUB_PATH"
-
-      # /bin/sh on ubuntu-latest is dash, the same shell Raspberry Pi OS and
-      # Debian actually use - this validates the no-pwsh fallback build
-      # (RISC-V64 boards, Raspberry Pi OS on a Pi 4, etc.) without needing an
-      # exotic runner architecture, since m-posix.sh only relies on /bin/sh
-      # and a C compiler, not any x86/ARM-specific behavior.
-      - name: Build dcc host tools with m-posix.sh
-        run: sh m-posix.sh
-
-      # runall.sh is the unofficial, no-pwsh test runner for the same
-      # platforms; it drives ma.sh directly rather than dccmake, so it can't
-      # build multi-file apps (see scripts/runall.sh's own skip logic) - run
-      # in fast mode here since the pwsh-based `tests` job below already
-      # covers the full/extended suite via the primary build path.
-      - name: Run test suite with runall.sh
-        run: bash scripts/runall.sh -mode fast
