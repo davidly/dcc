@@ -1,0 +1,2106 @@
+<!DOCTYPE html><html lang="en" class="no-js"><head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="MkDocs documentation for DCC C Compiler, its runtime, and dccrtlstrip size analysis.">
+      
+      
+        <meta name="author" content="David Lee">
+      
+      
+      
+        <link rel="prev" href="..">
+      
+      
+        <link rel="next" href="../00-vscode-debugging/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>The toolchain - DCC C Compiler Reference</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <link href="../assets/stylesheets/glightbox.min.css" rel="stylesheet"><script src="../assets/javascripts/glightbox.min.js"></script><style id="glightbox-style">
+            html.glightbox-open { overflow: initial; height: 100%; }
+            .gslide-title { margin-top: 0px; user-select: text; }
+            .gslide-desc { color: #666; user-select: text; }
+            .gslide-image img { background: white; }
+            .gscrollbar-fixer { padding-right: 15px; }
+            .gdesc-inner { font-size: 0.75rem; }
+            body[data-md-color-scheme="slate"] .gdesc-inner { background: var(--md-default-bg-color); }
+            body[data-md-color-scheme="slate"] .gslide-title { color: var(--md-default-fg-color); }
+            body[data-md-color-scheme="slate"] .gslide-desc { color: var(--md-default-fg-color); }
+        </style></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#the-toolchain" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="DCC C Compiler Reference" class="md-header__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DCC C Compiler Reference
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              The toolchain
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink" aria-label="Switch to dark mode" type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 2c-1.82 0-3.53.5-5 1.35C8 5.08 10 8.3 10 12s-2 6.92-5 8.65C6.47 21.5 8.18 22 10 22a10 10 0 0 0 10-10A10 10 0 0 0 10 2"></path></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="cyan" aria-label="Switch to light mode" type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"></path></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required="">
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix="">
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="DCC C Compiler Reference" class="md-nav__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    DCC C Compiler Reference
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix="">
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The toolchain
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The toolchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#install-prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clone-the-repositories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clone the repositories
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-dcc-c-compiler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build DCC C Compiler
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-ntvcm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build ntvcm
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#set-up-your-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set up your environment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verify-the-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify the setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-vscode-debugging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code debugging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-debug-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugger host and I/O adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-agent-skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agentic skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-c-conformance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C conformance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../02-build-and-link/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building and linking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-types-and-conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Types and conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../04-operators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operators
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10">
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Library reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/01-assert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    assert.h: Diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/07-ctype/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ctype.h: Character handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/02-errno/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    errno.h: Error reporting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/03-float/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    float.h: Floating-point limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/04-limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    limits.h: Integer limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/17-locale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    locale.h: Localization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/08-math/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    math.h: Floating point math
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/09-setjmp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    setjmp.h: Non-local jumps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/16-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    signal.h: Signal handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/10-stdarg/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdarg.h: Variadic arguments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/11-stdbool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdbool.h: Boolean type
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/12-stddef/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stddef.h: Common definitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/13-stdint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdint.h: Fixed-width integers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/05-stdio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdio.h: Console and file I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/06-stdlib/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdlib.h: Memory and utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/14-string/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    string.h: String handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/15-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    time.h: Date and time
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../10-system-and-cpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System and CP/M services
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../11-limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../12-examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worked examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13">
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/00-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compiler architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/01-dccrtlstrip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/02-runtime-sizes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime function sizes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/03-utilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/05-building-project-docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building project docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#install-prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Install prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clone-the-repositories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clone the repositories
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-dcc-c-compiler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build DCC C Compiler
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-ntvcm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build ntvcm
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#set-up-your-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Set up your environment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verify-the-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify the setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="the-toolchain">The toolchain<a class="headerlink" href="#the-toolchain" title="Permanent link">¶</a></h1>
+<p>To build CP/M apps, you need the native DCC tools (<code>dcc</code>, <code>dccmake</code>,
+<code>dccpeep</code>, <code>dccrtlstrip</code>, <code>m80c</code>, and <code>l80c</code>), the bundled headers, and
+<code>DCCRTL.MAC</code>. Normal builds run entirely on the host. Use
+<a href="../appendix/03-utilities/#toolchain-commands"><code>ntvcm</code></a> to run the resulting
+programs, or transfer them to another CP/M emulator or real hardware.
+The original <code>m80.com</code> and <code>l80.com</code> are needed only for the optional emulated
+assembler/linker path. Source debugging uses the separate
+<a href="../00-debug-host/"><code>dcc-debug-host</code></a>.</p>
+<p>You build these tools once. After that, use them from any CP/M app project.</p>
+<p>Setup flow:</p>
+<ul>
+<li>Install the host prerequisites for Windows, macOS, or Linux.</li>
+<li>Clone the DCC C Compiler (<code>dcc</code>) and <code>ntvcm</code> repositories.</li>
+<li>Build the DCC C Compiler host tools with <code>pwsh ./scripts/build-dcc.ps1</code>
+  (or <code>sh m-posix.sh</code> on Linux platforms without a PowerShell package, e.g.
+  RISC-V64 boards or Raspberry Pi OS).</li>
+<li>Build the ntvcm emulator.</li>
+<li>Add the DCC C Compiler and ntvcm directories to your <code>PATH</code>.</li>
+<li>Verify the setup with a sample CP/M program.</li>
+</ul>
+<h2 id="install-prerequisites">Install prerequisites<a class="headerlink" href="#install-prerequisites" title="Permanent link">¶</a></h2>
+<p>Install the native compiler tools for your host platform before cloning and
+building DCC C Compiler or ntvcm.</p>
+<p>The full PowerShell build also requires CMake and a C++17 compiler for
+<code>dcc-debug-host</code> and its example adapter. Install CMake with
+<code>winget install Kitware.CMake</code> on Windows, <code>brew install cmake</code> on macOS, or
+<code>sudo apt install cmake</code> on Ubuntu. Verify it with <code>cmake --version</code>.</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:6"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio"><input id="__tabbed_1_2" name="__tabbed_1" type="radio"><input id="__tabbed_1_3" name="__tabbed_1" type="radio"><input id="__tabbed_1_4" name="__tabbed_1" type="radio"><input id="__tabbed_1_5" name="__tabbed_1" type="radio"><input id="__tabbed_1_6" name="__tabbed_1" type="radio"><div class="tabbed-labels"><label for="__tabbed_1_1">Windows</label><label for="__tabbed_1_2">macOS</label><label for="__tabbed_1_3">Ubuntu</label><label for="__tabbed_1_4">Ubuntu ARM64</label><label for="__tabbed_1_5">Linux without PowerShell (RISC-V64, etc.)</label><label for="__tabbed_1_6">Windows ARM64</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Install Visual Studio Build Tools with the C++ workload. Install with
+     <code>winget</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="p">-</span><span class="n">-id</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">VisualStudio</span><span class="p">.</span><span class="n">BuildTools</span> <span class="n">-e</span> <span class="p">-</span><span class="n">-override</span> <span class="s2">"--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --quiet --wait --norestart"</span>
+</code></pre></div>
+<p>You can also use the Visual Studio Installer and select <strong>Desktop
+development with C++</strong>. The Windows build uses the Microsoft C/C++
+compiler tools from that installation.</p>
+</li>
+<li>
+<p>Install PowerShell 7 (<code>pwsh</code>) from the
+   <a href="https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows">Microsoft PowerShell install guide</a>,
+   then verify it is available:</p>
+<div class="highlight"><pre><span></span><code><span class="n">pwsh</span> <span class="p">-</span><span class="n">-version</span>
+</code></pre></div>
+</li>
+</ol>
+</div>
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Install the Xcode Command Line Tools:</p>
+<div class="highlight"><pre><span></span><code>xcode-select<span class="w"> </span>--install
+</code></pre></div>
+<p>This provides the clang and C++ compiler tools used by the macOS build
+scripts.</p>
+</li>
+<li>
+<p>Install PowerShell 7 (<code>pwsh</code>) with Homebrew or the
+   <a href="https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-macos">Microsoft PowerShell install guide</a>,
+   then verify it is available:</p>
+<div class="highlight"><pre><span></span><code>brew<span class="w"> </span>install<span class="w"> </span>--cask<span class="w"> </span>powershell
+pwsh<span class="w"> </span>--version
+</code></pre></div>
+</li>
+</ol>
+</div>
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Install gcc, g++, make, and the usual build tools:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>build-essential
+</code></pre></div>
+</li>
+<li>
+<p>Install PowerShell 7 (<code>pwsh</code>) using the package instructions for your
+   Ubuntu release in the
+   <a href="https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux">Microsoft PowerShell install guide</a>,
+   then verify it is available:</p>
+<div class="highlight"><pre><span></span><code>pwsh<span class="w"> </span>--version
+</code></pre></div>
+</li>
+</ol>
+</div>
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Install gcc, g++, make, and the usual build tools:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>build-essential
+</code></pre></div>
+</li>
+<li>
+<p>Install an ARM64 build of PowerShell 7 (<code>pwsh</code>). If the package flow for
+   your Ubuntu release is available, use the
+   <a href="https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux">Microsoft PowerShell install guide</a>.
+   If not, use the official <code>linux-arm64</code> tarball from the PowerShell
+   release page. To find the latest available version, check the
+   <a href="https://github.com/PowerShell/PowerShell/releases">PowerShell releases page</a>
+   or query the GitHub release metadata:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://api.github.com/repos/PowerShell/PowerShell/releases/latest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="p">|</span><span class="w"> </span>sed<span class="w"> </span>-n<span class="w"> </span><span class="s1">'s/.*"tag_name": "v\([^"]*\)".*/\1/p'</span>
+</code></pre></div>
+<p>For a user-local install, set <code>version</code> to that release:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">version</span><span class="o">=</span><span class="m">7</span>.6.3
+<span class="nv">install_dir</span><span class="o">=</span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/share/powershell/</span><span class="nv">$version</span><span class="s2">"</span>
+<span class="nv">archive</span><span class="o">=</span><span class="s2">"/tmp/powershell-</span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="s2">-linux-arm64.tar.gz"</span>
+
+mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$install_dir</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/bin"</span>
+curl<span class="w"> </span>-fL<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="s2">"https://github.com/PowerShell/PowerShell/releases/download/v</span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="s2">/powershell-</span><span class="si">${</span><span class="nv">version</span><span class="si">}</span><span class="s2">-linux-arm64.tar.gz"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-o<span class="w"> </span><span class="s2">"</span><span class="nv">$archive</span><span class="s2">"</span>
+tar<span class="w"> </span>-xzf<span class="w"> </span><span class="s2">"</span><span class="nv">$archive</span><span class="s2">"</span><span class="w"> </span>-C<span class="w"> </span><span class="s2">"</span><span class="nv">$install_dir</span><span class="s2">"</span>
+chmod<span class="w"> </span>+x<span class="w"> </span><span class="s2">"</span><span class="nv">$install_dir</span><span class="s2">/pwsh"</span>
+ln<span class="w"> </span>-sfn<span class="w"> </span><span class="s2">"</span><span class="nv">$install_dir</span><span class="s2">/pwsh"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/bin/pwsh"</span>
+</code></pre></div>
+<p>Make sure <code>~/.local/bin</code> is on your <code>PATH</code>, then verify both the
+version and architecture:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/bin:</span><span class="nv">$PATH</span><span class="s2">"</span>
+pwsh<span class="w"> </span>--version
+file<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>readlink<span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/.local/bin/pwsh"</span><span class="k">)</span><span class="s2">"</span>
+</code></pre></div>
+<p>The <code>file</code> output should report <code>ARM aarch64</code>.</p>
+</li>
+</ol>
+</div>
+<div class="tabbed-block">
+<p>Some platforms this project targets - RISC-V64 boards, for example - have
+no PowerShell package and no official release tarball at all, unlike
+ARM64 above. On any such Linux platform, skip installing PowerShell
+entirely:</p>
+<ol>
+<li>
+<p>Install gcc, g++, make, and the usual build tools:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>build-essential
+</code></pre></div>
+</li>
+<li>
+<p>Use <code>m-posix.sh</code> in place of <code>pwsh ./scripts/build-dcc.ps1</code> throughout
+   this guide - see <a href="#build-dcc-c-compiler">Build DCC C Compiler</a> below.
+   It needs nothing beyond <code>/bin/sh</code> (tested under <code>dash</code>, what Raspberry
+   Pi OS/Debian actually use) and a C compiler, and builds the same
+   <code>dcc</code>, <code>dccpeep</code>, <code>dccrtlstrip</code>, <code>dccmake</code>, <code>m80c</code>, and <code>l80c</code> tools.</p>
+</li>
+</ol>
+</div>
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Install Visual Studio Build Tools with the C++ workload and native ARM64
+   compiler tools. Install with <code>winget</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">winget</span> <span class="n">install</span> <span class="p">-</span><span class="n">-id</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">VisualStudio</span><span class="p">.</span><span class="n">BuildTools</span> <span class="n">-e</span> <span class="p">-</span><span class="n">-override</span> <span class="s2">"--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --includeRecommended --quiet --wait --norestart"</span>
+</code></pre></div>
+<p>You can also use the Visual Studio Installer and select <strong>Desktop
+development with C++</strong>, then add the <strong>MSVC ARM64/ARM64EC build tools</strong>
+component. The DCC C Compiler Windows build scripts use the native ARM64 MSVC
+environment (<code>vcvarsarm64.bat</code>) when they run on Windows ARM64.</p>
+</li>
+<li>
+<p>Verify that the ARM64 MSVC tools were installed:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">$vswhere</span> <span class="p">=</span> <span class="s2">"${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"</span>
+<span class="nv">$installPath</span> <span class="p">=</span> <span class="p">&amp;</span> <span class="nv">$vswhere</span> <span class="n">-latest</span> <span class="n">-products</span> <span class="p">*</span> <span class="n">-requires</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">VisualStudio</span><span class="p">.</span><span class="n">Component</span><span class="p">.</span><span class="n">VC</span><span class="p">.</span><span class="n">Tools</span><span class="p">.</span><span class="n">ARM64</span> <span class="n">-property</span> <span class="n">installationPath</span>
+<span class="nb">Test-Path</span> <span class="s2">"$installPath\VC\Auxiliary\Build\vcvarsarm64.bat"</span>
+</code></pre></div>
+<p>The final command should print <code>True</code>.</p>
+</li>
+<li>
+<p>Install PowerShell 7 (<code>pwsh</code>) from the
+   <a href="https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows">Microsoft PowerShell install guide</a>,
+   then verify it is available:</p>
+<div class="highlight"><pre><span></span><code><span class="n">pwsh</span> <span class="p">-</span><span class="n">-version</span>
+</code></pre></div>
+</li>
+</ol>
+</div>
+</div>
+</div>
+<h2 id="clone-the-repositories">Clone the repositories<a class="headerlink" href="#clone-the-repositories" title="Permanent link">¶</a></h2>
+<pre><code># Clone DCC C Compiler
+git clone https://github.com/davidly/dcc.git
+
+# Clone the ntvcm z80 emulator
+git clone https://github.com/davidly/ntvcm.git
+</code></pre>
+<h2 id="build-dcc-c-compiler">Build DCC C Compiler<a class="headerlink" href="#build-dcc-c-compiler" title="Permanent link">¶</a></h2>
+<p>The cross-platform PowerShell build script is in the <code>scripts</code> directory. It
+builds <code>dcc</code>, <code>dccpeep</code>, <code>dccrtlstrip</code>, <code>dccmake</code>, <code>m80c</code>, <code>l80c</code>,
+<code>dcc-debug-host</code>, and its example I/O adapter, using MSVC on Windows, clang on
+macOS, and gcc on Linux by default. Run it from the cloned <code>dcc</code> directory:</p>
+<pre><code>cd dcc
+pwsh ./scripts/build-dcc.ps1
+</code></pre>
+<p>On Linux platforms without a PowerShell package - RISC-V64 boards, Raspberry
+Pi OS on a Pi 4, and similar - use <code>m-posix.sh</code> at the repository root
+instead. It needs only <code>/bin/sh</code> and a C compiler, and builds the same
+<code>dcc</code>, <code>dccpeep</code>, <code>dccrtlstrip</code>, <code>dccmake</code>, <code>m80c</code>, and <code>l80c</code> tools (plus,
+best-effort, <code>dcc-debug-host</code> if <code>cmake</code> and a C++ compiler are available):</p>
+<pre><code>sh m-posix.sh
+</code></pre>
+<h2 id="build-ntvcm">Build ntvcm<a class="headerlink" href="#build-ntvcm" title="Permanent link">¶</a></h2>
+<p>ntvcm is a C++ project. Build it from its own directory. The commands below
+start from the parent directory containing both checkouts; from <code>dcc</code>, first
+return to that parent with <code>cd ..</code>.</p>
+<p>Use the <code>mr.bat</code> / <code>mrmac.sh</code> / <code>mr.sh</code> scripts below, not <code>m.bat</code> / <code>mmac.sh</code>
+/ <code>m.sh</code>. The <code>r</code> versions build release configurations of the emulator with
+asserts compiled out, so the resulting <code>ntvcm</code> runs faster.</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="2:5"><input checked="checked" id="__tabbed_2_1" name="__tabbed_2" type="radio"><input id="__tabbed_2_2" name="__tabbed_2" type="radio"><input id="__tabbed_2_3" name="__tabbed_2" type="radio"><input id="__tabbed_2_4" name="__tabbed_2" type="radio"><input id="__tabbed_2_5" name="__tabbed_2" type="radio"><div class="tabbed-labels"><label for="__tabbed_2_1">Windows</label><label for="__tabbed_2_2">macOS</label><label for="__tabbed_2_3">Ubuntu</label><label for="__tabbed_2_4">Ubuntu ARM64</label><label for="__tabbed_2_5">Windows ARM64</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<p>Open a Developer PowerShell or Developer Command Prompt so the Microsoft
+C/C++ compiler (<code>cl</code>) is on your <code>PATH</code>, then run the Windows release build
+script:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd </span><span class="n">ntvcm</span>
+<span class="p">.\</span><span class="n">mr</span><span class="p">.</span><span class="n">bat</span>
+</code></pre></div>
+<p>Produces <code>ntvcm.exe</code>.</p>
+</div>
+<div class="tabbed-block">
+<p>Open a terminal where the Xcode Command Line Tools are available, then run
+the macOS release build script:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>ntvcm
+chmod<span class="w"> </span>+x<span class="w"> </span>mrmac.sh
+./mrmac.sh
+</code></pre></div>
+<p>Produces the <code>ntvcm</code> executable.</p>
+</div>
+<div class="tabbed-block">
+<p>Open a terminal where <code>g++</code> is available, then run the Linux release build
+script:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>ntvcm
+chmod<span class="w"> </span>+x<span class="w"> </span>mr.sh
+./mr.sh
+</code></pre></div>
+<p>Produces the <code>ntvcm</code> executable.</p>
+</div>
+<div class="tabbed-block">
+<p>Open a terminal where <code>g++</code> is available, then run the Linux release build
+script:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>ntvcm
+chmod<span class="w"> </span>+x<span class="w"> </span>mr.sh
+./mr.sh
+</code></pre></div>
+<p>Produces the <code>ntvcm</code> executable.</p>
+</div>
+<div class="tabbed-block">
+<p>Open a Developer PowerShell or Developer Command Prompt for ARM64 so the
+Microsoft C/C++ compiler (<code>cl</code>) is on your <code>PATH</code>, then run the Windows
+release build script:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">cd </span><span class="n">ntvcm</span>
+<span class="p">.\</span><span class="n">mr</span><span class="p">.</span><span class="n">bat</span>
+</code></pre></div>
+<p>Produces <code>ntvcm.exe</code>.</p>
+</div>
+</div>
+</div>
+<h2 id="set-up-your-environment">Set up your environment<a class="headerlink" href="#set-up-your-environment" title="Permanent link">¶</a></h2>
+<p>Use <code>dccmake</code> to build application projects with the source-built tools.
+Optional build and test helpers live in the <code>scripts</code> directory:</p>
+<ul>
+<li><code>scripts/ma.sh</code> — source-checkout implementation for Linux/macOS without PowerShell</li>
+<li><code>scripts/ma.ps1</code> — source-checkout implementation for Windows PowerShell 5.1 or PowerShell 7+</li>
+<li><code>scripts/runall.ps1</code> — builds and verifies the test suite</li>
+</ul>
+<p>Run the single-app shell helper directly on Linux/macOS, or run the PowerShell
+scripts from your operating-system terminal or the VS Code terminal by changing
+to the DCC C Compiler checkout, starting <code>pwsh</code>, and running <code>./scripts/ma.ps1</code> or
+<code>./scripts/runall.ps1</code>.</p>
+<p>They resolve each tool the same way: they use an environment variable if you set
+one, otherwise they look for the tool on your <code>PATH</code>. The relevant tools are:</p>
+<ul>
+<li><a href="../appendix/03-utilities/#toolchain-commands"><code>dcc</code></a> — compiler</li>
+<li><a href="../appendix/03-utilities/#build-pipeline-helper-dccmake"><code>dccmake</code></a> — build pipeline helper</li>
+<li><a href="../appendix/03-utilities/#toolchain-commands"><code>dccpeep</code></a> — peephole optimizer</li>
+<li><a href="../appendix/03-utilities/#toolchain-commands"><code>dccrtlstrip</code></a> — application/runtime stripper</li>
+<li><a href="../appendix/03-utilities/#toolchain-commands"><code>ntvcm</code></a> — CP/M emulator</li>
+<li><a href="../appendix/03-utilities/#native-assembler-m80c"><code>m80c</code></a> / <a href="../appendix/03-utilities/#native-linker-l80c"><code>l80c</code></a> — native assembler and linker</li>
+</ul>
+<p>Recommended setup, especially when building apps in a project <em>outside</em> the DCC C Compiler
+repo, is to add the directories containing the built <code>dcc</code> and <code>ntvcm</code>
+binaries to your <code>PATH</code>. The DCC C Compiler directory also provides <code>dccpeep</code>,
+<code>dccmake</code>, <code>dccrtlstrip</code>, <code>m80c</code>, <code>l80c</code>, the standard headers, and
+<code>DCCRTL.MAC</code>. For a <code>dccmake</code> build outside that directory, configure
+<code>dcc-runtime</code> and <code>dcc-include-directory</code> as shown in
+<a href="../02-build-and-link/#build-with-dccmake">Building and linking</a>; putting a
+directory on <code>PATH</code> alone does not configure header lookup.</p>
+<div class="tabbed-set tabbed-alternate" data-tabs="3:5"><input checked="checked" id="__tabbed_3_1" name="__tabbed_3" type="radio"><input id="__tabbed_3_2" name="__tabbed_3" type="radio"><input id="__tabbed_3_3" name="__tabbed_3" type="radio"><input id="__tabbed_3_4" name="__tabbed_3" type="radio"><input id="__tabbed_3_5" name="__tabbed_3" type="radio"><div class="tabbed-labels"><label for="__tabbed_3_1">Windows</label><label for="__tabbed_3_2">macOS</label><label for="__tabbed_3_3">Ubuntu</label><label for="__tabbed_3_4">Ubuntu ARM64</label><label for="__tabbed_3_5">Windows ARM64</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Add the DCC C Compiler and ntvcm directories to <code>PATH</code> for the current PowerShell
+   session:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">$env:PATH</span> <span class="p">+=</span> <span class="s2">";C:\path\to\dcc;C:\path\to\ntvcm"</span>
+</code></pre></div>
+</li>
+<li>
+<p>To make that permanent for your Windows user account, update the user
+   <code>PATH</code> and then open a new terminal:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">$userPath</span> <span class="p">=</span> <span class="no">[Environment]</span><span class="p">::</span><span class="n">GetEnvironmentVariable</span><span class="p">(</span><span class="s2">"Path"</span><span class="p">,</span> <span class="s2">"User"</span><span class="p">)</span>
+<span class="no">[Environment]</span><span class="p">::</span><span class="n">SetEnvironmentVariable</span><span class="p">(</span><span class="s2">"Path"</span><span class="p">,</span> <span class="s2">"$userPath;C:\path\to\dcc;C:\path\to\ntvcm"</span><span class="p">,</span> <span class="s2">"User"</span><span class="p">)</span>
+</code></pre></div>
+</li>
+<li>
+<p>Replace <code>C:\path\to\dcc</code> and <code>C:\path\to\ntvcm</code> with the actual
+   directories. With this on your <code>PATH</code>, the scripts find <code>dcc</code>,
+   <code>dccpeep</code>, <code>dccrtlstrip</code>, and <code>ntvcm</code> automatically.</p>
+</li>
+</ol>
+<p>To pin specific binaries instead (for example, when juggling multiple
+DCC C Compiler builds), set the environment variables to explicit paths and only
+   put ntvcm on <code>PATH</code>:</p>
+<pre><code>```powershell
+$env:PATH += ";C:\path\to\ntvcm"
+$env:DCC = "C:\path\to\dcc\dcc.exe"
+$env:DCCPEEP = "C:\path\to\dcc\dccpeep.exe"
+$env:DCCRTLSTRIP = "C:\path\to\dcc\dccrtlstrip.exe"
+```
+</code></pre>
+</div>
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Add the DCC C Compiler and ntvcm directories to <code>PATH</code> for the current shell
+   session:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$PATH</span><span class="s2">:/path/to/dcc:/path/to/ntvcm"</span>
+</code></pre></div>
+</li>
+<li>
+<p>To make that permanent for the default zsh shell, append the same setting
+   to <code>~/.zshrc</code>, then open a new terminal or reload the file:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">printf</span><span class="w"> </span><span class="s1">'\nexport PATH="$PATH:/path/to/dcc:/path/to/ntvcm"\n'</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.zshrc
+<span class="nb">source</span><span class="w"> </span>~/.zshrc
+</code></pre></div>
+</li>
+<li>
+<p>Replace <code>/path/to/dcc</code> and <code>/path/to/ntvcm</code> with the actual directories
+   (e.g. <code>~/GitHub/dcc</code> and <code>~/GitHub/ntvcm</code>). With this on your <code>PATH</code>,
+   the scripts find <code>dcc</code>, <code>dccpeep</code>, <code>dccrtlstrip</code>, and <code>ntvcm</code>
+   automatically.</p>
+</li>
+</ol>
+<p>To pin specific binaries instead (for example, when juggling multiple
+DCC C Compiler builds), set the environment variables to explicit paths and only
+   put ntvcm on <code>PATH</code>:</p>
+<pre><code>```bash
+export PATH="$PATH:/path/to/ntvcm"
+export DCC=/path/to/dcc/dcc
+export DCCPEEP=/path/to/dcc/dccpeep
+export DCCRTLSTRIP=/path/to/dcc/dccrtlstrip
+```
+</code></pre>
+</div>
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Add the DCC C Compiler and ntvcm directories to <code>PATH</code> for the current shell
+   session:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$PATH</span><span class="s2">:/path/to/dcc:/path/to/ntvcm"</span>
+</code></pre></div>
+</li>
+<li>
+<p>To make that permanent for bash, append the same setting to <code>~/.bashrc</code>,
+   then open a new terminal or reload the file:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">printf</span><span class="w"> </span><span class="s1">'\nexport PATH="$PATH:/path/to/dcc:/path/to/ntvcm"\n'</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.bashrc
+<span class="nb">source</span><span class="w"> </span>~/.bashrc
+</code></pre></div>
+</li>
+<li>
+<p>Replace <code>/path/to/dcc</code> and <code>/path/to/ntvcm</code> with the actual directories
+   (e.g. <code>~/GitHub/dcc</code> and <code>~/GitHub/ntvcm</code>). With this on your <code>PATH</code>,
+   the scripts find <code>dcc</code>, <code>dccpeep</code>, <code>dccrtlstrip</code>, and <code>ntvcm</code>
+   automatically.</p>
+</li>
+</ol>
+<p>To pin specific binaries instead (for example, when juggling multiple
+DCC C Compiler builds), set the environment variables to explicit paths and only
+   put ntvcm on <code>PATH</code>:</p>
+<pre><code>```bash
+export PATH="$PATH:/path/to/ntvcm"
+export DCC=/path/to/dcc/dcc
+export DCCPEEP=/path/to/dcc/dccpeep
+export DCCRTLSTRIP=/path/to/dcc/dccrtlstrip
+```
+</code></pre>
+</div>
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Add the DCC C Compiler and ntvcm directories to <code>PATH</code> for the current shell
+   session:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$PATH</span><span class="s2">:/path/to/dcc:/path/to/ntvcm"</span>
+</code></pre></div>
+</li>
+<li>
+<p>To make that permanent for bash, append the same setting to <code>~/.bashrc</code>,
+   then open a new terminal or reload the file:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">printf</span><span class="w"> </span><span class="s1">'\nexport PATH="$PATH:/path/to/dcc:/path/to/ntvcm"\n'</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>~/.bashrc
+<span class="nb">source</span><span class="w"> </span>~/.bashrc
+</code></pre></div>
+</li>
+<li>
+<p>Replace <code>/path/to/dcc</code> and <code>/path/to/ntvcm</code> with the actual directories
+   (e.g. <code>~/GitHub/dcc</code> and <code>~/GitHub/ntvcm</code>). With this on your <code>PATH</code>,
+   the scripts find <code>dcc</code>, <code>dccpeep</code>, <code>dccrtlstrip</code>, and <code>ntvcm</code>
+   automatically.</p>
+</li>
+</ol>
+<p>To pin specific binaries instead (for example, when juggling multiple
+DCC C Compiler builds), set the environment variables to explicit paths and only
+   put ntvcm on <code>PATH</code>:</p>
+<pre><code>```bash
+export PATH="$PATH:/path/to/ntvcm"
+export DCC=/path/to/dcc/dcc
+export DCCPEEP=/path/to/dcc/dccpeep
+export DCCRTLSTRIP=/path/to/dcc/dccrtlstrip
+```
+</code></pre>
+</div>
+<div class="tabbed-block">
+<ol>
+<li>
+<p>Add the DCC C Compiler and ntvcm directories to <code>PATH</code> for the current PowerShell
+   session:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">$env:PATH</span> <span class="p">+=</span> <span class="s2">";C:\path\to\dcc;C:\path\to\ntvcm"</span>
+</code></pre></div>
+</li>
+<li>
+<p>To make that permanent for your Windows user account, update the user
+   <code>PATH</code> and then open a new terminal:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">$userPath</span> <span class="p">=</span> <span class="no">[Environment]</span><span class="p">::</span><span class="n">GetEnvironmentVariable</span><span class="p">(</span><span class="s2">"Path"</span><span class="p">,</span> <span class="s2">"User"</span><span class="p">)</span>
+<span class="no">[Environment]</span><span class="p">::</span><span class="n">SetEnvironmentVariable</span><span class="p">(</span><span class="s2">"Path"</span><span class="p">,</span> <span class="s2">"$userPath;C:\path\to\dcc;C:\path\to\ntvcm"</span><span class="p">,</span> <span class="s2">"User"</span><span class="p">)</span>
+</code></pre></div>
+</li>
+<li>
+<p>Replace <code>C:\path\to\dcc</code> and <code>C:\path\to\ntvcm</code> with the actual
+   directories. With this on your <code>PATH</code>, the scripts find <code>dcc</code>,
+   <code>dccpeep</code>, <code>dccrtlstrip</code>, and <code>ntvcm</code> automatically.</p>
+</li>
+</ol>
+<p>To pin specific binaries instead (for example, when juggling multiple
+DCC C Compiler builds), set the environment variables to explicit paths and only
+   put ntvcm on <code>PATH</code>:</p>
+<pre><code>```powershell
+$env:PATH += ";C:\path\to\ntvcm"
+$env:DCC = "C:\path\to\dcc\dcc.exe"
+$env:DCCPEEP = "C:\path\to\dcc\dccpeep.exe"
+$env:DCCRTLSTRIP = "C:\path\to\dcc\dccrtlstrip.exe"
+```
+</code></pre>
+</div>
+</div>
+</div>
+<h2 id="verify-the-setup">Verify the setup<a class="headerlink" href="#verify-the-setup" title="Permanent link">¶</a></h2>
+<p>With the tools on your <code>PATH</code>, build and run one of the repository's sample
+tests. From your operating-system terminal or the VS Code terminal, change to
+the DCC checkout and use the native build driver:</p>
+<pre><code>cd /path/to/dcc
+dccmake tests/tstr.c dcc-output=TSTR
+ntvcm build/TSTR.COM
+</code></pre>
+<p>The DCC C Compiler repo's <code>tests/</code> programs are suitable samples for scratch projects, but
+day-to-day work does not need to happen inside the DCC C Compiler repo. The tools build
+CP/M apps from wherever your sources live. Once that works, move on to
+<a href="../02-build-and-link/">Building and linking</a> for the day-to-day workflow.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer">
+        
+          
+          <a href=".." class="md-footer__link md-footer__link--prev" aria-label="Previous: Introduction">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Introduction
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../00-vscode-debugging/" class="md-footer__link md-footer__link--next" aria-label="Next: VS Code debugging">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                VS Code debugging
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"></path></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright © 2026 David Lee
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.footer", "content.code.copy", "navigation.tabs.sticky", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  
+<script id="init-glightbox">const lightbox = GLightbox({"touchNavigation": true, "loop": false, "zoomable": true, "draggable": true, "openEffect": "zoom", "closeEffect": "zoom", "slideEffect": "slide"});
+document$.subscribe(()=>{ lightbox.reload(); });
+</script></body></html>

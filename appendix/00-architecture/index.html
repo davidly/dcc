@@ -1,0 +1,2428 @@
+<!DOCTYPE html><html lang="en" class="no-js"><head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="MkDocs documentation for DCC C Compiler, its runtime, and dccrtlstrip size analysis.">
+      
+      
+        <meta name="author" content="David Lee">
+      
+      
+      
+        <link rel="prev" href="../../12-examples/">
+      
+      
+        <link rel="next" href="../01-dccrtlstrip/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Compiler architecture - DCC C Compiler Reference</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <link href="../../assets/stylesheets/glightbox.min.css" rel="stylesheet"><script src="../../assets/javascripts/glightbox.min.js"></script><style id="glightbox-style">
+            html.glightbox-open { overflow: initial; height: 100%; }
+            .gslide-title { margin-top: 0px; user-select: text; }
+            .gslide-desc { color: #666; user-select: text; }
+            .gslide-image img { background: white; }
+            .gscrollbar-fixer { padding-right: 15px; }
+            .gdesc-inner { font-size: 0.75rem; }
+            body[data-md-color-scheme="slate"] .gdesc-inner { background: var(--md-default-bg-color); }
+            body[data-md-color-scheme="slate"] .gslide-title { color: var(--md-default-fg-color); }
+            body[data-md-color-scheme="slate"] .gslide-desc { color: var(--md-default-fg-color); }
+        </style></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#appendix-compiler-architecture" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DCC C Compiler Reference" class="md-header__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DCC C Compiler Reference
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Compiler architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink" aria-label="Switch to dark mode" type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 2c-1.82 0-3.53.5-5 1.35C8 5.08 10 8.3 10 12s-2 6.92-5 8.65C6.47 21.5 8.18 22 10 22a10 10 0 0 0 10-10A10 10 0 0 0 10 2"></path></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="cyan" aria-label="Switch to light mode" type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"></path></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required="">
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix="">
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DCC C Compiler Reference" class="md-nav__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    DCC C Compiler Reference
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix="">
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-setup-toolchain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The toolchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-vscode-debugging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code debugging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-debug-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugger host and I/O adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-agent-skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agentic skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../01-c-conformance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C conformance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../02-build-and-link/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building and linking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../03-types-and-conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Types and conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../04-operators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operators
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10">
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Library reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/01-assert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    assert.h: Diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/07-ctype/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ctype.h: Character handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/02-errno/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    errno.h: Error reporting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/03-float/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    float.h: Floating-point limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/04-limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    limits.h: Integer limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/17-locale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    locale.h: Localization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/08-math/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    math.h: Floating point math
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/09-setjmp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    setjmp.h: Non-local jumps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/16-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    signal.h: Signal handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/10-stdarg/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdarg.h: Variadic arguments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/11-stdbool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdbool.h: Boolean type
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/12-stddef/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stddef.h: Common definitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/13-stdint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdint.h: Fixed-width integers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/05-stdio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdio.h: Console and file I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/06-stdlib/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdlib.h: Memory and utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/14-string/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    string.h: String handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/15-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    time.h: Date and time
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../10-system-and-cpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System and CP/M services
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../11-limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../12-examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worked examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" checked="">
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compiler architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compiler architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#the-toolchain-at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The toolchain at a glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compiler-shape-front-end-ast-and-mir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compiler shape: front end, AST, and MIR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compiler-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compiler Features
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inside-dcc-c-compiler-module-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inside DCC C Compiler: module architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inside-dccpeep-a-fixpoint-peephole-optimizer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inside dccpeep: a fixpoint peephole optimizer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-runtime-a-block-structured-library-sized-for-stripping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The runtime: a block-structured library sized for stripping
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-dccrtlstrip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../02-runtime-sizes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime function sizes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-utilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../05-building-project-docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building project docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#the-toolchain-at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The toolchain at a glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compiler-shape-front-end-ast-and-mir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compiler shape: front end, AST, and MIR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compiler-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compiler Features
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inside-dcc-c-compiler-module-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inside DCC C Compiler: module architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inside-dccpeep-a-fixpoint-peephole-optimizer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inside dccpeep: a fixpoint peephole optimizer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-runtime-a-block-structured-library-sized-for-stripping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The runtime: a block-structured library sized for stripping
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="appendix-compiler-architecture">Appendix: compiler architecture<a class="headerlink" href="#appendix-compiler-architecture" title="Permanent link">¶</a></h1>
+<p>This appendix describes the DCC C Compiler toolchain: the compiler <code>dcc</code>, the peephole
+optimizer <code>dccpeep</code>, the runtime size reducer <code>dccrtlstrip</code>, and the assembler
+and linker - either the host-native
+<a href="../03-utilities/#native-assembler-m80c"><code>m80c</code></a>/<a href="../03-utilities/#native-linker-l80c"><code>l80c</code></a>,
+or the Microsoft <code>M80</code>/<code>L80</code> originals running under <code>ntvcm</code>.</p>
+<div class="admonition note">
+<p class="admonition-title">Host-resident tools</p>
+</div>
+<p><code>dcc</code>, <code>dccpeep</code>, <code>dccrtlstrip</code>,
+  <a href="../03-utilities/#native-assembler-m80c"><code>m80c</code></a>, and
+  <a href="../03-utilities/#native-linker-l80c"><code>l80c</code></a> run on Windows, macOS, and
+  Linux. They never run on a Z80. They emit Z80 assembly text and CP/M
+  <code>.COM</code> files that run under CP/M-80, for example via the <code>ntvcm</code> emulator.
+  <a href="../03-utilities/#native-assembler-m80c"><code>m80c</code></a>/
+  <a href="../03-utilities/#native-linker-l80c"><code>l80c</code></a> are clean-room,
+  LINK-80-object-format-compatible
+  reimplementations of <code>M80</code>/<code>L80</code> with unbounded host memory instead of
+  CP/M's own 64K tables - large <code>nopeep</code> builds can exhaust real <code>L80</code>'s own
+  in-emulator linking workspace well before the target program itself would
+  not fit; <a href="../03-utilities/#native-linker-l80c"><code>l80c</code></a> has no such ceiling.
+  They are the default; pass
+  <code>dcc-use-emulated-m80=true</code>/<code>dcc-use-emulated-l80=true</code> to <code>dccmake</code> (or
+  <code>--emulated-m80</code>/<code>--emulated-l80</code> to <code>ma.sh</code>/<code>ma.ps1</code>) to use the real
+  <code>M80.COM</code>/<code>L80.COM</code> under <code>ntvcm</code> instead, e.g. to cross-check output.</p>
+<p>The compiler implementation is portable C11 host code built by modern Clang,
+  GCC, or MSVC. That implementation language is independent of <code>dcc</code>'s C89
+  base language and selected C99/C11 additions for the 16-bit Z80 target.</p>
+<h2 id="the-toolchain-at-a-glance">The toolchain at a glance<a class="headerlink" href="#the-toolchain-at-a-glance" title="Permanent link">¶</a></h2>
+<p>A single <code>.c</code> file becomes a CP/M <code>.COM</code> executable through a short pipeline.
+Each stage has one job and hands a text or object file to the next:</p>
+<pre class="mermaid"><code>flowchart TB
+  SRC["C source"] --&gt; DCC["dcc&lt;br/&gt;AST → MIR → Z80 assembly"]
+  DCC --&gt; PEEP["dccpeep&lt;br/&gt;optional assembly optimization"]
+  PEEP --&gt; APPSTRIP["dccrtlstrip&lt;br/&gt;remove unreachable app blocks"]
+  APPSTRIP --&gt; APPASM["m80c&lt;br/&gt;assemble application"]
+  APPASM --&gt; APPREL["app.REL"]
+
+  RTL["DCCRTL.MAC&lt;br/&gt;full runtime"] --&gt; STRIP["dccrtlstrip&lt;br/&gt;keep referenced routines"]
+  APPSTRIP -. runtime references .-&gt; STRIP
+  STRIP --&gt; RTLASM["m80c&lt;br/&gt;assemble reduced runtime"]
+  RTLASM --&gt; RTLREL["RTLMIN.REL"]
+
+  APPREL --&gt; LINK["l80c&lt;br/&gt;link application + runtime"]
+  RTLREL --&gt; LINK
+  LINK --&gt; COM["CP/M .COM executable"]</code></pre>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Tool</th>
+<th>Input</th>
+<th>Output</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Compile</td>
+<td><code>dcc</code></td>
+<td><code>.c</code></td>
+<td><code>.MAC</code></td>
+<td>Parse typed AST, lower and verify MIR, then select Z80/M80 assembly</td>
+</tr>
+<tr>
+<td>Optimize</td>
+<td><code>dccpeep</code></td>
+<td><code>.MAC</code></td>
+<td><code>.MAC</code></td>
+<td>Local peephole rewriting of the asm</td>
+</tr>
+<tr>
+<td>Reduce application</td>
+<td><code>dccrtlstrip</code></td>
+<td>All app <code>.MAC</code> files</td>
+<td>Rewritten app <code>.MAC</code> files</td>
+<td>Remove functions, initialized objects, and module BSS objects unreachable from the final program entry</td>
+</tr>
+<tr>
+<td>Reduce runtime</td>
+<td><code>dccrtlstrip</code></td>
+<td><code>DCCRTL.MAC</code> + app <code>.MAC</code></td>
+<td><code>RTLMIN.MAC</code></td>
+<td>Keep only the runtime routines the app references</td>
+</tr>
+<tr>
+<td>Assemble</td>
+<td><a href="../03-utilities/#native-assembler-m80c"><code>m80c</code></a></td>
+<td><code>.MAC</code></td>
+<td><code>.REL</code></td>
+<td>Object code (relocatable); <code>dccmake</code> uses native <code>m80c</code> by default</td>
+</tr>
+<tr>
+<td>Link</td>
+<td><a href="../03-utilities/#native-linker-l80c"><code>l80c</code></a></td>
+<td><code>.REL</code> files</td>
+<td><code>.COM</code></td>
+<td>Resolve symbols into a CP/M executable; <code>dccmake</code> uses native <code>l80c</code> by default</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>dccpeep</code> stage is optional (<code>./scripts/ma.ps1 name -Mode nopeep</code> skips it
+when run from PowerShell in the DCC C Compiler checkout). <code>dccrtlstrip</code> first
+computes whole-program reachability across all final application assembly
+modules, then uses the reduced application to select runtime blocks.</p>
+<h2 id="compiler-shape-front-end-ast-and-mir">Compiler shape: front end, AST, and MIR<a class="headerlink" href="#compiler-shape-front-end-ast-and-mir" title="Permanent link">¶</a></h2>
+<p>DCC C Compiler is an <strong>AST/MIR compiler</strong>. The recursive-descent front end
+builds typed AST nodes for function statements and expressions. Those transient
+nodes lower into one persistent MIR function before the AST arena is reused.
+Production function assembly is emitted from generated MIR candidates.</p>
+<p>Top-level declarations, global initializers, strings, and data/BSS placement
+remain table-driven because they are not function-body instructions.</p>
+<pre class="mermaid"><code>flowchart TB
+  SRC["C source"] --&gt; FRONT["Front end&lt;br/&gt;preprocess, parse, build typed AST"]
+  FRONT --&gt; MIR["Persistent MIR&lt;br/&gt;lower statements and record metadata"]
+  MIR --&gt; ANALYZE["Prepare MIR&lt;br/&gt;repair metadata, check structure,&lt;br/&gt;build CFG, promote objects, transform values"]
+  ANALYZE --&gt; VERIFY["Verify dominance&lt;br/&gt;independent reachable CFG + PHI-edge checks"]
+  VERIFY --&gt; ALLOCATE["Plan baseline allocation&lt;br/&gt;solve liveness, assign homes and spills"]
+  ALLOCATE --&gt; SELECT["Select generated Z80 candidate&lt;br/&gt;try exact structural schedules first"]
+
+  SELECT -- exact match --&gt; ASM["Selected .MAC function body"]
+  SELECT -- exact declines --&gt; GENERAL["Build generated alternatives&lt;br/&gt;rollout, homed, regional, spilled"]
+  GENERAL --&gt; COST["Choose alternative&lt;br/&gt;candidate-specific allocation + mir-v1"]
+  COST --&gt; ASM
+
+  ALLOCATE -. optional reports .-&gt; SHADOW["Diagnostic shadow models&lt;br/&gt;target constraints + sparse schedule"]</code></pre>
+<table>
+<thead>
+<tr>
+<th>Classic phase</th>
+<th>DCC C Compiler implementation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Preprocessing / lexical analysis</td>
+<td>Integrated macro engine and <code>next_token</code> lexer in <code>dcc_preproc.c</code>; <code>dcc_pp_expr.c</code> evaluates conditional directives</td>
+</tr>
+<tr>
+<td>Parsing</td>
+<td>Recursive descent builds typed AST nodes against live symbol/type tables</td>
+</tr>
+<tr>
+<td>Intermediate representation</td>
+<td>Persistent per-function MIR with virtual values, typed memory, calls, labels, branches, PHIs, VLA operations, and aggregate copies</td>
+</tr>
+<tr>
+<td>MIR analysis</td>
+<td>Deferred metadata repair, structural checks, CFG construction, object promotion, independent dominance verification, liveness, baseline register homes, and spill-slot planning</td>
+</tr>
+<tr>
+<td>Instruction selection</td>
+<td>Priority exact machine schedules, followed by general rollout, homed, hybrid/regional, and spilled CFG candidates</td>
+</tr>
+<tr>
+<td>Profitability</td>
+<td>After exact scheduling declines, <code>mir-v1</code> compares generated alternatives using machine instructions/bytes, helper/frame/spill costs, moves, branches, and loop weighting</td>
+</tr>
+<tr>
+<td>Machine-dependent cleanup</td>
+<td>Standalone <code>dccpeep</code> fixpoint optimization over the selected assembly</td>
+</tr>
+</tbody>
+</table>
+<h3 id="transient-ast-persistent-mir">Transient AST, persistent MIR<a class="headerlink" href="#transient-ast-persistent-mir" title="Permanent link">¶</a></h3>
+<p>AST nodes retain C result type and effective operand type, so integer
+promotions, pointer scaling, long/float operations, bit-fields, and lvalue
+widths are decided before lowering. The MIR keeps those decisions after the AST
+arena is reset.</p>
+<p>MIR uses virtual values rather than source-register claims. Its instruction
+set represents constants, parameters, loads/stores, address/member/index
+formation, unary/binary operations, call-site-tagged arguments and calls,
+aggregate copies, labels, branches, jumps, edge-specific PHIs, returns, and VLA
+stack save/allocate/restore operations.</p>
+<h3 id="one-production-body-walk">One production body walk<a class="headerlink" href="#one-production-body-walk" title="Permanent link">¶</a></h3>
+<p><code>dcc_func.c</code> performs one production metadata/MIR walk for each function.
+Declarations are represented by stable placeholders because parser replay may
+discover initializers, renamed C99 loop variables, strings, inline temporaries,
+or VLA scope events after surrounding statements have already lowered.
+<code>dcc_ast_metadata.c</code> and <code>dcc_ast_stmt_meta.c</code> fill and position those events
+without generating a second assembly body.</p>
+<p>This separation is load-bearing:</p>
+<ul>
+<li>declarations, scopes, VLA exits, labels, diagnostics, and debug events have
+  explicit non-emitting owners;</li>
+<li>statement evaluation occurs once;</li>
+<li>initializer side effects cannot be duplicated by metadata replay;</li>
+<li>every production function body reaches instruction selection as verified MIR.</li>
+</ul>
+<h3 id="verification-promotion-and-allocation">Verification, promotion, and allocation<a class="headerlink" href="#verification-promotion-and-allocation" title="Permanent link">¶</a></h3>
+<p>Structural verification checks operand/object bounds, labels, definitions,
+PHI references, call identities, and known argument ABI types. After object
+promotion and semantic transformations, <code>dcc_mir_verify.c</code> independently
+reconstructs the instruction CFG and computes an immediate-dominator tree in
+reverse postorder, using storage linear in the MIR size.</p>
+<p>Every ordinary value use on a reachable path must be dominated by its
+definition: execution cannot reach the use without first passing the
+definition. PHIs define their results at the logical block entry, even when
+they appear later in the instruction array; each input must dominate its
+corresponding incoming edge. Argument records and their values must dominate
+the matching call. Unreachable paths impose no dominance requirement, but
+their IDs and references still undergo structural checks. This non-mutating
+check runs before allocation and candidate emission and cannot be disabled
+through an environment setting.</p>
+<p>Object promotion reuses agreeing reaching definitions or constructs a valid
+two-predecessor PHI. It distinguishes an <strong>undefined entry value</strong> from an
+<strong>unreached dataflow state</strong>: a definition discovered only on a loop backedge
+cannot supply the function-entry path. Undefined values and unresolved joins
+remain memory operations. This does not make reading an uninitialized C local
+defined behavior; it prevents that read from being represented by an invalid
+SSA value. Exact schedules account for the corrected NOP positions where
+unnecessary loop merges no longer produce PHIs.</p>
+<p>After verification, backwards liveness treats PHI operands as incoming-edge
+uses and keeps call arguments live through the matching call-site ID.</p>
+<p>Allocation assigns lifetime homes in HL, DE, BC, or callee-saved IY, with
+deterministic spill slots when pressure or ABI constraints require them.
+Call-crossing ordinary values may use only IY. Fixed Z80 operand/result
+registers are boundary constraints, so the emitter inserts moves rather than
+precoloring a value for its whole lifetime.</p>
+<p>The MIR analysis pipeline computes a baseline allocation and retains its liveness matrices
+for selection. Candidate construction may then derive and measure a different
+allocation plan: lazy-parameter and regional candidates, for example, save the
+baseline homes and spills, recompute them for that candidate, and restore the
+baseline before the next attempt.</p>
+<h3 id="generated-only-candidate-selection">Generated-only candidate selection<a class="headerlink" href="#generated-only-candidate-selection" title="Permanent link">¶</a></h3>
+<p>Every candidate writes to its own temporary stream. A declining selector cannot
+leave partial text in the next candidate. Production first tries:</p>
+<ul>
+<li>exact <code>scheduled-machine-cfg</code> kernels with complete structural proofs;</li>
+<li>the compact <code>general-rollout</code> scalar DAG for eligible straight-line functions;</li>
+<li><code>homed-scalar-cfg</code>, including hybrid and regional-home variants;</li>
+<li>the general <code>spilled-scalar-cfg</code> emitter.</li>
+</ul>
+<p>An accepted exact schedule has priority. When exact scheduling declines, the
+selector establishes a complete generated incumbent from the rollout or general
+CFG candidates, then <code>mir-v1</code> may compare that incumbent with homed,
+lazy-parameter, hybrid, regional, and spilled variants. The policy compares
+only generated MIR candidates.
+<code>DCC_MIR_REQUIRE_COMPLETE=1</code> and <code>DCC_MIR_REQUIRE_EMIT=1</code> are the strict
+semantic and generated-output boundaries.</p>
+<p>Proofs are deliberately conservative. Unknown, recursive, cyclic, volatile,
+aliased, or unsupported shapes decline an optimization, not MIR emission.</p>
+<h3 id="refactor-validation">Refactor validation<a class="headerlink" href="#refactor-validation" title="Permanent link">¶</a></h3>
+<p>For behavior-preserving front-end or metadata refactors, compare raw compiler
+output and diagnostics before and after, then run the CP/M suite. For MIR
+selection changes, compare stack and no-stack census snapshots, run every app
+whose generated hash or metrics changed in peep and nopeep modes, and finish
+with strict full+extended stack and no-stack runs.</p>
+<h2 id="compiler-features">Compiler Features<a class="headerlink" href="#compiler-features" title="Permanent link">¶</a></h2>
+<p>The DCC C Compiler is intentionally small, but the compiler front end still provides a
+user-facing feature set around diagnostics, C89/C99 compatibility extensions,
+target-model checks, and size-oriented dead-code elimination in the generated
+program.</p>
+<h3 id="error-messages-by-category">Error messages by category<a class="headerlink" href="#error-messages-by-category" title="Permanent link">¶</a></h3>
+<p>Compiler diagnostics are emitted through <code>dcc_diag_emit.c</code>. Each diagnostic is
+assigned a stable <code>DCC-E####</code> code, reported with the source file and line, and
+prints the original source line with a caret when the compiler has an exact
+token position. The compile-fail diagnostic tests under <code>tests/diagnostics/</code>
+lock these messages and carets against exact baselines.</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Code range</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name lookup</td>
+<td><code>DCC-E0201</code></td>
+<td>undeclared identifiers</td>
+</tr>
+<tr>
+<td>Preprocessor and include handling</td>
+<td><code>DCC-E0301</code>-<code>DCC-E0321</code></td>
+<td>malformed <code>#include</code>, unknown directives, unmatched <code>#elif</code>/<code>#else</code>/<code>#endif</code>, bad macro arity</td>
+</tr>
+<tr>
+<td>Constant expressions</td>
+<td><code>DCC-E0401</code>-<code>DCC-E0403</code></td>
+<td>non-constant expressions, division by zero, missing expression operands</td>
+</tr>
+<tr>
+<td>Struct/union/enum/type semantics</td>
+<td><code>DCC-E0501</code>-<code>DCC-E0540</code></td>
+<td>field designators, <code>offsetof</code>, bit-fields, duplicate enum constants, missing type names, multiple storage classes</td>
+</tr>
+<tr>
+<td>Array and pointer constraints</td>
+<td><code>DCC-E0601</code>-<code>DCC-E0605</code></td>
+<td>unsupported variable inner dimensions, invalid bounds/object sizes, scalar subscripting</td>
+</tr>
+<tr>
+<td>Statement control flow</td>
+<td><code>DCC-E0701</code>-<code>DCC-E0706</code></td>
+<td><code>break</code>/<code>continue</code> outside valid contexts, stray <code>case</code>/<code>default</code>, duplicate or undefined labels</td>
+</tr>
+<tr>
+<td>Functions and declarations</td>
+<td><code>DCC-E0801</code>-<code>DCC-E0806</code></td>
+<td>parameter declaration errors, redefinitions, too few or too many function-call arguments</td>
+</tr>
+<tr>
+<td>Initializers and assignment compatibility</td>
+<td><code>DCC-E0901</code>-<code>DCC-E0921</code></td>
+<td>invalid initializers, integer-to-pointer assignment, taking the address of a register-qualified object</td>
+</tr>
+<tr>
+<td>Unsupported or malformed constructs</td>
+<td><code>DCC-E1001</code>-<code>DCC-E1005</code></td>
+<td>unsupported AST forms, malformed syntax, oversized string literals, unsupported <code>sizeof</code> expressions</td>
+</tr>
+<tr>
+<td>General syntax and top-level parsing</td>
+<td><code>DCC-E1101</code>-<code>DCC-E1107</code></td>
+<td>expected tokens such as <code>;</code>, <code>)</code>, <code>]</code>, <code>=</code>, or an external declaration</td>
+</tr>
+<tr>
+<td>CP/M/Z80 target-model limits</td>
+<td><code>DCC-E1201</code>-<code>DCC-E1203</code></td>
+<td>unsupported <code>double</code>, <code>long long</code>, and 64-bit integer typedef names</td>
+</tr>
+</tbody>
+</table>
+<p>The categories are deliberately broad: the numeric code says where the problem
+was detected, while the message text names the exact source-level issue.</p>
+<h3 id="dead-code-detection-and-elimination">Dead code detection and elimination<a class="headerlink" href="#dead-code-detection-and-elimination" title="Permanent link">¶</a></h3>
+<p>The DCC C Compiler does not run a whole-program control-flow analysis pass, and it does not
+warn about arbitrary unreachable user statements. Instead, dead-code handling is
+pragmatic and size-focused at the points where the toolchain has reliable local
+knowledge:</p>
+<ul>
+<li><strong>Dead MIR values and stores.</strong> Lowering records side effects separately from
+  virtual results. Liveness, object promotion, and selector-local proofs can
+  omit unused values, dead stores, and rematerializable temporaries.</li>
+<li><strong>Dead stores and labels in assembly.</strong> <code>dccpeep</code> runs to a fixpoint over the
+  emitted <code>.MAC</code> text. Among its cleanups are jump/label threading, jump-to-next
+  removal, redundant load/store removal, and conservative dead IX-frame store
+  elimination when a stack slot is overwritten before it can be read.</li>
+<li><strong>Dead static inline bodies.</strong> Simple <code>static inline</code> functions can be
+  buffered and emitted only when a real out-of-line body is needed, avoiding
+  unused helper text in the generated assembly.</li>
+<li><strong>Dead runtime blocks.</strong> <code>dccrtlstrip</code> performs conservative mark-and-sweep
+  dead-block elimination over <code>DCCRTL.MAC</code>: it roots symbols referenced by the
+  app, follows runtime-to-runtime references to a fixpoint, and writes
+  <code>RTLMIN.MAC</code> containing only reachable runtime blocks.</li>
+<li><strong>Dead application blocks.</strong> Before runtime selection, <code>dccrtlstrip</code> follows
+  reachability across the final application's marked assembly modules and
+  removes unreferenced functions and eligible objects. This is link-time
+  reachability, not a whole-program C statement analysis.</li>
+</ul>
+<p>This split keeps the compiler simple while still attacking the biggest sources
+of wasted code: unused expression values, local assembly redundancies, unused
+inline bodies, and unreferenced runtime support.</p>
+<h2 id="inside-dcc-c-compiler-module-architecture">Inside DCC C Compiler: module architecture<a class="headerlink" href="#inside-dcc-c-compiler-module-architecture" title="Permanent link">¶</a></h2>
+<p>The compiler is one binary built from focused modules. Foundational target
+types, shared data structures, and broadly used APIs live in <code>dcc.h</code>; narrower
+contracts live in subsystem <code>*_internal.h</code> headers. Shared compiler state is
+defined once in <code>dcc_state.c</code>; machine-family modules do not add shared data.</p>
+<pre class="mermaid"><code>graph TB
+    subgraph FE["Front end"]
+      DRIVER["dcc.c&lt;br/&gt;driver + CLI"]
+      PP["dcc_preproc.c / dcc_pp_expr.c&lt;br/&gt;preprocessor + lexer"]
+      PARSER["dcc_func.c / dcc_stmt.c&lt;br/&gt;declarations + statements"]
+      SEM["dcc_types.c / dcc_symbols.c&lt;br/&gt;types + symbols"]
+    end
+
+    subgraph AST["Transient typed AST"]
+      BUILD["dcc_ast_build.c"]
+      NODES["dcc_ast.c / dcc_ast.h"]
+      META["dcc_ast_metadata.c&lt;br/&gt;dcc_ast_stmt_meta.c"]
+    end
+
+    subgraph MIR["Persistent function MIR"]
+      CORE["dcc_mir.c&lt;br/&gt;lowering + repair + promotion"]
+      VERIFY["dcc_mir_verify.c&lt;br/&gt;independent dominance verification"]
+      ALLOCATE["dcc_mir.c&lt;br/&gt;liveness + baseline allocation"]
+      SHADOW["dcc_mir_target.c / dcc_mir_schedule.c&lt;br/&gt;diagnostic shadow models"]
+    end
+
+    subgraph BACK["Generated back ends"]
+      SELECT["dcc_mir_select.c&lt;br/&gt;priority, rollout + mir-v1"]
+      COMMON["dcc_mir_emit_common.c&lt;br/&gt;scalar DAG + shared emission"]
+      HOMED["dcc_mir_homed_cfg.c&lt;br/&gt;homed / hybrid / regional"]
+      SPILLED["dcc_mir_spilled_cfg.c&lt;br/&gt;general spilled CFG"]
+      MACHINE["dcc_mir_machine_*.c&lt;br/&gt;exact structural schedules"]
+    end
+
+    subgraph OUT["Top level and data"]
+      INIT["dcc_global_init.c&lt;br/&gt;file-scope initializers"]
+      DATA["dcc_data.c&lt;br/&gt;strings, globals, BSS"]
+      ASM["selected function streams&lt;br/&gt;+ top-level assembly"]
+    end
+
+    DRIVER --&gt; PP --&gt; PARSER --&gt; BUILD --&gt; CORE
+    SEM --&gt; BUILD
+    NODES -.storage and typed nodes.-&gt; BUILD
+    META -.declarations / scopes / VLA events.-&gt; CORE
+    CORE --&gt; VERIFY --&gt; ALLOCATE --&gt; SELECT
+    ALLOCATE -. diagnostic reports .-&gt; SHADOW
+    SELECT --&gt; COMMON
+    SELECT --&gt; HOMED
+    SELECT --&gt; SPILLED
+    SELECT --&gt; MACHINE
+    HOMED -. shared operations .-&gt; COMMON
+    SPILLED -. shared operations .-&gt; COMMON
+    COMMON --&gt; ASM
+    HOMED --&gt; ASM
+    SPILLED --&gt; ASM
+    MACHINE --&gt; ASM
+    INIT --&gt; DATA --&gt; ASM</code></pre>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Modules</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Shared</td>
+<td><code>dcc.h</code>, <code>dcc_state.c</code>, subsystem <code>*_internal.h</code> files</td>
+<td>Target model, shared contracts, and lifecycle-owned compiler state</td>
+</tr>
+<tr>
+<td>Front end</td>
+<td><code>dcc.c</code>, <code>dcc_preproc.c</code>, <code>dcc_pp_expr.c</code>, <code>dcc_func.c</code>, <code>dcc_stmt.c</code>, <code>dcc_diag_emit.c</code>, <code>dcc_global_scan.c</code></td>
+<td>Driver, preprocessing/lexing, declarations/statements, conservative global-use prepass, frame scan, and diagnostics</td>
+</tr>
+<tr>
+<td>Types / symbols</td>
+<td><code>dcc_types.c</code>, <code>dcc_symbols.c</code>, <code>dcc_constexpr.c</code>, <code>dcc_fold.c</code>, <code>dcc_asmname.c</code></td>
+<td>Type system, symbol tables, constant evaluation/folding, and M80-safe assembly-name mapping</td>
+</tr>
+<tr>
+<td>Typed AST / metadata</td>
+<td><code>dcc_ast.c</code>, <code>dcc_ast_build.c</code>, <code>dcc_ast_gen*.c</code>, <code>dcc_ast_metadata.c</code>, <code>dcc_ast_stmt_meta.c</code>, <code>dcc_licm.c</code></td>
+<td>Transient typed trees, semantic classifiers, and non-emitting LICM/CSE planning and declaration/scope replay</td>
+</tr>
+<tr>
+<td>Compatibility helpers</td>
+<td><code>dcc_expr.c</code>, <code>dcc_ops.c</code>, <code>dcc_cmp.c</code>, <code>dcc_assign.c</code>, <code>dcc_decl.c</code>, <code>dcc_stmt_fast.c</code>, <code>dcc_array_narrow.c</code></td>
+<td>Shared initializer/type behavior and conservative source proofs; not a production body emitter</td>
+</tr>
+<tr>
+<td>MIR core</td>
+<td><code>dcc_mir.c</code>, <code>dcc_mir_stream.c</code></td>
+<td>Persistent IR, metadata repair, CFG/verifier, liveness, baseline allocation, and isolated candidate streams</td>
+</tr>
+<tr>
+<td>MIR dominance verification</td>
+<td><code>dcc_mir_verify.c</code></td>
+<td>Independent reachable CFG, immediate dominators, ordinary-value and PHI-edge checks, and call-argument dominance; no IR rewriting or allocation</td>
+</tr>
+<tr>
+<td>MIR emission / selection</td>
+<td><code>dcc_mir_select.c</code>, <code>dcc_mir_emit_common.c</code>, <code>dcc_mir_homed_cfg.c</code>, <code>dcc_mir_spilled_cfg.c</code></td>
+<td>Exact-schedule priority, scalar DAG rollout, transactional generated candidates, candidate-specific homes/spills, shared emission, and <code>mir-v1</code> selection</td>
+</tr>
+<tr>
+<td>Diagnostic shadow models</td>
+<td><code>dcc_mir_target.c</code>, <code>dcc_mir_schedule.c</code></td>
+<td>Optional Z80 constraint and sparse-schedule reports; these modules do not select production candidates or emit Z80</td>
+</tr>
+<tr>
+<td>Machine schedules</td>
+<td><code>dcc_mir_machine_emit.c</code> (coordinator), <code>dcc_mir_machine_*.c</code> (families)</td>
+<td>Exact structural matchers and specialized Z80 streams</td>
+</tr>
+<tr>
+<td>Top level / output</td>
+<td><code>dcc_func.c</code>, <code>dcc_global_init.c</code>, <code>dcc_data.c</code></td>
+<td>Function/frame parsing, one production metadata/MIR body walk, global initializer recording, deferred static-body placement, and data-section emission</td>
+</tr>
+</tbody>
+</table>
+<h3 id="exact-machine-schedule-families">Exact machine-schedule families<a class="headerlink" href="#exact-machine-schedule-families" title="Permanent link">¶</a></h3>
+<p><code>dcc_mir_machine_emit.c</code> owns common machine helpers and the order-sensitive
+dispatch. Cohesive schedules live in separately compiled families:</p>
+<table>
+<thead>
+<tr>
+<th>Family module</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dcc_mir_machine_attention.c</code></td>
+<td>Matrix, attention, and fixed-point kernels</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_byte_scans.c</code></td>
+<td>Byte/row scans, fills, copies, hashes, records, and file-line kernels</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_constant_folding.c</code></td>
+<td>Constant/result flows, result switches, and indexed-member schedules</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_containers.c</code></td>
+<td>Array, container, stack, comparison, and reduction schedules</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_float_recursion.c</code></td>
+<td>Floating-point, recursive, tree, and byte-status kernels</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_numeric.c</code></td>
+<td>Integer, long, fixed-point, and math kernels</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_float_reports.c</code></td>
+<td>Float reports and checks</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_scanners.c</code></td>
+<td>Scan, parse, and traversal loops</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_aggregate_checks.c</code></td>
+<td>Aggregate, array, and struct checks</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_structural_checks.c</code></td>
+<td>Literal, bitset, sieve, string, structure, and bitfield validations</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_runtime_runners.c</code></td>
+<td>Runtime, file, and system orchestration</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_interpreter_runners.c</code></td>
+<td>Interpreter and parser runners</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_call_runners.c</code></td>
+<td>Call/control orchestration</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_validation_runners.c</code></td>
+<td>Scope, wide-value, and validation runners</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_wide_records.c</code></td>
+<td>Wide arithmetic, aggregate updates, and record-oriented schedules</td>
+</tr>
+<tr>
+<td><code>dcc_mir_machine_endgame.c</code></td>
+<td>Large final exact schedule families</td>
+</tr>
+</tbody>
+</table>
+<p>Machine families follow a zero-shared-state rule:</p>
+<ul>
+<li>plans, candidates, and mutable matching state are automatic and attempt-local;</li>
+<li>each family exports one dispatcher and no data;</li>
+<li>module-local constant tables use internal linkage;</li>
+<li><code>dcc_mir_machine_internal.h</code> contains function contracts, not shared plan
+  storage.</li>
+</ul>
+<p>Run <code>scripts/audit-c-module-exports.py</code> after changing a module boundary. The
+audit must report only the allowed dispatcher and no exported data.</p>
+<h2 id="inside-dccpeep-a-fixpoint-peephole-optimizer">Inside dccpeep: a fixpoint peephole optimizer<a class="headerlink" href="#inside-dccpeep-a-fixpoint-peephole-optimizer" title="Permanent link">¶</a></h2>
+<p><code>dccpeep</code> is DCC C Compiler's <strong>machine-dependent optimizer</strong>. It reads the emitted <code>.MAC</code>
+as an array of text lines and applies dozens of small <em>peephole</em> rewrites —
+each one matches a short local instruction pattern and replaces it with a
+cheaper equivalent (for example folding a redundant store/reload, threading a
+jump-to-jump, turning an <code>ld</code>/<code>cp</code> against zero into <code>or a</code>, or replacing an
+absolute <code>jp</code> in range with a relative <code>jr</code>).</p>
+<p>The optimizer is split by responsibility. <code>peep_lines.c</code> owns storage,
+mutation, physical-line I/O, and opaque barriers for <code>; dcc user asm</code> regions;
+passes never rewrite or delete those user-authored lines. <code>peep_parse.c</code>
+contains stateless assembly parsers, <code>peep_effects.c</code> caches structured line,
+opcode, register, and flag metadata, and <code>peep_analyze.c</code> contains shared
+conservative register analysis. <code>peep_control_flow.c</code> owns versioned
+label/function indexes and bounded reachability queries. The main <code>dccpeep.c</code>
+file owns the descriptor-driven, order-sensitive fixed-point catalogue and
+remaining general passes. <code>PeepContext</code> groups program ownership, options,
+statistics, mutation versions, and cached indexes; compatibility globals
+preserve established pass signatures. <code>PeepEditTransaction</code> provides opt-in
+atomic commit/rollback for coupled rewrites.
+The high-volume local dispatcher, board/game idioms, loop registerization, and
+compiler-tagged temporary handling live in <code>peep_pass_once.c</code>,
+<code>peep_pass_minmax.c</code>, <code>peep_pass_loops.c</code>, and
+<code>peep_pass_inline_temp.c</code>. Label and branch rewrites live in
+<code>peep_pass_control_flow.c</code>. Post-convergence shared-helper rewrites and
+terminal cleanup live in <code>peep_pass_stubs.c</code> and <code>peep_pass_final.c</code>
+respectively, behind <code>dccpeep_internal.h</code>.</p>
+<p>dccpeep runs its rewrite catalogue to a <strong>fixpoint</strong> so one rewrite can expose
+the pattern another rewrite needs:</p>
+<pre class="mermaid"><code>flowchart TB
+    READ["read .MAC into line array"] --&gt; SWEEP["run all peephole passes once"]
+    SWEEP --&gt; CHK{"any pass&lt;br/&gt;changed a line?"}
+    CHK --&gt;|yes, and under 30 passes| SWEEP
+    CHK --&gt;|no change, or 30 passes| POST["post-convergence passes"]
+    POST --&gt; FRAME["IX-frame elimination&lt;br/&gt;+ optional shared stubs (-Os)"]
+    FRAME --&gt; FINAL["final tidy:&lt;br/&gt;dead-load removal, jp -&gt; jr"]
+    FINAL --&gt; WRITE["write optimized .MAC"]</code></pre>
+<p>Key design points:</p>
+<ul>
+<li><strong>Driven to convergence.</strong> The main loop re-runs every pass until a full
+  sweep makes no change (capped at 30 iterations), because passes feed each
+  other — e.g. a store/reload elimination can create a dead label that a later
+  pass then removes.</li>
+<li><strong>Order-sensitive post-passes.</strong> A few transforms must run <em>after</em>
+  convergence: the signed-compare constant-bias fold, IX-frame elimination,
+  and the shared-stub passes all depend on the instruction stream having
+  settled, because earlier structural passes recognise loops by their
+  canonical (un-folded) shape.</li>
+<li><strong>Two optimization goals.</strong> <code>-Ot</code> (default, "time") inlines helper sequences
+  for speed; <code>-Os</code> ("size") factors recurring sequences into shared <code>call</code>
+  stubs to shrink the binary. Each helper family counts complete matches first
+  and fires only at its whole-program linked-stub break-even. The mode is
+  chosen on the command line and changes which post-convergence passes fire.</li>
+<li><strong>Text safety is explicit.</strong> Physical input lines are read without a fixed
+  length limit. Marked user-assembly regions become opaque label barriers while
+  optimization runs, then are restored byte-for-byte; address relaxation also
+  refuses to estimate across them.</li>
+<li><strong>Direct observability.</strong> <code>scripts/run-dccpeep-tests.ps1</code> checks focused
+  default, <code>-Os</code>, and undocumented-opcode fixtures plus idempotence. Optional
+  <code>-fstats</code> output reports convergence iterations, per-pass calls and changes,
+  and inserted/deleted line totals to stderr without changing normal output.</li>
+</ul>
+<div class="admonition tip">
+<p class="admonition-title">Why a separate program instead of an in-compiler pass</p>
+<p>Keeping the peephole optimizer as a standalone text-to-text filter keeps
+the compiler simple and allows inspection, diffing, and skipping
+optimization (<code>nopeep</code>). The assembly is the contract between the two tools.</p>
+</div>
+<h2 id="the-runtime-a-block-structured-library-sized-for-stripping">The runtime: a block-structured library sized for stripping<a class="headerlink" href="#the-runtime-a-block-structured-library-sized-for-stripping" title="Permanent link">¶</a></h2>
+<p>The runtime <code>DCCRTL.MAC</code> is a single assembly source, but its
+<em>architecture</em> is what makes the toolchain's "pay only for what you use"
+property possible. Rather than one monolithic blob, the runtime is written as
+hundreds of parsed blocks around <code>public</code> entry points and shared preludes. A
+program never links the whole library — <code>dccrtlstrip</code> keeps only the blocks the
+application actually references (the mark-and-sweep details are in the companion
+appendix <a href="../01-dccrtlstrip/"><em>Runtime optimization</em></a>). The architectural
+consequence is that routine dependencies can be inspected and their linked
+cost measured for a particular application.</p>
+<pre class="mermaid"><code>flowchart TB
+    subgraph RT["DCCRTL.MAC (block-structured runtime)"]
+      BASE["always-present baseline&lt;br/&gt;(start, argv/console, heap, exit)"]
+        IO["stdio blocks&lt;br/&gt;printf, file I/O core"]
+        MEM["memory blocks&lt;br/&gt;malloc/free/realloc"]
+        LONG["32-bit long blocks"]
+        FLT["float core + math.h"]
+        STR["string / ctype blocks"]
+    end
+    BASE --&gt; APP(["linked .COM&lt;br/&gt;baseline + referenced blocks only"])
+    IO -. if referenced .-&gt; APP
+    MEM -. if referenced .-&gt; APP
+    LONG -. if referenced .-&gt; APP
+    FLT -. if referenced .-&gt; APP
+    STR -. if referenced .-&gt; APP</code></pre>
+<h3 id="two-numbers-describe-every-routine">Two numbers describe every routine<a class="headerlink" href="#two-numbers-describe-every-routine" title="Permanent link">¶</a></h3>
+<p>Because the runtime is block-structured, each public routine has two costs that
+the build-time size hook (<code>docs/docs/hooks/runtime_sizes.py</code>) measures directly:</p>
+<ul>
+<li><strong>self</strong> — the source lines in the routine's own block.</li>
+<li><strong>marginal</strong> — self <em>plus</em> every additional block it transitively links
+  beyond the always-present baseline. This estimates source volume, not
+  assembled bytes or execution cycles.</li>
+</ul>
+<p>The gap between the two is the whole story of the runtime's size architecture: a
+small <code>self</code> with a large <code>marginal</code> means the routine sits on top of a big
+shared substrate (the file-I/O core, or the float arithmetic core).</p>
+<h3 id="the-always-present-baseline">The always-present baseline<a class="headerlink" href="#the-always-present-baseline" title="Permanent link">¶</a></h3>
+<p>The forced <code>start</code> root retains entry, heap/BSS setup, heap-state words, exit,
+and their dependencies. Command-tail construction and console output have
+separate public blocks; the application main shim can retain additional
+support. Use the generated table for the current baseline rather than a fixed
+block count. <code>putchar</code> and <code>puts</code> are small wrappers, not zero-cost operations.</p>
+<h3 id="what-the-feature-groups-cost">What the feature groups cost<a class="headerlink" href="#what-the-feature-groups-cost" title="Permanent link">¶</a></h3>
+<p>The runtime's size is dominated by a few shared cores. Routines that sit on a
+core are cheap individually but expensive to introduce, because the first one
+links the whole core:</p>
+<table>
+<thead>
+<tr>
+<th>Feature group</th>
+<th>Shared core it tends to link</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Console output (<code>putchar</code>, <code>puts</code>, integer <code>printf</code>)</td>
+<td>baseline console writer or self-contained formatter</td>
+</tr>
+<tr>
+<td>File-stream + low-level I/O (<code>fopen</code>, <code>fread</code>, <code>fputs</code>, <code>fprintf</code>)</td>
+<td>FCB/DMA file core</td>
+</tr>
+<tr>
+<td><code>scanf</code> / <code>sscanf</code> / <code>fscanf</code></td>
+<td>shared scan core</td>
+</tr>
+<tr>
+<td>Memory (<code>malloc</code>/<code>free</code>/<code>realloc</code>/<code>calloc</code>)</td>
+<td>heap helpers and size arithmetic</td>
+</tr>
+<tr>
+<td>32-bit <code>long</code> arithmetic</td>
+<td>long multiply/divide/modulo helpers</td>
+</tr>
+<tr>
+<td><code>float</code> operators</td>
+<td>float normalise/round core</td>
+</tr>
+<tr>
+<td><code>math.h</code> (<code>sinf</code>, <code>expf</code>, <code>powf</code>, …)</td>
+<td>float core plus conversions and chained math helpers</td>
+</tr>
+<tr>
+<td><code>string.h</code> / <code>ctype.h</code></td>
+<td>usually self-contained routines</td>
+</tr>
+</tbody>
+</table>
+<p>The exact per-routine <code>self</code>/<code>marginal</code> numbers — and the transitive
+dependencies behind each one — are tabulated on the auto-generated
+<a href="../02-runtime-sizes/"><em>Runtime function sizes</em></a> page, with the optimisation
+takeaways in <a href="../01-dccrtlstrip/"><em>Runtime optimization</em></a>. The takeaways for
+sizing a program are:</p>
+<ul>
+<li><strong>Console-only output and string/ctype routines are cheap</strong> — they link
+  little or nothing beyond the baseline.</li>
+<li><strong>The first file, <code>scanf</code>, or <code>float</code> operation is the expensive one</strong>; it
+  links a shared core. Additional routines in the same family are then nearly
+  free.</li>
+<li><strong><code>math.h</code> is the single biggest lever</strong> — the <code>exp</code>/<code>log</code>/<code>pow</code> and
+  hyperbolic group are expensive because each chains other math routines on top
+  of the float core.</li>
+</ul>
+<p>Those numbers are recomputed from <code>DCCRTL.MAC</code> on every docs build, so editing
+the runtime and rebuilding the docs is all that is needed to refresh them.</p>
+<h2 id="architecture-summary">Architecture summary<a class="headerlink" href="#architecture-summary" title="Permanent link">¶</a></h2>
+<ul>
+<li>DCC C Compiler is an <strong>AST/MIR</strong> C89-base compiler with selected C99/C11
+  additions. Typed AST nodes lower into persistent verified function MIR.</li>
+<li>MIR owns CFG, PHIs, virtual values, object promotion, liveness, register
+  homes, spills, target constraints, and generated candidate selection.</li>
+<li>Production function assembly comes only from MIR.</li>
+<li>Structurally proven exact machine schedules have priority. When they decline,
+  general rollout and homed/spilled CFG candidates are selected from generated
+  streams, with <code>mir-v1</code> arbitrating eligible alternatives.</li>
+<li>Machine-dependent optimization is split out into <strong><code>dccpeep</code></strong>, a
+  fixpoint peephole optimizer over the assembly text, with separate time (<code>-Ot</code>)
+  and size (<code>-Os</code>) strategies.</li>
+<li>The runtime <code>DCCRTL.MAC</code> is <strong>block-structured</strong> into hundreds of public
+  blocks, so every routine has a measurable
+  <code>self</code>/<code>marginal</code> size cost and <code>dccrtlstrip</code> can link only the blocks a
+  program references. The exact current totals are generated on the
+  <a href="../02-runtime-sizes/">runtime size page</a>.</li>
+<li>The back half of the pipeline uses native
+  <strong><a href="../03-utilities/#native-assembler-m80c"><code>m80c</code></a></strong>/
+  <strong><a href="../03-utilities/#native-linker-l80c"><code>l80c</code></a></strong> (or
+  Microsoft <strong><code>M80</code></strong>/<strong><code>L80</code></strong> under <code>ntvcm</code>) for assembly and linking - a
+  shared LINK-80-compatible <code>.REL</code> object format that DCC C Compiler consumes
+  as a fixed target rather than needing to invent its own.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer">
+        
+          
+          <a href="../../12-examples/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Worked examples">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Worked examples
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../01-dccrtlstrip/" class="md-footer__link md-footer__link--next" aria-label="Next: Runtime optimization">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Runtime optimization
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"></path></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright © 2026 David Lee
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.footer", "content.code.copy", "navigation.tabs.sticky", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  
+<script id="init-glightbox">const lightbox = GLightbox({"touchNavigation": true, "loop": false, "zoomable": true, "draggable": true, "openEffect": "zoom", "closeEffect": "zoom", "slideEffect": "slide"});
+document$.subscribe(()=>{ lightbox.reload(); });
+</script></body></html>
