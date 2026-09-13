@@ -27,6 +27,7 @@
 /libdcc-debug-io-adapter-example.so
 /dcc-debug-io-adapter-example.dll
 /build
+/scratch/
 /test_dcc.txt
 /test_dccu.txt
 
