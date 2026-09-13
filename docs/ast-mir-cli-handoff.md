@@ -1,6 +1,6 @@
 # AST/MIR Correctness: Copilot CLI Handoff
 
-Snapshot: 2026-09-12. This handoff requires no prior chat history, VS Code
+Snapshot: 2026-09-13. This handoff requires no prior chat history, VS Code
 session, local memory, or existing build artifacts. GitHub and the current
 checkout are authoritative if the snapshot becomes stale.
 
@@ -30,6 +30,19 @@ still need investigation.
 The current workflow replaces sequential per-family full-suite runs with
 isolated background workers and consolidated integration gates:
 
+- `pwsh scripts/run-mir-proof-suite.ps1` is the phase-gated aggregate entry point
+  for all maintained proof layers. It includes canonical and independent
+  builds, script/static audits, normal and sanitized host tests, debugger-host
+  tests, isolated compiler mutants, both strict release modes, the extended MIR
+  census, and the instrumented coverage workflow. `-List` prints its ordered
+  gates without executing them. Independent preparation gates run concurrently,
+  the stack/no-stack release gates split the CPU budget, and mutation/coverage
+  phases retain their existing bounded schedulers.
+- GitHub CI intentionally runs only the standard cross-platform
+  `runall.ps1 -Mode full` regression gate. Developers run the aggregate proof
+  suite periodically after fully validating proof-related increments locally;
+  clobber, mutation, coverage, extended-corpus, sanitizer, and debugger proof
+  gates are not duplicated on every push or pull request.
 - Assign disjoint source modules and data-only case manifests to workers.
   Keep one owner for shared host tests and one integrator for publication.
 - Workers run new/changed cases and valid controls, not the entire corpus.
@@ -59,6 +72,40 @@ isolated background workers and consolidated integration gates:
   `%8m` profile pools avoid serialization on profile-file locks.
   Report-only runs verify recorded input/tool/profile hashes and do not rerun
   targets. Do not merge worker revisions or faulty compiler profiles.
+
+The latest local aggregate validation used 24 workers. Phases 1-10 passed under
+`build/mir-proof-suite-validation-4`: 131 script tests, all static/runtime
+audits, normal and ASan/UBSan MIR host tests (5/5 each), debugger-host tests
+(10/10), 23 killed compiler mutants plus the valid baseline, both strict
+stack/no-stack release gates, and 548 extended-census rows across both modes.
+Phase 11 separately ran four 3,039-function debug censuses. Its
+phase-11 publication correctly stopped because `scripts/runall.ps1` changed
+after the immutable input snapshot. A clean phase-11 replay against the
+unchanged current tree then passed under
+`build/mir-proof-suite-validation-5/coverage`, including all clobber and
+mutation campaigns, 5/5 instrumented host tests, 397 hashed raw profiles, and
+final checkpoint verification. Runner and process-supervision hardening then
+made that snapshot stale. The exact hardened tree was recollected under
+`build/mir-proof-suite-validation-6/coverage`; all 40 mutation campaigns, four
+3,039-function debug censuses, 5/5 instrumented host tests, and final immutable
+checkpoint verification passed again with 397 hashed raw profiles. The
+subsequent review found and fixed three runner-isolation defects: concurrent
+release diagnostics shared one directory, Windows-native coverage paths were
+passed directly to POSIX `sh`, and lowercase `dcc_*` controls escaped
+sanitation. The complete 134-test script suite and a focused isolated
+116-diagnostic run passed after those fixes. Validation 6 was correctly
+rejected as stale; the exact final tree was recollected under
+`build/mir-proof-suite-validation-7/coverage`. All 40 mutation campaigns, four
+3,039-function debug censuses, 5/5 instrumented host tests, all clobber
+campaigns, 397 hashed raw profiles, and final immutable checkpoint verification
+passed. Its `inputs.json` SHA-256 is
+`567e9ba8fabdcc8b76865872255406117e35a4b7f0b79ccb2e0ea3eda5e7c2b1`.
+The
+selected AST/MIR result remains 4,617/4,617 functions (100.00%),
+190,992/202,799 lines (94.18%),
+104,409/155,968 branches (66.94%), and 173,590/183,486 regions (94.61%), with
+51,301 branch outcomes still unreviewed. These generated artifacts are local
+evidence, not tracked files or a claim that broader correctness work is done.
 
 Each worktree needs its own binaries and CMake output directory. The canonical
 build's `-OutputPath` redirects intermediate artifacts, not repository-root

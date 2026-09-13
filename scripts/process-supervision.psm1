@@ -11,7 +11,6 @@ function Start-SupervisedProcess(
     [ValidateRange(0.01, 86400)][double]$DrainTimeoutSeconds = 5
 ) {
     $start = [System.Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = (Get-Process -Id $PID).Path
     $start.WorkingDirectory = $WorkingDirectory
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
@@ -30,14 +29,30 @@ function Start-SupervisedProcess(
     $jobName = "Local\dcc-process-" + [guid]::NewGuid()
     $job = [IntPtr]::Zero
     $start.Environment["DCC_PROCESS_SCOPE"] = $scope
-    $request = Join-Path $scope "request.json"
-    [ordered]@{
-        FilePath = $FilePath; Arguments = @($Arguments)
-        JobName = $jobName; ScopePath = $scope
-    } | ConvertTo-Json | Set-Content -LiteralPath $request
-    foreach ($argument in @("-NoLogo", "-NoProfile", "-NonInteractive", "-File",
-        (Join-Path $PSScriptRoot "process-supervisor.ps1"), "-RequestPath", $request)) {
-        $start.ArgumentList.Add($argument)
+    $useDirectUnixSupervisor = -not $IsWindows -and
+        $null -ne (Get-Command "setsid" -ErrorAction SilentlyContinue)
+    if (-not $useDirectUnixSupervisor) {
+        $start.FileName = (Get-Process -Id $PID).Path
+        $request = Join-Path $scope "request.json"
+        [ordered]@{
+            FilePath = $FilePath; Arguments = @($Arguments)
+            JobName = $jobName; ScopePath = $scope
+        } | ConvertTo-Json | Set-Content -LiteralPath $request
+        foreach ($argument in @("-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+            (Join-Path $PSScriptRoot "process-supervisor.ps1"), "-RequestPath", $request)) {
+            $start.ArgumentList.Add($argument)
+        }
+    } else {
+        # setsid and exec provide the same killable process group without an
+        # extra PowerShell runtime. Platforms without the setsid utility use
+        # the portable PowerShell supervisor, whose native helper calls setsid.
+        $start.FileName = "setsid"
+        foreach ($argument in @(
+            "/bin/sh", "-c",
+            'umask 077; : > "$DCC_PROCESS_SCOPE/ready"; exec "$@"',
+            "dcc-process-supervisor", $FilePath) + $Arguments) {
+            $start.ArgumentList.Add($argument)
+        }
     }
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $start

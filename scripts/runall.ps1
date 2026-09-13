@@ -2280,7 +2280,10 @@ if (-not $Apps) {
     Write-Host "RUNNING DIAGNOSTICS SUITE" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     if ($FailuresOnly) {
-        $diagnosticsOutput = & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc $diagnosticDcc 2>&1
+        $diagnosticsOutput = & pwsh `
+            (Join-Path $PSScriptRoot "run-diagnostics.ps1") `
+            -Dcc $diagnosticDcc `
+            -BuildDir (Join-Path $BuildDir "diagnostics") 2>&1
         $diagnosticsExitCode = $LASTEXITCODE
         if ($diagnosticsExitCode -ne 0) {
             foreach ($line in @($diagnosticsOutput)) { Write-Host $line }
@@ -2290,7 +2293,9 @@ if (-not $Apps) {
         }
     }
     else {
-        & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc $diagnosticDcc
+        & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") `
+            -Dcc $diagnosticDcc `
+            -BuildDir (Join-Path $BuildDir "diagnostics")
         $diagnosticsExitCode = $LASTEXITCODE
     }
     $diagnosticsPassed = ($diagnosticsExitCode -eq 0)

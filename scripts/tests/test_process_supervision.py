@@ -136,6 +136,21 @@ Stop-SupervisedProcess $child
 ''')
         self.assertEqual(result, {"exitCode": 0, "timedOut": False, "output": "42"})
 
+    @unittest.skipIf(os.name == "nt", "setsid fallback is Unix-only")
+    def test_missing_setsid_uses_portable_supervisor(self):
+        environment = dict(os.environ, PATH=str(self.workspace / "empty-path"))
+        result = self.run_powershell(r'''
+$child = Start-SupervisedProcess $python @("-c", "print(43)") $directory
+$requestExists = Test-Path -LiteralPath (Join-Path $child.ScopePath "request.json")
+$result = Complete-SupervisedProcess $child
+@{ exitCode = $result.ExitCode; timedOut = $result.TimedOut;
+   output = $result.Output.Trim(); requestExists = $requestExists } | ConvertTo-Json
+''', environment)
+        self.assertEqual(result, {
+            "exitCode": 0, "timedOut": False, "output": "43",
+            "requestExists": True,
+        })
+
     def test_overall_deadline_and_explicit_stop_clean_live_processes(self):
         code = (
             "import os, pathlib, time; "

@@ -430,6 +430,34 @@ The text summary is written to
 at `build/compiler-coverage/report/html/index.html`. Set `CC`, `PWSH`,
 `LLVM_COV`, or `LLVM_PROFDATA` to override tool discovery.
 
+## `run-mir-proof-suite.ps1`
+
+Runs every maintained AST/MIR proof gate through one phase-gated command:
+canonical and independent builds, script/static audits, normal and sanitized
+host tests, debugger-host tests, isolated compiler mutants, strict stack and
+no-stack release suites, the extended MIR census, and the complete instrumented
+coverage workflow.
+
+```sh
+pwsh ./scripts/run-mir-proof-suite.ps1
+```
+
+The runner uses all detected processors by default and retains each run below
+a unique `build/mir-proof-suite-*` directory. Use `-List` to inspect the
+ordered gates without executing them, or set `-Jobs`, `-MutationJobs`, and
+`-MutationBuildJobs` to control the combined CPU budget. Independent script,
+CMake, host, sanitizer, and debugger preparations run concurrently; the two
+strict release modes split the available workers. Mutation and coverage phases
+retain their own bounded schedulers. A complete run is intentionally long:
+strict native release gates and instrumented coverage execute separately so
+coverage instrumentation cannot substitute for release evidence.
+Ambient `DCC`/`DCC_*` diagnostic, selector, mutation, and driver controls are
+cleared before execution; installation paths such as `DCC_HOME`,
+`DCC_INCLUDE`, `DCC_LIB`, and `DCC_RUNTIME` are preserved. The sanitizer build
+explicitly uses the same discovered or configured Clang toolchain as coverage.
+Run this proof suite periodically on a developer machine; GitHub CI intentionally
+runs only the standard cross-platform `runall.ps1 -Mode full` regression gate.
+
 ## `runall.ps1`
 
 Comprehensive test suite: builds and runs all main test applications with output

@@ -210,7 +210,16 @@ int main(int argc, char **argv) {
         completed = subprocess.run(command, cwd=self.repo, env=environment,
                                    capture_output=True, text=True, timeout=180)
         if expected_exit == 0:
-            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            diagnostic = completed.stdout + completed.stderr
+            if completed.returncode != 0 and (output / "results.json").exists():
+                results = json.loads((output / "results.json").read_text())
+                for result in results:
+                    if result["outcome"] not in ("passed", "killed"):
+                        diagnostic += f"\n{result}\n"
+                        case_output = output / result["mutation"]
+                        for log in sorted(case_output.glob("*.log")):
+                            diagnostic += f"\n--- {log.name} ---\n{log.read_text()}"
+            self.assertEqual(completed.returncode, 0, diagnostic)
         else:
             self.assertNotEqual(completed.returncode, 0)
         results = json.loads((output / "results.json").read_text())
