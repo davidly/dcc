@@ -1,0 +1,14 @@
+[
+  {
+    "Name": "astfold",
+    "Group": "ast-fold-wave5",
+    "Sources": ["tests/mir-clobber/astfold.c"],
+    "Defines": [],
+    "Expected": [
+      "bool folds=1/1,1/1,0/0",
+      "astfold passed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false]
+  }
+]

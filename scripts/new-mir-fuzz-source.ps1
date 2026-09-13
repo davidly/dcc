@@ -19,6 +19,8 @@ $source = [System.Text.StringBuilder]::new()
 [void]$source.AppendLine('#endif')
 [void]$source.AppendLine('unsigned int touch8(unsigned char *target, unsigned char *alias, unsigned int value) { *target = (unsigned char)(*target ^ value); return *alias; }')
 [void]$source.AppendLine('unsigned int touch16(unsigned int *target, unsigned int *alias, unsigned int value) { *target ^= value; return *alias; }')
+[void]$source.AppendLine('unsigned int alter8(unsigned char *target, unsigned char *alias, unsigned int value) { *alias = (unsigned char)(*alias + value); return *target; }')
+[void]$source.AppendLine('unsigned int alter16(unsigned int *target, unsigned int *alias, unsigned int value) { *alias += value; return *target; }')
 $expected = [System.Collections.Generic.List[int]]::new()
 for ($program = 0; $program -lt $Programs; ++$program) {
     $width = if (($program % 2) -eq 0) { 8 } else { 16 }
@@ -30,7 +32,7 @@ for ($program = 0; $program -lt $Programs; ++$program) {
     }
     [void]$source.AppendLine("unsigned int fuzz$program(unsigned int seed) {")
     [void]$source.AppendLine("$element data[4]; $element *alias; unsigned int first, second, saved, count; int slot;")
-    [void]$source.AppendLine("unsigned int (*callback)($element *, $element *, unsigned int) = touch$width;")
+    [void]$source.AppendLine("unsigned int (*callback)($element *, $element *, unsigned int) = (seed & 64U) ? touch$width : alter$width;")
     [void]$source.AppendLine('for (slot = 0; slot < 4; ++slot) data[slot] = seed + (unsigned int)slot * 17U;')
     [void]$source.AppendLine('alias = (seed & 1U) ? &data[1] : &data[2]; first = seed; second = seed ^ 43690U; saved = data[1];')
     foreach ($operation in $operations) {
@@ -62,8 +64,15 @@ for ($program = 0; $program -lt $Programs; ++$program) {
                 3 { $first -shr $operation.Shift }
                 4 { [long][Math]::Floor($first / $operation.Constant) }
             }
-            $data[1] = ($data[1] -bxor $first) -band $mask
-            $second = ($second + $data[$aliasIndex]) -band 65535
+            if (($sample -band 64) -ne 0) {
+                $data[1] = ($data[1] -bxor $first) -band $mask
+                $callbackResult = $data[$aliasIndex]
+            } else {
+                $data[$aliasIndex] =
+                    ($data[$aliasIndex] + $first) -band $mask
+                $callbackResult = $data[1]
+            }
+            $second = ($second + $callbackResult) -band 65535
         }
         for ($count = 0; $count -lt ($sample -band 3); ++$count) {
             $first = ($first + $data[$count]) -band 65535

@@ -1,0 +1,93 @@
+[
+  {
+    "Name": "fr26exact",
+    "Group": "for-increment-wave26",
+    "Sources": ["tests/mir-clobber/frinc26.c"],
+    "Defines": [],
+    "Expected": ["for increment 10,10,4,4,14,22,14"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "for-increment-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "fr26alt",
+    "Group": "for-increment-wave26",
+    "Sources": ["tests/mir-clobber/frinc26.c"],
+    "Defines": ["FRINC_ALT_STRINGS"],
+    "Expected": ["for increment alternate 10,10,4,4,14,22,14"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "for-increment-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "fr26values",
+    "Group": "for-increment-wave26",
+    "Sources": ["tests/mir-clobber/frinc26.c"],
+    "Defines": ["FRINC_CHANGED_VALUES"],
+    "Expected": ["for increment 6,6,3,3,9,22,14"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "for-increment-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "fr26volatile",
+    "Group": "for-increment-wave26",
+    "Sources": ["tests/mir-clobber/frinc26.c"],
+    "Defines": ["FRINC_VOLATILE_RESULTS"],
+    "Expected": ["for increment 10,10,4,4,14,22,14"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "for-increment-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "fr26unsigned",
+    "Group": "for-increment-wave26",
+    "Sources": ["tests/mir-clobber/frinc26.c"],
+    "Defines": ["FRINC_UNSIGNED_RESULTS"],
+    "Expected": ["for increment 10,10,4,4,14,22,14"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "for-increment-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "fr26narrow",
+    "Group": "for-increment-wave26",
+    "Sources": ["tests/mir-clobber/frinc26.c"],
+    "Defines": ["FRINC_NARROW_RESULTS"],
+    "Expected": ["for increment 10,10,4,4,14,22,14"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "for-increment-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "fr26debug",
+    "Group": "for-increment-wave26",
+    "Sources": ["tests/mir-clobber/frinc26.c"],
+    "Defines": [],
+    "Expected": ["for increment 10,10,4,4,14,22,14"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  }
+]

@@ -1,0 +1,508 @@
+[
+  {
+    "Name": "buf27exact",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": [
+      "ok: 4K-IOFBF adopted (buffered 28 bytes)",
+      "tsvbuf2 passed with great success",
+      "tsvbuf2 done $tail-no-newline$"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "buf27gline",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "buf27debug",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "DebugModes": ["true"]
+  },
+  {
+    "Name": "buf27generic",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Defines": ["BUF27_GENERIC"],
+    "Expected": ["OK", "buffered generic passed"],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "buf27string",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "1:immediate:123456789",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27direct",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "26:src1:999",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27callid",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "2:immediate:4",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27callname",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "26:identity:88",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27callwide",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "4:type:5",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27loadtype",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "13:type:2",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27loadwidth",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "13:memory_size:7",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27indextype",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "134:type:5",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27indexwidth",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "150:memory_size:2",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27phi",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "127:type:5",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27store",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "125:src1:999",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27unsignedstr",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireExact": true,
+    "MachineMutation": "1:type:49",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "buf27unusedstoretype",
+    "Group": "buffered-console-wave27",
+    "Sources": ["tests/mir-clobber/buf27.c"],
+    "Expected": ["tsvbuf2 passed with great success"],
+    "Exit": 0,
+    "StackModes": [false],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireExact": true,
+    "MachineMutation": "141:type:32767",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "b27fa01",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/b27local.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=1"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa02",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/b27local.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=3"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa03",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=4"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa04",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=5"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa05",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=6"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa06",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=7"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa07",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=8"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa08",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=9"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa09",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=11"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa10",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=12"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa11",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=13"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "b27fa12",
+    "Group": "buffered-console-wave27",
+    "Sources": [
+      "tests/mir-clobber/buf27.c",
+      "tests/mir-clobber/b27fast.c"
+    ],
+    "Defines": [
+      "BUF27_FASTCALL_CLASS=14"
+    ],
+    "Expected": [
+      "tsvbuf2 passed with great success"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "buffered-console-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main"
+  }
+]

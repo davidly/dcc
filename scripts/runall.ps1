@@ -108,7 +108,7 @@ speed:
     which needs no separate pass at all.
 
 .PARAMETER ReportFile
-    CSV path for -Report output (default: "perf_results.csv").
+    CSV path for -Report output (default: "build/perf_results.csv").
 
 .PARAMETER ReportClockHz
     Nominal clock speed (Hz) used to compute the "ms" figure recorded in
@@ -263,7 +263,7 @@ param(
     [switch]$Serial,
     [int]$ThrottleLimit = [Environment]::ProcessorCount,
     [switch]$Report,
-    [string]$ReportFile = "perf_results.csv",
+    [string]$ReportFile = "build/perf_results.csv",
     [long]$ReportClockHz = 400000000,
     [switch]$NoPerfCheck,
     [switch]$UpdatePerfBaseline,
@@ -2270,12 +2270,20 @@ $perfCheckSw.Stop()
 $diagnosticsPassed = $null
 $diagnosticsSw = [System.Diagnostics.Stopwatch]::StartNew()
 if (-not $Apps) {
+    $diagnosticDcc = if ($env:DCC) {
+        $env:DCC
+    } else {
+        Join-Path $script:RepoRoot "dcc"
+    }
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "RUNNING DIAGNOSTICS SUITE" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     if ($FailuresOnly) {
-        $diagnosticsOutput = & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc") 2>&1
+        $diagnosticsOutput = & pwsh `
+            (Join-Path $PSScriptRoot "run-diagnostics.ps1") `
+            -Dcc $diagnosticDcc `
+            -BuildDir (Join-Path $BuildDir "diagnostics") 2>&1
         $diagnosticsExitCode = $LASTEXITCODE
         if ($diagnosticsExitCode -ne 0) {
             foreach ($line in @($diagnosticsOutput)) { Write-Host $line }
@@ -2285,7 +2293,9 @@ if (-not $Apps) {
         }
     }
     else {
-        & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") -Dcc (Join-Path $script:RepoRoot "dcc")
+        & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") `
+            -Dcc $diagnosticDcc `
+            -BuildDir (Join-Path $BuildDir "diagnostics")
         $diagnosticsExitCode = $LASTEXITCODE
     }
     $diagnosticsPassed = ($diagnosticsExitCode -eq 0)

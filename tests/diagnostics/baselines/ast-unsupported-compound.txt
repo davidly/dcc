@@ -1,0 +1,4 @@
+<source>:7: error DCC-E1002: unsupported AST statement near '{'
+        {
+        ^
+dcc: 1 error(s)

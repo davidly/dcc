@@ -1,0 +1,72 @@
+[
+  {
+    "Name": "a27alt",
+    "Group": "abort-wave27",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW27_ALT_STRINGS"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave27 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "a27buffer",
+    "Group": "abort-wave27",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW27_LARGE_BUFFER"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "a27vfile",
+    "Group": "abort-wave27",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW27_VOLATILE_FILE"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "a27vfail",
+    "Group": "abort-wave27",
+    "Sources": ["tests/mir-clobber/abortw13.c"],
+    "Defines": ["AW27_VOLATILE_FAILURES"],
+    "Expected": [
+      "oracle files=1 open=3 puts=1 close=2 rename=1 gets=1 compare=1 remove=1 check=9 print=1 printable=7 space=5 failures=0",
+      "abort wave13 ok",
+      "abort-call=1"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "abort-file-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  }
+]

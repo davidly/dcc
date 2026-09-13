@@ -10,11 +10,27 @@
 
 #include <stdio.h>
 
+#ifndef MIR_CLOBBER_IF_COUNT
+#define MIR_CLOBBER_IF_COUNT 41
+#endif
+#ifndef MIR_CLOBBER_IF_I010
+#define MIR_CLOBBER_IF_I010 7005
+#endif
+#ifndef PTRW25_FIRST_WRAPPER_INDEX
+#define PTRW25_FIRST_WRAPPER_INDEX 0
+#endif
+
+#ifdef PTRW25_UNSIGNED_CHAR_DATA
+typedef unsigned char ptrw25_char_t;
+#else
+typedef char ptrw25_char_t;
+#endif
+
 struct Leaf {
     int v;
     int a[4];
-    char cv;
-    char ca[4];
+    ptrw25_char_t cv;
+    ptrw25_char_t ca[4];
     long lv;
     long la[4];
 };
@@ -23,10 +39,10 @@ struct Node {
     struct Leaf leaf[3];
     struct Leaf *pl;
     int *pi;
-    char *pc;
+    ptrw25_char_t *pc;
     long *plong;
     int m[2][3];
-    char cm[2][3];
+    ptrw25_char_t cm[2][3];
     long lm[2][3];
 };
 
@@ -35,19 +51,35 @@ struct Wrapper {
     struct Node *pn;
     struct Leaf *lp[3];
     int *ip[4];
-    char *cp[4];
+    ptrw25_char_t *cp[4];
     long *longp[4];
 };
 
+#ifdef PTRW25_STATIC_GLOBALS
+static
+#endif
 struct Wrapper gw[2];
+#ifdef PTRW25_STATIC_GLOBALS
+static
+#endif
 struct Wrapper *gwp[2];
+#ifdef PTRW25_STATIC_GLOBALS
+static
+#endif
 struct Wrapper **gwpp[2];
 
+#ifdef PTRW25_VOLATILE_GLOBAL_INT
+volatile
+#endif
 int gi[8];
-char gc[8];
+ptrw25_char_t gc[8];
 long gl[8];
 
+#ifdef PTRW25_FASTCALL_CHECK
+int fails;
+#else
 static int fails;
+#endif
 
 static void fail(name)
 char *name;
@@ -56,6 +88,7 @@ char *name;
     fails++;
 }
 
+#ifndef PTRW25_FASTCALL_CHECK
 static void check_int(name, got, exp)
 char *name;
 int got;
@@ -66,13 +99,62 @@ int exp;
         fails++;
     }
 }
+#else
+extern void __fastcall check_int(char *name, int got, int exp);
+#asm
+_check_int:
+        push    bc
+        push    de
+        push    hl
+        ld      a,e
+        sub     c
+        ld      a,d
+        sbc     a,b
+        jp      z,_ptrw25_check_ok
+        ld      hl,_ptrw25_check_format
+        push    hl
+        extrn   _printf
+        call    _printf
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
+        ld      hl,(_fails)
+        inc     hl
+        ld      (_fails),hl
+        ret
+_ptrw25_check_ok:
+        pop     bc
+        pop     bc
+        pop     bc
+        ret
+_ptrw25_check_format:
+        db      'FAIL %s got %d expected %d',13,10,0
+#endasm
+#endif
 
+#ifndef PTRW25_FASTCALL_PICKW
 static struct Wrapper *pickw(pp, n)
 struct Wrapper **pp;
 int n;
 {
     return *(pp + n);
 }
+#else
+extern struct Wrapper *__fastcall pickw(
+    struct Wrapper **pp, int n);
+#asm
+_pickw:
+        ex      de,hl
+        add     hl,hl
+        add     hl,de
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl
+        ret
+#endasm
+#endif
 
 static struct Node *pickn(wp, n)
 struct Wrapper *wp;
@@ -95,7 +177,7 @@ int n;
     return *(wp->ip + n);
 }
 
-static char *pickcp(wp, n)
+static ptrw25_char_t *pickcp(wp, n)
 struct Wrapper *wp;
 int n;
 {
@@ -123,18 +205,21 @@ int base;
     for (ni = 0; ni < 2; ni++) {
         for (li = 0; li < 3; li++) {
             w->n[ni].leaf[li].v = base + ni * 100 + li * 10 + 1;
-            w->n[ni].leaf[li].cv = (char)((base + ni * 20 + li * 3 + 2) & 127);
+            w->n[ni].leaf[li].cv = (ptrw25_char_t)
+                ((base + ni * 20 + li * 3 + 2) & 127);
             w->n[ni].leaf[li].lv = (long)base * 1000L + (long)ni * 100L + (long)li * 10L + 3L;
             for (k = 0; k < 4; k++) {
                 w->n[ni].leaf[li].a[k] = base + ni * 100 + li * 10 + k + 20;
-                w->n[ni].leaf[li].ca[k] = (char)((base + ni * 20 + li * 5 + k + 30) & 127);
+                w->n[ni].leaf[li].ca[k] = (ptrw25_char_t)
+                    ((base + ni * 20 + li * 5 + k + 30) & 127);
                 w->n[ni].leaf[li].la[k] = (long)base * 1000L + (long)ni * 100L + (long)li * 10L + (long)k + 40L;
             }
         }
         for (r = 0; r < 2; r++) {
             for (c = 0; c < 3; c++) {
                 w->n[ni].m[r][c] = base + ni * 100 + r * 10 + c + 200;
-                w->n[ni].cm[r][c] = (char)((base + ni * 20 + r * 5 + c + 60) & 127);
+                w->n[ni].cm[r][c] = (ptrw25_char_t)
+                    ((base + ni * 20 + r * 5 + c + 60) & 127);
                 w->n[ni].lm[r][c] = (long)base * 1000L + (long)ni * 100L + (long)r * 10L + (long)c + 300L;
             }
         }
@@ -155,7 +240,11 @@ int base;
     }
 }
 
+#ifdef PTRW25_UNSIGNED_RETURN
+unsigned int main()
+#else
 int main()
+#endif
 {
     struct Wrapper lw[2];
     struct Wrapper *lwp[2];
@@ -164,7 +253,7 @@ int main()
     struct Node *np;
     struct Leaf *lp;
     int li[8];
-    char lc[8];
+    ptrw25_char_t lc[8];
     long ll[8];
     int i;
     int count;
@@ -186,23 +275,42 @@ int main()
     lwp[0] = &lw[0];
     lwp[1] = &lw[1];
     lwpp[0] = &lwp[0];
+#ifdef PTRW25_ALIAS_LWPP
+    lwpp[1] = &lwp[0];
+#else
     lwpp[1] = &lwp[1];
+#endif
 
     for (i = 0; i < 8; i++) {
         gi[i] = 5000 + i;
-        gc[i] = (char)(70 + i);
+        gc[i] = (ptrw25_char_t)(70 + i);
         gl[i] = 600000L + (long)i;
         li[i] = 7000 + i;
-        lc[i] = (char)(80 + i);
+        lc[i] = (ptrw25_char_t)(80 + i);
         ll[i] = 800000L + (long)i;
     }
 
+#ifdef PTRW25_EQUIVALENT_ADDRESS_FORM
+    wp = lw + 0;
+#else
     wp = &lw[0];
+#endif
     np = &lw[0].n[0];
     lp = &lw[0].n[0].leaf[0];
 
     count = 0;
-    if ((*lwpp[0])->n[1].leaf[2].a[3] == 3143) count++; else fail("if_i001");
+#ifdef PTRW25_POINTER_TRUTHINESS
+    if ((*lwpp[0]) &&
+        (*lwpp[0])->n[1].leaf[2].a[3] == 3143)
+        count++;
+    else
+        fail("if_i001");
+#else
+    if ((*lwpp[PTRW25_FIRST_WRAPPER_INDEX])->n[1].leaf[2].a[3] == 3143)
+        count++;
+    else
+        fail("if_i001");
+#endif
     if ((*(lwpp[1]))->pn[1].leaf[0].v == 4101) count++; else fail("if_i002");
     if ((*(*gwpp[0])).n[0].pl->a[2] == 1032) count++; else fail("if_i003");
     if (*((*(*gwpp[1])).n[1].pi + 2) == 2312) count++; else fail("if_i004");
@@ -211,7 +319,10 @@ int main()
     if (pickl(&lw[1].n[1], 2)->v == 4121) count++; else fail("if_i007");
     if (*(&((&lw[0])->n[0].m[1][2])) == 3212) count++; else fail("if_i008");
     if (*(gi + 5) == 5005) count++; else fail("if_i009");
-    if (*((li + 2) + 3) == 7005) count++; else fail("if_i010");
+    if (*((li + 2) + 3) == MIR_CLOBBER_IF_I010)
+        count++;
+    else
+        fail("if_i010");
     if ((*lwpp[0])->n[1].leaf[2].ca[3] == 119) count++; else fail("if_c001");
     if ((*(lwpp[1]))->pn[1].leaf[0].cv == 54) count++; else fail("if_c002");
     if ((*(*gwpp[0])).n[0].pl->ca[2] == 13) count++; else fail("if_c003");
@@ -244,7 +355,7 @@ int main()
     if (pickn(pickw(gwp, 1), 0)->leaf[2].ca[1] < 0) fail("iff_c001"); else count++;
     if (pickl(&lw[1].n[1], 2)->lv != 4000123L) fail("iff_l001"); else count++;
 
-    check_int("if_count", count, 41);
+    check_int("if_count", count, MIR_CLOBBER_IF_COUNT);
 
     i = 0;
     sum = 0;

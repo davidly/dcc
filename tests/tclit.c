@@ -1,6 +1,10 @@
 /* tclit.c - block-scope compound literals. */
 #include <stdio.h>
 
+#ifndef MIR_CLOBBER_POINTER_LITERAL
+#define MIR_CLOBBER_POINTER_LITERAL 77
+#endif
+
 struct Pair {
     int a;
     int b;
@@ -190,9 +194,10 @@ static void check_value_literals_extra(void)
 
     /* Pointer-typed compound literal used as a value (initializer context). */
     {
-        int x = 77;
+        int x = MIR_CLOBBER_POINTER_LITERAL;
         int *xp = (int *){ &x };
-        check_int(*xp, 77, "pointer-typed literal value");
+        check_int(*xp, MIR_CLOBBER_POINTER_LITERAL,
+                  "pointer-typed literal value");
     }
 }
 

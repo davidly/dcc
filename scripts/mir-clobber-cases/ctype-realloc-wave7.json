@@ -1,0 +1,162 @@
+[
+  {
+    "Name": "cr7exact",
+    "Group": "ctype-realloc-wave7",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": [],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireExact": true
+  },
+  {
+    "Name": "cr7ctype",
+    "Group": "ctype-realloc-wave7",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW7_FAST_CTYPE"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true
+  },
+  {
+    "Name": "cr7check",
+    "Group": "ctype-realloc-wave7",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW7_FAST_CHECK"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true
+  },
+  {
+    "Name": "cr7alloc",
+    "Group": "ctype-realloc-wave7",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW7_FAST_ALLOC"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true
+  },
+  {
+    "Name": "cr7copy",
+    "Group": "ctype-realloc-wave7",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW7_FAST_COPY"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true
+  },
+  {
+    "Name": "cr7resize",
+    "Group": "ctype-realloc-wave7",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW7_FAST_RESIZE"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true
+  },
+  {
+    "Name": "cr7compare",
+    "Group": "ctype-realloc-wave7",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW7_FAST_COMPARE"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true
+  },
+  {
+    "Name": "cr7free",
+    "Group": "ctype-realloc-wave7",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW7_FAST_FREE"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true
+  },
+  {
+    "Name": "cr7debug",
+    "Group": "ctype-realloc-wave7-debug",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": [],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  }
+]

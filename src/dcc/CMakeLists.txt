@@ -117,11 +117,57 @@ if(DCC_BUILD_MIR_TESTS)
     add_executable(mir-verify-test
         ../../tests/host/mir_verify.c ${DCC_MIR_TEST_SOURCES})
     target_include_directories(mir-verify-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_executable(mir-scalar-dag-test
+        ../../tests/host/mir_scalar_dag.c ${DCC_MIR_TEST_SOURCES})
+    target_include_directories(
+        mir-scalar-dag-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_executable(mir-selector-isolation-test
+        ../../tests/host/mir_selector_isolation.c
+        ${DCC_MIR_TEST_SOURCES})
+    target_include_directories(
+        mir-selector-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_executable(mir-consteval-isolation-test
+        ../../tests/host/mir_consteval_isolation.c
+        ${DCC_MIR_TEST_SOURCES})
+    target_include_directories(
+        mir-consteval-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_executable(mir-vla-smooth-isolation-test
+        ../../tests/host/mir_vla_smooth_isolation.c
+        ${DCC_MIR_TEST_SOURCES})
+    target_include_directories(
+        mir-vla-smooth-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(
+        mir-vla-smooth-isolation-test PRIVATE
+        DCC_MIR_VLA_SMOOTH_ISOLATION_TEST=1)
     if(DCC_ENABLE_COVERAGE)
         target_compile_options(mir-verify-test PRIVATE
             -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
         set_property(TARGET mir-verify-test APPEND_STRING PROPERTY
             LINK_FLAGS " -fprofile-instr-generate")
+        target_compile_options(mir-scalar-dag-test PRIVATE
+            -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+        set_property(TARGET mir-scalar-dag-test APPEND_STRING PROPERTY
+            LINK_FLAGS " -fprofile-instr-generate")
+        target_compile_options(mir-selector-isolation-test PRIVATE
+            -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+        set_property(TARGET mir-selector-isolation-test APPEND_STRING PROPERTY
+            LINK_FLAGS " -fprofile-instr-generate")
+        target_compile_options(mir-consteval-isolation-test PRIVATE
+            -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+        set_property(TARGET mir-consteval-isolation-test APPEND_STRING PROPERTY
+            LINK_FLAGS " -fprofile-instr-generate")
+        target_compile_options(mir-vla-smooth-isolation-test PRIVATE
+            -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+        set_property(TARGET mir-vla-smooth-isolation-test APPEND_STRING PROPERTY
+            LINK_FLAGS " -fprofile-instr-generate")
     endif()
     add_test(NAME mir-verify COMMAND mir-verify-test)
+    add_test(NAME mir-scalar-dag COMMAND mir-scalar-dag-test)
+    add_test(
+        NAME mir-selector-isolation COMMAND mir-selector-isolation-test)
+    add_test(
+        NAME mir-consteval-isolation COMMAND mir-consteval-isolation-test)
+    add_test(
+        NAME mir-vla-smooth-isolation
+        COMMAND mir-vla-smooth-isolation-test)
 endif()

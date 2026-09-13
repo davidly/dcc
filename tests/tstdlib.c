@@ -58,8 +58,10 @@ static void check_ldiv(const char *name, long numer, long denom,
         fail_long(name, result.quot, expected_quot);
     if (result.rem != expected_rem)
         fail_long(name, result.rem, expected_rem);
+#ifndef MIR_CLOBBER_LDIV_NO_IDENTITY
     if (result.quot * denom + result.rem != numer)
         fail_long(name, result.quot * denom + result.rem, numer);
+#endif
 }
 
 int main(void)

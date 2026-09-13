@@ -18,6 +18,18 @@ try {
     if ($first -notmatch 'expected\[96\]' -or $first -notmatch 'seed=23117') {
         throw "Generated program lacks stable oracle/replay identity"
     }
+    if ($first -notmatch '\? touch8 : alter8' -or
+        $first -notmatch '\? touch16 : alter16' -or
+        [regex]::Matches($first, '\(\*callback\)').Count -ne 12) {
+        throw "Generated program lacks conditional callback coverage"
+    }
+    & $generator -OutputPath "$workspace/single.c" -Seed 23117 -Programs 1
+    $single = [System.IO.File]::ReadAllText("$workspace/single.c")
+    if ($single -notmatch 'expected\[8\]' -or
+        [regex]::Matches($single,
+            'unsigned int fuzz\d+\(unsigned int seed\)').Count -ne 1) {
+        throw "Generated program count does not control oracle size"
+    }
     Write-Host "MIR fuzz generator reproducibility passed"
 } finally {
     Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue

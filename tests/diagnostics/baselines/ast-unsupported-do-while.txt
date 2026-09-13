@@ -1,0 +1,4 @@
+<source>:8: error DCC-E1002: unsupported do-while condition or body near 'do'
+        do {
+        ^
+dcc: 1 error(s)

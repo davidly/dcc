@@ -17,6 +17,8 @@
  */
 
 #include "dcc_mir_machine_internal.h"
+#include <errno.h>
+#include <limits.h>
 #include <stdint.h>
 
 /* Private copy of mir_machine_constant_value (small helper
@@ -75,13 +77,33 @@ void mir_machine_emit_global_word(
 void mir_machine_emit_float_bits(
     MirStream *out, unsigned long bits);
 
+static int mir_machine_report_enabled(const char *template_name)
+{
+    const char *function_filter = getenv("DCC_MIR_MACHINE_FUNCTION");
+    const char *template_filter = getenv("DCC_MIR_MACHINE_TEMPLATE");
+
+    return getenv("DCC_MIR_MACHINE_REPORT") != NULL &&
+           (function_filter == NULL || function_filter[0] == '\0' ||
+            !strcmp(function_filter, mir.name)) &&
+           (template_filter == NULL || template_filter[0] == '\0' ||
+            !strcmp(template_filter, template_name));
+}
+
 int mir_machine_reject(const char *template_name, const char *reason)
 {
-    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+    if (mir_machine_report_enabled(template_name))
         fprintf(stderr,
                 "; MIR machine function=%s template=%s reject=%s\n",
                 mir.name, template_name, reason);
     return 0;
+}
+
+void mir_machine_accept(const char *template_name)
+{
+    if (mir_machine_report_enabled(template_name))
+        fprintf(stderr,
+                "; MIR machine function=%s template=%s accept=emitted\n",
+                mir.name, template_name);
 }
 
 int mir_machine_same_location(
@@ -570,7 +592,7 @@ void mir_emit_final_call_cleanup(
         mir_stream_puts("\tpop bc\n", out);
 }
 
-int mir_try_emit_scheduled_machine_cfg(MirStream *out)
+static int mir_try_emit_scheduled_machine_cfg_once(MirStream *out)
 {
     int result;
 
@@ -590,4 +612,87 @@ int mir_try_emit_scheduled_machine_cfg(MirStream *out)
     if (result >= 0)
         return result;
     return mir_try_emit_constant_folding_kernels(out);
+}
+
+static int mir_machine_apply_diagnostic_mutation(
+    struct MirInsn *saved, int *instruction_out)
+{
+    const char *function = getenv("DCC_MIR_MACHINE_MUTATE_FUNCTION");
+    const char *spec = getenv("DCC_MIR_MACHINE_MUTATE");
+    struct MirInsn *insn;
+    char instruction_text[32];
+    char field[32];
+    char value_text[32];
+    char trailing;
+    char *end;
+    long long instruction_value;
+    long long value;
+    int instruction;
+
+    if (function == NULL || function[0] == 0 ||
+        spec == NULL || spec[0] == 0 ||
+        strcmp(function, mir.name) != 0)
+        return 0;
+    if (sscanf(spec, "%31[^:]:%31[^:]:%31s%c",
+               instruction_text, field, value_text, &trailing) != 3)
+        fatal("invalid DCC_MIR_MACHINE_MUTATE specification");
+    errno = 0;
+    instruction_value = strtoll(instruction_text, &end, 10);
+    if (errno == ERANGE || *end != 0 ||
+        instruction_value < 0 || instruction_value > INT_MAX ||
+        instruction_value >= mir.count)
+        fatal("invalid DCC_MIR_MACHINE_MUTATE specification");
+    errno = 0;
+    value = strtoll(value_text, &end, 10);
+    if (errno == ERANGE || *end != 0)
+        fatal("invalid DCC_MIR_MACHINE_MUTATE value");
+    instruction = (int)instruction_value;
+
+    insn = &mir.insns[instruction];
+    *saved = *insn;
+    *instruction_out = instruction;
+    if ((!strcmp(field, "type") || !strcmp(field, "memory_size") ||
+         !strcmp(field, "src1") || !strcmp(field, "src2")) &&
+        (value < INT_MIN || value > INT_MAX))
+        fatal("DCC_MIR_MACHINE_MUTATE integer field is out of range");
+    if (!strcmp(field, "type"))
+        insn->type = (int)value;
+    else if (!strcmp(field, "immediate")) {
+#if LONG_MAX < LLONG_MAX
+        if (value < LONG_MIN || value > LONG_MAX)
+            fatal("DCC_MIR_MACHINE_MUTATE value is out of range");
+#endif
+        insn->immediate = (long)value;
+    }
+    else if (!strcmp(field, "memory_size"))
+        insn->memory_size = (int)value;
+    else if (!strcmp(field, "src1"))
+        insn->src1 = (int)value;
+    else if (!strcmp(field, "src2"))
+        insn->src2 = (int)value;
+    else if (!strcmp(field, "identity") && value > 0 &&
+             value <= UCHAR_MAX) {
+        insn->object = -1;
+        insn->name[0] = (char)value;
+    }
+    else
+        fatal("unknown DCC_MIR_MACHINE_MUTATE field");
+    mir_invalidate_use_cache();
+    return 1;
+}
+
+int mir_try_emit_scheduled_machine_cfg(MirStream *out)
+{
+    struct MirInsn saved;
+    int instruction = -1;
+    int mutated;
+    int result;
+
+    mutated = mir_machine_apply_diagnostic_mutation(&saved, &instruction);
+    result = mir_try_emit_scheduled_machine_cfg_once(out);
+    if (mutated) {
+        mir.insns[instruction] = saved;
+        mir_invalidate_use_cache();
+    }
+    return result;
 }

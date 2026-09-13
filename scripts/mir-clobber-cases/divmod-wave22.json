@@ -1,0 +1,72 @@
+[
+  {
+    "Name": "ndpositive",
+    "Group": "divmod-wave22",
+    "Sources": ["tests/tdmfuse.c"],
+    "Defines": ["TDMFUSE_POSITIVE_INITIAL"],
+    "Expected": ["checks=66 failures=0", "RESULT: PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "narrowed-divmod-loop",
+    "ExactFunction": "test_while_register_narrowed",
+    "RequireExact": true
+  },
+  {
+    "Name": "ndunsigned",
+    "Group": "divmod-wave22",
+    "Sources": ["tests/tdmfuse.c"],
+    "Defines": ["TDMFUSE_UNSIGNED_COUNTER"],
+    "Expected": ["checks=66 failures=0", "RESULT: PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "narrowed-divmod-loop",
+    "ExactFunction": "test_while_register_narrowed",
+    "RequireExact": true
+  },
+  {
+    "Name": "ndnegative",
+    "Group": "divmod-wave22",
+    "Sources": ["tests/tdmfuse.c"],
+    "Defines": ["TDMFUSE_NEGATIVE_INITIAL"],
+    "Expected": ["checks=66 failures=0", "RESULT: PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "test_while_register_narrowed",
+    "RequiredSelectorFunction": "test_while_register_narrowed",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ndwrap",
+    "Group": "divmod-wave22",
+    "Sources": ["tests/tdmfuse.c"],
+    "Defines": ["TDMFUSE_WRAP_SCALE"],
+    "Expected": ["checks=66 failures=0", "RESULT: PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "test_while_register_narrowed",
+    "RequiredSelectorFunction": "test_while_register_narrowed",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "ndvolatile",
+    "Group": "divmod-wave22",
+    "Sources": ["tests/tdmfuse.c"],
+    "Defines": ["TDMFUSE_VOLATILE_ARRAY"],
+    "Expected": ["checks=66 failures=0", "RESULT: PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "test_while_register_narrowed",
+    "RequiredSelectorFunction": "test_while_register_narrowed",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "nddebug",
+    "Group": "divmod-wave22",
+    "Sources": ["tests/tdmfuse.c"],
+    "Defines": [],
+    "Expected": ["checks=66 failures=0", "RESULT: PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  }
+]

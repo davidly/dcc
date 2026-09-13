@@ -719,6 +719,9 @@ static void forward_attention(void)
     unsigned char i, j;
 
     /* Step 1-3: Q = X.Wq, K = X.Wk, V = X.Wv */
+#ifdef MIR_CLOBBER_DISABLE_PROJECTION_CACHE
+    project_all_qkv();
+#else
     if (projection_cache_state == PCACHE_DISABLED)
         project_all_qkv();
     else if (projection_cache_state == PCACHE_COLD) {
@@ -733,6 +736,7 @@ static void forward_attention(void)
         }
         project_cached_qkv();
     }
+#endif
     /* Step 4: S[i][j] = (Q[i] . K[j]) / sqrt(d), sqrt(16)=4 -> >>2 */
     query = &attention_workspace[QB];
     score = &attention_workspace[AB];

@@ -1,0 +1,246 @@
+[
+  {
+    "Name": "alw28-canonical",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "alw28-full-debug",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [false],
+    "DebugModes": ["true"]
+  },
+  {
+    "Name": "alw28-renamed-runtime",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": [
+      "tests/tmalloch.c",
+      "tests/mir-clobber/alw28abi.c"
+    ],
+    "Defines": ["W28_RENAMED_RUNTIME"],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "alw28-fast-runtime",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": [
+      "tests/tmalloch.c",
+      "tests/mir-clobber/a28fst.c"
+    ],
+    "Defines": ["W28_FAST_RUNTIME"],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "alw28-wide-size-abi",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": [
+      "tests/tmalloch.c",
+      "tests/mir-clobber/alw28abi.c"
+    ],
+    "Defines": ["W28_WIDE_SIZE_RUNTIME"],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true
+  },
+  {
+    "Name": "alw28-fail-first",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": [
+      "tests/tmalloch.c",
+      "tests/mir-clobber/alw28abi.c"
+    ],
+    "Defines": ["W28_RENAMED_RUNTIME", "W28_FAIL_SIZE=32768U"],
+    "Expected": ["tmallochi2: malloc32768 failed"],
+    "Exit": 1, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "alw28-fail-small-block",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": [
+      "tests/tmalloch.c",
+      "tests/mir-clobber/alw28abi.c"
+    ],
+    "Defines": ["W28_RENAMED_RUNTIME", "W28_FAIL_SIZE=32U"],
+    "Expected": ["FAIL malloc after large free returned null"],
+    "Exit": 1, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "alw28-fail-final-small",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": [
+      "tests/tmalloch.c",
+      "tests/mir-clobber/alw28abi.c"
+    ],
+    "Defines": ["W28_RENAMED_RUNTIME", "W28_FAIL_SIZE=1U"],
+    "Expected": ["FAIL small malloc failed"],
+    "Exit": 1, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireExact": true
+  },
+  {
+    "Name": "alw28-volatile-locals",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": ["W28_VOLATILE_LOCALS"],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true
+  },
+  {
+    "Name": "alw28-volatile-bytes",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": ["W28_VOLATILE_BYTES"],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true
+  },
+  {
+    "Name": "alw28-allocation-type",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "1:type:32767",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "alw28-local-width",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "6:memory_size:7",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "alw28-index-width",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "19:memory_size:7",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "alw28-call-type",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "3:type:32767",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "alw28-argument-id",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "2:immediate:32767",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "alw28-free-dataflow",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "59:src1:1734",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "alw28-operator",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "39:immediate:32767",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "alw28-phi-dataflow",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "82:src2:1734",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "alw28-pointer-identity",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "6:identity:88",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "alw28-return-type",
+    "Group": "allocation-lifetime-wave28",
+    "Sources": ["tests/tmalloch.c"],
+    "Defines": [],
+    "Expected": ["tmalloch: all tests passed"],
+    "Exit": 0, "StackModes": [true, false],
+    "ExactTemplate": "allocation-lifetime-runner",
+    "ExactFunction": "main", "RequireRejected": true,
+    "MachineMutation": "198:type:32767",
+    "MachineMutationFunction": "main"
+  }
+]

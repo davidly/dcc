@@ -1,0 +1,643 @@
+[
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-exact",
+    "RequireExact": true
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-check-string-bound",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "37:immediate:32767",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-summary-string-bound",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "666:immediate:32767",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-check-arg-abi",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "38:type:5",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-print-arg-abi",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "669:type:5",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-expected-type",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "48:type:5",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-byte-constant-type",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "8:type:5",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-byte-store-type",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "124:type:2",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-word-store-signedness",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "433:type:34",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-call-hidden-source",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "50:src2:1",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-byte-loop-operator",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "100:immediate:62",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-byte-loop-phi",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "97:src2:0",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-cube-loop-operator",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "426:immediate:43",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-grid-cell-stride",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "551:immediate:7",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-return-dataflow",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "665:src1:0",
+    "MachineMutationFunction": "multidim_wave19"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_BYTE_COLUMNS_5"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-byte-extent",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_CUBE_PLANES_3"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-cube-extent",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_GRID_CELLS_4"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-grid-extent",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_SIGNED_BYTES"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-signed-byte-layout",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_VOLATILE_ROOT"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-volatile-root",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_INITIALIZED_ROOT"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-initialized-root",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_VOLATILE_FAILURES"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-volatile-failures",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_CHECK_VARIADIC"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-variadic-check",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_CHECK_UNSIGNED"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-unsigned-check-abi",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [
+      "MDW19_CALL_ALIAS"
+    ],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "ExactTemplate": "multidim-array-runner",
+    "ExactFunction": "multidim_wave19",
+    "Name": "mdw19-call-alias",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "multidim_wave19",
+    "RequiredSelectorFunction": "multidim_wave19",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Group": "multidim-wave19-debug",
+    "Sources": [
+      "tests/mir-clobber/mdimw19.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "PASS multidim_array",
+      "MDIMW19 oracle failures=0 hash=1976547259 guards=17,51,85,119,153"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "Name": "mdw19-debug",
+    "DebugModes": [
+      "true",
+      "lines"
+    ]
+  }
+]

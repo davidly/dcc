@@ -1,0 +1,411 @@
+[
+  {
+    "Name": "addw23-signed-target",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [
+      "ADDW23_SIGNED_TARGET"
+    ],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 "
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true,
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "addw23-debug",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "true"
+    ]
+  },
+  {
+    "Name": "addw23-volatile-source",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [
+      "ADDW23_VOLATILE_SOURCE"
+    ],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 "
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "addw23-volatile-target",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [
+      "ADDW23_VOLATILE_TARGET"
+    ],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 "
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "addw23-word-check-abi",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [
+      "ADDW23_WORD_CHECK"
+    ],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 "
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "addw23-indirect-check",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [
+      "ADDW23_INDIRECT_CHECK"
+    ],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 "
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "addw23-commuted-addition",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [
+      "ADDW23_COMMUTED_ADDITION"
+    ],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 "
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "addw23-global-address-type",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "25:type:17",
+    "MachineMutationFunction": "additive_wave12"
+  },
+  {
+    "Name": "addw23-phi-type",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "5:type:4",
+    "MachineMutationFunction": "additive_wave12"
+  },
+  {
+    "Name": "addw23-initial-store-source",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "3:src1:999",
+    "MachineMutationFunction": "additive_wave12"
+  },
+  {
+    "Name": "addw23-local-load-type",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "143:type:4",
+    "MachineMutationFunction": "additive_wave12"
+  },
+  {
+    "Name": "addw23-argument-type",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "58:type:2",
+    "MachineMutationFunction": "additive_wave12"
+  },
+  {
+    "Name": "addw23-argument-width",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "58:memory_size:1",
+    "MachineMutationFunction": "additive_wave12"
+  },
+  {
+    "Name": "addw23-argument-secondary-source",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      true
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "58:src2:0",
+    "MachineMutationFunction": "additive_wave12"
+  },
+  {
+    "Name": "addw23-call-immediate",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "69:immediate:1",
+    "MachineMutationFunction": "additive_wave12"
+  },
+  {
+    "Name": "addw23-call-source",
+    "Group": "additive-wave23",
+    "Sources": [
+      "tests/mir-clobber/addw12.c"
+    ],
+    "Defines": [],
+    "Expected": [
+      "ADDW12 failures=0 checks=36 guards=1 calls=6 hash=3855076560 source=3849128021"
+    ],
+    "Exit": 0,
+    "StackModes": [
+      false
+    ],
+    "DebugModes": [
+      "lines"
+    ],
+    "ExactTemplate": "additive-subscript-runner",
+    "ExactFunction": "additive_wave12",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "additive_wave12",
+    "RequiredSelectorFunction": "additive_wave12",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "69:src1:0",
+    "MachineMutationFunction": "additive_wave12"
+  }
+]

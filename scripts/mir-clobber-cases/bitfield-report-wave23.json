@@ -1,0 +1,204 @@
+[
+  {
+    "Name": "bfreport23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": [],
+    "Expected": [
+      "global 5 17 200 1234 1456",
+      "rmw-live 0 0 19 19",
+      "rmw-live-signed -8 -7 -7",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "bitfield-report-sequence",
+    "ExactFunction": "main",
+    "RequireExact": true,
+    "DebugModes": ["lines"]
+  },
+  {
+    "Name": "bfdebug23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": [],
+    "Expected": [
+      "rmw-live-signed -8 -7 -7",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["true"]
+  },
+  {
+    "Name": "bfrename23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": ["MIR_W23_RENAMED_HELPERS"],
+    "Expected": [
+      "return 6 31 255 1000 1292",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "bitfield-report-sequence",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "bfwidth23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": ["MIR_W23_UNSIGNED_WIDTH4"],
+    "Expected": [
+      "global 5 1 200 1234 1440",
+      "return 6 15 255 1000 1276",
+      "rmw-live 8 8 3 3",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "bfsigned23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": ["MIR_W23_SIGNED_A_UNSIGNED"],
+    "Expected": [
+      "rmw-live-signed 8 9 9",
+      "signed-global 13 12 77 102",
+      "signed-return 12 15 30 57",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "bfvolatile23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": ["MIR_W23_VOLATILE_GLOBALS"],
+    "Expected": [
+      "global 5 17 200 1234 1456",
+      "signed-global -3 12 77 86",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "bfstatic23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": ["MIR_W23_STATIC_RESULTS"],
+    "Expected": [
+      "return 6 31 255 1000 1292",
+      "signed-return -4 15 30 41",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "bfwideabi23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": ["MIR_W23_WIDE_MAKE_D"],
+    "Expected": [
+      "return 6 31 255 1000 1292",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "bfxor23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": ["MIR_W23_XOR_RMW"],
+    "Expected": [
+      "rmw 3 2 15 2 4",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "main"
+  },
+  {
+    "Name": "bfstring23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": [],
+    "Expected": [
+      "return 6 31 255 1000 1292",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "bitfield-report-sequence",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "9:immediate:32767",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "bfmember23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": [],
+    "Expected": [
+      "return 6 31 255 1000 1292",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "bitfield-report-sequence",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "207:memory_size:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "bfcalltype23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": [],
+    "Expected": [
+      "return 6 31 255 1000 1292",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "bitfield-report-sequence",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "66:type:5",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "bfrmwtype23",
+    "Group": "bitfield-report-wave23",
+    "Sources": ["tests/tbitfld.c"],
+    "Defines": [],
+    "Expected": [
+      "rmw-live 0 0 19 19",
+      "tbitfield completed"
+    ],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "bitfield-report-sequence",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "MachineMutation": "164:type:5",
+    "MachineMutationFunction": "main"
+  }
+]

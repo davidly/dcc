@@ -1,0 +1,11 @@
+[
+  {
+    "Name": "masn11",
+    "Group": "member-assign-wave11",
+    "Sources": ["tests/mir-clobber/masn11.c"],
+    "Defines": [],
+    "Expected": ["member numeric assignment failures=0"],
+    "Exit": 0,
+    "StackModes": [true, false]
+  }
+]

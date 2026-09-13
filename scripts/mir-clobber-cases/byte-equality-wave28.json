@@ -1,0 +1,90 @@
+[
+  {
+    "Name": "beq28base",
+    "Group": "byte-equality-wave28",
+    "Sources": ["tests/tbyteeq.c"],
+    "Expected": ["tbyteeq PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "byte-equality-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "beq28debug",
+    "Group": "byte-equality-wave28",
+    "Sources": ["tests/tbyteeq.c"],
+    "Expected": ["tbyteeq PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["true"]
+  },
+  {
+    "Name": "beq28names",
+    "Group": "byte-equality-wave28",
+    "Sources": ["tests/tbyteeq.c"],
+    "Defines": ["BYTE_EQUALITY_W28_ALT_STRINGS"],
+    "Expected": ["tbyteeq PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-equality-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "beq28extent",
+    "Group": "byte-equality-wave28",
+    "Sources": ["tests/tbyteeq.c"],
+    "Defines": ["BYTE_EQUALITY_W28_LARGE_ARRAYS"],
+    "Expected": ["tbyteeq PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-equality-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "beq28varray",
+    "Group": "byte-equality-wave28",
+    "Sources": ["tests/tbyteeq.c"],
+    "Defines": ["BYTE_EQUALITY_W28_VOLATILE_ARRAYS"],
+    "Expected": ["tbyteeq PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["lines"],
+    "ExactTemplate": "byte-equality-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "beq28vfail",
+    "Group": "byte-equality-wave28",
+    "Sources": ["tests/tbyteeq.c"],
+    "Defines": ["BYTE_EQUALITY_W28_VOLATILE_FAILURES"],
+    "Expected": ["tbyteeq PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-equality-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "beq28vlocal",
+    "Group": "byte-equality-wave28",
+    "Sources": ["tests/tbyteeq.c"],
+    "Defines": ["BYTE_EQUALITY_W28_VOLATILE_LOCAL"],
+    "Expected": ["tbyteeq PASS"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "byte-equality-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  }
+]

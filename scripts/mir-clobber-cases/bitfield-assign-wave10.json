@@ -1,0 +1,11 @@
+[
+  {
+    "Name": "bfasn10",
+    "Group": "bitfield-assign-wave10",
+    "Sources": ["tests/mir-clobber/bfasn10.c"],
+    "Defines": [],
+    "Expected": ["bitfield numeric assignment failures=0"],
+    "Exit": 0,
+    "StackModes": [true, false]
+  }
+]

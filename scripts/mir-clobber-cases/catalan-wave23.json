@@ -1,0 +1,71 @@
+[
+  {
+    "Name": "catrename",
+    "Group": "catalan-wave23",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_RENAMED_HELPERS"],
+    "Expected": ["0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "catalformat",
+    "Group": "catalan-wave23",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_ALT_FORMAT"],
+    "Expected": ["Catalan=0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "catunsigned",
+    "Group": "catalan-wave23",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_UNSIGNED_COUNTER"],
+    "Expected": ["0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "catvolatile",
+    "Group": "catalan-wave23",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_VOLATILE_ARRAYS"],
+    "Expected": ["0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "catdebug",
+    "Group": "catalan-wave23",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": ["0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  }
+]

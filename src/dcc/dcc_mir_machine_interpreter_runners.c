@@ -350,6 +350,7 @@ struct MirFortranFatalSchedule {
     struct Sym *program_counter;
     struct Sym *statement_count;
     struct Sym *print_function;
+    struct Sym *exit_function;
     int message_stack_offset;
     int statement_stride;
     int text_offset;
@@ -6762,22 +6763,322 @@ static void mir_emit_fortran_grow_schedule(
     mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static int mir_fortran_fatal_signed_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_fortran_fatal_char_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_CHAR &&
+           type_size(type) == 2;
+}
+
+static int mir_fortran_fatal_stream_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           type_size(type) == 2;
+}
+
+static int mir_fortran_fatal_statement_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & TYPE_STRUCT) != 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_fortran_fatal_void_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_VOID &&
+           type_size(type) == 0;
+}
+
+static int mir_fortran_fatal_string_equals(
+    int string_id, const char *expected)
+{
+    size_t length = strlen(expected);
+
+    return string_id >= 0 && string_id < nstrings &&
+           strings[string_id] != NULL &&
+           !string_wide[string_id] &&
+           string_len[string_id] == (int)length &&
+           !memcmp(strings[string_id], expected, length);
+}
+
+static int mir_fortran_fatal_call_target(
+    const struct MirInsn *call, struct Sym *function,
+    int variadic, int fixed_arguments, int noreturn)
+{
+    return call->opcode == MIR_CALL && call->src1 < 0 &&
+           call->memory_flags ==
+               (variadic ? MIR_CALL_FLAG_VARIADIC : 0) &&
+           function != NULL && function->storage == SC_FUNC &&
+           !function->is_funcptr && !function->is_fastcall &&
+           function->is_noreturn == noreturn &&
+           function->has_proto &&
+           function->proto_variadic == variadic &&
+           function->proto_nargs == fixed_arguments &&
+           function->type == call->type &&
+           (call->base_name[0] == 0 ||
+            !strcmp(call->base_name,
+                    asm_name_for(sym_asm_name(function))));
+}
+
+static void mir_fortran_fatal_hash_value(
+    unsigned long long *first, unsigned long long *second,
+    unsigned long long value)
+{
+    *first ^= value;
+    *first *= 1099511628211ULL;
+    *second ^= value + 0x9e3779b97f4a7c15ULL +
+        (*second << 6) + (*second >> 2);
+}
+
+static int mir_fortran_fatal_semantic_payload(void)
+{
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int instruction;
+    int object;
+    int declared;
+    int item;
+
+    if (mir.object_count < 0 ||
+        mir.object_count >
+            (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+        return 0;
+    /*
+     * Symbol spellings and string IDs are normalized here; the matcher
+     * separately binds every used symbol and validates both string contents.
+     */
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)insn->type,
+            (unsigned long long)(unsigned int)
+                (insn->opcode == MIR_STRING_ADDRESS
+                    ? 0 : insn->immediate),
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            (unsigned long long)(unsigned int)insn->object,
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)
+                insn->secondary_offset,
+            (unsigned long long)(unsigned int)
+                insn->inline_temp_id,
+            (unsigned long long)(unsigned int)
+                insn->divmod_cast_types
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_fortran_fatal_hash_value(
+                &first, &second, values[item]);
+    }
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+
+        mir_fortran_fatal_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->storage);
+        mir_fortran_fatal_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->type);
+        mir_fortran_fatal_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->offset);
+        mir_fortran_fatal_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->entry_value);
+        mir_fortran_fatal_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->is_register);
+    }
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)
+                mir.declared_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_type_unstable[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_storage[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dim_counts[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_elem_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_vla_size_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_vla[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_array[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_volatile[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_pointee_is_volatile[declared],
+            (unsigned long long)
+                mir.declared_pointee_volatile_masks[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dynamic_strides[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_const[declared],
+            (unsigned long long)
+                mir.declared_const_values[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_funcptr[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_funcptr_return_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_has_proto[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_nargs[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_variadic[declared]
+        };
+
+        if (mir.declared_dim_counts[declared] < 0 ||
+            mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+            mir.declared_proto_nargs[declared] < 0 ||
+            mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+            return 0;
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_fortran_fatal_hash_value(
+                &first, &second, values[item]);
+        for (item = 0;
+             item < mir.declared_dim_counts[declared]; ++item)
+            mir_fortran_fatal_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_dims[declared][item]);
+        for (item = 0;
+             item < mir.declared_proto_nargs[declared]; ++item)
+            mir_fortran_fatal_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_proto_types[declared][item]);
+    }
+    for (item = 0; item < mir.alias_count; ++item) {
+        mir_fortran_fatal_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)
+                mir.alias_declaration_indices[item]);
+    }
+    {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)mir.count,
+            (unsigned long long)(unsigned int)mir.next_value,
+            (unsigned long long)(unsigned int)mir.next_label,
+            (unsigned long long)(unsigned int)mir.next_call_id,
+            (unsigned long long)(unsigned int)
+                mir.has_indirect_incdec,
+            (unsigned long long)(unsigned int)
+                mir.has_pointer_difference,
+            (unsigned long long)(unsigned int)
+                mir.has_narrowed_for_counter,
+            (unsigned long long)(unsigned int)
+                mir.has_compound_literal,
+            (unsigned long long)(unsigned int)mir.has_vla,
+            (unsigned long long)(unsigned int)
+                mir.implicit_zero_return,
+            (unsigned long long)(unsigned int)
+                mir.has_runtime_stride_param,
+            (unsigned long long)(unsigned int)
+                mir.is_variadic_function,
+            (unsigned long long)(unsigned int)mir.return_type,
+            (unsigned long long)(unsigned int)mir.local_bytes,
+            (unsigned long long)(unsigned int)
+                mir.dead_local_suffix_bytes,
+            (unsigned long long)(unsigned int)
+                mir.aggregate_temp_bytes,
+            (unsigned long long)(unsigned int)mir.opaque_count,
+            (unsigned long long)(unsigned int)mir.object_count,
+            (unsigned long long)(unsigned int)
+                mir.has_declared_register_object,
+            (unsigned long long)(unsigned int)mir.declared_count,
+            (unsigned long long)(unsigned int)mir.alias_count,
+            (unsigned long long)(unsigned int)mir.sink_purpose
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_fortran_fatal_hash_value(
+                &first, &second, values[item]);
+    }
+    if (first == 0x27f0daaf5afffc7bULL &&
+        second == 0x80ffe53abee3f7faULL)
+        return 1;
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s "
+                "template=fortran-fatal-schedule "
+                "reject=semantic-payload "
+                "fingerprint=%016llx:%016llx\n",
+                mir.name, first, second);
+    return 0;
+}
+
+static void mir_emit_fortran_fatal_symbol_call(
+    MirStream *out, struct Sym *function, const char *name)
+{
+    if ((function->storage == SC_EXTERN || function->needs_extrn) &&
+        mir_extrn_should_emit(function))
+        mir_stream_printf(out, "\textrn %s\n", name);
+    mir_stream_printf(out, "\tcall %s\n", name);
+}
+
 static int mir_match_fortran_fatal_schedule(
     struct MirFortranFatalSchedule *plan)
 {
+    const char *print_name;
     const char *exit_name;
+    int print_arguments[5];
+    int exit_arguments[1];
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 81 || mir_cfg_block_count() != 18 ||
         mir.has_vla || mir.aggregate_temp_bytes != 0 ||
-        (mir.return_type & 15) != TYPE_VOID ||
+        mir_has_cfg_backedge() ||
+        !mir_fortran_fatal_void_type(mir.return_type) ||
         !mir_machine_parameter_value_offset(
             mir.insns[1].dst, &plan->message_stack_offset))
-        return 0;
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "shape");
     plan->statements = mir_pascal_scan_symbol(9, 2, 0);
     plan->program_counter = mir_pascal_scan_symbol(11, 2, 0);
     plan->statement_count = mir_pascal_scan_symbol(52, 2, 0);
     plan->print_function = find_global(mir.insns[77].name);
+    plan->exit_function = find_global(mir.insns[80].name);
     plan->statement_stride = (int)mir.insns[24].immediate;
     plan->text_offset = (int)mir.insns[67].immediate;
     plan->format_string_id = (int)mir.insns[5].immediate;
@@ -6787,30 +7088,279 @@ static int mir_match_fortran_fatal_schedule(
         plan->statement_count == NULL ||
         plan->print_function == NULL ||
         plan->statement_stride <= 0 ||
+        plan->statement_stride > 32767 ||
         plan->text_offset < 0 ||
         plan->text_offset + 1 >= plan->statement_stride ||
         plan->format_string_id < 0 ||
         plan->empty_string_id < 0)
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "symbols");
+    if (!mir_fortran_fatal_string_equals(
+            plan->format_string_id,
+            "forint:%s near pc=%d '%s'\n") ||
+        !mir_fortran_fatal_string_equals(
+            plan->empty_string_id, ""))
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "format");
+    if (!mir_fortran_fatal_char_pointer_type(mir.insns[1].type) ||
+        mir_machine_pointee_is_volatile(&mir.insns[1]) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[2].type) ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[5].type) ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[7].type) ||
+        !mir_fortran_fatal_statement_pointer_type(
+            plan->statements->type) ||
+        plan->program_counter->type != plan->statements->type ||
+        !mir_fortran_fatal_signed_word_type(
+            plan->statement_count->type) ||
+        mir.insns[9].type != plan->statements->type ||
+        mir.insns[11].type != plan->program_counter->type ||
+        mir.insns[21].type != plan->program_counter->type ||
+        mir.insns[22].type != plan->statements->type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[23].type) ||
+        !mir_fortran_fatal_signed_word_type(
+            mir.insns[23].secondary_offset) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[24].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[25].type) ||
+        mir.insns[25].secondary_offset != mir.insns[24].type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[31].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[34].type) ||
+        mir.insns[36].type != plan->statements->type ||
+        mir.insns[38].type != plan->program_counter->type ||
+        mir.insns[39].type != plan->statements->type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[40].type) ||
+        mir.insns[40].secondary_offset != plan->statements->type ||
+        mir.insns[50].type != plan->program_counter->type ||
+        mir.insns[51].type != plan->statements->type ||
+        mir.insns[52].type != plan->statement_count->type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[53].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[54].type) ||
+        mir.insns[55].type != plan->statements->type ||
+        mir.insns[55].secondary_offset != mir.insns[54].type ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[56].type) ||
+        mir.insns[56].secondary_offset != plan->statements->type ||
+        mir.insns[66].type != plan->program_counter->type ||
+        type_ptr_depth(mir.insns[67].type) != 2 ||
+        (mir.insns[67].type & 15) != TYPE_CHAR ||
+        mir.insns[67].memory_size != 2 ||
+        mir.insns[67].memory_flags != 0 ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[68].type) ||
+        mir.insns[68].memory_size != 2 ||
+        mir.insns[68].memory_flags != 0 ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[72].type) ||
+        !mir_fortran_fatal_char_pointer_type(mir.insns[75].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[77].type) ||
+        !mir_fortran_fatal_signed_word_type(mir.insns[78].type) ||
+        !mir_fortran_fatal_void_type(mir.insns[80].type))
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "types");
+    if (!mir_fortran_fatal_call_target(
+            &mir.insns[77], plan->print_function, 1, 2, 0) ||
+        !mir_machine_call_arguments(
+            &mir.insns[77], 5, print_arguments) ||
+        print_arguments[0] != mir.insns[2].dst ||
+        print_arguments[1] != mir.insns[5].dst ||
+        print_arguments[2] != mir.insns[7].dst ||
+        print_arguments[3] != mir.insns[34].dst ||
+        print_arguments[4] != mir.insns[75].dst ||
+        !mir_fortran_fatal_stream_pointer_type(
+            plan->print_function->proto_types[0]) ||
+        !mir_fortran_fatal_char_pointer_type(
+            plan->print_function->proto_types[1]) ||
+        !mir_fortran_fatal_call_target(
+            &mir.insns[80], plan->exit_function, 0, 1, 1) ||
+        !mir_machine_call_arguments(
+            &mir.insns[80], 1, exit_arguments) ||
+        exit_arguments[0] != mir.insns[78].dst ||
+        !mir_fortran_fatal_signed_word_type(
+            plan->exit_function->proto_types[0]))
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "calls");
+    if (mir.insns[2].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 2) ||
+        mir.insns[4].opcode != MIR_ARG ||
+        mir.insns[4].immediate != 0 ||
+        mir.insns[4].src1 != mir.insns[2].dst ||
+        mir.insns[5].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[6].opcode != MIR_ARG ||
+        mir.insns[6].immediate != 1 ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[7].opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[7]) ||
+        mir.insns[8].opcode != MIR_ARG ||
+        mir.insns[8].immediate != 2 ||
+        mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[9].opcode != MIR_LOAD ||
+        find_global(mir.insns[9].name) != plan->statements ||
+        mir.insns[10].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[16].label ||
+        mir.insns[11].opcode != MIR_LOAD ||
+        find_global(mir.insns[11].name) !=
+            plan->program_counter ||
+        mir.insns[12].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[16].label ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        mir.insns[15].opcode != MIR_JUMP ||
+        mir.insns[15].label != mir.insns[18].label ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 0) ||
+        mir.insns[19].opcode != MIR_PHI ||
+        mir.insns[19].src1 != mir.insns[14].dst ||
+        mir.insns[19].src2 != mir.insns[17].dst ||
+        mir.insns[19].phi_pred1 != mir.insns[13].label ||
+        mir.insns[19].phi_pred2 != mir.insns[16].label ||
+        mir.insns[20].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        mir.insns[20].label != mir.insns[29].label ||
+        mir.insns[21].opcode != MIR_LOAD ||
+        find_global(mir.insns[21].name) !=
+            plan->program_counter ||
+        mir.insns[22].opcode != MIR_LOAD ||
+        find_global(mir.insns[22].name) != plan->statements ||
+        mir.insns[23].opcode != MIR_BINARY ||
+        mir.insns[23].immediate != '-' ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[24].opcode != MIR_CONST ||
+        mir.insns[25].opcode != MIR_BINARY ||
+        mir.insns[25].immediate != '/' ||
+        mir.insns[25].src1 != mir.insns[23].dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[28].opcode != MIR_JUMP ||
+        mir.insns[28].label != mir.insns[33].label ||
+        !mir_machine_constant_equals(mir.insns[31].dst, 65535) ||
+        mir.insns[34].opcode != MIR_PHI ||
+        mir.insns[34].src1 != mir.insns[25].dst ||
+        mir.insns[34].src2 != mir.insns[31].dst ||
+        mir.insns[34].phi_pred1 != mir.insns[27].label ||
+        mir.insns[34].phi_pred2 != mir.insns[32].label ||
+        mir.insns[35].opcode != MIR_ARG ||
+        mir.insns[35].immediate != 3 ||
+        mir.insns[35].src1 != mir.insns[34].dst ||
+        mir.insns[36].opcode != MIR_LOAD ||
+        find_global(mir.insns[36].name) != plan->statements ||
+        mir.insns[37].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[37].label != mir.insns[45].label ||
+        mir.insns[38].opcode != MIR_LOAD ||
+        find_global(mir.insns[38].name) !=
+            plan->program_counter ||
+        mir.insns[39].opcode != MIR_LOAD ||
+        find_global(mir.insns[39].name) != plan->statements ||
+        mir.insns[40].opcode != MIR_BINARY ||
+        mir.insns[40].immediate != TOK_GE ||
+        mir.insns[40].src1 != mir.insns[38].dst ||
+        mir.insns[40].src2 != mir.insns[39].dst ||
+        mir.insns[41].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        mir.insns[41].label != mir.insns[45].label ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 1) ||
+        mir.insns[44].opcode != MIR_JUMP ||
+        mir.insns[44].label != mir.insns[47].label ||
+        !mir_machine_constant_equals(mir.insns[46].dst, 0) ||
+        mir.insns[48].opcode != MIR_PHI ||
+        mir.insns[48].src1 != mir.insns[43].dst ||
+        mir.insns[48].src2 != mir.insns[46].dst ||
+        mir.insns[48].phi_pred1 != mir.insns[42].label ||
+        mir.insns[48].phi_pred2 != mir.insns[45].label ||
+        mir.insns[49].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[49].src1 != mir.insns[48].dst ||
+        mir.insns[49].label != mir.insns[61].label ||
+        mir.insns[50].opcode != MIR_LOAD ||
+        find_global(mir.insns[50].name) !=
+            plan->program_counter ||
+        mir.insns[51].opcode != MIR_LOAD ||
+        find_global(mir.insns[51].name) != plan->statements ||
+        mir.insns[52].opcode != MIR_LOAD ||
+        find_global(mir.insns[52].name) !=
+            plan->statement_count ||
+        mir.insns[53].opcode != MIR_CONST ||
+        mir.insns[53].immediate !=
+            plan->statement_stride ||
+        mir.insns[54].opcode != MIR_BINARY ||
+        mir.insns[54].immediate != '*' ||
+        mir.insns[54].src1 != mir.insns[52].dst ||
+        mir.insns[54].src2 != mir.insns[53].dst ||
+        mir.insns[55].opcode != MIR_BINARY ||
+        mir.insns[55].immediate != '+' ||
+        mir.insns[55].src1 != mir.insns[51].dst ||
+        mir.insns[55].src2 != mir.insns[54].dst ||
+        mir.insns[56].opcode != MIR_BINARY ||
+        mir.insns[56].immediate != '<' ||
+        mir.insns[56].src1 != mir.insns[50].dst ||
+        mir.insns[56].src2 != mir.insns[55].dst ||
+        mir.insns[57].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[57].src1 != mir.insns[56].dst ||
+        mir.insns[57].label != mir.insns[61].label ||
+        !mir_machine_constant_equals(mir.insns[59].dst, 1) ||
+        mir.insns[60].opcode != MIR_JUMP ||
+        mir.insns[60].label != mir.insns[63].label ||
+        !mir_machine_constant_equals(mir.insns[62].dst, 0) ||
+        mir.insns[64].opcode != MIR_PHI ||
+        mir.insns[64].src1 != mir.insns[59].dst ||
+        mir.insns[64].src2 != mir.insns[62].dst ||
+        mir.insns[64].phi_pred1 != mir.insns[58].label ||
+        mir.insns[64].phi_pred2 != mir.insns[61].label ||
+        mir.insns[65].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[65].src1 != mir.insns[64].dst ||
+        mir.insns[65].label != mir.insns[71].label ||
+        mir.insns[66].opcode != MIR_LOAD ||
+        find_global(mir.insns[66].name) !=
+            plan->program_counter ||
+        mir.insns[67].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[67].src1 != mir.insns[66].dst ||
+        mir.insns[67].immediate != plan->text_offset ||
+        mir.insns[68].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[68].src1 != mir.insns[67].dst ||
+        mir.insns[70].opcode != MIR_JUMP ||
+        mir.insns[70].label != mir.insns[74].label ||
+        mir.insns[75].opcode != MIR_PHI ||
+        mir.insns[75].src1 != mir.insns[68].dst ||
+        mir.insns[75].src2 != mir.insns[72].dst ||
+        mir.insns[75].phi_pred1 != mir.insns[69].label ||
+        mir.insns[75].phi_pred2 != mir.insns[73].label ||
+        mir.insns[76].opcode != MIR_ARG ||
+        mir.insns[76].immediate != 4 ||
+        mir.insns[76].src1 != mir.insns[75].dst ||
+        mir.insns[77].opcode != MIR_CALL ||
+        mir.insns[4].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[6].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[8].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[35].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[76].secondary_offset !=
+            mir.insns[77].secondary_offset ||
+        mir.insns[78].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[78].dst, 1) ||
+        mir.insns[79].opcode != MIR_ARG ||
+        mir.insns[79].immediate != 0 ||
+        mir.insns[79].src1 != mir.insns[78].dst ||
+        mir.insns[80].opcode != MIR_CALL ||
+        mir.insns[79].secondary_offset !=
+            mir.insns[80].secondary_offset)
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "semantics");
+    if (!mir_fortran_fatal_semantic_payload())
         return 0;
-    snprintf(
-        plan->print_name, sizeof(plan->print_name), "%s",
-        mir.insns[77].base_name[0] != 0
-            ? mir.insns[77].base_name
-            : asm_name_for(sym_asm_name(plan->print_function)));
-    exit_name = mir.insns[80].base_name[0] != 0
-        ? mir.insns[80].base_name
-        : mir.insns[80].name;
-    if (exit_name[0] == '_')
-        dcc_copy_str(
-            plan->exit_name, sizeof(plan->exit_name), exit_name);
-    else if (strlen(exit_name) + 2 <= sizeof(plan->exit_name)) {
-        plan->exit_name[0] = '_';
-        dcc_copy_str(
-            plan->exit_name + 1,
-            sizeof(plan->exit_name) - 1, exit_name);
-    }
-    return plan->print_name[0] != 0 &&
-           plan->exit_name[0] != 0;
+    print_name =
+        asm_name_for(sym_asm_name(plan->print_function));
+    exit_name =
+        asm_name_for(sym_asm_name(plan->exit_function));
+    if (print_name == NULL || print_name[0] == 0 ||
+        strlen(print_name) >= sizeof(plan->print_name) ||
+        exit_name == NULL || exit_name[0] == 0 ||
+        strlen(exit_name) >= sizeof(plan->exit_name))
+        return mir_machine_reject(
+            "fortran-fatal-schedule", "call-names");
+    dcc_copy_str(
+        plan->print_name, sizeof(plan->print_name), print_name);
+    dcc_copy_str(
+        plan->exit_name, sizeof(plan->exit_name), exit_name);
+    return 1;
 }
 
 static void mir_emit_fortran_fatal_schedule(
@@ -6877,10 +7427,12 @@ static void mir_emit_fortran_fatal_schedule(
             plan->message_stack_offset + 3);
     mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n\tld hl,2\n\tpush hl\n",
             plan->format_string_id);
-    mir_emit_runtime_call(out, plan->print_name);
+    mir_emit_fortran_fatal_symbol_call(
+        out, plan->print_function, plan->print_name);
     mir_interpreter_file_cleanup(out, 5);
     mir_stream_puts("\tld hl,1\n\tpush hl\n", out);
-    mir_emit_runtime_call(out, plan->exit_name);
+    mir_emit_fortran_fatal_symbol_call(
+        out, plan->exit_function, plan->exit_name);
     mir_stream_puts("\tpop bc\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
@@ -7433,6 +7985,7 @@ int mir_try_emit_interpreter_runners(MirStream *out)
         }
         if (mir_match_fortran_fatal_schedule(
                 &fortran_fatal_plan)) {
+            mir_machine_accept("fortran-fatal-schedule");
             mir_emit_fortran_fatal_schedule(
                 out, &fortran_fatal_plan);
             return 1;

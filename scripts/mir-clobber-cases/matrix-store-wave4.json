@@ -1,0 +1,141 @@
+[
+  {
+    "Name": "mst4ok",
+    "Group": "matrix-store-wave4",
+    "Sources": ["tests/mir-clobber/mst4pf.c"],
+    "Defines": [],
+    "Expected": [
+      "dimensions 2x3 100 10 99 -99 bounds=1111,2222",
+      "rounding 4x1 -1 1 0 0 bounds=3333,4444",
+      "saturation 4x1 32767 -32768 32767 -32767 bounds=5555,6666",
+      "zero-columns 2x0 0 0 77 -77 bounds=7777,8888",
+      "zero-rows 0x3 1234 -2345 88 -88 bounds=9999,-9999"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-store-schedule",
+    "ExactFunction": "matrix_product_store",
+    "RequireExact": true
+  },
+  {
+    "Name": "mst4phi",
+    "Group": "matrix-store-wave4",
+    "Sources": ["tests/mir-clobber/mst4pf.c"],
+    "Defines": [],
+    "Expected": [
+      "dimensions 2x3 100 10 99 -99 bounds=1111,2222",
+      "rounding 4x1 -1 1 0 0 bounds=3333,4444",
+      "saturation 4x1 32767 -32768 32767 -32767 bounds=5555,6666",
+      "zero-columns 2x0 0 0 77 -77 bounds=7777,8888",
+      "zero-rows 0x3 1234 -2345 88 -88 bounds=9999,-9999"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-store-schedule",
+    "ExactFunction": "matrix_product_store",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_product_store",
+    "RequiredSelectorFunction": "matrix_product_store",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "15:src2:23",
+    "MachineMutationFunction": "matrix_product_store"
+  },
+  {
+    "Name": "mst4wid",
+    "Group": "matrix-store-wave4",
+    "Sources": ["tests/mir-clobber/mst4pf.c"],
+    "Defines": [],
+    "Expected": [
+      "dimensions 2x3 100 10 99 -99 bounds=1111,2222",
+      "rounding 4x1 -1 1 0 0 bounds=3333,4444",
+      "saturation 4x1 32767 -32768 32767 -32767 bounds=5555,6666",
+      "zero-columns 2x0 0 0 77 -77 bounds=7777,8888",
+      "zero-rows 0x3 1234 -2345 88 -88 bounds=9999,-9999"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-store-schedule",
+    "ExactFunction": "matrix_product_store",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_product_store",
+    "RequiredSelectorFunction": "matrix_product_store",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "53:memory_size:1",
+    "MachineMutationFunction": "matrix_product_store"
+  },
+  {
+    "Name": "mst4mul",
+    "Group": "matrix-store-wave4",
+    "Sources": ["tests/mir-clobber/mst4pf.c"],
+    "Defines": [],
+    "Expected": [
+      "dimensions 2x3 100 10 99 -99 bounds=1111,2222",
+      "rounding 4x1 -1 1 0 0 bounds=3333,4444",
+      "saturation 4x1 32767 -32768 32767 -32767 bounds=5555,6666",
+      "zero-columns 2x0 0 0 77 -77 bounds=7777,8888",
+      "zero-rows 0x3 1234 -2345 88 -88 bounds=9999,-9999"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-store-schedule",
+    "ExactFunction": "matrix_product_store",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_product_store",
+    "RequiredSelectorFunction": "matrix_product_store",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "55:immediate:43",
+    "MachineMutationFunction": "matrix_product_store"
+  },
+  {
+    "Name": "mst4bnd",
+    "Group": "matrix-store-wave4",
+    "Sources": ["tests/mir-clobber/mst4pf.c"],
+    "Defines": [],
+    "Expected": [
+      "dimensions 2x3 100 10 99 -99 bounds=1111,2222",
+      "rounding 4x1 -1 1 0 0 bounds=3333,4444",
+      "saturation 4x1 32767 -32768 32767 -32767 bounds=5555,6666",
+      "zero-columns 2x0 0 0 77 -77 bounds=7777,8888",
+      "zero-rows 0x3 1234 -2345 88 -88 bounds=9999,-9999"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-store-schedule",
+    "ExactFunction": "matrix_product_store",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_product_store",
+    "RequiredSelectorFunction": "matrix_product_store",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "74:immediate:8388351",
+    "MachineMutationFunction": "matrix_product_store"
+  },
+  {
+    "Name": "mst4out",
+    "Group": "matrix-store-wave4",
+    "Sources": ["tests/mir-clobber/mst4pf.c"],
+    "Defines": [],
+    "Expected": [
+      "dimensions 2x3 100 10 99 -99 bounds=1111,2222",
+      "rounding 4x1 -1 1 0 0 bounds=3333,4444",
+      "saturation 4x1 32767 -32768 32767 -32767 bounds=5555,6666",
+      "zero-columns 2x0 0 0 77 -77 bounds=7777,8888",
+      "zero-rows 0x3 1234 -2345 88 -88 bounds=9999,-9999"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-store-schedule",
+    "ExactFunction": "matrix_product_store",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_product_store",
+    "RequiredSelectorFunction": "matrix_product_store",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "121:memory_size:1",
+    "MachineMutationFunction": "matrix_product_store"
+  }
+]

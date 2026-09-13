@@ -1,0 +1,181 @@
+[
+  {
+    "Name": "mxaddok",
+    "Group": "matrix-add-proof",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": [],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireExact": true
+  },
+  {
+    "Name": "mxaddphi",
+    "Group": "matrix-add-proof",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": [],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_vector_add",
+    "RequiredSelectorFunction": "matrix_vector_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "15:src2:23",
+    "MachineMutationFunction": "matrix_vector_add"
+  },
+  {
+    "Name": "mxaddstr",
+    "Group": "matrix-add-proof",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": [],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_vector_add",
+    "RequiredSelectorFunction": "matrix_vector_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "46:immediate:45",
+    "MachineMutationFunction": "matrix_vector_add"
+  },
+  {
+    "Name": "mxaddwid",
+    "Group": "matrix-add-proof",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": [],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_vector_add",
+    "RequiredSelectorFunction": "matrix_vector_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "53:memory_size:1",
+    "MachineMutationFunction": "matrix_vector_add"
+  },
+  {
+    "Name": "mxaddmul",
+    "Group": "matrix-add-proof",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": [],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_vector_add",
+    "RequiredSelectorFunction": "matrix_vector_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "55:immediate:43",
+    "MachineMutationFunction": "matrix_vector_add"
+  },
+  {
+    "Name": "mxaddbnd",
+    "Group": "matrix-add-proof",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": [],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_vector_add",
+    "RequiredSelectorFunction": "matrix_vector_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "70:immediate:8388351",
+    "MachineMutationFunction": "matrix_vector_add"
+  },
+  {
+    "Name": "mxaddcph",
+    "Group": "matrix-add-proof",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": [],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_vector_add",
+    "RequiredSelectorFunction": "matrix_vector_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "110:src2:100",
+    "MachineMutationFunction": "matrix_vector_add"
+  },
+  {
+    "Name": "mxaddout",
+    "Group": "matrix-add-proof",
+    "Sources": ["tests/mir-clobber/mataddpf.c"],
+    "Defines": [],
+    "Expected": [
+      "basic 107 -43 40 guard=1111,2222",
+      "round 9 11 10 10 guard=3333,4444",
+      "saturation 32767 -32768 32767 -32768 guard=5555,6666",
+      "empty 1234 -2345 guard=7777,8888"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "matrix-product-add-schedule",
+    "ExactFunction": "matrix_vector_add",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "matrix_vector_add",
+    "RequiredSelectorFunction": "matrix_vector_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "129:immediate:45",
+    "MachineMutationFunction": "matrix_vector_add"
+  }
+]

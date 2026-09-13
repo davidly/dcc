@@ -1,0 +1,11 @@
+[
+  {
+    "Name": "ares15",
+    "Group": "assign-result-wave15",
+    "Sources": ["tests/mir-clobber/ares15.c"],
+    "Defines": [],
+    "Expected": ["multidimensional assignment result failures=0"],
+    "Exit": 0,
+    "StackModes": [true, false]
+  }
+]

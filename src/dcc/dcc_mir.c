@@ -238,6 +238,46 @@ static int mir_new_value(void)
     return mir.next_value++;
 }
 
+void mir_record_call_signature(int call_id, const struct Sym *prototype)
+{
+    struct MirCallSignature *signature;
+
+    if (call_id < 0)
+        return;
+    if (call_id >= mir.call_signature_capacity) {
+        int old_capacity = mir.call_signature_capacity;
+        int new_capacity = old_capacity > 0 ? old_capacity : 16;
+        struct MirCallSignature *grown;
+
+        while (new_capacity <= call_id)
+            new_capacity *= 2;
+        grown = (struct MirCallSignature *)realloc(
+            mir.call_signatures, (size_t)new_capacity * sizeof(*grown));
+        if (grown == NULL)
+            fatal("out of memory recording MIR call signatures");
+        mir.call_signatures = grown;
+        memset(mir.call_signatures + old_capacity, 0,
+               (size_t)(new_capacity - old_capacity) *
+                   sizeof(*mir.call_signatures));
+        mir.call_signature_capacity = new_capacity;
+    }
+    signature = &mir.call_signatures[call_id];
+    memset(signature, 0, sizeof(*signature));
+    if (prototype == NULL)
+        return;
+    signature->present = 1;
+    signature->has_proto = prototype->has_proto;
+    signature->parameter_count = prototype->proto_nargs;
+    signature->variadic = prototype->proto_variadic;
+    signature->return_type = prototype->storage == SC_FUNC
+        ? prototype->type
+        : (prototype->funcptr_return_type != 0
+           ? prototype->funcptr_return_type
+           : type_decay_ptr(prototype->type));
+    memcpy(signature->parameter_types, prototype->proto_types,
+           sizeof(signature->parameter_types));
+}
+
 static int mir_new_label(void)
 {
     return mir.next_label++;
@@ -1115,6 +1155,9 @@ static int mir_lower_expr(const struct AstNode *node);
 static void mir_lower_stmt(const struct AstNode *node);
 static int mir_lvalue_type(const struct AstNode *node);
 static int mir_lower_conversion(int value, int target_type);
+static int mir_expr_ast_is_complete(const struct AstNode *node);
+static int mir_lower_aggregate_call_address(const struct AstNode *call,
+                                            const struct Sym *temporary);
 static void mir_emit_ident_store(const struct AstNode *ident, int value);
 static int mir_try_lower_inline_call_expr(const struct AstNode *call,
                                           struct Sym *fn_sym,
@@ -1593,6 +1636,8 @@ static int mir_try_lower_inline_call_expr(const struct AstNode *call,
 
     if (out_value == NULL)
         return 0;
+    if (!mir_expr_ast_is_complete(call))
+        return 0;
     if (fn_sym != NULL &&
         (fn_sym->inline_stmt_expr != NULL || fn_sym->inline_stmt_body != NULL))
         return 0;
@@ -1629,7 +1674,8 @@ static int mir_try_lower_inline_call_stmt(const struct AstNode *call)
     struct AstNode *stmt;
     struct MirInlineCallScope scope;
 
-    if (call == NULL || call->kind != AST_CALL || call->a == NULL ||
+    if (call == NULL || call->kind != AST_CALL ||
+        !mir_expr_ast_is_complete(call) ||
         call->a->kind != AST_IDENT)
         return 0;
     fn_sym = find_global(call->a->sval);
@@ -1737,8 +1783,8 @@ static int mir_reload_bitfield(int address, const struct FieldDef *field,
     return value;
 }
 
-static int mir_lower_aggregate_call_address(const struct AstNode *call,
-                                            const struct Sym *temporary)
+static int mir_lower_aggregate_call_address_impl(const struct AstNode *call,
+                                                 const struct Sym *temporary)
 {
     struct MirInsn *insn;
     int argument;
@@ -2116,32 +2162,15 @@ static void mir_set_node_memory(struct MirInsn *insn,
         insn->memory_flags |= 4;
 }
 
-static int mir_reject_register_address(const struct AstNode *node)
+static int mir_expr_list_metadata_is_valid(const struct AstNode *node)
 {
-    int index;
-
-    if (node == NULL)
+    if (node->kind != AST_CALL)
+        return node->list_len == 0 && node->list_cap == 0 &&
+               node->list == NULL;
+    if (node->list_len < 0 || node->list_cap < 0 ||
+        node->list_len > node->list_cap)
         return 0;
-    if (node->kind == AST_UNARY && node->op == '&' &&
-        node->a != NULL && node->a->kind == AST_IDENT) {
-        struct Sym *symbol = mir_ident_symbol(node->a);
-
-        if (symbol != NULL && symbol->is_register) {
-            dcc_error_at(node->file, node->line, -1,
-                         "cannot take address of register object",
-                         mir_ident_name(node->a));
-            return 1;
-        }
-    }
-    if (mir_reject_register_address(node->a) ||
-        mir_reject_register_address(node->b) ||
-        mir_reject_register_address(node->c) ||
-        mir_reject_register_address(node->d))
-        return 1;
-    for (index = 0; index < node->list_len; ++index)
-        if (mir_reject_register_address(node->list[index]))
-            return 1;
-    return 0;
+    return (node->list_cap == 0) == (node->list == NULL);
 }
 
 static int mir_lower_lvalue_address(const struct AstNode *node)
@@ -2514,7 +2543,507 @@ static int mir_compound_binary_operator(int assignment_operator)
     }
 }
 
+static const struct AstNode *mir_call_callee_base(
+    const struct AstNode *callee)
+{
+    while (callee != NULL && callee->kind == AST_UNARY &&
+           callee->op == '*')
+        callee = callee->a;
+    return callee;
+}
+
+static int mir_call_ast_is_complete(const struct AstNode *node)
+{
+    int argument;
+
+    if (node == NULL || node->kind != AST_CALL || node->a == NULL ||
+        !mir_expr_list_metadata_is_valid(node))
+        return 0;
+    if (node->a->kind == AST_IDENT && node->a->sval == NULL)
+        return 0;
+    for (argument = 0; argument < node->list_len; ++argument)
+        if (node->list[argument] == NULL)
+            return 0;
+    return 1;
+}
+
+static int mir_unary_operator_is_supported(int operation)
+{
+    return operation == '&' || operation == '*' || operation == '+' ||
+           operation == '-' || operation == '!' || operation == '~' ||
+           operation == TOK_INC || operation == TOK_DEC;
+}
+
+static int mir_binary_operator_is_supported(int operation)
+{
+    return operation == '+' || operation == '-' || operation == '*' ||
+           operation == '/' || operation == '%' || operation == '&' ||
+           operation == '|' || operation == '^' || operation == '<' ||
+           operation == '>' || operation == TOK_EQ || operation == TOK_NE ||
+           operation == TOK_LE || operation == TOK_GE ||
+           operation == TOK_SHL || operation == TOK_SHR;
+}
+
+static int mir_assignment_operator_is_supported(int operation)
+{
+    return operation == '=' ||
+           mir_compound_binary_operator(operation) != 0;
+}
+
+#define MIR_AST_PREFLIGHT_INLINE_FRAMES 32
+#define MIR_AST_PREFLIGHT_INLINE_ENTRIES 64
+#define MIR_AST_PREFLIGHT_ACTIVE 1
+#define MIR_AST_PREFLIGHT_COMPLETE 2
+
+struct MirAstPreflightFrame {
+    const struct AstNode *node;
+    size_t next_child;
+    int checked;
+};
+
+struct MirAstPreflightEntry {
+    const struct AstNode *node;
+    unsigned char state;
+};
+
+struct MirAstPreflight {
+    struct MirAstPreflightFrame *frames;
+    size_t frame_count;
+    size_t frame_capacity;
+    struct MirAstPreflightEntry *entries;
+    size_t entry_count;
+    size_t entry_capacity;
+    struct MirAstPreflightFrame
+        inline_frames[MIR_AST_PREFLIGHT_INLINE_FRAMES];
+    struct MirAstPreflightEntry
+        inline_entries[MIR_AST_PREFLIGHT_INLINE_ENTRIES];
+};
+
+static struct MirAstPreflight *mir_active_ast_preflight;
+
+static void mir_ast_preflight_init(struct MirAstPreflight *preflight)
+{
+    preflight->frames = preflight->inline_frames;
+    preflight->frame_count = 0;
+    preflight->frame_capacity = MIR_AST_PREFLIGHT_INLINE_FRAMES;
+    preflight->entries = preflight->inline_entries;
+    preflight->entry_count = 0;
+    preflight->entry_capacity = MIR_AST_PREFLIGHT_INLINE_ENTRIES;
+    memset(preflight->inline_entries, 0, sizeof(preflight->inline_entries));
+}
+
+static void mir_ast_preflight_dispose(struct MirAstPreflight *preflight)
+{
+    if (preflight->frames != preflight->inline_frames)
+        free(preflight->frames);
+    if (preflight->entries != preflight->inline_entries)
+        free(preflight->entries);
+}
+
+static void mir_ast_preflight_grow_frames(
+    struct MirAstPreflight *preflight)
+{
+    struct MirAstPreflightFrame *grown;
+    size_t new_capacity;
+
+    if (preflight->frame_capacity > (size_t)-1 / 2)
+        fatal("out of memory");
+    new_capacity = preflight->frame_capacity * 2;
+    if (new_capacity > (size_t)-1 / sizeof(*grown))
+        fatal("out of memory");
+    grown = (struct MirAstPreflightFrame *)xmalloc(
+        new_capacity * sizeof(*grown));
+    memcpy(grown, preflight->frames,
+           preflight->frame_count * sizeof(*grown));
+    if (preflight->frames != preflight->inline_frames)
+        free(preflight->frames);
+    preflight->frames = grown;
+    preflight->frame_capacity = new_capacity;
+}
+
+static size_t mir_ast_preflight_hash(const struct AstNode *node)
+{
+    size_t hash = (size_t)node;
+
+    hash ^= hash >> 7;
+    hash ^= hash >> 17;
+    return hash;
+}
+
+static struct MirAstPreflightEntry *mir_ast_preflight_find_entry(
+    const struct MirAstPreflight *preflight, const struct AstNode *node)
+{
+    size_t index = mir_ast_preflight_hash(node) &
+                   (preflight->entry_capacity - 1);
+
+    while (preflight->entries[index].node != NULL) {
+        if (preflight->entries[index].node == node)
+            return &preflight->entries[index];
+        index = (index + 1) & (preflight->entry_capacity - 1);
+    }
+    return NULL;
+}
+
+static void mir_ast_preflight_grow_entries(
+    struct MirAstPreflight *preflight)
+{
+    struct MirAstPreflightEntry *grown;
+    struct MirAstPreflightEntry *old_entries = preflight->entries;
+    size_t old_capacity = preflight->entry_capacity;
+    size_t index;
+    size_t new_capacity;
+
+    if (old_capacity > (size_t)-1 / 2)
+        fatal("out of memory");
+    new_capacity = old_capacity * 2;
+    if (new_capacity > (size_t)-1 / sizeof(*grown))
+        fatal("out of memory");
+    grown = (struct MirAstPreflightEntry *)xmalloc(
+        new_capacity * sizeof(*grown));
+    memset(grown, 0, new_capacity * sizeof(*grown));
+    preflight->entries = grown;
+    preflight->entry_capacity = new_capacity;
+    preflight->entry_count = 0;
+    for (index = 0; index < old_capacity; ++index)
+        if (old_entries[index].node != NULL) {
+            size_t slot = mir_ast_preflight_hash(old_entries[index].node) &
+                          (new_capacity - 1);
+            while (grown[slot].node != NULL)
+                slot = (slot + 1) & (new_capacity - 1);
+            grown[slot] = old_entries[index];
+            ++preflight->entry_count;
+        }
+    if (old_entries != preflight->inline_entries)
+        free(old_entries);
+}
+
+static struct MirAstPreflightEntry *mir_ast_preflight_insert_entry(
+    struct MirAstPreflight *preflight, const struct AstNode *node)
+{
+    size_t index;
+
+    if (preflight->entry_count >=
+        preflight->entry_capacity - preflight->entry_capacity / 4)
+        mir_ast_preflight_grow_entries(preflight);
+    index = mir_ast_preflight_hash(node) &
+            (preflight->entry_capacity - 1);
+    while (preflight->entries[index].node != NULL)
+        index = (index + 1) & (preflight->entry_capacity - 1);
+    preflight->entries[index].node = node;
+    preflight->entries[index].state = MIR_AST_PREFLIGHT_ACTIVE;
+    ++preflight->entry_count;
+    return &preflight->entries[index];
+}
+
+static int mir_ast_preflight_push(struct MirAstPreflight *preflight,
+                                  const struct AstNode *node)
+{
+    struct MirAstPreflightEntry *entry;
+    struct MirAstPreflightFrame *frame;
+
+    if (node == NULL)
+        return -1;
+    entry = mir_ast_preflight_find_entry(preflight, node);
+    if (entry != NULL)
+        return entry->state == MIR_AST_PREFLIGHT_COMPLETE ? 0 : -1;
+    (void)mir_ast_preflight_insert_entry(preflight, node);
+    if (preflight->frame_count == preflight->frame_capacity)
+        mir_ast_preflight_grow_frames(preflight);
+    frame = &preflight->frames[preflight->frame_count++];
+    frame->node = node;
+    frame->next_child = 0;
+    frame->checked = 0;
+    return 1;
+}
+
+static void mir_ast_preflight_complete_top(
+    struct MirAstPreflight *preflight)
+{
+    const struct AstNode *node =
+        preflight->frames[preflight->frame_count - 1].node;
+    struct MirAstPreflightEntry *entry =
+        mir_ast_preflight_find_entry(preflight, node);
+
+    if (entry == NULL)
+        fatal("internal MIR AST preflight state");
+    entry->state = MIR_AST_PREFLIGHT_COMPLETE;
+    --preflight->frame_count;
+}
+
+static int mir_ast_preflight_contains(
+    const struct MirAstPreflight *preflight, const struct AstNode *node)
+{
+    const struct MirAstPreflightEntry *entry;
+
+    if (preflight == NULL || node == NULL)
+        return 0;
+    entry = mir_ast_preflight_find_entry(preflight, node);
+    return entry != NULL && entry->state == MIR_AST_PREFLIGHT_COMPLETE;
+}
+
+static int mir_expr_ast_node_is_complete(const struct AstNode *node)
+{
+    if (!mir_expr_list_metadata_is_valid(node))
+        return 0;
+    switch (node->kind) {
+    case AST_INT_LIT:
+    case AST_FLOAT_LIT:
+    case AST_SIZEOF_TYPE:
+        return 1;
+    case AST_STR_LIT:
+        return node->str_index >= 0 || node->sval != NULL;
+    case AST_IDENT:
+        return node->sval != NULL || node->sym != NULL;
+    case AST_CALL:
+        return mir_call_ast_is_complete(node);
+    case AST_MEMBER:
+        return (node->op == '.' || node->op == TOK_ARROW) &&
+               node->sval != NULL;
+    case AST_UNARY:
+        return mir_unary_operator_is_supported(node->op);
+    case AST_POSTFIX:
+        return node->op == TOK_INC || node->op == TOK_DEC;
+    case AST_BINARY:
+        return mir_binary_operator_is_supported(node->op);
+    case AST_ASSIGN:
+        return mir_assignment_operator_is_supported(node->op);
+    case AST_CAST:
+        return node->type != 0;
+    case AST_COMPOUND_LITERAL:
+        return node->sym != NULL;
+    default:
+        return 1;
+    }
+}
+
+static int mir_expr_ast_child(const struct AstNode *node, size_t index,
+                              const struct AstNode **child)
+{
+    switch (node->kind) {
+    case AST_CALL:
+        if (index == 0) {
+            *child = node->a;
+            return 1;
+        }
+        --index;
+        if (index < (size_t)node->list_len) {
+            *child = node->list[index];
+            return 1;
+        }
+        return 0;
+    case AST_INDEX:
+    case AST_LOGAND:
+    case AST_LOGOR:
+    case AST_BINARY:
+    case AST_ASSIGN:
+    case AST_COMMA:
+        if (index < 2) {
+            *child = index == 0 ? node->a : node->b;
+            return 1;
+        }
+        return 0;
+    case AST_COND:
+        if (index < 3) {
+            *child = index == 0 ? node->a :
+                     index == 1 ? node->b : node->c;
+            return 1;
+        }
+        return 0;
+    case AST_MEMBER:
+    case AST_UNARY:
+    case AST_POSTFIX:
+    case AST_CAST:
+    case AST_SIZEOF_EXPR:
+        if (index == 0) {
+            *child = node->a;
+            return 1;
+        }
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+static int mir_expr_ast_preflight(
+    const struct AstNode *node, struct MirAstPreflight *preflight)
+{
+    const struct AstNode *child;
+    int complete = 1;
+    int pushed;
+
+    mir_ast_preflight_init(preflight);
+    if (mir_ast_preflight_push(preflight, node) <= 0)
+        complete = 0;
+    while (complete && preflight->frame_count > 0) {
+        struct MirAstPreflightFrame *frame =
+            &preflight->frames[preflight->frame_count - 1];
+
+        if (!frame->checked) {
+            if (!mir_expr_ast_node_is_complete(frame->node)) {
+                complete = 0;
+                break;
+            }
+            if (frame->node->kind == AST_UNARY &&
+                frame->node->op == '&' && frame->node->a != NULL &&
+                frame->node->a->kind == AST_IDENT) {
+                struct Sym *symbol = mir_ident_symbol(frame->node->a);
+
+                if (symbol != NULL && symbol->is_register) {
+                    dcc_error_at(frame->node->file, frame->node->line, -1,
+                                 "cannot take address of register object",
+                                 mir_ident_name(frame->node->a));
+                    complete = 0;
+                    break;
+                }
+            }
+            frame->checked = 1;
+        }
+        if (mir_expr_ast_child(frame->node, frame->next_child, &child)) {
+            ++frame->next_child;
+            pushed = mir_ast_preflight_push(preflight, child);
+            if (pushed < 0)
+                complete = 0;
+        } else
+            mir_ast_preflight_complete_top(preflight);
+    }
+    return complete;
+}
+
+static int mir_expr_ast_is_complete(const struct AstNode *node)
+{
+    struct MirAstPreflight preflight;
+    int complete;
+
+    if (mir_ast_preflight_contains(mir_active_ast_preflight, node))
+        return 1;
+    complete = mir_expr_ast_preflight(node, &preflight);
+    mir_ast_preflight_dispose(&preflight);
+    return complete;
+}
+
+static int mir_emit_opaque_expr(const struct AstNode *node)
+{
+    struct MirInsn *insn;
+    int value = mir_new_value();
+
+    insn = mir_emit(MIR_OPAQUE);
+    insn->dst = value;
+    insn->type = node->type;
+    insn->immediate = node->kind;
+    return value;
+}
+
+static int mir_lower_expr_impl(const struct AstNode *node);
+
+static int mir_lower_aggregate_call_address(const struct AstNode *call,
+                                            const struct Sym *temporary)
+{
+    struct MirAstPreflight preflight;
+    struct MirAstPreflight *saved_preflight;
+    int value;
+
+    if (call == NULL || call->kind != AST_CALL)
+        return -1;
+    if (mir_ast_preflight_contains(mir_active_ast_preflight, call))
+        return mir_lower_aggregate_call_address_impl(call, temporary);
+    if (!mir_expr_ast_preflight(call, &preflight)) {
+        mir_ast_preflight_dispose(&preflight);
+        return mir_emit_opaque_expr(call);
+    }
+    saved_preflight = mir_active_ast_preflight;
+    mir_active_ast_preflight = &preflight;
+    value = mir_lower_aggregate_call_address_impl(call, temporary);
+    mir_active_ast_preflight = saved_preflight;
+    mir_ast_preflight_dispose(&preflight);
+    return value;
+}
+
 static int mir_lower_expr(const struct AstNode *node)
+{
+    struct MirAstPreflight preflight;
+    struct MirAstPreflight *saved_preflight;
+    int value;
+
+    if (node == NULL)
+        return -1;
+    if (mir_ast_preflight_contains(mir_active_ast_preflight, node))
+        return mir_lower_expr_impl(node);
+    if (!mir_expr_ast_preflight(node, &preflight)) {
+        mir_ast_preflight_dispose(&preflight);
+        return mir_emit_opaque_expr(node);
+    }
+    saved_preflight = mir_active_ast_preflight;
+    mir_active_ast_preflight = &preflight;
+    value = mir_lower_expr_impl(node);
+    mir_active_ast_preflight = saved_preflight;
+    mir_ast_preflight_dispose(&preflight);
+    return value;
+}
+
+static int mir_simple_unary_node(const struct AstNode *node)
+{
+    if (node == NULL)
+        return 0;
+    if (node->kind == AST_CAST)
+        return 1;
+    return node->kind == AST_UNARY && node->op != '*' && node->op != '&' &&
+           node->op != TOK_INC && node->op != TOK_DEC;
+}
+
+static int mir_lower_simple_unary_chain(const struct AstNode *node)
+{
+    const struct AstNode *inline_nodes[32];
+    const struct AstNode **nodes = inline_nodes;
+    const struct AstNode *current = node;
+    size_t capacity = 32;
+    size_t count = 0;
+    size_t index;
+    int value;
+
+    while (mir_simple_unary_node(current)) {
+        if (count == capacity) {
+            const struct AstNode **grown;
+            size_t new_capacity;
+
+            if (capacity > (size_t)-1 / 2)
+                fatal("out of memory");
+            new_capacity = capacity * 2;
+            if (new_capacity > (size_t)-1 / sizeof(*grown))
+                fatal("out of memory");
+            grown = (const struct AstNode **)xmalloc(
+                new_capacity * sizeof(*grown));
+            memcpy(grown, nodes, count * sizeof(*grown));
+            if (nodes != inline_nodes)
+                free(nodes);
+            nodes = grown;
+            capacity = new_capacity;
+        }
+        nodes[count++] = current;
+        current = current->a;
+    }
+    value = mir_lower_expr(current);
+    for (index = count; index > 0; --index) {
+        const struct AstNode *unary = nodes[index - 1];
+        struct MirInsn *insn;
+        int result = mir_new_value();
+
+        insn = mir_emit(MIR_UNARY);
+        insn->dst = result;
+        insn->src1 = value;
+        insn->type = unary->type;
+        insn->immediate = unary->op;
+        if (unary->kind == AST_CAST && type_ptr_depth(unary->type) > 0) {
+            insn->has_pointer_qualifiers = 1;
+            insn->pointee_volatile_mask = unary->pointee_volatile_mask;
+        }
+        value = result;
+    }
+    if (nodes != inline_nodes)
+        free(nodes);
+    return value;
+}
+
+static int mir_lower_expr_impl(const struct AstNode *node)
 {
     struct MirInsn *insn;
     int left;
@@ -2531,8 +3060,6 @@ static int mir_lower_expr(const struct AstNode *node)
     int else_exit_label;
     int i;
 
-    if (node == NULL)
-        return -1;
     switch (node->kind) {
     case AST_INT_LIT:
         value = mir_new_value();
@@ -2567,8 +3094,6 @@ static int mir_lower_expr(const struct AstNode *node)
     case AST_SIZEOF_EXPR:
         {
             struct Sym *vla = ast_sizeof_whole_vla_sym(node->a);
-            if (mir_reject_register_address(node->a))
-                return -1;
             value = mir_new_value();
             if (vla != NULL && vla->vla_size_offset != 0) {
                 insn = mir_emit(MIR_VLA_SIZE);
@@ -2789,18 +3314,7 @@ static int mir_lower_expr(const struct AstNode *node)
             insn->memory_size = type_size(dereferenced_type);
             return value;
         }
-        left = mir_lower_expr(node->a);
-        value = mir_new_value();
-        insn = mir_emit(MIR_UNARY);
-        insn->dst = value;
-        insn->src1 = left;
-        insn->type = node->type;
-        insn->immediate = node->op;
-        if (node->kind == AST_CAST && type_ptr_depth(node->type) > 0) {
-            insn->has_pointer_qualifiers = 1;
-            insn->pointee_volatile_mask = node->pointee_volatile_mask;
-        }
-        return value;
+        return mir_lower_simple_unary_chain(node);
     case AST_POSTFIX:
         if (node->op == TOK_INC || node->op == TOK_DEC) {
             value = mir_lower_incdec(node->a, node->op, 1);
@@ -3259,28 +3773,34 @@ static int mir_lower_expr(const struct AstNode *node)
         {
         int *argument_types = NULL;
         int *argument_values = NULL;
-        int call_id = mir.next_call_id++;
+        int call_id;
         int callee_value = -1;
         int reverse_conditional_arguments = 0;
-        const char *syntactic_name = node->a != NULL &&
-                                     node->a->kind == AST_IDENT
+        const char *syntactic_name;
+        const char *call_name;
+        struct Sym *callee_identifier;
+        int function_pointer_call;
+        struct Sym *function_symbol;
+        struct Sym *call_prototype;
+
+        if (!mir_call_ast_is_complete(node))
+            break;
+        call_id = mir.next_call_id++;
+        syntactic_name = node->a->kind == AST_IDENT
             ? node->a->sval : "<indirect>";
-        const char *call_name = syntactic_name;
-        struct Sym *callee_identifier = node->a != NULL &&
-                                        node->a->kind == AST_IDENT
+        call_name = syntactic_name;
+        callee_identifier = node->a->kind == AST_IDENT
             ? mir_ident_symbol(node->a) : NULL;
-        int function_pointer_call = callee_identifier != NULL &&
-                                    callee_identifier->is_funcptr;
-        struct Sym *function_symbol = node->a != NULL &&
-                                      node->a->kind == AST_IDENT
+        function_pointer_call = callee_identifier != NULL &&
+                                callee_identifier->is_funcptr;
+        function_symbol = node->a->kind == AST_IDENT
             ? (callee_identifier != NULL &&
                callee_identifier->storage == SC_FUNC
                 ? callee_identifier : find_global(call_name))
             : NULL;
-        struct Sym *call_prototype = function_symbol;
+        call_prototype = function_symbol;
         if ((function_symbol == NULL || function_symbol->storage != SC_FUNC) &&
-            (node->a == NULL || node->a->kind != AST_IDENT ||
-             function_pointer_call)) {
+            (node->a->kind != AST_IDENT || function_pointer_call)) {
             call_name = "<indirect>";
             function_symbol = NULL;
         } else if (function_symbol != NULL &&
@@ -3316,13 +3836,12 @@ static int mir_lower_expr(const struct AstNode *node)
             }
         }
         if (strcmp(call_name, "<indirect>") == 0) {
-            const struct AstNode *callee = node->a;
-            while (callee != NULL && callee->kind == AST_UNARY &&
-                   callee->op == '*')
-                callee = callee->a;
+            const struct AstNode *callee =
+                mir_call_callee_base(node->a);
             call_prototype = ast_indirect_call_proto_sym(node);
             callee_value = mir_lower_expr(callee);
         }
+        mir_record_call_signature(call_id, call_prototype);
         if (function_symbol != NULL && node->list_len >= 3) {
             int conditional_argument_count = 0;
 
@@ -3481,12 +4000,7 @@ static int mir_lower_expr(const struct AstNode *node)
     /* Unsupported expressions remain explicit barriers in the prototype.
      * They still define a value so surrounding supported operations preserve
      * their use/def structure. */
-    value = mir_new_value();
-    insn = mir_emit(MIR_OPAQUE);
-    insn->dst = value;
-    insn->type = node->type;
-    insn->immediate = node->kind;
-    return value;
+    return mir_emit_opaque_expr(node);
 }
 
 static void mir_lower_stmt(const struct AstNode *node)
@@ -3787,6 +4301,10 @@ void mir_begin_function(const char *name, const char *assembly_name,
     mir.next_value = 0;
     mir.next_label = 0;
     mir.next_call_id = 0;
+    if (mir.call_signature_capacity > 0)
+        memset(mir.call_signatures, 0,
+               (size_t)mir.call_signature_capacity *
+                   sizeof(*mir.call_signatures));
     mir.next_inline_temp_id = 1;
     mir.has_indirect_incdec = 0;
     mir.has_pointer_difference = 0;
@@ -6033,7 +6551,11 @@ static int mir_declared_index(const char *name)
 static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
 {
     struct MirInsn inserted;
+    int declaration;
+    int declaration_count;
     int event;
+    int event_count;
+    int old_count = mir.count;
 
     if (index < 0 || index > mir.count)
         return NULL;
@@ -6041,9 +6563,35 @@ static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
     memmove(&mir.insns[index + 1], &mir.insns[index],
             (size_t)(mir.count - index - 1) * sizeof(*mir.insns));
     mir.insns[index] = inserted;
-    for (event = 0; event < mir.debug_event_count; ++event)
-        if (mir.debug_events[event].point >= index)
+    event_count = mir.debug_events != NULL ? mir.debug_event_count : 0;
+    if (event_count < 0)
+        event_count = 0;
+    if (event_count > mir.debug_event_capacity)
+        event_count = mir.debug_event_capacity;
+    for (event = 0; event < event_count; ++event)
+        if (mir.debug_events[event].point >= index &&
+            mir.debug_events[event].point <= old_count)
             ++mir.debug_events[event].point;
+    /* Keep valid lexical coordinates attached to the displaced MIR while
+     * leaving malformed values unchanged for later diagnostics. An insertion
+     * exactly at an exclusive scope end remains outside it. */
+    declaration_count = mir.declaration_count;
+    if (declaration_count < 0)
+        declaration_count = 0;
+    if (declaration_count >
+        (int)(sizeof(mir.declaration_placeholders) /
+              sizeof(mir.declaration_placeholders[0])))
+        declaration_count =
+            (int)(sizeof(mir.declaration_placeholders) /
+                  sizeof(mir.declaration_placeholders[0]));
+    for (declaration = 0; declaration < declaration_count; ++declaration) {
+        if (mir.declaration_placeholders[declaration] >= index &&
+            mir.declaration_placeholders[declaration] < old_count)
+            ++mir.declaration_placeholders[declaration];
+        if (mir.declaration_scope_ends[declaration] > index &&
+            mir.declaration_scope_ends[declaration] <= old_count)
+            ++mir.declaration_scope_ends[declaration];
+    }
     return &mir.insns[index];
 }
 
@@ -6574,15 +7122,17 @@ static void mir_insert_phi_forward_return_before(int index,
             mir_insert_instruction_before(
                 index, consumer->opcode);
         struct MirInsn *ret;
+        int consumer_value;
 
         if (consumer_insn == NULL)
             fatal("cannot insert MIR phi-forward consumer");
         mir_init_phi_forward_consumer(consumer_insn, source_value, phi_value,
                                       consumer);
+        consumer_value = consumer_insn->dst;
         ret = mir_insert_instruction_before(index + 1, MIR_RETURN);
         if (ret == NULL)
             fatal("cannot insert MIR phi-forward return");
-        mir_init_phi_forward_return(ret, consumer_insn->dst, terminal_type);
+        mir_init_phi_forward_return(ret, consumer_value, terminal_type);
     } else {
         struct MirInsn *ret = mir_insert_instruction_before(index, MIR_RETURN);
 
@@ -6604,6 +7154,7 @@ static int mir_forward_single_phi_return_join(int successor)
     int explicit_predecessor;
     int source0;
     int source1;
+    int phi_value;
     struct MirInsn consumer_copy;
     const struct MirInsn *consumer_template = NULL;
     int terminal_type;
@@ -6643,6 +7194,7 @@ static int mir_forward_single_phi_return_join(int successor)
     source1 = mir_phi_forward_source_for_predecessor(phi, label_predecessor);
     if (source0 < 0 || source1 < 0)
         return 0;
+    phi_value = phi->dst;
     terminal_type = mir.insns[terminal_instruction].type;
     if (consumer_instruction >= 0) {
         consumer_copy = mir.insns[consumer_instruction];
@@ -6652,19 +7204,21 @@ static int mir_forward_single_phi_return_join(int successor)
     if (consumer_instruction >= 0)
         mir_make_nop(&mir.insns[consumer_instruction]);
     mir_make_nop(&mir.insns[terminal_instruction]);
-    mir_insert_phi_forward_return_before(successor, source1, phi->dst,
+    mir_insert_phi_forward_return_before(successor, source1, phi_value,
                                          consumer_template, terminal_type);
     if (consumer_template != NULL) {
         struct MirInsn *explicit_consumer = &mir.insns[explicit_predecessor];
         struct MirInsn *ret;
+        int consumer_value;
 
-        mir_init_phi_forward_consumer(explicit_consumer, source0, phi->dst,
+        mir_init_phi_forward_consumer(explicit_consumer, source0, phi_value,
                                       consumer_template);
+        consumer_value = explicit_consumer->dst;
         ret = mir_insert_instruction_before(explicit_predecessor + 1,
                                             MIR_RETURN);
         if (ret == NULL)
             fatal("cannot insert MIR phi-forward return");
-        mir_init_phi_forward_return(ret, explicit_consumer->dst,
+        mir_init_phi_forward_return(ret, consumer_value,
                                     terminal_type);
     } else {
         mir_init_phi_forward_return(&mir.insns[explicit_predecessor], source0,
@@ -6977,6 +7531,71 @@ static int mir_try_resolve_deferred_member_address(struct MirInsn *insn)
     return 1;
 }
 
+static int mir_deferred_call_arguments_are_well_ordered(
+    int call_index, int has_proto, int parameter_count, int variadic)
+{
+    const struct MirInsn *call;
+    int argument_count = 0;
+    long last_position = -1;
+    int matching_calls = 0;
+    int instruction;
+
+    /* Do not partially rewrite malformed calls: inserted conversions change
+     * instruction indices, so a late/duplicate argument could otherwise make
+     * the remainder of this pass skip or rewrite the wrong instruction. */
+    if (call_index < 0 || call_index >= mir.count)
+        return 0;
+    call = &mir.insns[call_index];
+    if (call->secondary_offset < 0 ||
+        call->secondary_offset >= mir.next_call_id)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int prior;
+
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            insn->secondary_offset == call->secondary_offset)
+            ++matching_calls;
+        if (insn->opcode != MIR_ARG ||
+            insn->secondary_offset != call->secondary_offset)
+            continue;
+        if (instruction >= call_index || insn->immediate < 0)
+            return 0;
+        for (prior = 0; prior < instruction; ++prior)
+            if (mir.insns[prior].opcode == MIR_ARG &&
+                mir.insns[prior].secondary_offset == call->secondary_offset &&
+                mir.insns[prior].immediate == insn->immediate)
+                return 0;
+        ++argument_count;
+        if (insn->immediate > last_position)
+            last_position = insn->immediate;
+    }
+    if (matching_calls != 1 ||
+        last_position != (long)argument_count - 1)
+        return 0;
+    if (has_proto) {
+        if (parameter_count < 0 || parameter_count > MAX_PROTO_PARAMS ||
+            argument_count < parameter_count ||
+            (!variadic && argument_count != parameter_count))
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_deferred_function_pointer_call_is_well_ordered(
+    int call_index, int declaration)
+{
+    if (declaration < 0 || declaration >= mir.declared_count ||
+        call_index < 0 || call_index >= mir.count ||
+        mir.insns[call_index].src1 >= 0)
+        return 0;
+    return mir_deferred_call_arguments_are_well_ordered(
+        call_index, mir.declared_has_proto[declaration],
+        mir.declared_proto_nargs[declaration],
+        mir.declared_proto_variadic[declaration]);
+}
+
 void mir_resolve_deferred_metadata(void)
 {
 
@@ -7001,19 +7620,22 @@ void mir_resolve_deferred_metadata(void)
         int last = mir.count;
         int scope_label = -1;
         int instruction;
-        if (declaration >= 0 && declaration < mir.declaration_count) {
+        if (declaration != -1) {
+            if (declaration < 0 || declaration >= mir.declaration_count)
+                continue;
             first = mir.declaration_placeholders[declaration];
             last = mir.declaration_scope_ends[declaration];
             scope_label = mir.declaration_scope_labels[declaration];
-            if (first < 0)
-                first = 0;
-            if (last < first || last > mir.count)
-                last = mir.count;
+            if (first < 0 || first >= mir.count)
+                continue;
             if (scope_label >= 0) {
                 int scope_end = mir_find_label(scope_label);
-                if (scope_end >= first)
-                    last = scope_end + 1;
+                if (scope_end < first)
+                    continue;
+                last = scope_end;
             } else if (strstr(mir.alias_internal_names[i], "#b") == NULL) {
+                if (last < first || last > mir.count)
+                    continue;
                 /* A for-init alias ends at its loop-exit branch.  General
                  * block aliases use explicit scope labels and must span
                  * conditional branches within the block. */
@@ -7022,11 +7644,12 @@ void mir_resolve_deferred_metadata(void)
                         int target =
                             mir_find_label(mir.insns[instruction].label);
                         if (target > instruction) {
-                            last = target + 1;
+                            last = target;
                             break;
                         }
                     }
-            }
+            } else if (last < first || last > mir.count)
+                continue;
         }
         for (instruction = first; instruction < last; ++instruction) {
             struct MirInsn *insn = &mir.insns[instruction];
@@ -7160,6 +7783,9 @@ scoped_type_repair_done:
             continue;
         mir_copy_name(callee_name, call->name);
         declaration = mir_declared_index(callee_name);
+        if (!mir_deferred_function_pointer_call_is_well_ordered(
+                i, declaration))
+            continue;
         callee_type = mir_named_type(callee_name);
         callee_value = mir_new_value();
         load = mir_insert_instruction_before(i, MIR_LOAD);
@@ -7248,6 +7874,55 @@ scoped_type_repair_done:
             if (!comparison)
                 insn->type = right->type;
         }
+        /*
+         * Full debug restores a named load's declared type after AST
+         * coercion may have stamped the wider computation type on it.
+         * Recreate the conversion the binary would otherwise assume.
+         */
+        if (opt_debug && comparison &&
+            type_size(insn->secondary_offset) == 4) {
+            if (left != NULL && left->opcode != MIR_CONST &&
+                type_ptr_depth(left->type) == 0 &&
+                !type_is_float(left->type) &&
+                type_size(left->type) > 0 &&
+                type_size(left->type) < 4) {
+                int source_value = insn->src1;
+                int target_type = insn->secondary_offset;
+                int converted_value = mir_new_value();
+                struct MirInsn *conversion =
+                    mir_insert_instruction_before(i, MIR_UNARY);
+
+                conversion->dst = converted_value;
+                conversion->src1 = source_value;
+                conversion->type = target_type;
+                conversion->immediate = 0;
+                ++i;
+                insn = &mir.insns[i];
+                insn->src1 = converted_value;
+            }
+            right = mir_mutable_definition(insn->src2);
+            if (right != NULL && right->opcode != MIR_CONST &&
+                type_ptr_depth(right->type) == 0 &&
+                !type_is_float(right->type) &&
+                type_size(right->type) > 0 &&
+                type_size(right->type) < 4) {
+                int source_value = insn->src2;
+                int target_type = insn->secondary_offset;
+                int converted_value = mir_new_value();
+                struct MirInsn *conversion =
+                    mir_insert_instruction_before(i, MIR_UNARY);
+
+                conversion->dst = converted_value;
+                conversion->src1 = source_value;
+                conversion->type = target_type;
+                conversion->immediate = 0;
+                ++i;
+                insn = &mir.insns[i];
+                insn->src2 = converted_value;
+            }
+            left = mir_mutable_definition(insn->src1);
+            right = mir_mutable_definition(insn->src2);
+        }
         if (!type_is_float(insn->secondary_offset)) {
             if (left != NULL && left->opcode == MIR_CONST &&
                 type_size(left->type) < type_size(insn->secondary_offset))
@@ -7272,17 +7947,49 @@ scoped_type_repair_done:
              mir.insns[i].opcode == MIR_CALL_AGGREGATE) &&
             strcmp(mir.insns[i].name, "<indirect>") != 0) {
             struct Sym *callee = find_global(mir.insns[i].name);
+            int call_id = mir.insns[i].secondary_offset;
             int argument;
-            if (callee == NULL)
+            if (callee == NULL || callee->storage != SC_FUNC ||
+                mir.insns[i].src1 >= 0 || mir.insns[i].src2 >= 0 ||
+                !mir_deferred_call_arguments_are_well_ordered(
+                    i, callee->has_proto, callee->proto_nargs,
+                    callee->proto_variadic))
                 continue;
             for (argument = 0; argument < mir.count; ++argument)
                 if (mir.insns[argument].opcode == MIR_ARG &&
                     mir.insns[argument].secondary_offset ==
-                        mir.insns[i].secondary_offset &&
+                        call_id &&
                     mir.insns[argument].immediate >= 0 &&
-                    mir.insns[argument].immediate < callee->proto_nargs)
-                    mir.insns[argument].type = callee->proto_types[
+                    mir.insns[argument].immediate < callee->proto_nargs) {
+                    int argument_type = callee->proto_types[
                         mir.insns[argument].immediate];
+                    int source_value = mir.insns[argument].src1;
+                    const struct MirInsn *source =
+                        mir_definition(source_value);
+
+                    /*
+                     * As above, full debug can reveal the declared source
+                     * type after lowering folded the prototype conversion
+                     * into the named load.
+                     */
+                    if (opt_debug &&
+                        !type_is_struct_object(argument_type) &&
+                        source != NULL && source->type != 0 &&
+                        source->type != argument_type) {
+                        int converted_value = mir_new_value();
+                        struct MirInsn *conversion =
+                            mir_insert_instruction_before(argument, MIR_UNARY);
+
+                        conversion->dst = converted_value;
+                        conversion->src1 = source_value;
+                        conversion->type = argument_type;
+                        conversion->immediate = 0;
+                        ++argument;
+                        ++i;
+                        mir.insns[argument].src1 = converted_value;
+                    }
+                    mir.insns[argument].type = argument_type;
+                }
         }
 
     for (i = 0; i < mir.count; ++i)
@@ -9613,13 +10320,13 @@ static int mir_lazy_parameter_eligible(const struct MirInsn *parameter)
     if (parameter->opcode != MIR_PARAM || parameter->dst < 0 ||
         parameter->object < 0 || parameter->object >= mir.object_count ||
         mir.has_vla || type_ptr_depth(parameter->type) != 0 ||
-        type_size(parameter->type) < 1 || type_size(parameter->type) > 2 ||
+        type_size(parameter->type) < 1 || type_size(parameter->type) > 4 ||
         type_is_struct_object(parameter->type) ||
         mir_lazy_parameter_semantic_use_count(parameter->dst) != 1)
         return 0;
     object = &mir.objects[parameter->object];
     if (object->storage != SC_PARAM || type_ptr_depth(object->type) != 0 ||
-        type_size(object->type) < 1 || type_size(object->type) > 2 ||
+        type_size(object->type) < 1 || type_size(object->type) > 4 ||
         type_is_struct_object(object->type))
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction)
@@ -11436,6 +12143,160 @@ int mir_probe_wide_colors_for_homed(
     return ok;
 }
 
+struct MirCallPrototype {
+    int has_proto;
+    int parameter_count;
+    int variadic;
+    int return_type;
+    const int *parameter_types;
+};
+
+static int mir_call_prototypes_match(const struct MirCallPrototype *left,
+                                     const struct MirCallPrototype *right)
+{
+    int parameter;
+
+    if (!left->has_proto || !right->has_proto ||
+        left->parameter_count != right->parameter_count ||
+        left->variadic != right->variadic ||
+        left->return_type != right->return_type ||
+        left->parameter_count < 0 ||
+        left->parameter_count > MAX_PROTO_PARAMS)
+        return 0;
+    for (parameter = 0; parameter < left->parameter_count; ++parameter)
+        if (left->parameter_types[parameter] !=
+            right->parameter_types[parameter])
+            return 0;
+    return 1;
+}
+
+static void mir_resolve_value_call_prototype(
+    int value, int call_instruction, int depth,
+    unsigned char *states, struct MirCallPrototype *cache,
+    struct MirCallPrototype *prototype)
+{
+    const struct MirInsn *source = NULL;
+    const struct Sym *callee;
+    int declared;
+    int definition;
+
+    memset(prototype, 0, sizeof(*prototype));
+    if (value < 0 || value >= mir.next_value || depth > mir.next_value)
+        return;
+    if (states[value] == 2) {
+        *prototype = cache[value];
+        return;
+    }
+    if (states[value] == 1)
+        return;
+    states[value] = 1;
+    for (definition = 0; definition < call_instruction; ++definition)
+        if (mir.insns[definition].dst == value) {
+            source = &mir.insns[definition];
+            break;
+        }
+    if (source == NULL)
+        goto resolved;
+    if (source->opcode == MIR_PHI) {
+        struct MirCallPrototype left;
+        struct MirCallPrototype right;
+
+        mir_resolve_value_call_prototype(
+            source->src1, call_instruction, depth + 1, states, cache, &left);
+        mir_resolve_value_call_prototype(
+            source->src2, call_instruction, depth + 1, states, cache, &right);
+        if (mir_call_prototypes_match(&left, &right))
+            *prototype = left;
+        goto resolved;
+    }
+    if (source->opcode == MIR_ADDRESS) {
+        callee = find_global(source->name);
+        if (callee != NULL && callee->storage == SC_FUNC &&
+            callee->has_proto) {
+            prototype->has_proto = 1;
+            prototype->parameter_count = callee->proto_nargs;
+            prototype->variadic = callee->proto_variadic;
+            prototype->return_type = callee->type;
+            prototype->parameter_types = callee->proto_types;
+        }
+        goto resolved;
+    }
+    if (source->opcode != MIR_LOAD && source->opcode != MIR_PARAM)
+        goto resolved;
+    declared = mir_declared_index(source->name);
+    if (declared >= 0) {
+        if (mir.declared_has_proto[declared]) {
+            prototype->has_proto = 1;
+            prototype->parameter_count = mir.declared_proto_nargs[declared];
+            prototype->variadic = mir.declared_proto_variadic[declared];
+            prototype->return_type =
+                mir.declared_funcptr_return_types[declared];
+            prototype->parameter_types =
+                mir.declared_proto_types[declared];
+        }
+    } else {
+        callee = find_global(source->name);
+        if (callee != NULL && callee->has_proto) {
+            prototype->has_proto = 1;
+            prototype->parameter_count = callee->proto_nargs;
+            prototype->variadic = callee->proto_variadic;
+            prototype->return_type = callee->is_funcptr
+                ? callee->funcptr_return_type : callee->type;
+            prototype->parameter_types = callee->proto_types;
+        }
+    }
+resolved:
+    cache[value] = *prototype;
+    states[value] = 2;
+}
+
+static void mir_resolve_call_prototype(const struct MirInsn *call,
+                                       int call_instruction,
+                                       struct MirCallPrototype *prototype)
+{
+    const struct Sym *callee = NULL;
+
+    memset(prototype, 0, sizeof(*prototype));
+    if (call->secondary_offset >= 0 &&
+        call->secondary_offset < mir.next_call_id &&
+        call->secondary_offset < mir.call_signature_capacity &&
+        mir.call_signatures[call->secondary_offset].present) {
+        const struct MirCallSignature *signature =
+            &mir.call_signatures[call->secondary_offset];
+
+        if (signature->has_proto) {
+            prototype->has_proto = 1;
+            prototype->parameter_count = signature->parameter_count;
+            prototype->variadic = signature->variadic;
+            prototype->return_type = signature->return_type;
+            prototype->parameter_types = signature->parameter_types;
+        }
+        return;
+    }
+    if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
+        unsigned char *states = (unsigned char *)calloc(
+            (size_t)mir.next_value, sizeof(*states));
+        struct MirCallPrototype *cache = (struct MirCallPrototype *)calloc(
+            (size_t)mir.next_value, sizeof(*cache));
+
+        if (mir.next_value > 0 && (states == NULL || cache == NULL))
+            fatal("out of memory resolving MIR call prototype");
+        mir_resolve_value_call_prototype(
+            call->src1, call_instruction, 0, states, cache, prototype);
+        free(states);
+        free(cache);
+        return;
+    }
+    callee = find_global(call->name);
+    if (callee != NULL && callee->has_proto) {
+        prototype->has_proto = 1;
+        prototype->parameter_count = callee->proto_nargs;
+        prototype->variadic = callee->proto_variadic;
+        prototype->return_type = callee->type;
+        prototype->parameter_types = callee->proto_types;
+    }
+}
+
 static int mir_verify_structure(void)
 {
     unsigned char *labels;
@@ -11502,6 +12363,13 @@ static int mir_verify_structure(void)
                 calls[insn->secondary_offset] = 1;
             }
         }
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            !strcmp(insn->name, "<indirect>") && insn->src1 < 0) {
+            fprintf(stderr, "; MIR %s: instruction %d has no indirect callee\n",
+                    mir.name, instruction);
+            valid = 0;
+        }
         if (insn->opcode == MIR_LABEL) {
             if (insn->label < 0 || insn->label >= mir.next_label ||
                 labels[insn->label]) {
@@ -11561,40 +12429,18 @@ static int mir_verify_structure(void)
             }
             for (prior = instruction + 1; prior < mir.count; ++prior) {
                 const struct MirInsn *call = &mir.insns[prior];
-                const struct Sym *callee;
+                struct MirCallPrototype prototype;
                 int target_type = 0;
 
                 if ((call->opcode != MIR_CALL &&
                      call->opcode != MIR_CALL_AGGREGATE) ||
                     call->secondary_offset != insn->secondary_offset)
                     continue;
-                callee = find_global(call->name);
-                if (callee != NULL && callee->has_proto &&
-                    insn->immediate >= 0 && insn->immediate < callee->proto_nargs)
-                    target_type = callee->proto_types[insn->immediate];
-                else if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
-                    int definition;
-                    for (definition = 0; definition < prior; ++definition) {
-                        const struct MirInsn *source = &mir.insns[definition];
-                        int declared;
-                        if (source->dst != call->src1 ||
-                            (source->opcode != MIR_LOAD &&
-                             source->opcode != MIR_PARAM))
-                            continue;
-                        declared = mir_declared_index(source->name);
-                        callee = find_global(source->name);
-                        if (declared >= 0 && mir.declared_has_proto[declared] &&
-                            insn->immediate >= 0 &&
-                            insn->immediate < mir.declared_proto_nargs[declared])
-                            target_type = mir.declared_proto_types[declared]
-                                                                 [insn->immediate];
-                        else if (callee != NULL && callee->has_proto &&
-                                 insn->immediate >= 0 &&
-                                 insn->immediate < callee->proto_nargs)
-                            target_type = callee->proto_types[insn->immediate];
-                        break;
-                    }
-                }
+                mir_resolve_call_prototype(call, prior, &prototype);
+                if (prototype.has_proto && insn->immediate >= 0 &&
+                    insn->immediate < prototype.parameter_count)
+                    target_type =
+                        prototype.parameter_types[insn->immediate];
                 if (target_type != 0 && insn->type != target_type) {
                     fprintf(stderr,
                             "; MIR %s: instruction %d has incorrect argument ABI type\n",
@@ -11607,39 +12453,14 @@ static int mir_verify_structure(void)
     }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *call = &mir.insns[instruction];
-        const struct Sym *callee;
-        int has_proto = 0;
-        int parameter_count = 0;
-        int variadic = 0;
+        struct MirCallPrototype prototype;
         int argument_count = 0;
         long last_position = -1;
         int prior;
 
         if (call->opcode != MIR_CALL && call->opcode != MIR_CALL_AGGREGATE)
             continue;
-        callee = find_global(call->name);
-        if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
-            for (prior = 0; prior < instruction; ++prior) {
-                const struct MirInsn *source = &mir.insns[prior];
-                int declared;
-                if (source->dst != call->src1 ||
-                    (source->opcode != MIR_LOAD && source->opcode != MIR_PARAM))
-                    continue;
-                declared = mir_declared_index(source->name);
-                callee = find_global(source->name);
-                if (declared >= 0 && mir.declared_has_proto[declared]) {
-                    has_proto = 1;
-                    parameter_count = mir.declared_proto_nargs[declared];
-                    variadic = mir.declared_proto_variadic[declared];
-                }
-                break;
-            }
-        }
-        if (!has_proto && callee != NULL && callee->has_proto) {
-            has_proto = 1;
-            parameter_count = callee->proto_nargs;
-            variadic = callee->proto_variadic;
-        }
+        mir_resolve_call_prototype(call, instruction, &prototype);
         for (prior = 0; prior < instruction; ++prior) {
             const struct MirInsn *argument = &mir.insns[prior];
             if (argument->opcode != MIR_ARG ||
@@ -11650,8 +12471,10 @@ static int mir_verify_structure(void)
                 last_position = argument->immediate;
         }
         if (last_position != (long)argument_count - 1 ||
-            (has_proto && (argument_count < parameter_count ||
-                           (!variadic && argument_count != parameter_count)))) {
+            (prototype.has_proto &&
+             (argument_count < prototype.parameter_count ||
+              (!prototype.variadic &&
+               argument_count != prototype.parameter_count)))) {
             fprintf(stderr, "; MIR %s: instruction %d has incorrect argument arity\n",
                     mir.name, instruction);
             valid = 0;

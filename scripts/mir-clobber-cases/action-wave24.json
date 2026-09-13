@@ -1,0 +1,75 @@
+[
+  {
+    "Name": "actrename",
+    "Group": "action-wave24",
+    "Sources": ["tests/mir-clobber/actdec.c"],
+    "Defines": ["ACTION_RENAMED_HELPERS"],
+    "Expected": ["1,123,0", "1,77,0", "2,-1,0", "3,-1,2", "0,-1,0"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "action-decode-schedule",
+    "ExactFunction": "decode_action",
+    "RequireExact": true
+  },
+  {
+    "Name": "actlayout",
+    "Group": "action-wave24",
+    "Sources": ["tests/mir-clobber/actdec.c"],
+    "Defines": ["ACTION_PAD_LAYOUT"],
+    "Expected": ["1,123,0", "1,77,0", "2,-1,0", "3,-1,2", "0,-1,0"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "action-decode-schedule",
+    "ExactFunction": "decode_action",
+    "RequireExact": true
+  },
+  {
+    "Name": "actconstants",
+    "Group": "action-wave24",
+    "Sources": ["tests/mir-clobber/actdec.c"],
+    "Defines": ["ACTION_ALT_CONSTANTS"],
+    "Expected": ["11,123,0", "11,77,0", "12,-1,0", "13,-1,2", "10,-1,0"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "action-decode-schedule",
+    "ExactFunction": "decode_action",
+    "RequireExact": true
+  },
+  {
+    "Name": "actunsigned",
+    "Group": "action-wave24",
+    "Sources": ["tests/mir-clobber/actdec.c"],
+    "Defines": ["ACTION_UNSIGNED_TEXT"],
+    "Expected": ["1,123,0", "1,77,0", "2,-1,0", "3,-1,2", "0,-1,0"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "decode_action",
+    "RequiredSelectorFunction": "decode_action",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "actvolatile",
+    "Group": "action-wave24",
+    "Sources": ["tests/mir-clobber/actdec.c"],
+    "Defines": ["ACTION_VOLATILE_STATE"],
+    "Expected": ["1,123,0", "1,77,0", "2,-1,0", "3,-1,2", "0,-1,0"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "action-decode-schedule",
+    "ExactFunction": "decode_action",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "decode_action",
+    "RequiredSelectorFunction": "decode_action",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "actdebug",
+    "Group": "action-wave24",
+    "Sources": ["tests/mir-clobber/actdec.c"],
+    "Defines": [],
+    "Expected": ["1,123,0", "1,77,0", "2,-1,0", "3,-1,2", "0,-1,0"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  }
+]

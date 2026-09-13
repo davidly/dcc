@@ -1,0 +1,79 @@
+[
+  {
+    "Name": "fioexact",
+    "Group": "fileio-wave25",
+    "Sources": ["tests/mir-clobber/fio25.c"],
+    "FixturePaths": [
+      "tests/mir-clobber/FIOFRA.IN",
+      "tests/mir-clobber/FIOFRB.IN"
+    ],
+    "Defines": [],
+    "Expected": ["fileio25 ok"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "file-io-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "fioalt",
+    "Group": "fileio-wave25",
+    "Sources": ["tests/mir-clobber/fio25.c"],
+    "Defines": ["FIO_ALT_STRINGS"],
+    "Expected": ["fileio25 alternate ok"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "file-io-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "fiolarge",
+    "Group": "fileio-wave25",
+    "Sources": ["tests/mir-clobber/fio25.c"],
+    "Defines": ["FIO_LARGE_BUFFER"],
+    "Expected": ["fileio25 ok"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "main",
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "fiovol",
+    "Group": "fileio-wave25",
+    "Sources": ["tests/mir-clobber/fio25.c"],
+    "Defines": ["FIO_VOLATILE_STREAM"],
+    "Expected": ["fileio25 ok"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "ExactTemplate": "file-io-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredGenericFunction": "main",
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "fiounsigned",
+    "Group": "fileio-wave25",
+    "Sources": ["tests/mir-clobber/fio25.c"],
+    "Defines": ["FIO_UNSIGNED_BUFFER"],
+    "Expected": ["fileio25 ok"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "RequiredGenericFunction": "main",
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "fiodebug",
+    "Group": "fileio-wave25",
+    "Sources": ["tests/mir-clobber/fio25.c"],
+    "Defines": [],
+    "Expected": ["fileio25 ok"],
+    "Exit": 0,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  }
+]

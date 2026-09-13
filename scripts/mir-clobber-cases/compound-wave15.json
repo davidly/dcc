@@ -1,0 +1,356 @@
+[
+  {
+    "Name": "cmp15ok",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "cmp15debug",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "DebugModes": ["true", "lines"]
+  },
+  {
+    "Name": "cmp15-arg-site-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "14:type:4",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-arg-value-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "15:type:4",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-call-result-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "17:type:19",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-helper-result-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "796:type:19",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-string-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "11:type:18",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-store-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "3:type:4",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-store-width",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "3:memory_size:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-indirect-width",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "248:memory_size:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-load-width",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "263:memory_size:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-assignment-flow",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "10:src1:0",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-binary-result-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "6:type:4",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-branch-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "965:type:4",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-branch-metadata",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "965:immediate:1",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-return-value-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "966:type:4",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-return-node-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "967:type:4",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-print-string-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "969:type:18",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-print-arg-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "970:type:18",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp15-print-result-type",
+    "Group": "compound-wave15",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "MachineMutation": "971:type:18",
+    "MachineMutationFunction": "main"
+  }
+]

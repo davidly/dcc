@@ -1,11 +1,12 @@
 /**
  * @file dcc_mir_verify.c
- * @brief Verifies reachable MIR definitions and PHI-edge dominance.
+ * @brief Verifies MIR predecessor topology and reachable value dominance.
  *
  * @par Role
  * Builds an independent instruction CFG and an immediate-dominator tree in
- * reverse postorder, then checks ordinary uses and logical block-entry PHIs.
- * Storage is linear in instructions, labels, and virtual values.
+ * reverse postorder, then checks ordinary uses, logical block-entry PHI
+ * predecessors, and PHI-edge values. Storage is linear in instructions,
+ * labels, and virtual values.
  *
  * @par Boundary
  * Requires structurally checked MIR. Does not rewrite instructions, use cached
@@ -43,6 +44,71 @@ static int mir_dom_contains(int definition, int use,
 {
     return definition >= 0 && entry[definition] >= 0 && entry[use] >= 0 &&
            entry[definition] <= entry[use] && exit[use] <= exit[definition];
+}
+
+static int mir_dom_phi_predecessors_valid(
+    int phi_instruction, const int *offsets,
+    const int *predecessors, const int *labels,
+    const int *definitions, const int *entry,
+    const int *exit, int *dominance_valid)
+{
+    const struct MirInsn *phi = &mir.insns[phi_instruction];
+    int block_start = mir_phi_physical_start(phi_instruction);
+    int block_entry;
+    int slot_predecessors[2] = {-1, -1};
+    int slot_has_alternate[2] = {0, 0};
+    int target;
+
+    /* Collapse label/NOP entry aliases, but count only external CFG edges. */
+    while (block_start > 0 &&
+           (mir.insns[block_start - 1].opcode == MIR_LABEL ||
+            mir.insns[block_start - 1].opcode == MIR_NOP))
+        --block_start;
+    block_entry = mir_first_nonlabel_successor(block_start);
+    for (target = block_start; target <= block_entry; ++target) {
+        int edge;
+
+        for (edge = offsets[target]; edge < offsets[target + 1]; ++edge) {
+            int predecessor = predecessors[edge];
+            const struct MirInsn *prior = &mir.insns[predecessor];
+            int predecessor_label;
+            int edge_label = -1;
+            int slot;
+            int source;
+
+            if (predecessor >= block_start && predecessor < block_entry)
+                continue;
+            predecessor_label = mir_block_label_before(predecessor);
+            if ((prior->opcode == MIR_JUMP ||
+                 prior->opcode == MIR_BRANCH_FALSE) &&
+                prior->label >= 0 && prior->label < mir.next_label &&
+                labels[prior->label] == target)
+                edge_label = prior->label;
+            slot = mir_phi_slot_for_edge(
+                phi, predecessor_label, edge_label,
+                target, phi_instruction);
+            if (slot < 0)
+                return 0;
+            if (slot_predecessors[slot] < 0)
+                slot_predecessors[slot] = predecessor;
+            else if (slot_predecessors[slot] != predecessor)
+                slot_has_alternate[slot] = 1;
+            source = slot == 0 ? phi->src1 : phi->src2;
+            if (entry[predecessor] >= 0 &&
+                !mir_dom_contains(
+                    definitions[source], predecessor, entry, exit)) {
+                fprintf(stderr,
+                        "; MIR %s: instruction %d has non-dominating "
+                        "PHI predecessor %d\n",
+                        mir.name, phi_instruction, predecessor);
+                *dominance_valid = 0;
+            }
+        }
+    }
+    return slot_predecessors[0] >= 0 &&
+           slot_predecessors[1] >= 0 &&
+           (slot_predecessors[0] != slot_predecessors[1] ||
+            slot_has_alternate[0] || slot_has_alternate[1]);
 }
 
 int mir_verify_dominance(void)
@@ -189,31 +255,20 @@ int mir_verify_dominance(void)
     }
     for (instruction = 0; instruction < count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->opcode == MIR_PHI &&
+            !mir_dom_phi_predecessors_valid(
+                instruction, offsets, predecessors, labels,
+                definitions, rank, order, &valid)) {
+            fprintf(stderr,
+                    "; MIR %s: instruction %d has invalid PHI predecessors\n",
+                    mir.name, instruction);
+            valid = 0;
+        }
         if (rank[instruction] < 0 || insn->opcode == MIR_NOP)
             continue;
         if (insn->opcode == MIR_PHI) {
             int start = mir_phi_physical_start(instruction);
-            int edge;
-            int incoming = 0;
-            for (edge = offsets[start]; edge < offsets[start + 1]; ++edge) {
-                int prior = predecessors[edge];
-                int label;
-                int source;
-                if (rank[prior] < 0)
-                    continue;
-                ++incoming;
-                label = mir_block_label_before(prior);
-                source = label == insn->phi_pred1 ? insn->src1 :
-                         label == insn->phi_pred2 ? insn->src2 : -1;
-                if (source < 0 ||
-                    !mir_dom_contains(definitions[source], prior, rank, order)) {
-                    fprintf(stderr,
-                            "; MIR %s: instruction %d has non-dominating PHI edge L%d\n",
-                            mir.name, instruction, label);
-                    valid = 0;
-                }
-            }
-            if (start == 0 || incoming == 0) {
+            if (start == 0) {
                 fprintf(stderr, "; MIR %s: instruction %d has no incoming PHI edge\n",
                         mir.name, instruction);
                 valid = 0;

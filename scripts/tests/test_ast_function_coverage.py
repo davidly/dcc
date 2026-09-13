@@ -62,22 +62,44 @@ class FunctionCoverageTests(unittest.TestCase):
         text = "active 10 2 80.00% 8 1 87.50% 4 2 50.00%\nTOTAL 10 2 80.00% 8 1 87.50% 4 2 50.00%\n"
         result = coverage.summarize_native(text, {"active"})
         self.assertEqual(result["totals"]["lines"], {"count": 8, "covered": 7})
+        excluded = "old 10 10 0.00% 8 8 0.00% 4 4 0.00%\n"
+        result = coverage.summarize_native(text + excluded, {"active"}, {"old"})
+        self.assertEqual(result["totals"]["lines"], {"count": 8, "covered": 7})
         with self.assertRaisesRegex(ValueError, "exact function selection"):
             coverage.summarize_native(text, {"active", "missing"})
         with self.assertRaisesRegex(ValueError, "unexpected or duplicate"):
             coverage.summarize_native(text, {"other"})
         with self.assertRaisesRegex(ValueError, "unexpected or duplicate"):
             coverage.summarize_native(text + text, {"active"})
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            coverage.summarize_native(text, {"active"}, {"active"})
+
+    def test_excluded_function_names_follow_coverage_identity(self):
+        report = {"data": [{"functions": [
+            {"name": "source.c:old", "count": 0,
+             "filenames": [str(coverage.ROOT / "source.c")]},
+            {"name": "source.c:active", "count": 1,
+             "filenames": [str(coverage.ROOT / "source.c")]},
+        ]}]}
+        classified = {
+            ("source.c", "old"): "legacy",
+            ("source.c", "active"): "production",
+        }
+        self.assertEqual(
+            coverage.excluded_functions(report, classified), {"source.c:old"})
 
 
     def test_gap_ledger_keeps_uncovered_outcomes_and_scope(self):
         source = str(coverage.ROOT / "src/dcc/dcc_mir_verify.c")
         active = {"name": "active", "count": 1, "filenames": [source],
+                  "regions": [[10, 1, 10, 9, 0, 0, 0, 0]],
                   "branches": [[10, 2, 10, 9, 0, 3, 0, 0, 4]]}
         old = dict(active, name="legacy", count=0)
         report = {"data": [{"functions": [active, old]}]}
         result = coverage.coverage_gaps(report, {"active"})
         self.assertEqual(result["unexecuted_functions"], [])
+        self.assertEqual(len(result["uncovered_regions"]), 1)
+        self.assertEqual(result["uncovered_regions"][0]["line"], 10)
         self.assertEqual(len(result["uncovered_branch_outcomes"]), 1)
         self.assertEqual(result["uncovered_branch_outcomes"][0]["outcome"], "true")
         self.assertEqual(result["uncovered_branch_outcomes"][0]["review"], "unreviewed")
@@ -86,8 +108,8 @@ class FunctionCoverageTests(unittest.TestCase):
 
     def test_reviews_preserve_denominator_and_require_evidence(self):
         review = {"source": "src/dcc/dcc_mir_verify.c", "function": "mir_verify_dominance",
-                  "expression": "incoming == 0", "outcome": "true",
-                  "classification": "defensive-unreachable", "evidence": "reachable non-entry predecessor"}
+                  "expression": "start == 0", "outcome": "true",
+                  "classification": "review-example", "evidence": "synthetic annotation control"}
         source = (coverage.ROOT / review["source"]).read_text().splitlines()
         line = next(index + 1 for index, text in enumerate(source) if review["expression"] in text)
         gap = {"source": review["source"], "function": review["function"], "line": line,
@@ -96,9 +118,24 @@ class FunctionCoverageTests(unittest.TestCase):
         gaps = {"uncovered_branch_outcomes": [gap]}
         coverage.annotate_reviews(gaps, [review])
         self.assertEqual(len(gaps["uncovered_branch_outcomes"]), 1)
-        self.assertEqual(gap["review"], "defensive-unreachable")
+        self.assertEqual(gap["review"], "review-example")
         with self.assertRaisesRegex(ValueError, "stale or unsupported"):
             coverage.annotate_reviews(gaps, [dict(review, expression="missing expression")])
+
+    def test_require_complete_checks_every_metric(self):
+        complete = {"totals": {
+            "functions": {"covered": 2, "count": 2},
+            "lines": {"covered": 3, "count": 3},
+            "branches": {"covered": 4, "count": 4},
+            "regions": {"covered": 5, "count": 5},
+        }}
+        coverage.require_complete(complete)
+        incomplete = {"totals": dict(
+            complete["totals"],
+            branches={"covered": 3, "count": 4})}
+        with self.assertRaisesRegex(
+                ValueError, "branches=3/4"):
+            coverage.require_complete(incomplete)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+<source>:7: error DCC-E1002: unsupported expression statement near 'values'
+        values[0][0] += &value;
+        ^
+<source>:8: error DCC-E1002: unsupported return expression near 'return'
+        return values[1][2] <<= 1.5f;
+        ^
+dcc: 2 error(s)

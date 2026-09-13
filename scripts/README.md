@@ -430,6 +430,34 @@ The text summary is written to
 at `build/compiler-coverage/report/html/index.html`. Set `CC`, `PWSH`,
 `LLVM_COV`, or `LLVM_PROFDATA` to override tool discovery.
 
+## `run-mir-proof-suite.ps1`
+
+Runs every maintained AST/MIR proof gate through one phase-gated command:
+canonical and independent builds, script/static audits, normal and sanitized
+host tests, debugger-host tests, isolated compiler mutants, strict stack and
+no-stack release suites, the extended MIR census, and the complete instrumented
+coverage workflow.
+
+```sh
+pwsh ./scripts/run-mir-proof-suite.ps1
+```
+
+The runner uses all detected processors by default and retains each run below
+a unique `build/mir-proof-suite-*` directory. Use `-List` to inspect the
+ordered gates without executing them, or set `-Jobs`, `-MutationJobs`, and
+`-MutationBuildJobs` to control the combined CPU budget. Independent script,
+CMake, host, sanitizer, and debugger preparations run concurrently; the two
+strict release modes split the available workers. Mutation and coverage phases
+retain their own bounded schedulers. A complete run is intentionally long:
+strict native release gates and instrumented coverage execute separately so
+coverage instrumentation cannot substitute for release evidence.
+Ambient `DCC`/`DCC_*` diagnostic, selector, mutation, and driver controls are
+cleared before execution; installation paths such as `DCC_HOME`,
+`DCC_INCLUDE`, `DCC_LIB`, and `DCC_RUNTIME` are preserved. The sanitizer build
+explicitly uses the same discovered or configured Clang toolchain as coverage.
+Run this proof suite periodically on a developer machine; GitHub CI intentionally
+runs only the standard cross-platform `runall.ps1 -Mode full` regression gate.
+
 ## `runall.ps1`
 
 Comprehensive test suite: builds and runs all main test applications with output
@@ -478,7 +506,7 @@ build mode. Use `-Mode full` when you want both fast and nopeep builds.
 | `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
 | `-KeepBuild` | (off) | Keep the per-invocation `build/run-<pid>/` folder instead of removing it on exit (parallel mode) |
 | `-Report` | (off) | Append per-app execution time and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
-| `-ReportFile` | `perf_results.csv` | CSV path used by `-Report` |
+| `-ReportFile` | `build/perf_results.csv` | CSV path used by `-Report` |
 | `-ReportClockHz` | `400000000` | ntvcm clock speed used for measured report runs; set to `0` for full-speed report runs |
 
 ### Build modes
@@ -505,7 +533,7 @@ pwsh ./scripts/runall.ps1 -Mode fast            # optimized build only
 pwsh ./scripts/runall.ps1 -Mode nopeep          # unoptimized build only
 pwsh ./scripts/runall.ps1 -Extended             # also run extended c-testsuite
 pwsh ./scripts/runall.ps1 -KeepBuild            # keep build/run-<pid>/ for debugging
-pwsh ./scripts/runall.ps1 -Report               # append perf_results.csv
+pwsh ./scripts/runall.ps1 -Report               # append build/perf_results.csv
 pwsh ./scripts/runall.ps1 -ReportClockHz 0 -Report  # full-speed report run
 ```
 

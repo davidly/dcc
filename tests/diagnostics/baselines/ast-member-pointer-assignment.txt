@@ -1,0 +1,7 @@
+<source>:10: error DCC-E1002: unsupported expression statement near 'sample'
+        sample.word = &value;
+        ^
+<source>:11: error DCC-E1002: unsupported expression statement near 'sample'
+        sample.byte = &value;
+        ^
+dcc: 2 error(s)
