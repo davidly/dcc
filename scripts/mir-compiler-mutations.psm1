@@ -26,6 +26,7 @@ function Get-MirCompilerMutations {
         @{ Name = "wide-call-crossing-allocation"; Before = '            if (cross_call[value]) {'; After = '            if (0 && cross_call[value]) {'; ExpectedFailure = 'FAIL wide value retained caller-clobbered home across call' },
         @{ Name = "guarded-call-preservation"; Source = "src/dcc/dcc_mir_homed_cfg.c"; Before = '                preserve_de = mir_home_color_live_across('; After = '                preserve_de = 0 && mir_home_color_live_across('; ExpectedFailure = 'FAIL guarded call DE preservation' },
         @{ Name = "wide-guarded-call-preservation"; Source = "src/dcc/dcc_mir_homed_cfg.c"; Before = '                preserve_bc_iy = mir_home_color_live_across('; After = '                preserve_bc_iy = 0 && mir_home_color_live_across('; ExpectedFailure = 'FAIL guarded call BC:IY preservation' },
+        @{ Name = "paired-byte-adjacency"; Source = "src/dcc/dcc_mir_homed_cfg.c"; Before = '    if (out->offsets[0] + 1 != out->offsets[1] &&'; After = '    if (0 && out->offsets[0] + 1 != out->offsets[1] &&'; PairedByteProbe = $true; ExpectedFailure = 'FAIL paired-byte matcher accepted nonadjacent fields' },
         @{
             Name = "allocation-first-result"
             Source = "src/dcc/dcc_mir_machine_validation_runners.c"
@@ -98,6 +99,8 @@ function Get-MirMutationOutcome($Execution, $Mutation) {
             '(?m)^' + [regex]::Escape($Mutation.ExpectedFailure) + '\r?$')
         $failureLabel = if ($Mutation.MatcherProbe) {
             "MIR matcher restoration failures"
+        } elseif ($Mutation.PairedByteProbe) {
+            "MIR paired-byte mutation failures"
         } else {
             "MIR verifier failures"
         }
@@ -260,6 +263,50 @@ function Invoke-MirMutationWorker(
             } else {
                 $result.outcome = Get-MirMutationOutcome $execution $probe
                 $result.detail = "Matcher restoration probe; see test.log"
+                return
+            }
+        }
+        $pairedByteProbes = if ($Name -eq "baseline") {
+            @(Get-MirCompilerMutations | Where-Object { $_.PairedByteProbe })
+        } elseif ($mutation.PairedByteProbe) {
+            @($mutation)
+        } else {
+            @()
+        }
+        foreach ($probe in $pairedByteProbes) {
+            $result.phase = "paired-byte"
+            $compiler = Find-MirMutationBinary "$Workspace/bin" "dcc"
+            $probeLog = if ($Name -eq "baseline") {
+                Join-Path $OutputDirectory (
+                    "paired-byte-$($probe.Name).log")
+            } else {
+                Join-Path $OutputDirectory "test.log"
+            }
+            $execution = Complete-MirMutationProcess (Start-MirMutationProcess `
+                (Get-Process -Id $PID).Path @(
+                    "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+                    (Join-Path $RepoRoot "scripts/test-mir-paired-byte-restoration.ps1"),
+                    "-Compiler", $compiler,
+                    "-Source", (Join-Path $RepoRoot "tests/mir-clobber/pairbyte.c"),
+                    "-IncludeDirectory", "$Workspace/include",
+                    "-OutputDirectory", "$Workspace/output/paired-byte",
+                    "-ExpectedFailure", $probe.ExpectedFailure
+                ) "$Workspace/output" $probeLog @{
+                    DCC_MIR_REQUIRE_COMPLETE = "1"
+                    DCC_MIR_REQUIRE_EMIT = "1"
+                    DCC_MIR_CACHE_VERIFY = "1"
+                } -ParentScope $processScope) 60
+            $result.exitCode = $execution.ExitCode
+            if ($Name -eq "baseline") {
+                if ($execution.TimedOut -or $execution.ExitCode -ne 0) {
+                    $result.detail =
+                        "Unmutated paired-byte probe failed; see " +
+                        [System.IO.Path]::GetFileName($probeLog)
+                    return
+                }
+            } else {
+                $result.outcome = Get-MirMutationOutcome $execution $probe
+                $result.detail = "Paired-byte restoration probe; see test.log"
                 return
             }
         }

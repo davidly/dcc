@@ -109,7 +109,11 @@ evidence, not tracked files or a claim that broader correctness work is done.
 The subsequent paired-byte increment adds four forced-regional field-gap
 controls. All 12 paired-byte stack/no-stack and peep/nopeep configurations and
 the 134-test script suite pass; the frozen built-in clobber inventory is now
-5,068 leaves.
+5,068 leaves. A dedicated compile probe also requires the adjacent control to
+emit the paired-byte marker and the field-gap form to omit it. A clean-build
+mutant that disables only the nonadjacent-offset guard is killed by that exact
+assertion; the complete mutation campaign now has one passing baseline and
+24/24 killed mutants.
 
 Each worktree needs its own binaries and CMake output directory. The canonical
 build's `-OutputPath` redirects intermediate artifacts, not repository-root
@@ -626,6 +630,16 @@ locally verified execution inventory.
   verification enabled. This test-only increment leaves the 9,686-leaf
   inventory and production output unchanged and makes no additive raw coverage
   claim. Commit `df67f458` contains the invariant and mutant.
+- Wave 40 proves the regional paired-byte adjacency boundary independently of
+  ordinary target selection. The compile probe requires the adjacent control to
+  emit `;@dcc.mir paired-byte-call` and the field-gap form to omit it. A
+  clean-build mutant disables only the nonadjacent-offset rejection and is
+  killed by that exact assertion; crashes, build failures, and unrelated
+  diagnostics are invalid outcomes. The complete campaign has one passing
+  baseline plus 24/24 killed mutants. Together with the 12 target executions,
+  this proves both the guard's necessity and correct forced-regional fallback.
+  Production code is unchanged, and this increment makes no additive raw
+  coverage claim.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

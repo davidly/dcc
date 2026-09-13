@@ -369,6 +369,17 @@ complete compiler suite has one passing baseline and 23/23 killed mutants, and
 This test-only semantic proof leaves the exact inventory at 9,686 and makes no
 raw coverage claim. Commit `df67f458` contains the proof.
 
+Wave 40 independently proves the regional paired-byte adjacency boundary. Its
+compile-only probe requires the adjacent control to emit
+`;@dcc.mir paired-byte-call` and the field-gap near match not to emit it. A
+clean-build compiler mutant disables only the nonadjacent-offset rejection and
+is killed by the exact near-match assertion; build failures, crashes, and
+unrelated diagnostics remain invalid outcomes. The complete campaign has one
+passing baseline plus 24/24 killed mutants. The target suite separately
+executes the adjacent and field-gap forms in all stack/no-stack and peep/nopeep
+modes, including forced regional fallback. This proof changes no production
+code and makes no additive raw coverage claim.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

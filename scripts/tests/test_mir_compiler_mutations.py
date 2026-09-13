@@ -17,6 +17,8 @@ PWSH = shutil.which("pwsh")
 
 @unittest.skipUnless(PWSH and shutil.which("cmake"), "requires PowerShell and CMake")
 class CompilerMutationTests(unittest.TestCase):
+    maxDiff = None
+
     @classmethod
     def setUpClass(cls):
         command = (
@@ -39,6 +41,7 @@ class CompilerMutationTests(unittest.TestCase):
                      "run-mir-compiler-mutation-worker.ps1",
                      "mir-compiler-mutations.psm1",
                      "test-mir-matcher-restoration.ps1",
+                     "test-mir-paired-byte-restoration.ps1",
                      "process-supervision.psm1", "process-supervisor.ps1"):
             shutil.copyfile(ROOT / "scripts" / name, self.repo / "scripts" / name)
         (self.repo / "scripts/new-mir-fuzz-source.ps1").write_text(
@@ -131,7 +134,8 @@ static void done(void) {
 int main(int argc, char **argv) {
     const char *profile = getenv("LLVM_PROFILE_FILE");
     const char *cache = getenv("DCC_MIR_CACHE_VERIFY");
-    if (getenv("DCC_MIR_SELECT_CANDIDATE") || !profile ||
+    if ((getenv("DCC_MIR_SELECT_CANDIDATE") &&
+         strcmp(getenv("DCC_MIR_SELECT_CANDIDATE"), "regional")) || !profile ||
         strstr(profile, "forbidden-normal-coverage") || !strstr(profile, "profiles"))
         return 10;
 #ifdef VERIFIER
@@ -158,6 +162,7 @@ int main(int argc, char **argv) {
     if (!strcmp(MODE, "mixed") && !strcmp(MUTATION, "argument-abi")) return 134;
     return 1;
 #else
+    int gap = 0;
     int i;
     if (!cache || strcmp(cache, "1")) return 12;
     if (!strcmp(MODE, "baseline-compile-failure") && !strcmp(MUTATION, "baseline"))
@@ -181,11 +186,20 @@ int main(int argc, char **argv) {
             puts("; MIR selection function=main selector=spilled-scalar-cfg result=mir");
         }
     }
+    for (i = 1; i < argc; ++i)
+        if (strstr(argv[i], "MIR_CLOBBER_PAIRED_GAP=1"))
+            gap = 1;
     for (i = 1; i + 1 < argc; ++i) {
         if (!strcmp(argv[i], "-o")) {
             FILE *f = fopen(argv[i + 1], "w");
             if (!f) return 13;
-            fputs("; probe", f); fclose(f);
+            if (!gap || !strcmp(MUTATION, "paired-byte-adjacency"))
+                fputs(";@dcc.mir paired-byte-call\n", f);
+            else
+                fputs("; generic\n", f);
+            fclose(f);
+            if (!strcmp(MUTATION, "paired-byte-adjacency"))
+                done();
             return 0;
         }
     }
@@ -195,6 +209,10 @@ int main(int argc, char **argv) {
 ''')
         (self.repo / "tests/host/mir_scalar_dag.c").write_text(
             "/* Auxiliary host test copied into mutation workspaces. */\n"
+        )
+        (self.repo / "tests/mir-clobber").mkdir(parents=True, exist_ok=True)
+        (self.repo / "tests/mir-clobber/pairbyte.c").write_text(
+            "int main(void) { return 0; }\n"
         )
 
     def run_fixture(self, jobs=None, expected_exit=0):
@@ -309,6 +327,7 @@ int main(int argc, char **argv) {
             "wide-call-crossing-allocation": "killed",
             "guarded-call-preservation": "killed",
             "wide-guarded-call-preservation": "killed",
+            "paired-byte-adjacency": "killed",
             "allocation-first-result": "killed",
             "allocation-store-width": "killed",
         })
@@ -323,9 +342,12 @@ $fieldCacheMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "global-field-vn-cache"
 $matcherMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "allocation-first-result"
+$pairedByteMutation = Get-MirCompilerMutations |
+    Where-Object Name -eq "paired-byte-adjacency"
 $hostLog = "FAIL branch value cannot escape join`nMIR verifier failures=1`n"
 $cacheLog = "; MIR CACHE MISMATCH mir_definition function=f value=1 cached=2 uncached=-1`ndcc: fatal: MIR use-cache mismatch`n"
 $matcherLog = "FAIL allocation matcher accepted mutated first result`nMIR matcher restoration failures=1`n"
+$pairedByteLog = "FAIL paired-byte matcher accepted nonadjacent fields`nMIR paired-byte mutation failures=1`n"
 foreach ($case in @(
     @($hostMutation, $hostLog, 1, $false, "killed"),
     @($hostMutation, $hostLog, 8, $false, "invalid"),
@@ -343,7 +365,11 @@ foreach ($case in @(
     @($matcherMutation, $matcherLog, 1, $false, "killed"),
     @($matcherMutation, $matcherLog, 134, $false, "invalid"),
     @($matcherMutation, $matcherLog.Replace("first result", "other"), 1, $false, "invalid"),
-    @($matcherMutation, "MIR matcher restoration failures=0`n", 0, $false, "survived")
+    @($matcherMutation, "MIR matcher restoration failures=0`n", 0, $false, "survived"),
+    @($pairedByteMutation, $pairedByteLog, 1, $false, "killed"),
+    @($pairedByteMutation, $pairedByteLog, 134, $false, "invalid"),
+    @($pairedByteMutation, $pairedByteLog.Replace("nonadjacent", "other"), 1, $false, "invalid"),
+    @($pairedByteMutation, "MIR paired-byte mutation failures=0`n", 0, $false, "survived")
 )) {
     $actual = Get-MirMutationOutcome @{
         Output = $case[1]; ExitCode = $case[2]; TimedOut = $case[3]
