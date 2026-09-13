@@ -106,6 +106,10 @@ selected AST/MIR result remains 4,617/4,617 functions (100.00%),
 104,409/155,968 branches (66.94%), and 173,590/183,486 regions (94.61%), with
 51,301 branch outcomes still unreviewed. These generated artifacts are local
 evidence, not tracked files or a claim that broader correctness work is done.
+The subsequent paired-byte increment adds four forced-regional field-gap
+controls. All 12 paired-byte stack/no-stack and peep/nopeep configurations and
+the 134-test script suite pass; the frozen built-in clobber inventory is now
+5,068 leaves.
 
 Each worktree needs its own binaries and CMake output directory. The canonical
 build's `-OutputPath` redirects intermediate artifacts, not repository-root
@@ -1033,9 +1037,12 @@ functions.
 
 New target controls force and execute constant/dynamic inline byte stores plus
 an adjacent-byte regional call in all stack/peephole modes. A field-gap near
-match proves generic fallback and absence of the paired marker. Direct host
-controls cover dense-switch width state and both accepted/rejected spilled
-preflight paths. Candidate-matrix probes verify the wide-narrow cache against
+match proves generic fallback and absence of the paired marker under both normal
+selection and an explicitly forced regional candidate. This permanently checks
+that declining the adjacent-byte micro-optimization does not decline or
+contaminate the valid regional stream. Direct host controls cover dense-switch
+width state and both accepted/rejected spilled preflight paths. Candidate-matrix
+probes verify the wide-narrow cache against
 both `tlongopt` and `tm1mu.mulmod`.
 
 Review found that wide-narrow cache verification overwrote the cached set

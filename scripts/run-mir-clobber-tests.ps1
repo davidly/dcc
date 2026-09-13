@@ -2728,10 +2728,28 @@ try {
                     -ForbiddenAssemblyPatterns @(";@dcc.mir paired-byte-call")
             }
         }
-        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" `
-            $savedEnvironment["DCC_MIR_SELECT_FUNCTION"]
-        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" `
-            $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" "read_pair"
+        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "regional"
+        try {
+            foreach ($stackCheck in @($true, $false)) {
+                foreach ($peep in @($true, $false)) {
+                    Assert-RunCase -Name "pairedbytes-near-forced" `
+                        -Sources @(Join-Path $fixtureRoot "pairbyte.c") `
+                        -Defines @("MIR_CLOBBER_PAIRED_GAP=1") `
+                        -Expected @("paired bytes passed") -ExpectedExit 0 `
+                        -StackCheck $stackCheck -Peep $peep `
+                        -RequiredSelectorFunction "read_pair" `
+                        -RequiredSelector "regional-homed-scalar-cfg" `
+                        -RequiredCandidate "regional" `
+                        -ForbiddenAssemblyPatterns @(";@dcc.mir paired-byte-call")
+                }
+            }
+        } finally {
+            Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" `
+                $savedEnvironment["DCC_MIR_SELECT_FUNCTION"]
+            Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" `
+                $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
+        }
     }
     if ($Cases.Count -eq 0 -or
         "vlaend" -in $Cases -or "vlaok" -in $Cases) {

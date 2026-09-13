@@ -812,11 +812,13 @@ unsafe exact-emitter execution was removed, not a denominator change.
 The next generic-emitter checkpoint adds target-executed forced candidates for
 two constant/dynamic inline byte-array stores and a regional adjacent-byte call.
 The paired-byte near match inserts a field gap, must not contain the specialized
-marker, and executes through a named generic selector in stack/no-stack and
-peep/nopeep modes. Host controls add a successful spilled preflight followed by
-an oversized-frame rejection and cover the dense-switch width query. The
-wide-narrow multiply cache is verified on both `tlongopt` and the canonical
-`tm1mu.mulmod` shape.
+marker, and executes through both the normal generic selection and an explicitly
+forced regional candidate in stack/no-stack and peep/nopeep modes. This proves
+that the regional emitter falls back from its adjacent-byte micro-optimization
+without contaminating or declining the otherwise valid candidate. Host controls
+add a successful spilled preflight followed by an oversized-frame rejection and
+cover the dense-switch width query. The wide-narrow multiply cache is verified
+on both `tlongopt` and the canonical `tm1mu.mulmod` shape.
 
 Review of that cache control found it rebuilt the cache before comparing,
 making the diagnostic unable to detect a missed invalidation. It now compares
