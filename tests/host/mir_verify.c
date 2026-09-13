@@ -6592,6 +6592,24 @@ int main(void)
     mir.next_label = 5;
     mir.insns[9].phi_pred2 = 4;
     expect_verification("missing PHI predecessor", 0);
+    setup(7, 2, 3);
+    mir.insns[2].opcode = MIR_LABEL;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_PHI;
+    mir.insns[3].dst = 1;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 0;
+    mir.insns[3].phi_pred1 = 2;
+    mir.insns[3].phi_pred2 = 0;
+    mir.insns[4].opcode = MIR_RETURN;
+    mir.insns[4].src1 = 1;
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 2;
+    if (mir_verify_dominance()) {
+        fprintf(stderr,
+                "FAIL independent dominance accepted missing first PHI predecessor\n");
+        ++failures;
+    }
     diamond();
     mir.insns[9].phi_pred2 = 1;
     expect_verification("duplicate PHI predecessor", 0);

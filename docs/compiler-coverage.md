@@ -389,6 +389,16 @@ stack/no-stack and peep/nopeep modes, for 20 executions. The frozen built-in
 clobber inventory is 5,076 leaves. Production selection is unchanged, and the
 latest exact coverage snapshot predates this test-only increment.
 
+Wave 42 adds the missing symmetric independent-dominance control for a PHI
+whose first logical predecessor has no incoming CFG edge. The test calls
+`mir_verify_dominance` directly so the earlier structural verifier cannot mask
+the independent check. Focused LLVM 18 coverage changes
+`slot_predecessors[0] >= 0` from true-only to 50 true / 1 false. Normal and
+ASan/UBSan host tests pass 5/5, all 134 script tests pass, and the complete
+compiler campaign retains one passing baseline plus 24/24 killed mutants.
+This test-only increment changes no production output; regenerate the exact
+aggregate ledger before updating global totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

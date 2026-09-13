@@ -115,7 +115,10 @@ the 134-test script suite pass; the frozen built-in clobber inventory is now
 emit the paired-byte marker and the field-gap form to omit it. A clean-build
 mutant that disables only the nonadjacent-offset guard is killed by that exact
 assertion; the complete mutation campaign now has one passing baseline and
-24/24 killed mutants.
+24/24 killed mutants. A subsequent independent-dominance control directly
+rejects a PHI with no incoming edge for its first logical predecessor. Focused
+LLVM 18 coverage changes that branch from 0 to 1 false outcome; normal and
+ASan/UBSan host tests, all 134 script tests, and all 24 mutants pass.
 
 Each worktree needs its own binaries and CMake output directory. The canonical
 build's `-OutputPath` redirects intermediate artifacts, not repository-root
@@ -649,6 +652,14 @@ locally verified execution inventory.
   modes, for 20 executions. The frozen built-in inventory is 5,076 leaves.
   Production code is unchanged, and the latest exact coverage snapshot
   predates this test-only increment.
+- Wave 42 adds the symmetric independent-dominance check for a missing first
+  PHI predecessor. It calls `mir_verify_dominance` directly, preventing the
+  structural verifier from consuming the malformed graph first. Focused LLVM
+  18 coverage changes `slot_predecessors[0] >= 0` from 50 true / 0 false to
+  50 true / 1 false. Normal and ASan/UBSan host tests pass 5/5, all 134 script
+  tests pass, and the compiler campaign retains one baseline plus 24/24 killed
+  mutants. Production output is unchanged; exact aggregate totals remain
+  pending recollection.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
