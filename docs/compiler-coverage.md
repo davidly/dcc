@@ -1332,6 +1332,31 @@ release modes pass.
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
 
+Wave 2000 closes the historical `mir_match_fortran_grow_schedule` proof gap
+and fixes genuine exact-schedule false acceptances. The previous
+92-instruction, 11-block matcher bound one parameter, two globals, three
+callees, two string IDs, and four positive constants, but did not verify the
+complete opcode, type, width, SSA, operator, memory-flag, CFG, call-identity,
+or string-content payload. It accepted 476 of 489 matcher-relevant diagnostic
+mutations: 92/92 type, 92/92 width, 90/92 first-operand, 92/92 second-operand,
+92/92 immediate/operator, and 18/29 identity changes. A changed fill-byte
+source also selected the exact schedule and produced zero-filled memory rather
+than the requested value.
+
+The matcher now fingerprints every numeric MIR payload, CFG, object,
+declaration, and function property; separately binds all emitted globals and
+callees; and validates both emitted failure strings. New
+`tests/mir-clobber/fortgrow.c` isolates growth and independently checks
+no-growth, small-step, large-step, clamp, preservation, and fill behavior.
+`fortran-grow-wave2000-audit.py` runs 28 stack/no-stack and peep/nopeep runtime
+controls across seven source variants and rejects all 489 type, width,
+operand, immediate/operator, and meaningful identity mutations with generic
+fallback and zero survivors. The clean selected hash is `41574932` and
+assembly SHA-256 is
+`b45cda486ecdd0330ca0784e70fdcadc20edcd5d5418a94751305c325b593e59`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

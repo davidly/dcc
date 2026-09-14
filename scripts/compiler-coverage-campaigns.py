@@ -195,6 +195,9 @@ CAMPAIGNS = (
     Campaign("wide-hash33-schedule",
              "wide-hash33-wave1900-audit.py",
              output_dir="wide-hash33-wave1900-audit", max_jobs=2),
+    Campaign("fortran-grow-schedule",
+             "fortran-grow-wave2000-audit.py",
+             output_dir="fortran-grow-wave2000-audit", max_jobs=2),
 )
 
 

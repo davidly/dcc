@@ -1607,7 +1607,6 @@ locally verified execution inventory.
   `spilled-phi-slot` fallback, with zero meaningful survivors. The clean
   selected hash is `68dc3c28` and assembly SHA-256 is
   `5bebfa8ada44767c744c777b6113c6c254ae84a3a8fde6f8bde2c26a963e7dfe`.
-  The broader coverage objective remains incomplete.
 - Wave 1900 closes the historical `mir_match_wide_hash33` proof gap and fixes
   severe exact-schedule false acceptance. The old 32-instruction matcher
   explicitly constrained only 19 instruction positions and left complete
@@ -1630,6 +1629,27 @@ locally verified execution inventory.
   Zero meaningful survivors remain. The standalone audit, all 136 Python
   script tests, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 2000 closes the historical `mir_match_fortran_grow_schedule` proof gap
+  and fixes genuine exact-schedule false acceptances. The old 92-instruction,
+  11-block matcher bound one parameter, two globals, three callees, two string
+  IDs, and four positive constants, but did not prove the instruction
+  opcodes, types, widths, SSA operands, operators, memory flags, complete CFG,
+  call identities, or string contents. It falsely accepted 476 of 489
+  matcher-relevant diagnostic mutations: 92/92 type, 92/92 width, 90/92 first
+  operand, 92/92 second operand, 92/92 immediate/operator, and 18/29 identity
+  changes. A fill-byte source near match was also selected and demonstrably
+  emitted zero-filled memory instead of the requested byte value.
+  The matcher now fingerprints every numeric MIR payload, CFG, object,
+  declaration, and function property; separately binds all emitted globals
+  and callees; and validates both failure strings. New
+  `tests/mir-clobber/fortgrow.c` independently checks no-growth, small-step,
+  large-step, clamp, preservation, and fill behavior.
+  `fortran-grow-wave2000-audit.py` runs 28 stack/no-stack and peep/nopeep
+  runtime controls across seven source variants and rejects all 489 mutations
+  with generic fallback and zero survivors. The clean selected hash is
+  `41574932` and assembly SHA-256 is
+  `b45cda486ecdd0330ca0784e70fdcadc20edcd5d5418a94751305c325b593e59`.
+  The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
