@@ -218,6 +218,9 @@ CAMPAIGNS = (
     Campaign("pi-digit-schedule",
              "pi-digit-wave4000-audit.py",
              output_dir="pi-digit-wave4000-audit", max_jobs=2),
+    Campaign("float-sweep-schedule",
+             "float-sweep-wave4100-audit.py",
+             output_dir="float-sweep-wave4100-audit", max_jobs=2),
 )
 
 

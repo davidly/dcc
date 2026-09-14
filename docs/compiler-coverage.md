@@ -1508,6 +1508,29 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. No separate clobber manifest was added. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 4100 closes the historical `mir_match_float_sweep_schedule` proof gap and
+fixes severe false acceptance. The 431-instruction comparison variant directly
+classified only 38 stores and 19 calls, leaving most opcode, type, SSA,
+memory/qualifier, CFG-edge, PHI-predecessor, and metadata fields unproved. The
+old matcher accepted 8,745 of 9,970 exhaustive per-instruction field and
+meaningful identity mutations (87.7%).
+
+The matcher now fingerprints all 23 semantic and structural fields on every
+instruction before retaining either current 431-instruction comparison shape
+or the 434-instruction runtime-library shape. The unproved 440-instruction
+legacy outline now falls back conservatively. New
+`tests/mir-clobber/fltsweep.c` exercises the comparison shape and checks eleven
+library sine results against an independent Taylor-series implementation.
+`float-sweep-wave4100-audit.py` builds an isolated diagnostic mutation compiler,
+runs 16 stack/no-stack and peep/nopeep controls across exact, renamed,
+volatile, and extra-CFG variants, executes all eight no-stack binaries, and
+rejects all 9,970 mutations with generic fallback and zero survivors. The clean
+stack-check selected hash is `2a78fb3a`; assembly SHA-256 is
+`74674d626ad7b36e43e807e1f1f421a3ae5972aacf8acca749a8e1ef38c82827`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

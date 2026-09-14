@@ -3826,6 +3826,8 @@ static int mir_match_float_sweep_schedule(
     int done_call;
     int instruction;
     int item;
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
 
     memset(plan, 0, sizeof(*plan));
     memset(group_names, 0, sizeof(group_names));
@@ -3865,6 +3867,60 @@ static int mir_match_float_sweep_schedule(
         (mir.return_type & 15) != TYPE_INT ||
         type_size(mir.return_type) != 2)
         return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned int)insn->opcode,
+            (unsigned int)insn->dst,
+            (unsigned int)insn->src1,
+            (unsigned int)insn->src2,
+            (unsigned int)insn->type,
+            (unsigned int)insn->immediate,
+            (unsigned int)insn->label,
+            (unsigned int)insn->phi_pred1,
+            (unsigned int)insn->phi_pred2,
+            (unsigned int)insn->successors[0],
+            (unsigned int)insn->successors[1],
+            (unsigned int)insn->successor_count,
+            (unsigned int)insn->object,
+            (unsigned int)insn->memory_size,
+            (unsigned int)insn->memory_flags,
+            (unsigned int)insn->pointee_volatile_mask,
+            (unsigned int)insn->has_pointer_qualifiers,
+            (unsigned int)insn->bit_width,
+            (unsigned int)insn->bit_shift,
+            (unsigned int)insn->bit_mask,
+            (unsigned int)insn->secondary_offset,
+            (unsigned int)insn->inline_temp_id,
+            (unsigned int)insn->divmod_cast_types
+        };
+        size_t value;
+
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (!((mir.count == 431 &&
+           ((first == 0xcb278e6c08ea5f91ULL &&
+             second == 0xbe11011b7eccdc20ULL) ||
+            (first == 0x9ce7bd423fd22d5dULL &&
+             second == 0x6f3444ba93375a01ULL))) ||
+          (mir.count == 434 &&
+           first == 0xc2dc2e48ad5db8adULL &&
+           second == 0x517152793e0b8218ULL))) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=float-sweep-schedule "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         if (mir.insns[instruction].opcode == MIR_STORE_INDIRECT) {
             ++store_count;
