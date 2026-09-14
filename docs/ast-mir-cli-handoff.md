@@ -1530,6 +1530,35 @@ locally verified execution inventory.
   and assembly SHA-256 is
   `c9c86c97091c14451080c8a64ff0a0fcec70fe664049cd7a6dc0fc058568b954`.
   The broader coverage objective remains incomplete.
+- Wave 1600 closes the historical `mir_match_board_search_schedule` proof gap
+  and fixes genuine exact-schedule false acceptances. The old matcher proved
+  the 215-instruction/25-block opcode and selected-edge outline, four signed
+  word parameter offsets, helper names and argument counts, four global
+  identities, a few strides, and three constants. It did not bind the complete
+  SSA payload, scalar and pointer types, memory widths and flags, local
+  identities, operators, PHI inputs, branch conditions, call ABI, or full
+  global layouts. It accepted 311 of 359 targeted MIR mutations: 84/88 type,
+  22/24 width, 78/78 first-operand, 30/30 second-operand, 41/61
+  constant/operator/index, and 56/78 storage/call identity changes. It also
+  selected the hard-coded schedule for signed-index and unsigned-check source
+  near matches.
+  The matcher now fingerprints every numeric MIR payload and CFG field, checks
+  the complete function/helper ABI and observable identities, and proves the
+  exact `movecnt`, `moves`,
+  `side`, and `best_root` layouts and volatility properties. New
+  `tests/mir-clobber/bsearch.c` isolates the recursive alpha-beta search and
+  checks terminal, no-move, recursive, best-root, side-restoration, and score
+  results. `board-search-wave1600-audit.py` runs 64 stack/no-stack and
+  peep/nopeep runtime controls across 16 source variants, preserves exact
+  selection for baseline and renamed functions, proves generic fallback for
+  volatile state, alternate count/move/index/return/helper types, changed
+  extents, extra CFG, and all 359 targeted MIR mutations, and independently
+  forces `spilled-phi-slot` for every mutation. Zero meaningful survivors
+  remain. The clean selected hash is `93b87cc0` and assembly SHA-256 is
+  `42754918a399eb67099c355ace0d6c3f12fffa609d93741ab46c61fe943a3627`.
+  The standalone audit, full Python script-test suite, and both strict
+  506-app release modes pass. The broader coverage objective remains
+  incomplete.
 - Wave 1700 closes the remaining focused proof gap for
   `mir_match_scope_block_runner` without changing production code. The
   pre-existing `test-mir-scope-block-mutations.ps1` diagnostic covered four

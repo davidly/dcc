@@ -1223,6 +1223,35 @@ SHA-256 is
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
 
+Wave 1600 closes the historical `mir_match_board_search_schedule` proof gap
+and fixes genuine exact-schedule false acceptances. The previous matcher
+validated the 215-instruction/25-block opcode and selected-edge outline, four
+signed-word parameter offsets, helper names and argument counts, four global
+identities, selected strides, and three constants, but not the complete SSA
+payload, types, widths, memory flags, local identities, operators, PHIs,
+branch conditions, call ABI, or global layouts. It accepted 311 of 359
+targeted MIR mutations: 84/88 type, 22/24 width, 78/78 first-operand, 30/30
+second-operand, 41/61 constant/operator/index, and 56/78 storage/call identity
+changes. Signed-index and unsigned-check source near matches also retained the
+hard-coded schedule.
+
+The matcher now fingerprints every numeric MIR payload and CFG field,
+validates the complete search/helper ABI and observable identities, and proves
+the exact `movecnt`, `moves`, `side`, and `best_root` layouts and volatility
+properties. New
+`tests/mir-clobber/bsearch.c` isolates the recursive alpha-beta search and
+checks terminal, no-move, recursive, best-root, side-restoration, and score
+results. `board-search-wave1600-audit.py` runs 64 stack/no-stack and
+peep/nopeep runtime controls across 16 source variants and rejects all 359
+targeted type, width, operand, constant/operator/index, and storage/call
+identity mutations. The volatile global/local source controls cover
+memory-flag rejection, and every direct MIR mutation independently selects
+forced `spilled-phi-slot` fallback. Zero meaningful survivors remain. The
+clean selected hash is `93b87cc0` and assembly SHA-256 is
+`42754918a399eb67099c355ace0d6c3f12fffa609d93741ab46c61fe943a3627`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
 Wave 1700 closes the remaining focused proof gap for
 `mir_match_scope_block_runner` without changing production code. The earlier
 `test-mir-scope-block-mutations.ps1` diagnostic covered four controls and 27
