@@ -1487,6 +1487,27 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall totals.
 
+Wave 4000 closes the historical `mir_match_pi_digit_schedule` proof gap and
+fixes severe false acceptance. The old 76-instruction matcher directly
+referenced only 27 instruction positions and accepted 1,642 of 1,754
+exhaustive per-instruction field and call-identity mutations (93.6%). Missing
+checks covered opcode, type, SSA identity, memory and qualifier metadata, CFG
+successors, PHI predecessors, and the remaining instruction metadata.
+
+The matcher now fingerprints all 23 semantic and structural fields on every
+instruction and validates the assertion string ID, width, and required
+expression prefix. New `tests/mir-clobber/pidigit.c` computes the first eight
+hexadecimal digits of pi and compares them with the independent `243f6a88`
+oracle. `pi-digit-wave4000-audit.py` builds an isolated diagnostic mutation
+compiler, runs 12 stack/no-stack and peep/nopeep controls across exact,
+renamed, and reordered-bound variants, and rejects all 1,755 mutations with
+generic fallback and zero survivors. The clean stack-check selected hash is
+`050cebd0`; assembly SHA-256 is
+`0481fbb52fa311e135a15dddcaee64cea71940af5999f07dbbe80da26d935a5f`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

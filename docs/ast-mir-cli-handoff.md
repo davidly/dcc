@@ -1770,6 +1770,26 @@ locally verified execution inventory.
   Zero meaningful survivors remain. The standalone audit, all 136 Python
   script tests, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 4000 closes the historical `mir_match_pi_digit_schedule` proof gap and
+  fixes severe exact-schedule false acceptance. The 76-instruction matcher
+  directly referenced only 27 instruction positions and did not prove the
+  complete opcode, type, SSA, memory/qualifier, CFG-edge, PHI-predecessor, or
+  metadata payload. The old matcher accepted 1,642 of 1,754 exhaustive
+  per-instruction field and call-identity mutations (93.6%). The matcher now
+  fingerprints all 23 semantic and structural fields on every instruction and
+  validates that the emitted assertion string is a valid narrow literal with
+  the required expression prefix. New `tests/mir-clobber/pidigit.c` computes
+  the first eight hexadecimal digits of pi and checks them against the
+  independent `243f6a88` oracle. New `pi-digit-wave4000-audit.py` builds an
+  isolated diagnostic mutation compiler, runs 12 stack/no-stack and
+  peep/nopeep controls across exact, renamed, and reordered-bound variants,
+  and rejects all 1,755 mutations with verified generic fallback and zero
+  survivors. The clean stack-check selected hash is `050cebd0` and assembly
+  SHA-256 is
+  `0481fbb52fa311e135a15dddcaee64cea71940af5999f07dbbe80da26d935a5f`.
+  The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass. No separate clobber manifest was needed. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
