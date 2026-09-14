@@ -997,6 +997,31 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 230 closes the historical `mir_match_float_asin_schedule` proof gap and
+fixes a genuine false-acceptance class. The old matcher proved the
+95-instruction opcode fingerprint, selected constants, partial call identity,
+and the Horner tree, but 52 of the campaign's 60 representative mutations
+still retained the unchanged hard-coded schedule. Missing proof included float
+and comparison result types, branch and return operands, local widths and
+identities, transform and recursive-result flow, and direct unary-call form
+and ABI. The matcher now proves those invariants together with the four-block
+label graph and every polynomial relationship.
+
+New `tests/mir-clobber/fasin.c` isolates the exact source shape and checks
+twelve independently tabulated results across signs, polynomial and transformed
+domains, endpoints, and historical out-of-domain behavior. New
+`float-asin-wave230-audit.py` runs 20 stack/no-stack and peep/nopeep runtime
+controls, retains exact selection for the baseline, and proves named spilled
+fallback for variadic-square-root, volatile-parameter, volatile-sign, and
+different-recursion near matches. It rejects 60/60 targeted MIR mutations and
+independently reproduces each fallback through
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot`, with zero meaningful survivors.
+The clean selected hash is `32a12ad4` and assembly SHA-256 is
+`d2b59eea697c24e27009b21cebe118b508ccd97bb667d702002f8fa1640dce89`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

@@ -1319,6 +1319,30 @@ locally verified execution inventory.
   `a68e9c6e4b124bc3e24adf826e8b8717693927d84185d82546251c3d60c623ce`.
   The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 230 closes the historical `mir_match_float_asin_schedule` proof gap and
+  fixes a genuine false-acceptance class. The old matcher proved the
+  95-instruction opcode fingerprint, selected constants, partial call
+  identity, and the Horner tree, but 52 of the campaign's 60 type, dataflow,
+  width, identity, return, and direct-call mutations still retained the
+  hard-coded schedule. The matcher now proves the four-block label graph,
+  exact float and comparison types, nonvolatile parameter/load/local
+  identities and widths, sign normalization, both domain branches and
+  returns, transform and recursive-call flow, complete unary call ABI, and
+  every polynomial input, store, and result relationship.
+  New `tests/mir-clobber/fasin.c` isolates the exact source shape and validates
+  twelve independently tabulated arcsine results across signs, the polynomial
+  and transformed domains, endpoints, and the historical out-of-domain
+  behavior. The dedicated `float-asin-wave230-audit.py` campaign runs 20
+  stack/no-stack and peep/nopeep runtime controls, retaining exact selection
+  for the baseline while proving spilled fallback for variadic-square-root,
+  volatile-parameter, volatile-sign, and different-recursion near matches. It
+  rejects 60/60 targeted MIR mutations and independently forces
+  `DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` for every fallback, with zero
+  meaningful survivors. The clean selected hash is `32a12ad4` and assembly
+  SHA-256 is
+  `d2b59eea697c24e27009b21cebe118b508ccd97bb667d702002f8fa1640dce89`.
+  The standalone audit, full Python script-test suite, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

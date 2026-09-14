@@ -3293,7 +3293,7 @@ static int mir_match_float_power_schedule(
 static int mir_match_float_asin_schedule(
     struct MirFloatAsinSchedule *plan)
 {
-    int expected_opcodes[95] = {
+    static const int expected_opcodes[95] = {
         MIR_LABEL, MIR_PARAM, MIR_FLOAT_CONST, MIR_STORE, MIR_NOP,
         MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_FLOAT_CONST,
         MIR_UNARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_UNARY, MIR_NOP,
@@ -3314,9 +3314,27 @@ static int mir_match_float_asin_schedule(
         MIR_BINARY, MIR_BINARY, MIR_STORE, MIR_LOAD, MIR_NOP, MIR_BINARY,
         MIR_RETURN
     };
+    static const int label_indices[4] = {0, 17, 24, 66};
+    static const int float_constant_indices[14] = {
+        2, 5, 8, 19, 22, 39, 43, 44, 58, 59, 75, 77, 79, 81
+    };
+    static const int comparison_indices[3] = {6, 20, 40};
+    static const int float_binary_indices[16] = {
+        46, 47, 61, 62, 63, 69, 74, 82,
+        83, 84, 85, 86, 87, 88, 89, 93
+    };
+    static const int load_indices[9] = {
+        18, 38, 45, 57, 67, 68, 71, 72, 91
+    };
+    static const int store_indices[7] = {3, 11, 15, 51, 56, 70, 90};
+    static const int local_store_indices[5] = {3, 51, 56, 70, 90};
     int sqrt_arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
     int self_arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
     int instruction;
+    int other;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 95 || mir_cfg_block_count() != 4 ||
@@ -3330,10 +3348,118 @@ static int mir_match_float_asin_schedule(
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "float-asin-schedule", "opcodes");
+    for (instruction = 0; instruction < 4; ++instruction)
+        for (other = instruction + 1; other < 4; ++other)
+            if (mir.insns[label_indices[instruction]].label ==
+                mir.insns[label_indices[other]].label)
+                return mir_machine_reject(
+                    "float-asin-schedule", "control-flow");
+    if (mir.insns[7].label != mir.insns[17].label ||
+        mir.insns[21].label != mir.insns[24].label ||
+        mir.insns[41].label != mir.insns[66].label)
+        return mir_machine_reject(
+            "float-asin-schedule", "control-flow");
     if (!mir_float_tolerance_parameter(
-            &mir.insns[1], 0, &plan->parameter_offset))
+            &mir.insns[1], 0, &plan->parameter_offset) ||
+        mir.insns[1].type != TYPE_FLOAT ||
+        !mir_machine_named_nonvolatile(&mir.insns[1]))
         return mir_machine_reject(
             "float-asin-schedule", "parameter");
+    for (instruction = 0; instruction < 14; ++instruction)
+        if (mir.insns[float_constant_indices[instruction]].type !=
+            TYPE_FLOAT)
+            return mir_machine_reject(
+                "float-asin-schedule", "types");
+    for (instruction = 0; instruction < 3; ++instruction)
+        if (mir.insns[comparison_indices[instruction]].type != TYPE_INT ||
+            mir.insns[comparison_indices[instruction]].secondary_offset !=
+                TYPE_FLOAT)
+            return mir_machine_reject(
+                "float-asin-schedule", "types");
+    for (instruction = 0; instruction < 16; ++instruction)
+        if (mir.insns[float_binary_indices[instruction]].type !=
+                TYPE_FLOAT ||
+            mir.insns[float_binary_indices[instruction]].secondary_offset !=
+                TYPE_FLOAT)
+            return mir_machine_reject(
+                "float-asin-schedule", "types");
+    if (mir.insns[9].type != TYPE_FLOAT ||
+        mir.insns[13].type != TYPE_FLOAT)
+        return mir_machine_reject(
+            "float-asin-schedule", "types");
+    for (instruction = 0; instruction < 9; ++instruction)
+        if (mir.insns[load_indices[instruction]].type != TYPE_FLOAT ||
+            mir.insns[load_indices[instruction]].memory_flags != 0 ||
+            !mir_machine_named_nonvolatile(
+                &mir.insns[load_indices[instruction]]))
+            return mir_machine_reject(
+                "float-asin-schedule", "loads");
+    for (instruction = 0; instruction < 7; ++instruction)
+        if (mir.insns[store_indices[instruction]].memory_size != 4 ||
+            (mir.insns[store_indices[instruction]].memory_flags &
+             (1 | 8)) != 0)
+            return mir_machine_reject(
+                "float-asin-schedule", "stores");
+    for (instruction = 0; instruction < 5; ++instruction)
+        if (!mir_scalar_memory_location(
+                &mir.insns[local_store_indices[instruction]],
+                &memory_type, &memory_storage, &memory_offset) ||
+            memory_type != TYPE_FLOAT ||
+            memory_storage != SC_LOCAL)
+            return mir_machine_reject(
+                "float-asin-schedule", "locals");
+    if (!mir_machine_same_location(
+            &mir.insns[1], &mir.insns[4]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[12]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[14]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[15]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[18]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[27]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[38]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[45]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[67]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[68]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[71]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[72]))
+        return mir_machine_reject(
+            "float-asin-schedule", "parameter-uses");
+    if (!mir_machine_same_location(
+            &mir.insns[3], &mir.insns[10]) ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[11]) ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[57]) ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[91]))
+        return mir_machine_reject(
+            "float-asin-schedule", "sign-local");
+    if (!mir_machine_same_location(
+            &mir.insns[51], &mir.insns[53]) ||
+        !mir_machine_same_location(
+            &mir.insns[56], &mir.insns[60]) ||
+        !mir_machine_same_location(
+            &mir.insns[70], &mir.insns[73]) ||
+        !mir_machine_same_location(
+            &mir.insns[70], &mir.insns[76]) ||
+        !mir_machine_same_location(
+            &mir.insns[70], &mir.insns[78]) ||
+        !mir_machine_same_location(
+            &mir.insns[70], &mir.insns[80]) ||
+        !mir_machine_same_location(
+            &mir.insns[90], &mir.insns[92]))
+        return mir_machine_reject(
+            "float-asin-schedule", "local-uses");
     plan->one_bits =
         (unsigned long)mir.insns[2].immediate & 0xffffffffUL;
     plan->zero_bits =
@@ -3368,6 +3494,27 @@ static int mir_match_float_asin_schedule(
         mir.insns[63].immediate != '*')
         return mir_machine_reject(
             "float-asin-schedule", "constants");
+    if (mir.insns[3].src1 != mir.insns[2].dst ||
+        mir.insns[6].src1 != mir.insns[1].dst ||
+        mir.insns[6].src2 != mir.insns[5].dst ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[11].src1 != mir.insns[9].dst ||
+        mir.insns[13].src1 != mir.insns[1].dst ||
+        mir.insns[15].src1 != mir.insns[13].dst ||
+        mir.insns[20].src1 != mir.insns[18].dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[40].src1 != mir.insns[38].dst ||
+        mir.insns[40].src2 != mir.insns[39].dst ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        mir.insns[46].src1 != mir.insns[44].dst ||
+        mir.insns[46].src2 != mir.insns[45].dst ||
+        mir.insns[47].src1 != mir.insns[43].dst ||
+        mir.insns[47].src2 != mir.insns[46].dst)
+        return mir_machine_reject(
+            "float-asin-schedule", "flow");
     if (!mir_float_report_call_arguments(
             &mir.insns[49], 1, sqrt_arguments) ||
         sqrt_arguments[0] != mir.insns[47].dst ||
@@ -3376,25 +3523,77 @@ static int mir_match_float_asin_schedule(
         self_arguments[0] != mir.insns[49].dst)
         return mir_machine_reject(
             "float-asin-schedule", "calls");
+    if (mir.insns[48].src1 != mir.insns[47].dst ||
+        mir.insns[48].immediate != 0 ||
+        mir.insns[48].secondary_offset !=
+            mir.insns[49].secondary_offset ||
+        mir.insns[48].type != TYPE_FLOAT ||
+        mir.insns[49].src1 >= 0 ||
+        mir.insns[49].secondary_offset < 0 ||
+        mir.insns[49].memory_flags != 0 ||
+        mir.insns[49].type != TYPE_FLOAT ||
+        mir.insns[51].src1 != mir.insns[49].dst ||
+        mir.insns[54].src1 != mir.insns[49].dst ||
+        mir.insns[54].immediate != 0 ||
+        mir.insns[54].secondary_offset !=
+            mir.insns[55].secondary_offset ||
+        mir.insns[54].type != TYPE_FLOAT ||
+        mir.insns[55].src1 >= 0 ||
+        mir.insns[55].secondary_offset < 0 ||
+        mir.insns[55].memory_flags != 0 ||
+        mir.insns[55].type != TYPE_FLOAT ||
+        mir.insns[56].src1 != mir.insns[55].dst)
+        return mir_machine_reject(
+            "float-asin-schedule", "call-flow");
     plan->sqrt_function = find_global(mir.insns[49].name);
     plan->self_function = find_global(mir.insns[55].name);
     if (plan->sqrt_function == NULL ||
+        plan->sqrt_function->storage != SC_FUNC ||
         plan->sqrt_function->is_funcptr ||
+        plan->sqrt_function->is_noreturn ||
+        plan->sqrt_function->is_fastcall ||
         !plan->sqrt_function->has_proto ||
         plan->sqrt_function->proto_variadic ||
         plan->sqrt_function->proto_nargs != 1 ||
-        !type_is_float(plan->sqrt_function->type) ||
+        plan->sqrt_function->proto_types[0] != TYPE_FLOAT ||
+        plan->sqrt_function->type != TYPE_FLOAT ||
         plan->self_function == NULL ||
         plan->self_function != find_global(mir.name) ||
+        plan->self_function->storage != SC_FUNC ||
         !plan->self_function->is_defined ||
+        plan->self_function->is_funcptr ||
+        plan->self_function->is_noreturn ||
+        plan->self_function->is_fastcall ||
         !plan->self_function->has_proto ||
         plan->self_function->proto_variadic ||
-        plan->self_function->proto_nargs != 1)
+        plan->self_function->proto_nargs != 1 ||
+        plan->self_function->proto_types[0] != TYPE_FLOAT ||
+        plan->self_function->type != TYPE_FLOAT)
         return mir_machine_reject(
             "float-asin-schedule", "call-symbols");
+    if ((mir.insns[49].base_name[0] != 0 &&
+         strcmp(
+             mir.insns[49].base_name,
+             asm_name_for(sym_asm_name(plan->sqrt_function)))) ||
+        (mir.insns[55].base_name[0] != 0 &&
+         strcmp(
+             mir.insns[55].base_name,
+             asm_name_for(sym_asm_name(plan->self_function)))))
+        return mir_machine_reject(
+            "float-asin-schedule", "call-symbols");
+    if (mir.insns[61].src1 != mir.insns[59].dst ||
+        mir.insns[61].src2 != mir.insns[55].dst ||
+        mir.insns[62].src1 != mir.insns[58].dst ||
+        mir.insns[62].src2 != mir.insns[61].dst ||
+        mir.insns[63].src1 != mir.insns[57].dst ||
+        mir.insns[63].src2 != mir.insns[62].dst ||
+        mir.insns[64].src1 != mir.insns[63].dst)
+        return mir_machine_reject(
+            "float-asin-schedule", "recursive-result");
     if (mir.insns[69].src1 != mir.insns[67].dst ||
         mir.insns[69].src2 != mir.insns[68].dst ||
         mir.insns[69].immediate != '*' ||
+        mir.insns[70].src1 != mir.insns[69].dst ||
         mir.insns[74].src1 != mir.insns[72].dst ||
         mir.insns[74].src2 != mir.insns[69].dst ||
         mir.insns[74].immediate != '*' ||
@@ -3422,6 +3621,7 @@ static int mir_match_float_asin_schedule(
         mir.insns[89].src1 != mir.insns[71].dst ||
         mir.insns[89].src2 != mir.insns[88].dst ||
         mir.insns[89].immediate != '+' ||
+        mir.insns[90].src1 != mir.insns[89].dst ||
         mir.insns[93].src1 != mir.insns[91].dst ||
         mir.insns[93].src2 != mir.insns[89].dst ||
         mir.insns[93].immediate != '*' ||
