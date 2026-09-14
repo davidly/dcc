@@ -877,6 +877,41 @@ locally verified execution inventory.
   rejected every new near match and mutation, so this increment closes proof
   gaps rather than fixing a false acceptance. All 136 Python script tests
   pass.
+- Wave 50 closes the next `mir_match_vla_smooth` proof gaps without changing
+  production code. The earlier VLA smoothing coverage already proved the exact
+  baseline, stack and debug modes, volatile and near-match source rejection,
+  alias/stride/restoration runtime behavior, and 54 direct metadata/ABI/object
+  mutations through the dedicated host harness plus `tests/mir-clobber/vla18.c`,
+  but it did not directly pin the matcher's remaining top-level relation
+  guards. `tests/host/mir_vla_smooth_isolation.c` now adds a
+  touching-but-non-overlapping local-layout acceptance control plus 112 direct
+  branch mutations covering the secondary parameter ABI checks,
+  parameter/local object-use mismatches, same-slot alias drift,
+  constant/value-link breakage, outer/inner loop relations, valid-index
+  PHI/branch plumbing, accumulation and increment links, average-store
+  wiring, alias-compare edges, and the return graph. Current code already
+  rejected every new mutation and accepted the boundary-layout control, so
+  this increment closes proof gaps rather than fixing a false acceptance.
+  Normal and ASan/UBSan MIR host CTest each pass
+  `mir-vla-smooth-isolation`, and all 136 Python script tests pass.
+- Wave 51 closes the next `mir_resolve_deferred_metadata` proof gaps without
+  changing production code. Existing host deferred-metadata coverage already
+  proved function-pointer insertion, direct-call conversion repair,
+  coordinate updates, basic alias bounds, and malformed call ordering, but it
+  did not directly pin alias windows with explicit scope labels, for-init
+  loop-exit truncation, orphaned `MIR_OBJECT_MERGE` demotion, or the
+  `#b`-gated scoped unary/PHI type-repair loop. New direct MIR assertions now
+  prove scope-label alias renaming plus `base_name` repair, label-before-window
+  non-repair, forward exit-branch truncation while ignoring a backward target,
+  invalid array-object merge demotion to `MIR_ADDRESS` while leaving a valid
+  merge intact, and unary/PHI type repair after a block alias retargets a
+  named load. The clean-build mutant `deferred-merge-demotion` disables only
+  the invalid-merge fallback and is killed by the exact
+  `FAIL deferred metadata merge demotion` assertion. Current code already
+  satisfied every new invariant, so this increment closes proof gaps rather
+  than fixing a false acceptance. Normal and ASan/UBSan MIR host CTest pass
+  5/5, the full compiler mutation campaign has one passing baseline plus
+  28/28 killed mutants, and all 136 Python script tests pass.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
