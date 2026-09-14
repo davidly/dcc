@@ -1021,6 +1021,22 @@ locally verified execution inventory.
   standalone audit, full Python script suite, and focused strict stack/no-stack
   `tptrcnd` release gates pass. The broader coverage objective remains
   incomplete.
+- Wave 64 closes the next `mir_match_float_tangent_rational` proof gaps
+  without changing production code. The historical tangent schedule had no
+  dedicated fixture or focused audit. New `tests/mir-clobber/tanrat.c`
+  isolates the 114-instruction exact shape and checks seven results against
+  independently computed mathematical tangent values. The dedicated
+  `float-tangent-wave64-audit.py` campaign runs 12 stack/no-stack and
+  peep/nopeep runtime controls, retaining exact selection for the baseline
+  and proving named spilled fallback for extra-arithmetic opcode/shape and
+  variadic-remainder ABI near matches. It also rejects 13/13 targeted MIR
+  mutations covering parameter and call types, local width and identity, call
+  arguments, repeated
+  constants, negation, period/quadrant/rational/result dataflow and operators,
+  zero-result flow, and the final PHI. Current code rejected every mutation
+  and near match as intended, so this increment closes proof gaps rather than
+  fixing a false acceptance. The standalone audit and all 136 Python script
+  tests pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

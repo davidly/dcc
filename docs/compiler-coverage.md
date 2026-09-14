@@ -692,6 +692,27 @@ script suite, and focused strict stack/no-stack `tptrcnd` release gates pass.
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals; the broader coverage objective remains incomplete.
 
+Wave 64 closes the next `mir_match_float_tangent_rational` proof gaps without
+changing production code. Historical commit `16e9a5f9` introduced the exact
+schedule before focused per-matcher audits, and no dedicated tangent fixture
+or audit existed. New `tests/mir-clobber/tanrat.c` isolates the
+114-instruction schedule and checks zero, signed, quadrant-inverted, and
+period-reduced results against seven independently computed mathematical
+tangent values. New `float-tangent-wave64-audit.py` runs 12 stack/no-stack
+and peep/nopeep runtime controls, retaining exact selection for the baseline
+and proving spilled fallback for extra-arithmetic opcode/shape and
+variadic-remainder ABI near matches. It rejects 13/13 targeted MIR mutations
+covering parameter and call types, local width and identity, call arguments,
+repeated constants, negation,
+period/quadrant/rational/result dataflow and operators, zero-result flow, and
+the final PHI. The clean baseline retains selected hash `948521bf` and
+assembly SHA-256
+`e0acbc154ecc7efc3491c561749c56a7ea4ece401de8e14b89955a11421db41c`.
+Current code already rejected every near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
