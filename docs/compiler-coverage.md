@@ -670,6 +670,28 @@ Python script tests pass. This remains a test-only increment;
 regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
 
+Wave 63 closes the next `mir_match_ptr_condition_main` proof gaps without
+changing its accepted program set or generated schedule. The matcher now runs
+its complete semantic signature after the explicit constant, call, ABI,
+global, alias, and aggregate-layout checks. This preserves the catch-all proof
+while allowing targeted mutations to exercise the specific rejection branches
+that the earlier signature placement masked. `tests/tptrcnd.c` adds
+runtime-safe alternate init/fail/check/picker helpers, a volatile failure
+counter, and renamed-global and loop-picker alias controls. A new
+`pointer-condition-wave63-audit.py` campaign runs 52 stack/no-stack and
+peep/nopeep controls, retaining exact selection for the baseline,
+static-global, and fastcall-picker variants while forcing named spilled
+fallback for ten near matches. It rejects 19/19 targeted MIR mutations covering
+byte promotion, operations, memory and index layout, constants, call and
+argument identities, globals, local/global/function aliasing, initialization,
+and return layout, with zero meaningful survivors. No genuine false acceptance
+was found: the baseline assembly SHA-256 remains
+`8816c4cf4df3c7a7bccb69042a4a814d5c72ea979642204b95fcc23f896ffbfb`
+and the selected hash remains `d4d8d799`. The standalone audit, full Python
+script suite, and focused strict stack/no-stack `tptrcnd` release gates pass.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals; the broader coverage objective remains incomplete.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

@@ -72,14 +72,22 @@ struct Wrapper **gwpp[2];
 volatile
 #endif
 int gi[8];
+#ifdef PTRW63_RENAMED_GLOBAL_INT
+int hc[8];
+#define PTRW63_GLOBAL_INT hc
+#else
+#define PTRW63_GLOBAL_INT gi
+#endif
 ptrw25_char_t gc[8];
 long gl[8];
 
-#ifdef PTRW25_FASTCALL_CHECK
-int fails;
-#else
-static int fails;
+#ifndef PTRW25_FASTCALL_CHECK
+static
 #endif
+#ifdef PTRW63_VOLATILE_FAILURES
+volatile
+#endif
+int fails;
 
 static void fail(name)
 char *name;
@@ -87,6 +95,14 @@ char *name;
     printf("FAIL %s\n", name);
     fails++;
 }
+
+#ifdef PTRW63_ALT_FAIL
+static void fail_alt(name)
+char *name;
+{
+    fail(name);
+}
+#endif
 
 #ifndef PTRW25_FASTCALL_CHECK
 static void check_int(name, got, exp)
@@ -133,6 +149,16 @@ _ptrw25_check_format:
 #endasm
 #endif
 
+#ifdef PTRW63_ALT_CHECK
+static void check_int_alt(name, got, exp)
+char *name;
+int got;
+int exp;
+{
+    check_int(name, got, exp);
+}
+#endif
+
 #ifndef PTRW25_FASTCALL_PICKW
 static struct Wrapper *pickw(pp, n)
 struct Wrapper **pp;
@@ -154,6 +180,15 @@ _pickw:
         ex      de,hl
         ret
 #endasm
+#endif
+
+#ifdef PTRW63_ALT_PICKW
+static struct Wrapper *pickw_alt(pp, n)
+struct Wrapper **pp;
+int n;
+{
+    return pickw(pp, n);
+}
 #endif
 
 static struct Node *pickn(wp, n)
@@ -190,6 +225,15 @@ int n;
 {
     return *(wp->longp + n);
 }
+
+#ifdef PTRW63_LOOP_FUNCTION_ALIAS
+static int *qicklp(wp, n)
+struct Wrapper *wp;
+int n;
+{
+    return pickip(wp, n);
+}
+#endif
 
 static void init_wrapper(w, base)
 struct Wrapper *w;
@@ -240,6 +284,15 @@ int base;
     }
 }
 
+#ifdef PTRW63_ALT_INIT
+static void init_wrapper_alt(w, base)
+struct Wrapper *w;
+int base;
+{
+    init_wrapper(w, base);
+}
+#endif
+
 #ifdef PTRW25_UNSIGNED_RETURN
 unsigned int main()
 #else
@@ -265,7 +318,11 @@ int main()
     init_wrapper(&gw[0], 1000);
     init_wrapper(&gw[1], 2000);
     init_wrapper(&lw[0], 3000);
+#ifdef PTRW63_ALT_INIT
+    init_wrapper_alt(&lw[1], 4000);
+#else
     init_wrapper(&lw[1], 4000);
+#endif
 
     gwp[0] = &gw[0];
     gwp[1] = &gw[1];
@@ -282,7 +339,7 @@ int main()
 #endif
 
     for (i = 0; i < 8; i++) {
-        gi[i] = 5000 + i;
+        PTRW63_GLOBAL_INT[i] = 5000 + i;
         gc[i] = (ptrw25_char_t)(70 + i);
         gl[i] = 600000L + (long)i;
         li[i] = 7000 + i;
@@ -309,16 +366,24 @@ int main()
     if ((*lwpp[PTRW25_FIRST_WRAPPER_INDEX])->n[1].leaf[2].a[3] == 3143)
         count++;
     else
+#ifdef PTRW63_ALT_FAIL
+        fail_alt("if_i001");
+#else
         fail("if_i001");
+#endif
 #endif
     if ((*(lwpp[1]))->pn[1].leaf[0].v == 4101) count++; else fail("if_i002");
     if ((*(*gwpp[0])).n[0].pl->a[2] == 1032) count++; else fail("if_i003");
     if (*((*(*gwpp[1])).n[1].pi + 2) == 2312) count++; else fail("if_i004");
+#ifdef PTRW63_ALT_PICKW
+    if ((*(pickw_alt(lwp, 0)->ip + 3))[0] == 3123) count++; else fail("if_i005");
+#else
     if ((*(pickw(lwp, 0)->ip + 3))[0] == 3123) count++; else fail("if_i005");
+#endif
     if (pickn(pickw(gwp, 1), 0)->leaf[2].a[1] == 2041) count++; else fail("if_i006");
     if (pickl(&lw[1].n[1], 2)->v == 4121) count++; else fail("if_i007");
     if (*(&((&lw[0])->n[0].m[1][2])) == 3212) count++; else fail("if_i008");
-    if (*(gi + 5) == 5005) count++; else fail("if_i009");
+    if (*(PTRW63_GLOBAL_INT + 5) == 5005) count++; else fail("if_i009");
     if (*((li + 2) + 3) == MIR_CLOBBER_IF_I010)
         count++;
     else
@@ -346,7 +411,7 @@ int main()
     if ((*(&wp))->n[1].leaf[1].a[3] == 3133 && (*(&wp))->n[1].leaf[1].la[3] == 3000153L) count++; else fail("log001");
     if ((*(&np))->leaf[2].ca[2] == 98 || (*(&np))->leaf[2].ca[2] == 0) count++; else fail("log002");
     if (!((*(&lp))->la[1] != 3000041L)) count++; else fail("log003");
-    if (*(gi + 5) == 5005 && *(gc + 5) == 75 && *(gl + 5) == 600005L) count++; else fail("log004");
+    if (*(PTRW63_GLOBAL_INT + 5) == 5005 && *(gc + 5) == 75 && *(gl + 5) == 600005L) count++; else fail("log004");
     if (*((li + 2) + 3) == 7005 && *((lc + 2) + 3) == 85 && *((ll + 2) + 3) == 800005L) count++; else fail("log005");
     if (((*(gwpp[0]))[0]).pn[0].leaf[2].a[0] == 1040) count++; else fail("log006");
     if (((*(gwpp[0]))[0]).pn[0].leaf[2].ca[0] == 16) count++; else fail("log007");
@@ -355,12 +420,20 @@ int main()
     if (pickn(pickw(gwp, 1), 0)->leaf[2].ca[1] < 0) fail("iff_c001"); else count++;
     if (pickl(&lw[1].n[1], 2)->lv != 4000123L) fail("iff_l001"); else count++;
 
+#ifdef PTRW63_ALT_CHECK
+    check_int_alt("if_count", count, MIR_CLOBBER_IF_COUNT);
+#else
     check_int("if_count", count, MIR_CLOBBER_IF_COUNT);
+#endif
 
     i = 0;
     sum = 0;
     guard = 0;
+#ifdef PTRW63_LOOP_FUNCTION_ALIAS
+    while ((i < 4) && (*(qicklp(&lw[i & 1], i & 3)) >= 3000) &&
+#else
     while ((i < 4) && (*(pickip(&lw[i & 1], i & 3)) >= 3000) &&
+#endif
            (*(picklp(&lw[i & 1], i & 3)) >= 3000000L)) {
         sum += i;
         i++;
@@ -432,7 +505,8 @@ int main()
     check_int("do_sum2", sum, 362);
 
     sum = 0;
-    for (i = 0; (i < 4) && (*(gi + i) >= 5000) && (*(gl + i) < 600010L); i++) {
+    for (i = 0; (i < 4) && (*(PTRW63_GLOBAL_INT + i) >= 5000) &&
+         (*(gl + i) < 600010L); i++) {
         sum += i;
     }
     check_int("for_i1", i, 4);

@@ -1002,6 +1002,25 @@ locally verified execution inventory.
   the memory-limit upper boundary. Current code already rejected every new
   near match and mutation, so this increment closes proof gaps rather than
   fixing a false acceptance. All 136 Python script tests pass.
+- Wave 63 closes the next `mir_match_ptr_condition_main` proof gaps without
+  changing its accepted program set or generated schedule. The complete
+  semantic signature is now checked after the matcher's explicit constant,
+  call, ABI, global, alias, and aggregate-layout proofs, so mutations of those
+  fields reach their specific rejection paths instead of being hidden by the
+  earlier catch-all signature rejection. `tests/tptrcnd.c` adds runtime-safe
+  alternate init/fail/check/picker helpers, a volatile failure counter, and
+  renamed-global and loop-picker alias controls. The dedicated
+  `pointer-condition-wave63-audit.py` campaign runs 52 stack/no-stack and
+  peep/nopeep controls, retaining exact selection for the baseline,
+  static-global, and fastcall-picker variants while proving named spilled
+  fallback for ten near matches. It also rejects 19/19 targeted MIR mutations
+  covering byte promotion, operation/type/layout checks, constants, call and
+  argument identities, globals, local/global/function aliasing, initialization,
+  and return layout, with zero meaningful survivors. No false acceptance was
+  found; the baseline assembly and selected hash remain unchanged. The
+  standalone audit, full Python script suite, and focused strict stack/no-stack
+  `tptrcnd` release gates pass. The broader coverage objective remains
+  incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

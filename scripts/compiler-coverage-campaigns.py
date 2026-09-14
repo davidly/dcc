@@ -114,6 +114,9 @@ CAMPAIGNS = (
              output_dir="byte-math-wave53-audit", max_jobs=2),
     Campaign("symbol-find-schedule", "symbol-find-wave62-audit.py",
              output_dir="symbol-find-wave62-audit", max_jobs=2),
+    Campaign("pointer-condition-schedule",
+             "pointer-condition-wave63-audit.py",
+             output_dir="pointer-condition-wave63-audit", max_jobs=2),
 )
 
 

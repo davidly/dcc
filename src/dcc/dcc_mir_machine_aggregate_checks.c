@@ -7834,15 +7834,6 @@ static int mir_match_ptr_condition_main(
         unary_cursor != strlen(mir_ptr_unary_operations))
         return mir_machine_reject(
             "pointer-condition-main", "operation-count");
-    mir_ptr_condition_semantic_signature(
-        &semantic_first, &semantic_second);
-    /* Before and after the byte-load promotion pass are both emitted. */
-    if (!((semantic_first == 0x2823cb69dd839bdaULL &&
-           semantic_second == 0x609814dbf3758006ULL) ||
-          (semantic_first == 0x5b94d652e8ad4bbaULL &&
-           semantic_second == 0x0cae523433db967aULL)))
-        return mir_machine_reject(
-            "pointer-condition-main", "semantic-signature");
     for (item = 0;
          item < sizeof(expected_constants) /
                 sizeof(expected_constants[0]);
@@ -8092,6 +8083,15 @@ static int mir_match_ptr_condition_main(
             mir_ptr_condition_instruction(2448)->dst)
         return mir_machine_reject(
             "pointer-condition-main", "aggregate-layout");
+    mir_ptr_condition_semantic_signature(
+        &semantic_first, &semantic_second);
+    /* Before and after the byte-load promotion pass are both emitted. */
+    if (!((semantic_first == 0x2823cb69dd839bdaULL &&
+           semantic_second == 0x609814dbf3758006ULL) ||
+          (semantic_first == 0x5b94d652e8ad4bbaULL &&
+           semantic_second == 0x0cae523433db967aULL)))
+        return mir_machine_reject(
+            "pointer-condition-main", "semantic-signature");
     return 1;
 }
 
