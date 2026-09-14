@@ -126,6 +126,9 @@ CAMPAIGNS = (
     Campaign("whitespace-scan-schedule",
              "whitespace-scan-wave70-audit.py",
              output_dir="whitespace-scan-wave70-audit", max_jobs=2),
+    Campaign("fixed-embedding-build",
+             "fixed-embedding-wave80-audit.py",
+             output_dir="fixed-embedding-wave80-audit", max_jobs=2),
 )
 
 

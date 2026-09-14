@@ -1076,6 +1076,28 @@ locally verified execution inventory.
   `31c83b5f4d79640c9908a480717fa7a952afd7d570e3069daebc3860cb92850b`.
   The standalone audit and all 136 Python script tests pass. The broader
   coverage objective remains incomplete.
+- Wave 80 closes the historical `mir_match_fixed_embedding_build` proof gap
+  without changing production code. Commit `9299371d` introduced the exact
+  schedule before focused per-matcher audits, and no dedicated fixture or
+  campaign remained in the tree. New `tests/mir-clobber/fxembd.c` isolates
+  the 77-instruction, seven-block schedule and validates all 128 embedding
+  outputs, including 16 lower and 16 upper saturations, against an
+  independently indexed and clamped oracle. The dedicated
+  `fixed-embedding-wave80-audit.py` campaign runs 12 stack/no-stack and
+  peep/nopeep runtime controls, retaining exact selection for the baseline
+  while proving named spilled fallback for volatile-token and variadic-clamp
+  near matches. `DCC_MIR_COST_REPORT` identifies the exact incumbent and
+  `DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` independently confirms every
+  rejected mutation's generic fallback. The campaign rejects 24/24 targeted
+  MIR mutations covering global and local identities, initializers, PHI and
+  loop bounds, token/weight indexing, widths, pointer increments, signed-wide
+  promotion/addition, call ABI/dataflow, result storage, and loop updates,
+  with zero meaningful survivors. Current code already rejected every near
+  match and mutation, so no genuine false acceptance was found. The clean
+  selected hash remains `e979e278` and assembly SHA-256 is
+  `399f0d1374c4e85d8da4744ccaf930010a55a07c7169e4675822bdb36ec7f2e4`.
+  The standalone audit and all 136 Python script tests pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

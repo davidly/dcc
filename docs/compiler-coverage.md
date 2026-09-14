@@ -757,6 +757,28 @@ false acceptance was found. The standalone audit and all 136 Python script
 tests pass. This remains a test-only increment; regenerate the immutable
 aggregate ledger before claiming new overall branch totals.
 
+Wave 80 closes the historical `mir_match_fixed_embedding_build` proof gap
+without changing production code. Commit `9299371d` introduced the exact
+schedule before focused per-matcher audits, and no dedicated fixture or
+campaign remained in the tree. New `tests/mir-clobber/fxembd.c` isolates the
+77-instruction, seven-block schedule and validates all 128 embedding outputs,
+including 16 lower and 16 upper saturations, with an independently indexed and
+clamped oracle. New `fixed-embedding-wave80-audit.py` runs 12 stack/no-stack
+and peep/nopeep runtime controls, retaining exact selection for the baseline
+while proving named spilled fallback for volatile-token and variadic-clamp
+near matches. Exact and fallback `DCC_MIR_COST_REPORT` assertions plus forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` controls verify candidate identity.
+The audit rejects 24/24 targeted MIR mutations covering global/local identity,
+initialization, PHI and loop bounds, indexing, widths, pointer increments,
+signed-wide promotion/addition, call ABI/dataflow, result storage, and loop
+updates, with zero meaningful survivors. The clean selected hash remains
+`e979e278` and assembly SHA-256 is
+`399f0d1374c4e85d8da4744ccaf930010a55a07c7169e4675822bdb36ec7f2e4`.
+Current code already rejected every near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
