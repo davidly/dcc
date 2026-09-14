@@ -108,6 +108,8 @@ CAMPAIGNS = (
              output_dir="symbol-insert-wave46-audit", max_jobs=2),
     Campaign("ctype-realloc-schedule", "ctype-realloc-wave48-audit.py",
              output_dir="ctype-realloc-wave48-audit", max_jobs=2),
+    Campaign("byte-math-flags-schedule", "byte-math-wave53-audit.py",
+             output_dir="byte-math-wave53-audit", max_jobs=2),
 )
 
 

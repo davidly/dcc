@@ -948,6 +948,25 @@ locally verified execution inventory.
   one passing baseline plus 28/28 killed mutants, both strict stack/no-stack
   full+extended release gates pass with zero failures and zero performance
   regressions, and all 136 Python script tests pass.
+- Wave 53 closes the next `mir_match_byte_math_flags` proof gaps without
+  changing production code. Existing byte-math coverage already proved the
+  exact baseline, the broad Wave 19 field-mutation census, and the source
+  mask/compare/complement/add/overflow/logic near matches, but it did not
+  keep a focused campaign over helper prototypes, variadic call-metadata
+  drift, or top-level non-void/VLA shape rejection, and it left several named
+  fallback reasons unpinned in the standalone audit. `tests/mir-clobber/
+  bytemath.c` now adds ANSI helper, compare-variadic, decimal-variadic,
+  non-void-return, and VLA source variants. The dedicated
+  `byte-math-wave53-audit.py` script runs 24 stack/no-stack and peep/nopeep
+  runtime controls, retaining exact selection for the baseline and ANSI-helper
+  variants while forcing spilled generic fallback for the four near matches,
+  and rejects 7/7 targeted MIR mutations covering instruction-metadata type
+  drift, wide-store width, state-pointer typing, compare/decimal call
+  indirection, and both early return-value paths. Current code already
+  accepted or rejected every new control as intended, so this increment closes
+  proof gaps rather than fixing a false acceptance. All 136 Python script
+  tests pass.
+
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

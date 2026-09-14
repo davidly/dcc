@@ -610,6 +610,26 @@ mutation campaign has one passing baseline plus 28/28 killed mutants, both
 strict stack/no-stack full+extended release gates pass with zero failures
 and zero performance regressions, and all 136 Python script tests pass.
 
+Wave 53 closes the next `mir_match_byte_math_flags` proof gaps without
+changing production code. The earlier byte-math coverage already proved the
+exact baseline, the broad Wave 19 field-mutation census, and the source-level
+mask/compare/complement/add/overflow/logic near matches, but it did not keep
+a focused campaign over prototype-bearing helper acceptance, variadic
+call-flag instruction-metadata drift, or top-level non-void/VLA shape
+rejection, and it left several named fallback reasons unpinned in the
+standalone audit. `tests/mir-clobber/bytemath.c` now adds ANSI helper,
+compare-variadic, decimal-variadic, non-void-return, and VLA source variants.
+A new `byte-math-wave53-audit.py` campaign then runs 24 stack/no-stack and
+peep/nopeep runtime controls, retaining exact selection for the baseline and
+prototype-bearing helper variants while forcing generic fallback for the four
+new near matches, and rejects 7/7 targeted MIR mutations that cover
+instruction-metadata type drift, wide-store width, state-pointer typing,
+compare/decimal call indirection, and both early return-value paths. Current
+code already accepted or rejected every new control as intended, so this
+increment closes proof gaps rather than fixing a false acceptance. All 136
+Python script tests pass. This remains a test-only increment; regenerate the
+immutable aggregate ledger before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
