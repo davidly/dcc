@@ -970,6 +970,33 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. This fixes production matching but does not replace the
 immutable aggregate coverage ledger or complete the broader objective.
 
+Wave 220 closes the historical `mir_match_indexed_word_sum` proof gap and
+fixes genuine exact-schedule false acceptances. The matcher already constrained
+the single-block opcode counts, common pointer parameter, positive constant
+indices, bounded address offsets, two nonvolatile word loads, addition, and
+return flow. Fresh diagnostic mutations showed that parameter/index type
+agreement, index stride metadata, member-pointer and load types, member widths,
+and addition/result types were not consistently proved. Those gaps let 24 of
+47 representative mutations retain the exact schedule.
+
+The matcher now validates the scalar parameter's declared memory type, matches
+each index address to that parameter and its element stride, requires word
+index constants, matches member-pointer/load types and widths, and proves the
+addition operand, result, and return types. New
+`tests/mir-clobber/idxwsum.c` isolates the 14-instruction schedule and checks
+two asymmetric signed results against fixed independent values. New
+`indexed-word-sum-wave220-audit.py` runs 32 stack/no-stack and peep/nopeep
+runtime controls, retains exact selection for the baseline, and proves generic
+fallback for volatile, bitfield, long-result, extra-parameter, VLA,
+local-state, and CFG near matches. It rejects 47/47 targeted MIR mutations and
+independently reproduces every mutation fallback with forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output. The clean selected hash
+remains `e3d216d0` and assembly SHA-256 is
+`a68e9c6e4b124bc3e24adf826e8b8717693927d84185d82546251c3d60c623ce`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

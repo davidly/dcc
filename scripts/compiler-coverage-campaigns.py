@@ -153,6 +153,9 @@ CAMPAIGNS = (
     Campaign("bcd-byte-math-schedule",
              "bcd-byte-math-wave200-audit.py",
              output_dir="bcd-byte-math-wave200-audit", max_jobs=2),
+    Campaign("indexed-word-sum-schedule",
+             "indexed-word-sum-wave220-audit.py",
+             output_dir="indexed-word-sum-wave220-audit", max_jobs=2),
 )
 
 

@@ -1291,6 +1291,33 @@ locally verified execution inventory.
   hash remains `14ace686` and assembly SHA-256 is
   `4c1cc708a5bba78f085bd74af9e9ac13293e3d22b6e00587a2666a8cc202cafb`.
   The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass. This fixes production matching but does not replace the
+  immutable aggregate coverage ledger or complete the broader objective.
+- Wave 220 closes the historical `mir_match_indexed_word_sum` proof gap and
+  fixes genuine exact-schedule false acceptances. The matcher already required
+  a one-block, one-parameter, two-load, one-add return shape, a common scalar
+  pointer parameter, positive constant indices, bounded computed offsets,
+  word loads, and nonvolatile accesses. It did not prove consistency among the
+  parameter, index-address, member-pointer, load, addition, and return types,
+  nor did it match index/member memory widths to the emitted stride and word
+  accesses. Twenty-four of 47 representative mutations of those fields
+  retained the exact schedule before the fix.
+  The matcher now proves parameter storage/type consistency, index operand
+  types and stride metadata, scalar index-constant widths, member-pointer and
+  load type/width agreement, addition operand/result types, and the return
+  type. New `tests/mir-clobber/idxwsum.c` isolates the 14-instruction schedule
+  and checks two asymmetric signed sums against fixed independent values. The
+  dedicated `indexed-word-sum-wave220-audit.py` campaign runs 32 stack/no-stack
+  and peep/nopeep runtime controls, retaining exact selection for the baseline
+  and proving generic fallback for volatile, bitfield, long-result,
+  extra-parameter, VLA, local-state, and CFG near matches. It rejects 47/47
+  targeted MIR mutations spanning every parameter, constant, index, member,
+  load, addition, and return field used by the proof. Forced
+  `DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output independently confirms
+  every mutation fallback with zero meaningful survivors. The clean selected
+  hash remains `e3d216d0` and assembly SHA-256 is
+  `a68e9c6e4b124bc3e24adf826e8b8717693927d84185d82546251c3d60c623ce`.
+  The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.

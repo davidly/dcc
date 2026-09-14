@@ -2456,8 +2456,19 @@ static int mir_match_indexed_word_sum(struct MirIndexedWordSum *plan)
 {
     const struct MirInsn *return_insn = NULL;
     const struct MirInsn *add;
+    const struct MirInsn *left_load;
+    const struct MirInsn *left_member;
+    const struct MirInsn *left_index;
+    const struct MirInsn *left_constant;
     const struct MirInsn *left_parameter;
+    const struct MirInsn *right_load;
+    const struct MirInsn *right_member;
+    const struct MirInsn *right_index;
+    const struct MirInsn *right_constant;
     const struct MirInsn *right_parameter;
+    int parameter_memory_type;
+    int parameter_memory_storage;
+    int parameter_memory_offset;
     int parameter_count = 0;
     int load_count = 0;
     int binary_count = 0;
@@ -2470,7 +2481,8 @@ static int mir_match_indexed_word_sum(struct MirIndexedWordSum *plan)
         type_ptr_depth(mir.return_type) != 0 ||
         type_size(mir.return_type) != 2 ||
         type_is_float(mir.return_type))
-        return 0;
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "preflight");
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
@@ -2495,17 +2507,21 @@ static int mir_match_indexed_word_sum(struct MirIndexedWordSum *plan)
             return_insn = insn;
             break;
         default:
-            return 0;
+            return mir_machine_reject(
+                "indexed-word-sum-schedule", "opcode");
         }
     }
     if (parameter_count != 1 || load_count != 2 ||
         binary_count != 1 || return_count != 1 ||
         return_insn == NULL || return_insn->src1 < 0)
-        return 0;
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "counts");
     add = mir_definition(return_insn->src1);
     if (add == NULL || add->opcode != MIR_BINARY ||
-        add->immediate != '+' || type_size(add->type) != 2 ||
+        add->immediate != '+' || add->type != mir.return_type ||
+        type_ptr_depth(add->secondary_offset) != 0 ||
         type_size(add->secondary_offset) != 2 ||
+        type_is_float(add->secondary_offset) ||
         !mir_machine_indexed_word_load(
             add->src1, &left_parameter, &plan->left_offset) ||
         !mir_machine_indexed_word_load(
@@ -2513,7 +2529,55 @@ static int mir_match_indexed_word_sum(struct MirIndexedWordSum *plan)
         left_parameter != right_parameter ||
         !mir_machine_scalar_pointer_parameter(
             left_parameter, &plan->parameter_stack_offset))
-        return 0;
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "result");
+    left_load = mir_definition(add->src1);
+    left_member = mir_definition(left_load->src1);
+    left_index = mir_definition(left_member->src1);
+    left_constant = mir_definition(left_index->src2);
+    right_load = mir_definition(add->src2);
+    right_member = mir_definition(right_load->src1);
+    right_index = mir_definition(right_member->src1);
+    right_constant = mir_definition(right_index->src2);
+    if (left_load->type != add->secondary_offset ||
+        right_load->type != add->secondary_offset ||
+        type_ptr_depth(left_load->type) != 0 ||
+        type_size(left_load->type) != 2 ||
+        type_is_float(left_load->type) ||
+        left_member->type != type_add_ptr(left_load->type) ||
+        right_member->type != type_add_ptr(right_load->type) ||
+        left_member->memory_size != left_load->memory_size ||
+        right_member->memory_size != right_load->memory_size ||
+        left_member->bit_width != 0 || right_member->bit_width != 0)
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "word-types");
+    if (left_index->type != left_parameter->type ||
+        right_index->type != right_parameter->type ||
+        left_index->type != right_index->type ||
+        left_index->memory_size != left_index->immediate ||
+        right_index->memory_size != right_index->immediate ||
+        left_index->bit_width != 0 || right_index->bit_width != 0 ||
+        (left_index->memory_flags & (1 | 8)) != 0 ||
+        (right_index->memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "index-types");
+    if (type_ptr_depth(left_constant->type) != 0 ||
+        type_size(left_constant->type) != 2 ||
+        type_is_float(left_constant->type) ||
+        type_ptr_depth(right_constant->type) != 0 ||
+        type_size(right_constant->type) != 2 ||
+        type_is_float(right_constant->type))
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "index-constants");
+    if (!mir_scalar_memory_location(
+            left_parameter, &parameter_memory_type,
+            &parameter_memory_storage, &parameter_memory_offset) ||
+        parameter_memory_type != left_parameter->type ||
+        parameter_memory_storage != SC_PARAM ||
+        parameter_memory_offset - 2 != plan->parameter_stack_offset)
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "parameter-type");
+    mir_machine_accept("indexed-word-sum-schedule");
     return 1;
 }
 
