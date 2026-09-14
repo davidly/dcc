@@ -1812,6 +1812,29 @@ locally verified execution inventory.
   No separate clobber manifest was needed. The standalone audit, full Python
   script-test suite, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 6000 closes the historical `mir_match_board_attack_schedule` proof gap
+  and fixes severe exact-schedule false acceptance. The old 676-instruction,
+  118-block matcher checked every opcode and 98 selected control edges, but
+  directly referenced only 82 instruction positions in its remaining field,
+  symbol, constant, and call checks. It left most destination/type/operand,
+  memory/qualifier, CFG-successor, PHI-predecessor, object, bitfield, and
+  auxiliary metadata unproved. Exhaustive mutation found 14,401 false
+  acceptances among 15,548 field changes (92.62%); 32 of those invalid
+  schedules crashed during exact emission.
+  The matcher now fingerprints all 23 numeric semantic and structural fields
+  on every instruction plus object, declared-local, alias, and whole-function
+  metadata, while preserving source-name independence and the existing
+  explicit board, direction-array, parameter, constant, call, and ABI proofs.
+  New `tests/mir-clobber/bdattack.c` compares pawn, knight, slider, blocked-ray,
+  king, and empty-board results against an independent row/column oracle. New
+  `board-attack-wave6000-audit.py` builds an isolated diagnostic mutation
+  compiler, runs 20 stack/no-stack and peep/nopeep controls across baseline,
+  renamed-function, volatile-board, volatile-direction, and extra-CFG variants,
+  and rejects all 15,548 mutations with generic fallback and zero survivors.
+  The clean selected hash remains `7e3a2471` and assembly SHA-256 is
+  `fae46f9c6ebbd1d2cc1dc6af6b716c607e85cc1d06b502bb7f61c3a104fde630`.
+  The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -221,6 +221,9 @@ CAMPAIGNS = (
     Campaign("float-sweep-schedule",
              "float-sweep-wave4100-audit.py",
              output_dir="float-sweep-wave4100-audit", max_jobs=2),
+    Campaign("board-attack-schedule",
+             "board-attack-wave6000-audit.py",
+             output_dir="board-attack-wave6000-audit", max_jobs=2),
 )
 
 

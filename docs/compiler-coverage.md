@@ -1530,6 +1530,31 @@ stack-check selected hash is `2a78fb3a`; assembly SHA-256 is
 The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. No separate clobber manifest was added. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
+Wave 6000 closes the historical `mir_match_board_attack_schedule` proof gap and
+fixes severe exact-schedule false acceptance. The previous 676-instruction,
+118-block matcher checked every opcode and 98 selected control edges but
+directly referenced only 82 instruction positions in its remaining field,
+symbol, constant, and call checks. It omitted most destinations, types,
+operands, memory/qualifier state, CFG successors, PHI predecessors, object
+identities, bitfields, and auxiliary metadata. It falsely accepted 14,401 of
+15,548 exhaustive per-instruction field mutations (92.62%); 32 accepted
+mutations crashed while the invalid exact schedule was emitted.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields at
+every instruction, together with object, declared-local, alias, and
+whole-function metadata. Existing source-name-independent checks continue to
+bind the board, direction arrays, parameters, constants, slider callee, and
+five call arguments. New `tests/mir-clobber/bdattack.c` checks pawn, knight,
+slider, blocked-ray, king, and empty-board behavior against an independent
+row/column oracle. `board-attack-wave6000-audit.py` builds an isolated
+diagnostic mutation compiler, runs 20 stack/no-stack and peep/nopeep controls
+across five source variants, and rejects all 15,548 mutations with generic
+fallback and zero survivors. The clean selected hash remains `7e3a2471`;
+assembly SHA-256 is
+`fae46f9c6ebbd1d2cc1dc6af6b716c607e85cc1d06b502bb7f61c3a104fde630`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall totals.
 
 ## Full workload
 
