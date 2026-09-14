@@ -1197,6 +1197,32 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 1300 revisits the already-hardened
+`mir_match_fixed_softmax_schedule` proof with a dedicated modern fixture and
+forced-fallback audit. The earlier Wave 22 campaign had already reduced its
+broad 2,479-mutation census to zero meaningful survivors, but retained benign
+mutations of inactive MIR metadata and did not independently force a named
+generic candidate for every semantic rejection. New
+`tests/mir-clobber/fixsmx.c` isolates the 154-instruction, 13-block schedule and
+checks four asymmetric input vectors, guard words, and an independent
+fixed-point oracle.
+
+New `fixed-softmax-wave1300-audit.py` runs 72 stack/no-stack and peep/nopeep
+runtime controls across 18 source variants. It preserves exact selection for
+baseline, renamed-function, renamed-clamp, prefix-increment, and oversized
+table forms; proves generic fallback for volatile vector/table/local state,
+alternate count/weight types, indirect or variadic clamp calls, changed scale
+and clamp limits, non-void return, undersized table, subtraction, and extra
+CFG; and rejects all 278 matcher-relevant type, width, constant/index,
+operand-dataflow, and storage-identity mutations with independently forced
+`spilled-phi-slot` fallback and zero meaningful survivors. Current production
+code rejected every control, so this found proof gaps only and no genuine
+false acceptance. The clean selected hash remains `cf58a4d7` and assembly
+SHA-256 is
+`c9c86c97091c14451080c8a64ff0a0fcec70fe664049cd7a6dc0fc058568b954`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

@@ -180,6 +180,9 @@ CAMPAIGNS = (
     Campaign("qsort-edge-schedule",
              "qsort-edge-wave1200-audit.py",
              output_dir="qsort-edge-wave1200-audit", max_jobs=2),
+    Campaign("fixed-softmax-schedule",
+             "fixed-softmax-wave1300-audit.py",
+             output_dir="fixed-softmax-wave1300-audit", max_jobs=2),
 )
 
 
