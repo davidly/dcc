@@ -1748,6 +1748,28 @@ locally verified execution inventory.
   The standalone audit, all 136 Python script tests, and both strict 506-app
   release modes pass.
   The broader coverage objective remains incomplete.
+- Wave 3200 closes the historical
+  `mir_match_anonymous_initializer_report_schedule` proof gap and fixes a broad
+  exact-schedule false-acceptance class. The old 278-instruction matcher checked
+  every opcode, but only 117 instructions appeared in its remaining explicit
+  field and relationship checks; 5,796 of 6,459 exhaustive relevant field and
+  storage-identity mutations retained the hard-coded report before the fix.
+  The matcher now fingerprints all 23 semantic and structural instruction
+  fields, binds all six initialized local aggregates to every later root
+  address, and proves the print, numeric-check, string-check, and failure-global
+  ABI/type contracts. New `tests/mir-clobber/anoninit.c` independently checks
+  every initialized bitfield, union member, nested anonymous aggregate, string,
+  and final result. New
+  `anonymous-initializer-report-wave3200-audit.py` builds an isolated diagnostic
+  mutation compiler, runs 20 stack/no-stack and peep/nopeep controls across five
+  source variants, and rejects all 6,459 mutations across all 278 instructions,
+  all 23 fingerprinted fields, and 65 meaningful identities. Every rejection
+  retains verified generic fallback, including forced `spilled-phi-slot`
+  selection. The clean selected hash remains `a893ab33` and assembly SHA-256 is
+  `9e373331e798ac87fc5d2d6a1de99aec32aa54ab159ac5a6857e06264e552a7d`.
+  Zero meaningful survivors remain. The standalone audit, all 136 Python
+  script tests, and both strict 506-app release modes pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

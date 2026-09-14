@@ -211,6 +211,10 @@ CAMPAIGNS = (
     Campaign("allocator-stress-schedule",
              "allocator-stress-wave2800-audit.py",
              output_dir="allocator-stress-wave2800-audit", max_jobs=2),
+    Campaign("anonymous-initializer-report-schedule",
+             "anonymous-initializer-report-wave3200-audit.py",
+             output_dir="anonymous-initializer-report-wave3200-audit",
+             max_jobs=2),
 )
 
 

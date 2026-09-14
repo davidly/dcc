@@ -14741,6 +14741,15 @@ static int mir_match_anonymous_initializer_report_schedule(
     const int initial_stores[10] = {
         2, 4, 6, 8, 10, 12, 14, 16, 18, 22
     };
+    const int storage_pairs[30][2] = {
+        {2, 25}, {2, 29}, {2, 33}, {2, 103}, {2, 114}, {2, 125},
+        {4, 40}, {4, 44}, {4, 48}, {4, 136}, {4, 147}, {4, 158},
+        {6, 55}, {6, 59}, {6, 63}, {6, 169}, {6, 180}, {6, 191},
+        {10, 70}, {10, 204},
+        {14, 77}, {14, 81}, {14, 85},
+        {14, 215}, {14, 226}, {14, 237},
+        {20, 92}, {20, 96}, {20, 248}, {20, 257}
+    };
     const int print_calls[6] = {37, 52, 67, 74, 89, 100};
     const int print_counts[6] = {4, 4, 4, 2, 4, 3};
     const int print_argument_instructions[6][4] = {
@@ -14781,6 +14790,62 @@ static int mir_match_anonymous_initializer_report_schedule(
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "anonymous-initializer-report", "opcodes");
+    {
+        unsigned long long first = 1469598103934665603ULL;
+        unsigned long long second = 0x9e3779b97f4a7c15ULL;
+
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+            unsigned long long values[] = {
+                (unsigned long long)(uint32_t)insn->opcode,
+                (unsigned long long)(uint32_t)insn->dst,
+                (unsigned long long)(uint32_t)insn->src1,
+                (unsigned long long)(uint32_t)insn->src2,
+                (unsigned long long)(uint32_t)insn->type,
+                (unsigned long long)(uint32_t)insn->immediate,
+                (unsigned long long)(uint32_t)insn->label,
+                (unsigned long long)(uint32_t)insn->phi_pred1,
+                (unsigned long long)(uint32_t)insn->phi_pred2,
+                (unsigned long long)(uint32_t)insn->successors[0],
+                (unsigned long long)(uint32_t)insn->successors[1],
+                (unsigned long long)(uint32_t)insn->successor_count,
+                (unsigned long long)(uint32_t)insn->object,
+                (unsigned long long)(uint32_t)insn->memory_size,
+                (unsigned long long)(uint32_t)insn->memory_flags,
+                (unsigned long long)insn->pointee_volatile_mask,
+                (unsigned long long)(uint32_t)
+                    insn->has_pointer_qualifiers,
+                (unsigned long long)(uint32_t)insn->bit_width,
+                (unsigned long long)(uint32_t)insn->bit_shift,
+                (unsigned long long)insn->bit_mask,
+                (unsigned long long)(uint32_t)
+                    insn->secondary_offset,
+                (unsigned long long)(uint32_t)insn->inline_temp_id,
+                (unsigned long long)(uint32_t)
+                    insn->divmod_cast_types
+            };
+            size_t value;
+
+            for (value = 0;
+                 value < sizeof(values) / sizeof(values[0]); ++value) {
+                first ^= values[value];
+                first *= 1099511628211ULL;
+                second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                    (second << 6) + (second >> 2);
+            }
+        }
+        if (first != 0x684e35d8f8f540feULL ||
+            second != 0xfed8198aa72b89ceULL) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=anonymous-initializer-report "
+                        "reject=semantic-payload "
+                        "fingerprint=%016llx:%016llx\n",
+                        mir.name, first, second);
+            return 0;
+        }
+    }
     for (item = 0; item < 10; ++item)
         if (!mir_anonymous_initializer_constant(
                 initial_constants[item], &initial[item]) ||
@@ -14797,6 +14862,12 @@ static int mir_match_anonymous_initializer_report_schedule(
         mir.insns[20].src1 != mir.insns[19].dst)
         return mir_machine_reject(
             "anonymous-initializer-report", "storage");
+    for (item = 0; item < 30; ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[storage_pairs[item][0]],
+                &mir.insns[storage_pairs[item][1]]))
+            return mir_machine_reject(
+                "anonymous-initializer-report", "storage-alias");
 
     plan->message_string = (int)mir.insns[19].immediate;
     plan->print_values[0][0] = initial[0] & 15;
@@ -14849,6 +14920,19 @@ static int mir_match_anonymous_initializer_report_schedule(
                 print_argument_instructions[item][0]].immediate;
         plan->print_counts[item] = print_counts[item];
     }
+    if (plan->print_function->storage != SC_FUNC ||
+        plan->print_function->is_fastcall ||
+        plan->print_function->is_noreturn ||
+        !plan->print_function->has_proto ||
+        !plan->print_function->proto_variadic ||
+        plan->print_function->proto_nargs != 1 ||
+        !mir_packed_scalar_type(
+            plan->print_function->type, TYPE_INT, 0, 0) ||
+        !mir_packed_scalar_type(
+            plan->print_function->proto_types[0],
+            TYPE_CHAR, 0, 1))
+        return mir_machine_reject(
+            "anonymous-initializer-report", "print-prototype");
     for (item = 0; item < 14; ++item) {
         struct Sym *function = NULL;
         char call_name[64];
@@ -14881,6 +14965,25 @@ static int mir_match_anonymous_initializer_report_schedule(
         plan->check_values[item] =
             (int)(unsigned long)expected;
     }
+    if (plan->check_function->storage != SC_FUNC ||
+        plan->check_function->is_fastcall ||
+        plan->check_function->is_noreturn ||
+        !plan->check_function->has_proto ||
+        plan->check_function->proto_variadic ||
+        plan->check_function->proto_nargs != 3 ||
+        !mir_packed_scalar_type(
+            plan->check_function->type, TYPE_VOID, 0, 0) ||
+        !mir_packed_scalar_type(
+            plan->check_function->proto_types[0],
+            TYPE_CHAR, 0, 1) ||
+        !mir_packed_scalar_type(
+            plan->check_function->proto_types[1],
+            TYPE_LONG, 0, 0) ||
+        !mir_packed_scalar_type(
+            plan->check_function->proto_types[2],
+            TYPE_LONG, 0, 0))
+        return mir_machine_reject(
+            "anonymous-initializer-report", "check-prototype");
     {
         const int expected_values[14] = {
             plan->print_values[0][0],
@@ -14924,11 +15027,28 @@ static int mir_match_anonymous_initializer_report_schedule(
         plan->string_check_function = function;
         plan->string_check_name =
             (int)mir.insns[246].immediate;
+        if (function->storage != SC_FUNC ||
+            function->is_fastcall || function->is_noreturn ||
+            !function->has_proto || function->proto_variadic ||
+            function->proto_nargs != 3 ||
+            !mir_packed_scalar_type(
+                function->type, TYPE_VOID, 0, 0) ||
+            !mir_packed_scalar_type(
+                function->proto_types[0], TYPE_CHAR, 0, 1) ||
+            !mir_packed_scalar_type(
+                function->proto_types[1], TYPE_CHAR, 0, 1) ||
+            !mir_packed_scalar_type(
+                function->proto_types[2], TYPE_CHAR, 0, 1))
+            return mir_machine_reject(
+                "anonymous-initializer-report",
+                "string-check-prototype");
     }
     plan->failures = find_global(mir.insns[266].name);
     if (plan->failures == NULL ||
         plan->failures->storage != SC_GLOBAL ||
         plan->failures->is_volatile ||
+        !mir_packed_scalar_type(
+            plan->failures->type, TYPE_INT, 0, 0) ||
         !mir_machine_same_location(
             &mir.insns[266], &mir.insns[274]) ||
         mir.insns[268].immediate != TOK_EQ ||

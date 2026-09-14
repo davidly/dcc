@@ -1462,6 +1462,31 @@ release modes pass.
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
 
+Wave 3200 closes the historical
+`mir_match_anonymous_initializer_report_schedule` proof gap and fixes broad
+false acceptance. The old 278-instruction matcher checked every opcode, but
+only 117 instructions appeared in its remaining explicit field and
+relationship checks. It accepted 5,796 of 6,459 exhaustive relevant
+per-instruction field and storage-identity mutations.
+
+The matcher now fingerprints all 23 semantic and structural fields on every
+instruction, binds all six initialized local aggregates to every later root
+address, and proves the print, numeric-check, string-check, and failure-global
+ABI/type contracts. New `tests/mir-clobber/anoninit.c` validates the anonymous
+bitfield, union, nested aggregate, string, and final-result behavior against
+independent constants. New
+`anonymous-initializer-report-wave3200-audit.py` builds an isolated diagnostic
+mutation compiler, runs 20 stack/no-stack and peep/nopeep controls across five
+source variants, and rejects all 6,459 mutations over all 278 instructions,
+all 23 fingerprinted fields, and 65 meaningful identities. Each rejection
+retains generic MIR emission and independently supports forced
+`spilled-phi-slot` fallback. Zero meaningful survivors remain. The clean
+selected hash remains `a893ab33`; assembly SHA-256 is
+`9e373331e798ac87fc5d2d6a1de99aec32aa54ab159ac5a6857e06264e552a7d`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
