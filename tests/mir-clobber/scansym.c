@@ -45,13 +45,21 @@ static int mtop = MAXMEM - 1;
 static int mtop;
 #endif
 
+#ifdef SYMBOL_ERROR_VARIADIC
+static void die(const char *message, ...)
+#else
 static void die(const char *message)
+#endif
 {
     printf("error=%s\n", message);
     exit(1);
 }
 
+#ifdef SYMBOL_COMPARE_VARIADIC
+static int same(const char *left, const char *right, ...)
+#else
 static int same(const char *left, const char *right)
+#endif
 {
 #ifdef SYMBOL_COMPARE_MUTATES_GLOBALS
     if (compare_calls++ == 0)
@@ -60,7 +68,48 @@ static int same(const char *left, const char *right)
     return strcmp(left, right) == 0;
 }
 
+#if defined(SYMBOL_COPY_VOID_RETURN)
+static void copy_symbol_name(
+    char *destination, const char *source, unsigned int length)
+{
+    (void)strncpy(destination, source, length);
+}
+#define COPY_SYMBOL_NAME(destination, source, length) \
+    copy_symbol_name(destination, source, length)
+#elif defined(SYMBOL_COPY_VARIADIC)
+static char *copy_symbol_name(
+    char *destination, const char *source, unsigned int length, ...)
+{
+    return strncpy(destination, source, length);
+}
+#define COPY_SYMBOL_NAME(destination, source, length) \
+    copy_symbol_name(destination, source, length)
+#else
+#define COPY_SYMBOL_NAME(destination, source, length) \
+    strncpy(destination, source, length)
+#endif
+
+#ifdef SYMBOL_COUNT_ADDRESS_TAKEN
+static void observe_count(int *value)
+{
+    if (*value < 0)
+        *value = 0;
+}
+#endif
+
+#ifdef SYMBOL_TABLE_ADDRESS_TAKEN
+static void observe_table(struct Sym **value)
+{
+    if (*value == NULL)
+        *value = records;
+}
+#endif
+
+#ifdef SYMBOL_UNSIGNED_RETURN
+static unsigned int sym_find(const char *name)
+#else
 static int sym_find(const char *name)
+#endif
 {
 #ifdef SYMBOL_UNSIGNED_INDEX
     unsigned int i;
@@ -76,7 +125,8 @@ static int sym_find(const char *name)
 #ifdef COPY_SHORT_NAME
     strncpy(sym[nsym].name, name, sizeof(sym[nsym].name) - 2);
 #else
-    strncpy(sym[nsym].name, name, sizeof(sym[nsym].name) - 1);
+    COPY_SYMBOL_NAME(
+        sym[nsym].name, name, sizeof(sym[nsym].name) - 1);
 #endif
     sym[nsym].scalar = mtop++;
     sym[nsym].base = -1;
@@ -104,6 +154,12 @@ int main(void)
     return 0;
 #endif
     sym = records;
+#ifdef SYMBOL_COUNT_ADDRESS_TAKEN
+    observe_count(&nsym);
+#endif
+#ifdef SYMBOL_TABLE_ADDRESS_TAKEN
+    observe_table(&sym);
+#endif
 #ifdef SYMBOL_CAPACITY_CONTROL
     return sym_find("FULL");
 #endif

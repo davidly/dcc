@@ -1,0 +1,323 @@
+[
+  {
+    "Name": "sym62ok",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireExact": true
+  },
+  {
+    "Name": "sym62ret",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": ["SYMBOL_UNSIGNED_RETURN"],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym62cmpvar",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": ["SYMBOL_COMPARE_VARIADIC"],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym62errvar",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": ["SYMBOL_ERROR_VARIADIC"],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym62copyret",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": ["SYMBOL_COPY_VOID_RETURN"],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym62copyvar",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": ["SYMBOL_COPY_VARIADIC"],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym62countaddr",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": ["SYMBOL_COUNT_ADDRESS_TAKEN"],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym62tableaddr",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": ["SYMBOL_TABLE_ADDRESS_TAKEN"],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym62idx",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "7:src2:26",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "sym62loop",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "10:type:34",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "sym62cmp",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "19:src1:15",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "sym62found",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "22:src1:17",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "sym62copyarg",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "43:src1:44",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "sym62scalar",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "60:src2:57",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "sym62base",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "67:src2:72",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "sym62size",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "73:src2:66",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "sym62memlim",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "75:immediate:32768",
+    "MachineMutationFunction": "sym_find"
+  },
+  {
+    "Name": "sym62final",
+    "Group": "symbol-find-wave62",
+    "Sources": ["tests/mir-clobber/scansym.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,1,0 nsym=2 mtop=2 a=0/-1/0 b=1/-1/0 names=ALPHA,BETA"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-find-schedule",
+    "ExactFunction": "sym_find",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_find",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "86:src1:84",
+    "MachineMutationFunction": "sym_find"
+  }
+]

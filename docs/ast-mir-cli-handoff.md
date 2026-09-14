@@ -986,6 +986,22 @@ locally verified execution inventory.
   inner-print, digit, and newline tails. Current code already rejected every
   new near match and mutation, so this increment closes proof gaps rather
   than fixing a false acceptance. All 136 Python script tests pass.
+- Wave 62 closes the next `mir_match_symbol_find_schedule` proof gaps without
+  changing production code. The earlier symbol-find coverage already proved
+  the exact baseline, the broad Wave 21 field-mutation census, capacity and
+  memory boundaries, unsigned globals/fields/indexes, volatile table
+  rejection, and comparison-call global-clobber safety, but it did not keep a
+  focused runtime-backed proof over unsigned return shape, variadic compare
+  and error helpers, void/variadic copy helpers, or count/table address
+  escapes. New `symbol-find-wave62` MIR-clobber cases add those seven source
+  near matches plus ten runtime-safe selector mutants, for 72 passing target
+  configurations. The dedicated `symbol-find-wave62-audit.py` script runs 32
+  stack/no-stack and peep/nopeep runtime controls and rejects 19/19 targeted
+  MIR mutations covering unsigned scalar and member-pointer types, PHI/loop/
+  compare/copy/store/return dataflow, direct helper identity/indirection, and
+  the memory-limit upper boundary. Current code already rejected every new
+  near match and mutation, so this increment closes proof gaps rather than
+  fixing a false acceptance. All 136 Python script tests pass.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
