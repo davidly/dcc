@@ -1278,6 +1278,33 @@ clean selected hash is `b3ab4a13` and assembly SHA-256 is
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
 
+Wave 1800 closes the historical `mir_match_global_array_fma` proof gap and
+fixes genuine exact-schedule false acceptances. The old 24-instruction matcher
+checked every opcode, but only 17 instructions had any payload checks. It did
+not prove the global/index/load arithmetic types, two indexed widths, repeated
+global offsets, promoted operand identities, binary secondary types, or
+memory and bitfield flags. It accepted 20 of 58 representative mutations:
+10/14 type, 2/7 width, 2/7 immediate/offset, and 6/13 storage-identity
+changes; all operand-dataflow mutations were already rejected.
+
+The matcher now binds all three addresses to the same nonvolatile global float
+array, proves every emitted index/load/store/binary type and width, checks the
+complete FMA dataflow, and verifies promoted operand identities plus zero
+memory, qualifier, and bitfield flags. The schedule is a single block with no
+PHIs, so it has no internal CFG edges or PHI predecessors to mutate. New
+`tests/mir-clobber/gafma.c` checks four independently tabulated FMA results,
+the stored array elements, and guards. New
+`global-array-fma-wave1800-audit.py` runs 24 stack/no-stack and peep/nopeep
+runtime controls across six source variants and rejects all 58 targeted type,
+width, operand, operator/offset, and storage-identity mutations. Volatile and
+extra-CFG source controls cover the memory-flag and CFG rejection boundaries,
+and every direct mutation independently selects forced `spilled-phi-slot`
+fallback. Zero meaningful survivors remain. The clean selected hash is
+`68dc3c28` and assembly SHA-256 is
+`5bebfa8ada44767c744c777b6113c6c254ae84a3a8fde6f8bde2c26a963e7dfe`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

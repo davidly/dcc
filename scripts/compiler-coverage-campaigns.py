@@ -189,6 +189,9 @@ CAMPAIGNS = (
     Campaign("scope-block-runner-schedule",
              "scope-block-wave1700-audit.py",
              output_dir="scope-block-wave1700-audit", max_jobs=2),
+    Campaign("global-array-fma-schedule",
+             "global-array-fma-wave1800-audit.py",
+             output_dir="global-array-fma-wave1800-audit", max_jobs=2),
 )
 
 

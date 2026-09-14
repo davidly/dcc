@@ -1583,6 +1583,31 @@ locally verified execution inventory.
   `b3ab4a13` and assembly SHA-256 is
   `47a208a38c9e04f30ca47e8b5ab9c28aabe5d3362e3524c42cdd565d69dccce9`.
   The broader coverage objective remains incomplete.
+- Wave 1800 closes the historical `mir_match_global_array_fma` proof gap and
+  fixes genuine exact-schedule false acceptances. The old matcher checked all
+  24 opcodes, but only 17 instructions had any payload checks; it did not prove
+  the global/index/load arithmetic types, two indexed widths, repeated global
+  offsets, promoted operand identities, binary secondary types, or memory and
+  bitfield flags. It accepted 20 of 58 representative mutations: 10/14 type,
+  2/7 width, 2/7 immediate/offset, and 6/13 storage-identity changes.
+  The matcher now binds all three addresses to the same nonvolatile global
+  float array, proves every emitted index/load/store/binary type and width,
+  checks the complete FMA dataflow, and verifies promoted operand identities
+  plus zero memory, qualifier, and bitfield flags. The schedule has one block
+  and no PHIs, so there are no internal CFG edges or PHI predecessors to
+  mutate.
+  New `tests/mir-clobber/gafma.c` isolates the 24-instruction schedule and
+  checks four independently tabulated products/addends, stored results, and
+  array guards. `global-array-fma-wave1800-audit.py` runs 24 stack/no-stack
+  and peep/nopeep runtime controls across six source variants, preserves exact
+  selection for baseline, renamed, and unsigned-index forms, proves generic
+  fallback for volatile-array, narrow-index, and extra-CFG near matches, and
+  rejects all 58 matcher-relevant type, width, operand, operator/offset, and
+  identity mutations. Every mutation independently selects forced
+  `spilled-phi-slot` fallback, with zero meaningful survivors. The clean
+  selected hash is `68dc3c28` and assembly SHA-256 is
+  `5bebfa8ada44767c744c777b6113c6c254ae84a3a8fde6f8bde2c26a963e7dfe`.
+  The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

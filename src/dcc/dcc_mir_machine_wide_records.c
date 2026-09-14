@@ -6625,6 +6625,9 @@ static int mir_match_global_array_fma(
     int memory_type;
     int memory_storage;
     int memory_offset;
+    int root_type;
+    int root_storage;
+    int root_offset;
     int instruction;
     int *offsets[4] = {
         &plan->left_stack_offset, &plan->right_stack_offset,
@@ -6652,12 +6655,18 @@ static int mir_match_global_array_fma(
         *offsets[instruction] = memory_offset - 2;
     }
     if (!type_is_float(left->type) || type_size(left->type) != 4 ||
-        !type_is_float(right->type) || type_size(right->type) != 4 ||
-        !type_is_float(addend->type) || type_size(addend->type) != 4 ||
+        right->type != left->type ||
+        addend->type != left->type ||
         type_ptr_depth(index->type) != 0 ||
+        type_is_float(index->type) ||
+        (index->type & 15) == TYPE_BOOL ||
         type_size(index->type) != 2 ||
+        type_ptr_depth(root->type) != 1 ||
+        type_decay_ptr(root->type) != left->type ||
+        type_size(root->type) != 2 ||
         !mir_scalar_memory_location(
             root, &memory_type, &memory_storage, &memory_offset) ||
+        memory_type != left->type ||
         memory_storage != SC_GLOBAL)
         return mir_machine_reject("global-array-fma", "types");
     plan->root = find_global(root->name);
@@ -6667,34 +6676,81 @@ static int mir_match_global_array_fma(
         plan->stride != 4 ||
         mir.insns[7].src1 != root->dst ||
         mir.insns[7].src2 != index->dst ||
+        mir.insns[7].type != root->type ||
         mir.insns[7].memory_size != 4 ||
         mir.insns[9].src1 != mir.insns[7].dst ||
         mir.insns[9].src2 != addend->dst ||
         mir.insns[9].memory_size != 4)
         return mir_machine_reject("global-array-fma", "initial-store");
-    if (strcmp(mir.insns[10].name, root->name) ||
+    if (!mir_scalar_memory_location(
+            &mir.insns[10], &root_type, &root_storage, &root_offset) ||
+        root_type != memory_type ||
+        root_storage != memory_storage ||
+        root_offset != memory_offset ||
+        mir.insns[10].type != root->type ||
         mir.insns[12].src1 != mir.insns[10].dst ||
         mir.insns[12].src2 != index->dst ||
+        mir.insns[12].type != root->type ||
         mir.insns[12].immediate != plan->stride ||
+        mir.insns[12].memory_size != 4 ||
         mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].type != left->type ||
         mir.insns[13].memory_size != 4 ||
         mir.insns[16].immediate != '*' ||
         mir.insns[16].src1 != left->dst ||
         mir.insns[16].src2 != right->dst ||
+        mir.insns[16].type != left->type ||
+        mir.insns[16].secondary_offset != right->type ||
         mir.insns[17].immediate != '+' ||
         mir.insns[17].src1 != mir.insns[13].dst ||
         mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[17].type != left->type ||
+        mir.insns[17].secondary_offset != left->type ||
         mir.insns[18].src1 != mir.insns[12].dst ||
         mir.insns[18].src2 != mir.insns[17].dst ||
         mir.insns[18].memory_size != 4 ||
-        strcmp(mir.insns[19].name, root->name) ||
+        !mir_scalar_memory_location(
+            &mir.insns[19], &root_type, &root_storage, &root_offset) ||
+        root_type != memory_type ||
+        root_storage != memory_storage ||
+        root_offset != memory_offset ||
+        mir.insns[19].type != root->type ||
         mir.insns[21].src1 != mir.insns[19].dst ||
         mir.insns[21].src2 != index->dst ||
+        mir.insns[21].type != root->type ||
         mir.insns[21].immediate != plan->stride ||
+        mir.insns[21].memory_size != 4 ||
         mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[22].type != left->type ||
         mir.insns[22].memory_size != 4 ||
         mir.insns[23].src1 != mir.insns[22].dst)
         return mir_machine_reject("global-array-fma", "fma");
+    if (!mir_machine_same_location(&mir.insns[6], index) ||
+        !mir_machine_same_location(&mir.insns[8], addend) ||
+        !mir_machine_same_location(&mir.insns[11], index) ||
+        !mir_machine_same_location(&mir.insns[14], left) ||
+        !mir_machine_same_location(&mir.insns[15], right) ||
+        !mir_machine_same_location(&mir.insns[20], index))
+        return mir_machine_reject(
+            "global-array-fma", "operand-identity");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected_memory_size =
+            instruction == 7 || instruction == 9 ||
+            instruction == 12 || instruction == 13 ||
+            instruction == 18 || instruction == 21 ||
+            instruction == 22 ? 4 : 0;
+
+        if (insn->memory_size != expected_memory_size ||
+            insn->memory_flags != 0 ||
+            insn->pointee_volatile_mask != 0 ||
+            insn->has_pointer_qualifiers ||
+            insn->bit_width != 0 ||
+            insn->bit_shift != 0 ||
+            insn->bit_mask != 0)
+            return mir_machine_reject(
+                "global-array-fma", "memory-contract");
+    }
     return 1;
 }
 
