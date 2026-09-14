@@ -394,6 +394,7 @@ static void verify_ast_assignment_support(void)
     struct AstNode address;
     struct AstNode member;
     struct AstNode owner;
+    struct AstNode owner_pointer;
     struct AstNode pointer_rhs;
     struct Sym *symbol;
     int saved_dead = expr_result_dead;
@@ -412,6 +413,7 @@ static void verify_ast_assignment_support(void)
     memset(&address, 0, sizeof(address));
     memset(&member, 0, sizeof(member));
     memset(&owner, 0, sizeof(owner));
+    memset(&owner_pointer, 0, sizeof(owner_pointer));
     memset(&pointer_rhs, 0, sizeof(pointer_rhs));
     lhs.kind = AST_IDENT;
     integer.kind = AST_INT_LIT;
@@ -736,33 +738,97 @@ static void verify_ast_assignment_support(void)
          ast_assignment_probe(
              &assign, &index, &real, TOK_MULEQ);
 
-    if (nfield_defs < MAX_FIELDS) {
-        struct FieldDef *field;
+    if (nfield_defs + 2 < MAX_FIELDS) {
+        struct FieldDef *pointer_field;
+        struct FieldDef *bitfield;
+        struct FieldDef *bool_field;
         int sid = add_struct_def("verify_assignment_record");
 
-        field = &field_defs[nfield_defs++];
-        memset(field, 0, sizeof(*field));
-        strcpy(field->name, "pointer");
-        field->parent_struct_id = sid;
-        field->type = type_add_ptr(TYPE_INT);
+        pointer_field = &field_defs[nfield_defs++];
+        memset(pointer_field, 0, sizeof(*pointer_field));
+        strcpy(pointer_field->name, "pointer");
+        pointer_field->parent_struct_id = sid;
+        pointer_field->type = type_add_ptr(TYPE_INT);
         symbol = add_global(
             "verify_assignment_record_value", make_struct_type(sid), SC_GLOBAL);
         owner.kind = AST_IDENT;
         owner.type = symbol->type;
         owner.sval = symbol->name;
         owner.sym = symbol;
+        symbol = add_global(
+            "verify_assignment_record_pointer",
+            type_add_ptr(make_struct_type(sid)), SC_GLOBAL);
+        owner_pointer.kind = AST_IDENT;
+        owner_pointer.type = symbol->type;
+        owner_pointer.sval = symbol->name;
+        owner_pointer.sym = symbol;
         member.kind = AST_MEMBER;
         member.op = '.';
         member.a = &owner;
-        member.sval = field->name;
-        member.type = field->type;
+        member.sval = pointer_field->name;
+        member.type = pointer_field->type;
+        /* Direct struct-member pointer compounds (`box.pointer += 1`,
+         * `boxp->pointer -= 1`) are classified independently of the
+         * member-array indexing cases below. */
+        integer.ival = 1;
+        ok = expect_ast_assignment_support(
+            "member pointer +=", &assign, &member, &integer,
+            TOK_ADDEQ, 1) && ok;
+        member.op = TOK_ARROW;
+        member.a = &owner_pointer;
+        ok = expect_ast_assignment_support(
+            "arrow member pointer -=", &assign, &member, &integer,
+            TOK_SUBEQ, 1) && ok;
+        integer.ival = 0;
+        ok = expect_ast_assignment_support(
+            "arrow member pointer invalid rhs", &assign, &member, &pointer_rhs,
+            TOK_ADDEQ, 0) && ok;
+        member.op = '.';
+        member.a = &owner;
         index.a = &member;
         index.type = TYPE_INT;
         ok = ok && ast_assignment_probe(
             &assign, &index, &integer, '=');
-        field->type = type_add_ptr(field->type);
-        member.type = field->type;
-        index.type = type_decay_ptr(field->type);
+
+        bitfield = &field_defs[nfield_defs++];
+        memset(bitfield, 0, sizeof(*bitfield));
+        strcpy(bitfield->name, "flags");
+        bitfield->parent_struct_id = sid;
+        bitfield->type = TYPE_INT | TYPE_UNSIGNED;
+        bitfield->bit_width = 5;
+        bitfield->bit_mask = 0x1f;
+        member.sval = bitfield->name;
+        member.type = bitfield->type;
+        /* Bitfield stores accept numeric `=` conversion and plain-int
+         * compound updates through the masked store tail. */
+        ok = expect_ast_assignment_support(
+            "bitfield float assignment", &assign, &member, &real,
+            '=', 1) && ok;
+        integer.ival = 1;
+        ok = expect_ast_assignment_support(
+            "bitfield shift assignment", &assign, &member, &integer,
+            TOK_SHLEQ, 1) && ok;
+
+        bool_field = &field_defs[nfield_defs++];
+        memset(bool_field, 0, sizeof(*bool_field));
+        strcpy(bool_field->name, "ready");
+        bool_field->parent_struct_id = sid;
+        bool_field->type = TYPE_BOOL;
+        member.sval = bool_field->name;
+        member.type = bool_field->type;
+        /* `_Bool` members accept plain `=` conversions but reject compound
+         * operators entirely. */
+        ok = expect_ast_assignment_support(
+            "bool member float assignment", &assign, &member, &real,
+            '=', 1) && ok;
+        ok = expect_ast_assignment_support(
+            "bool member compound rejection", &assign, &member, &integer,
+            TOK_ADDEQ, 0) && ok;
+
+        member.sval = pointer_field->name;
+        pointer_field->type = type_add_ptr(pointer_field->type);
+        member.type = pointer_field->type;
+        index.type = type_decay_ptr(pointer_field->type);
         integer.ival = 0;
         ok = ok && ast_assignment_probe(
             &assign, &index, &integer, '=');
@@ -779,6 +845,53 @@ static void verify_ast_assignment_support(void)
     } else {
         ok = 0;
     }
+
+    symbol = add_global(
+        "verify_assignment_pointer_ident_compound",
+        type_add_ptr(TYPE_INT), SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    /* Pointer identifiers allow dead-result `+=`/`-=` through the general
+     * compound tail, but not when the assignment's result is live. */
+    integer.ival = 1;
+    ok = expect_ast_assignment_support(
+        "pointer ident +=", &assign, &lhs, &integer, TOK_ADDEQ, 1) && ok;
+    expr_result_dead = 0;
+    ok = expect_ast_assignment_support(
+        "pointer ident live result", &assign, &lhs, &integer, TOK_ADDEQ, 0)
+         && ok;
+    expr_result_dead = 1;
+
+    symbol = add_global(
+        "verify_assignment_long_pointer_value",
+        type_add_ptr(TYPE_LONG), SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    dereference.a = &lhs;
+    dereference.type = TYPE_LONG;
+    /* Dereferenced long lvalues accept the wide shift compound path. */
+    ok = expect_ast_assignment_support(
+        "dereferenced long shift assignment", &assign, &dereference, &integer,
+        TOK_SHREQ, 1) && ok;
+
+    symbol = add_global(
+        "verify_assignment_float_pointer_value",
+        type_add_ptr(TYPE_FLOAT), SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    dereference.a = &lhs;
+    dereference.type = TYPE_FLOAT;
+    /* Dereferenced float lvalues admit arithmetic compounds but still reject
+     * unsupported operators like `%=`. */
+    ok = expect_ast_assignment_support(
+        "dereferenced float compound", &assign, &dereference, &wide,
+        TOK_ADDEQ, 1) && ok;
+    ok = expect_ast_assignment_support(
+        "dereferenced float modulus rejection", &assign, &dereference, &real,
+        TOK_MODEQ, 0) && ok;
 
     expr_result_dead = saved_dead;
     if (!ok) {

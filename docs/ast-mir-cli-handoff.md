@@ -838,6 +838,25 @@ locally verified execution inventory.
   ASan/UBSan host tests pass 5/5, the full compiler mutation campaign has one
   passing baseline plus 27/27 killed mutants, and all 136 Python script tests
   pass.
+- Wave 48 closes the next `ast_assign_supported_uncached` proof gaps without
+  changing production code. Existing direct-AST host coverage already
+  exercised identifier, indexed, multidimensional, and pointer-element
+  assignment classes, but it did not directly assert member-pointer
+  compounds, numeric bitfield conversions, `_Bool` member classification,
+  dead-vs-live pointer identifier compounds, or dereferenced long/float
+  compound boundaries. New host assertions now prove direct `.` and `->`
+  pointer-member `+=`/`-=` support, rejection of a pointer rhs for those
+  compounds, float-to-bitfield `=` conversion, bitfield `<<=`, float-to-`_Bool`
+  member `=` acceptance with compound rejection, dead-result pointer-identifier
+  `+=` acceptance with live-result rejection, dereferenced long `>>=`,
+  dereferenced float `+=`, and dereferenced float `%=` rejection.
+  `tests/mir-clobber/assigncv.c` now adds a cheap end-to-end target proof for
+  local pointer compounds, `box_pointer` member-pointer compounds, and
+  bitfield compound stores; manual `dccmake` peep/nopeep runs both report
+  `assignment coverage failures=0`. Normal and ASan/UBSan MIR host CTest pass
+  5/5, all 136 Python script tests pass, and no clean compiler mutant was
+  added because these classifier-only cases do not expose a narrow existing
+  mutation hook with a distinct downstream oracle.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

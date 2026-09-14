@@ -484,6 +484,31 @@ baseline plus 27/27 killed mutants, and all 136 Python script tests pass.
 This remains a test-only increment; the authoritative aggregate totals still
 await a fresh immutable collection.
 
+Wave 48 closes the next `ast_assign_supported_uncached` proof gaps without
+changing production code. The existing host matrix already covered broad
+identifier, indexed, pointer-array, multidimensional, and wide-scalar
+assignment families, but it did not directly pin several member and
+dereference classification branches in the remaining ledger. New direct-AST
+controls in `tests/host/mir_verify.c` now assert support or rejection for:
+
+- direct `.` and `->` pointer-member `+=`/`-=` compounds, plus rejection of a
+  pointer rhs for those compounds;
+- float-to-bitfield `=` conversion and bitfield `<<=` with a plain-int rhs;
+- float-to-`_Bool` member `=` acceptance and `_Bool` member compound rejection;
+- dead-result pointer-identifier `+=` acceptance with live-result rejection;
+- dereferenced long `>>=` acceptance, dereferenced float `+=` acceptance, and
+  dereferenced float `%=` rejection.
+
+`tests/mir-clobber/assigncv.c` also adds a cheap end-to-end proof for local
+pointer compounds, `box_pointer` member-pointer compounds, and bitfield
+compound stores; manual `dccmake` peep/nopeep runs both report
+`assignment coverage failures=0`. Normal and ASan/UBSan MIR host CTest pass
+5/5, and all 136 Python script tests pass. No clean compiler mutant was
+added: this predicate is a pure support classifier, and the newly covered
+branches do not map cleanly onto an existing single-condition mutation with a
+distinct downstream oracle. This remains a test-only increment; the
+authoritative aggregate totals still await a fresh immutable collection.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
