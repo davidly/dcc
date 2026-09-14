@@ -1240,6 +1240,35 @@ locally verified execution inventory.
   `b3d565637021d445de314147095b9e7aba6fcd7a5de036f89e130d952a263452`.
   The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 170 closes the historical `mir_match_aggregate_field_sum` proof gap
+  and fixes genuine exact-schedule false acceptances. The matcher already
+  constrained the one-block opcode counts, three-leaf addition tree,
+  nonvolatile scalar loads, common aggregate parameter location, field
+  offsets, widening conversions, and wide return. Fresh diagnostic mutations
+  showed that aggregate parameter types, aggregate-address and member-pointer
+  types, member widths, and load widths were not consistently proved. Those
+  gaps let 24 of 34 representative mutations retain the exact schedule,
+  including cases where the emitter changed the number of bytes read from a
+  field.
+  The matcher now validates the aggregate parameter and its three addresses,
+  requires scalar member-pointer and load types to agree, bounds every field
+  inside the aggregate, matches member/load widths, and proves the wide
+  addition result and operand types. New `tests/mir-clobber/aggfsum.c`
+  isolates the 16-instruction schedule with signed-byte, signed-long, and
+  unsigned-word fields and checks two asymmetric results against fixed
+  independent values. The dedicated
+  `aggregate-field-sum-wave170-audit.py` campaign runs 24 stack/no-stack and
+  peep/nopeep runtime controls, retains exact selection for baseline, renamed,
+  and padded-layout forms, and proves generic fallback for volatile, pointer,
+  and four-field near matches. It rejects 34/34 targeted MIR mutations across
+  parameter/address/member/load types, widths and bounds, conversions,
+  addition nodes, and return flow. Forced
+  `DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output independently confirms
+  every generic fallback with zero meaningful survivors. The clean selected
+  hash remains `bcb40981` and assembly SHA-256 is
+  `3e00c6e0a6c77e7df08684782db10084f71c228e2b1ec29cff820914bd86d7e3`.
+  The standalone audit, full Python script-test suite, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

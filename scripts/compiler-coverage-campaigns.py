@@ -147,6 +147,9 @@ CAMPAIGNS = (
     Campaign("matrix-product-kind-schedule",
              "matrix-product-kind-wave140-audit.py",
              output_dir="matrix-product-kind-wave140-audit", max_jobs=2),
+    Campaign("aggregate-field-sum-schedule",
+             "aggregate-field-sum-wave170-audit.py",
+             output_dir="aggregate-field-sum-wave170-audit", max_jobs=2),
 )
 
 

@@ -3979,7 +3979,15 @@ static void mir_emit_wide_narrow_division(
 static int mir_match_aggregate_field_sum(
     struct MirAggregateFieldSum *plan)
 {
+    const struct MirInsn *parameter = NULL;
     const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *addresses[3];
+    const struct MirInsn *members[3];
+    const struct MirInsn *loads[3];
+    int aggregate_type;
+    int aggregate_storage;
+    int aggregate_offset;
+    int aggregate_size;
     int parameter_count = 0;
     int address_count = 0;
     int member_count = 0;
@@ -3990,9 +3998,11 @@ static int mir_match_aggregate_field_sum(
 
     memset(plan, 0, sizeof(*plan));
     if (mir.has_vla || mir_cfg_block_count() != 1 ||
-        type_size(mir.return_type) != 4 ||
-        type_is_float(mir.return_type))
-        return 0;
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_LONG ||
+        type_size(mir.return_type) != 4)
+        return mir_machine_reject(
+            "aggregate-field-sum", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
@@ -4001,24 +4011,53 @@ static int mir_match_aggregate_field_sum(
         case MIR_LABEL:
             break;
         case MIR_PARAM:
+            if (parameter_count >= 1)
+                return mir_machine_reject(
+                    "aggregate-field-sum", "shape");
+            parameter = insn;
             ++parameter_count;
             break;
         case MIR_ADDRESS:
+            if (address_count >= 3)
+                return mir_machine_reject(
+                    "aggregate-field-sum", "shape");
+            addresses[address_count] = insn;
             ++address_count;
             break;
         case MIR_MEMBER_ADDRESS:
+            if (member_count >= 3)
+                return mir_machine_reject(
+                    "aggregate-field-sum", "shape");
+            members[member_count] = insn;
             ++member_count;
             break;
         case MIR_LOAD_INDIRECT:
+            if (load_count >= 3)
+                return mir_machine_reject(
+                    "aggregate-field-sum", "shape");
+            loads[load_count] = insn;
             ++load_count;
             break;
         case MIR_UNARY:
-            if (insn->immediate != 0)
-                return 0;
+            if (insn->immediate != 0 ||
+                type_ptr_depth(insn->type) != 0 ||
+                type_is_float(insn->type) ||
+                type_is_struct_object(insn->type) ||
+                (insn->type & 15) == TYPE_BOOL ||
+                (type_size(insn->type) != 1 &&
+                 type_size(insn->type) != 2 &&
+                 type_size(insn->type) != 4))
+                return mir_machine_reject(
+                    "aggregate-field-sum", "types");
             break;
         case MIR_BINARY:
-            if (insn->immediate != '+')
-                return 0;
+            if (insn->immediate != '+' ||
+                type_ptr_depth(insn->type) != 0 ||
+                (insn->type & 15) != TYPE_LONG ||
+                type_size(insn->type) != 4 ||
+                insn->secondary_offset != insn->type)
+                return mir_machine_reject(
+                    "aggregate-field-sum", "sum");
             ++binary_count;
             break;
         case MIR_RETURN:
@@ -4026,16 +4065,94 @@ static int mir_match_aggregate_field_sum(
             return_insn = insn;
             break;
         default:
-            return 0;
+            return mir_machine_reject(
+                "aggregate-field-sum", "opcode");
         }
     }
-    return parameter_count == 1 &&
-           address_count == 3 && member_count == 3 &&
-           load_count == 3 && binary_count == 2 &&
-           return_count == 1 && return_insn != NULL &&
-           mir_machine_collect_aggregate_sum(
-               return_insn->src1, plan, 0) &&
-           plan->field_count == 3;
+    if (parameter_count != 1 || parameter == NULL ||
+        address_count != 3 || member_count != 3 ||
+        load_count != 3 || binary_count != 2 ||
+        return_count != 1 || return_insn == NULL)
+        return mir_machine_reject(
+            "aggregate-field-sum", "shape");
+    if (!type_is_struct_object(parameter->type) ||
+        type_ptr_depth(parameter->type) != 0 ||
+        !mir_scalar_memory_location(
+            parameter, &aggregate_type,
+            &aggregate_storage, &aggregate_offset) ||
+        aggregate_type != parameter->type ||
+        aggregate_storage != SC_PARAM ||
+        aggregate_offset < 2)
+        return mir_machine_reject(
+            "aggregate-field-sum", "parameter");
+    aggregate_size = type_size(aggregate_type);
+    if (aggregate_size <= 0)
+        return mir_machine_reject(
+            "aggregate-field-sum", "layout");
+    for (instruction = 0; instruction < 3; ++instruction) {
+        const struct MirInsn *address = addresses[instruction];
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (type_ptr_depth(address->type) != 1 ||
+            type_decay_ptr(address->type) != aggregate_type ||
+            type_size(address->type) != 2 ||
+            address->immediate != 0 ||
+            address->memory_flags != 0 ||
+            address->bit_width != 0 ||
+            !mir_scalar_memory_location(
+                address, &memory_type,
+                &memory_storage, &memory_offset) ||
+            memory_type != aggregate_type ||
+            memory_storage != aggregate_storage ||
+            memory_offset != aggregate_offset)
+            return mir_machine_reject(
+                "aggregate-field-sum", "address");
+    }
+    for (instruction = 0; instruction < 3; ++instruction) {
+        const struct MirInsn *member = members[instruction];
+        const struct MirInsn *root = mir_definition(member->src1);
+        int field_type = type_decay_ptr(member->type);
+        int field_width = type_size(field_type);
+
+        if (root == NULL || root->opcode != MIR_ADDRESS ||
+            type_ptr_depth(member->type) != 1 ||
+            type_ptr_depth(field_type) != 0 ||
+            type_is_float(field_type) ||
+            type_is_struct_object(field_type) ||
+            (field_type & 15) == TYPE_BOOL ||
+            (field_width != 1 &&
+             field_width != 2 &&
+             field_width != 4) ||
+            member->memory_size != field_width ||
+            member->memory_flags != 0 ||
+            member->bit_width != 0 ||
+            member->immediate < 0 ||
+            member->immediate + field_width > aggregate_size)
+            return mir_machine_reject(
+                "aggregate-field-sum", "layout");
+    }
+    for (instruction = 0; instruction < 3; ++instruction) {
+        const struct MirInsn *load = loads[instruction];
+        const struct MirInsn *member = mir_definition(load->src1);
+
+        if (member == NULL ||
+            member->opcode != MIR_MEMBER_ADDRESS ||
+            type_decay_ptr(member->type) != load->type ||
+            load->memory_size != type_size(load->type) ||
+            load->memory_size != member->memory_size ||
+            load->memory_flags != 0 ||
+            load->bit_width != 0)
+            return mir_machine_reject(
+                "aggregate-field-sum", "loads");
+    }
+    if (!mir_machine_collect_aggregate_sum(
+            return_insn->src1, plan, 0) ||
+        plan->field_count != 3)
+        return mir_machine_reject(
+            "aggregate-field-sum", "flow");
+    return 1;
 }
 
 static void mir_emit_aggregate_field_sum(
