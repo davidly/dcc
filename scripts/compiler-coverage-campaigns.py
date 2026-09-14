@@ -215,6 +215,9 @@ CAMPAIGNS = (
              "anonymous-initializer-report-wave3200-audit.py",
              output_dir="anonymous-initializer-report-wave3200-audit",
              max_jobs=2),
+    Campaign("pi-digit-schedule",
+             "pi-digit-wave4000-audit.py",
+             output_dir="pi-digit-wave4000-audit", max_jobs=2),
 )
 
 

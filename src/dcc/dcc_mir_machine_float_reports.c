@@ -5164,7 +5164,10 @@ static int mir_match_pi_digit_schedule(
     const int series_calls[4] = {8, 16, 24, 31};
     const int series_constants[4] = {5, 13, 21, 28};
     const int series_values[4] = {1, 4, 5, 6};
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+    int instruction;
     int item;
 
     memset(plan, 0, sizeof(*plan));
@@ -5178,6 +5181,55 @@ static int mir_match_pi_digit_schedule(
         type_size(mir.insns[1].type) != 2 ||
         (mir.insns[1].type & TYPE_UNSIGNED) == 0)
         return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned int)insn->opcode,
+            (unsigned int)insn->dst,
+            (unsigned int)insn->src1,
+            (unsigned int)insn->src2,
+            (unsigned int)insn->type,
+            (unsigned int)(
+                insn->opcode == MIR_STRING_ADDRESS ?
+                0 : insn->immediate),
+            (unsigned int)insn->label,
+            (unsigned int)insn->phi_pred1,
+            (unsigned int)insn->phi_pred2,
+            (unsigned int)insn->successors[0],
+            (unsigned int)insn->successors[1],
+            (unsigned int)insn->successor_count,
+            (unsigned int)insn->object,
+            (unsigned int)insn->memory_size,
+            (unsigned int)insn->memory_flags,
+            (unsigned int)insn->pointee_volatile_mask,
+            (unsigned int)insn->has_pointer_qualifiers,
+            (unsigned int)insn->bit_width,
+            (unsigned int)insn->bit_shift,
+            (unsigned int)insn->bit_mask,
+            (unsigned int)insn->secondary_offset,
+            (unsigned int)insn->inline_temp_id,
+            (unsigned int)insn->divmod_cast_types
+        };
+        size_t value;
+
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0x2151b1fdc95d753bULL ||
+        second != 0x74f59292ca0972ebULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s template=pi-digit "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     for (item = 0; item < 4; ++item) {
         const struct MirInsn *call =
             &mir.insns[series_calls[item]];
@@ -5239,7 +5291,19 @@ static int mir_match_pi_digit_schedule(
         return mir_machine_reject(
             "pi-digit", "operations");
     plan->assert_string = (int)mir.insns[67].immediate;
-    return plan->assert_string >= 0;
+    if (plan->assert_string < 0 ||
+        plan->assert_string >= nstrings ||
+        strings[plan->assert_string] == NULL ||
+        string_wide[plan->assert_string] ||
+        string_len[plan->assert_string] <
+            (int)strlen("x >= 0 && x <= 15") ||
+        memcmp(
+            strings[plan->assert_string],
+            "x >= 0 && x <= 15",
+            strlen("x >= 0 && x <= 15")))
+        return mir_machine_reject(
+            "pi-digit", "assert-string");
+    return 1;
 }
 
 static void mir_pi_digit_load_float(MirStream *out, int offset)
