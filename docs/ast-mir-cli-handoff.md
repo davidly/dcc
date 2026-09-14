@@ -1429,6 +1429,29 @@ locally verified execution inventory.
   `329398a141cf6aa1b045f256eb26e2f15b4c0725794d733fc7f2f20adc524d4e`.
   The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 1000 closes the historical `mir_match_byte_record_copy_schedule` proof
+  gap and fixes genuine exact-schedule false acceptances. The old matcher
+  proved the 51-instruction single-block opcode fingerprint, two pointer
+  parameters and stack offsets, eight byte offsets and widths, nonvolatile
+  accesses, and source-to-destination SSA flow, but did not bind member-pointer
+  types to the loaded byte type or either stored type to that load. Fifty-six
+  of 156 representative parameter, type, offset, width, and operand mutations
+  retained the hard-coded `ldir` schedule before the fix. The matcher now
+  requires matching member-pointer types, a scalar byte load, the same stored
+  type, and plain zero-flag memory accesses for all eight fields.
+  New `tests/mir-clobber/brecopy.c` isolates the exact eight-byte record copy
+  and checks two asymmetric records against fixed values. The dedicated
+  `byte-record-copy-wave1000-audit.py` campaign runs 108 stack/no-stack and
+  peep/nopeep runtime controls across 27 source variants, retains exact
+  selection for baseline and renamed functions, and proves generic fallback
+  for volatile parameters and fields, distinct record types, reversed and
+  extra parameters, bitfields, local/VLA state, extra fields, and non-void
+  variants. It rejects all 156 targeted MIR mutations with independently
+  forced `spilled-phi-slot` fallback and zero meaningful survivors. The clean
+  selected hash remains `53bdf7fb` and assembly SHA-256 is
+  `e9d0990b8b4f72d1ba4962d98b8f6cd91cf8d602eba4b60b0031b8e0cd302114`.
+  The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

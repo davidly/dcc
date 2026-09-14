@@ -1119,6 +1119,31 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 1000 closes the historical `mir_match_byte_record_copy_schedule` proof gap
+and fixes genuine exact-schedule false acceptances. The old matcher proved the
+51-instruction single-block opcode fingerprint, pointer parameter ABI, eight
+byte offsets and widths, nonvolatile accesses, and the source-to-destination
+SSA flow, but did not bind member-pointer types to their loaded byte type or
+the stored type to that load. Fifty-six of 156 representative parameter, type,
+offset, width, and operand mutations retained the hard-coded `ldir` schedule
+before the fix. The matcher now requires matching member-pointer types, scalar
+byte loads, matching store types, and plain zero-flag memory operations for all
+eight fields.
+
+New `tests/mir-clobber/brecopy.c` isolates the exact eight-byte record copy and
+checks two asymmetric records against fixed values. New
+`byte-record-copy-wave1000-audit.py` runs 108 stack/no-stack and peep/nopeep
+runtime controls across 27 source variants, preserves exact selection for the
+baseline and renamed function, proves generic fallback for volatile
+parameters and fields, distinct record types, reversed and extra parameters,
+bitfields, local/VLA state, extra fields, and non-void variants, and rejects
+all 156 targeted MIR mutations with independently forced `spilled-phi-slot`
+fallback. The clean selected hash remains `53bdf7fb` and assembly SHA-256 is
+`e9d0990b8b4f72d1ba4962d98b8f6cd91cf8d602eba4b60b0031b8e0cd302114`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

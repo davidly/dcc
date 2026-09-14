@@ -171,6 +171,9 @@ CAMPAIGNS = (
     Campaign("modular-product-schedule",
              "modular-product-wave520-audit.py",
              output_dir="modular-product-wave520-audit", max_jobs=2),
+    Campaign("byte-record-copy-schedule",
+             "byte-record-copy-wave1000-audit.py",
+             output_dir="byte-record-copy-wave1000-audit", max_jobs=2),
 )
 
 

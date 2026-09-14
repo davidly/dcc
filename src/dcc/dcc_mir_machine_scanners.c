@@ -637,6 +637,14 @@ static int mir_match_byte_record_copy_schedule(
         const struct MirInsn *store =
             &mir.insns[destination_stores[field]];
 
+        if (destination_member->type != source_member->type ||
+            destination_member->type != type_add_ptr(load->type) ||
+            store->type != load->type ||
+            type_ptr_depth(load->type) != 0 ||
+            type_size(load->type) != 1 ||
+            type_is_float(load->type))
+            return mir_machine_reject(
+                "byte-record-copy-schedule", "field-types");
         if (destination_member->src1 != destination->dst ||
             source_member->src1 != source->dst ||
             destination_member->immediate != field ||
@@ -645,18 +653,17 @@ static int mir_match_byte_record_copy_schedule(
             source_member->memory_size != 1 ||
             destination_member->bit_width != 0 ||
             source_member->bit_width != 0 ||
-            (destination_member->memory_flags & (1 | 8)) != 0 ||
-            (source_member->memory_flags & (1 | 8)) != 0 ||
+            destination_member->memory_flags != 0 ||
+            source_member->memory_flags != 0 ||
             load->src1 != source_member->dst ||
             load->memory_size != 1 ||
             load->bit_width != 0 ||
-            (load->memory_flags & (1 | 8)) != 0 ||
-            type_size(load->type) != 1 ||
+            load->memory_flags != 0 ||
             store->src1 != destination_member->dst ||
             store->src2 != load->dst ||
             store->memory_size != 1 ||
             store->bit_width != 0 ||
-            (store->memory_flags & (1 | 8)) != 0)
+            store->memory_flags != 0)
             return mir_machine_reject(
                 "byte-record-copy-schedule", "fields");
     }
