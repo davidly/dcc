@@ -1433,6 +1433,35 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall totals.
 
+Wave 2800 closes the historical `mir_match_allocator_stress_schedule` proof
+gap and fixes severe exact-schedule false acceptance. The old 444-instruction,
+32-block matcher directly checked only 51 instruction positions and did not
+verify complete opcode, type, SSA, operator, memory/qualifier, CFG,
+PHI-predecessor, or metadata payloads. It also failed to bind 28 later array
+addresses to the two globals used by the emitted schedule. Exhaustive
+measurement against the old matcher found 10,100 false acceptances among
+10,267 mutations: all 444 type, memory-size, object, qualifier, CFG-successor,
+PHI-predecessor, bitfield, and metadata changes survived, along with 362/444
+opcode and 26/55 storage/call-identity changes. A coherent source near match
+that changed the pattern offset from 11 to 12 selected the old exact schedule
+and failed its independent checksum oracle.
+
+The matcher now fingerprints all 23 numeric MIR fields at every instruction
+and separately binds all 18 slot-array and ten size-array address instructions.
+New `tests/mir-clobber/alstress.c` independently simulates the deterministic
+allocation state and checks helper counts, final RNG state, and a pattern-slot
+checksum. `allocator-stress-wave2800-audit.py` compiles 16 stack/no-stack and
+peep/nopeep controls, executes the eight no-stack controls, and rejects all
+10,267 mutations with generic fallback and zero survivors. Stack-check
+controls are compile-only because this fixture deliberately fills the CP/M
+heap until the stack-collision guard fires. The clean stack-check selected
+hash is `f37f5f2e` and assembly SHA-256 is
+`d804868b0929fc88e2f70faf045ae2143f64249972aaf434b4f625afaf26b276`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

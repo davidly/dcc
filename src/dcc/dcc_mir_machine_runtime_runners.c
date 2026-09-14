@@ -11316,7 +11316,17 @@ static int mir_match_allocator_stress_schedule(
     const int string_instructions[10] = {
         70, 113, 139, 221, 229, 245, 321, 383, 420, 437
     };
+    const int slots_addresses[18] = {
+        13, 48, 56, 97, 142, 152, 170, 177, 251,
+        261, 300, 307, 324, 331, 362, 369, 386, 393
+    };
+    const int sizes_addresses[10] = {
+        19, 61, 84, 147, 157, 183, 256, 266, 312, 374
+    };
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     char assembly_name[64];
+    int instruction;
     int offset;
     int item;
 
@@ -11327,6 +11337,56 @@ static int mir_match_allocator_stress_schedule(
         !mir_has_cfg_backedge() ||
         (mir.return_type & 15) != TYPE_VOID)
         return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned int)insn->opcode,
+            (unsigned int)insn->dst,
+            (unsigned int)insn->src1,
+            (unsigned int)insn->src2,
+            (unsigned int)insn->type,
+            (unsigned int)(
+                insn->opcode == MIR_STRING_ADDRESS ?
+                insn->immediate - mir.insns[70].immediate :
+                insn->immediate),
+            (unsigned int)insn->label,
+            (unsigned int)insn->phi_pred1,
+            (unsigned int)insn->phi_pred2,
+            (unsigned int)insn->successors[0],
+            (unsigned int)insn->successors[1],
+            (unsigned int)insn->successor_count,
+            (unsigned int)insn->object,
+            (unsigned int)insn->memory_size,
+            (unsigned int)insn->memory_flags,
+            (unsigned int)insn->pointee_volatile_mask,
+            (unsigned int)insn->has_pointer_qualifiers,
+            (unsigned int)insn->bit_width,
+            (unsigned int)insn->bit_shift,
+            (unsigned int)insn->bit_mask,
+            (unsigned int)insn->secondary_offset,
+            (unsigned int)insn->inline_temp_id,
+            (unsigned int)insn->divmod_cast_types
+        };
+        size_t value;
+
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0xd6d408849e1a4819ULL ||
+        second != 0x01ee09d2d1ac2b78ULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s template=allocator-stress "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     plan->random_function = mir_recovery_direct_call(
         42, 0, 0, plan->random_name, sizeof(plan->random_name));
     plan->check_function = mir_recovery_direct_call(
@@ -11411,6 +11471,16 @@ static int mir_match_allocator_stress_schedule(
         plan->slots == plan->sizes)
         return mir_machine_reject(
             "allocator-stress", "globals");
+    for (item = 0; item < 18; ++item)
+        if (find_global(mir.insns[slots_addresses[item]].name) !=
+            plan->slots)
+            return mir_machine_reject(
+                "allocator-stress", "slots-alias");
+    for (item = 0; item < 10; ++item)
+        if (find_global(mir.insns[sizes_addresses[item]].name) !=
+            plan->sizes)
+            return mir_machine_reject(
+                "allocator-stress", "sizes-alias");
     for (item = 0; item < 10; ++item) {
         if (mir.insns[string_instructions[item]].opcode !=
             MIR_STRING_ADDRESS)

@@ -1722,6 +1722,32 @@ locally verified execution inventory.
   Zero meaningful survivors remain. The standalone audit, all 136 Python
   script tests, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 2800 closes the historical `mir_match_allocator_stress_schedule` proof
+  gap and fixes severe exact-schedule false acceptance. The old
+  444-instruction, 32-block matcher directly inspected only 51 instruction
+  positions: 26 calls, three initial global references, ten string addresses,
+  and twelve constants. It did not verify the complete opcode, type, SSA,
+  operator, memory/qualifier, CFG-edge, PHI-predecessor, or metadata payload,
+  nor did it bind 28 later array addresses to the selected globals. It falsely
+  accepted 10,100 of 10,267 exhaustive mutations. This included every type,
+  memory-size, CFG-successor, PHI-predecessor, object, qualifier, bitfield, and
+  metadata mutation, plus 362/444 opcode and 26/55 storage/call-identity
+  mutations. A source near match changing the pattern offset from 11 to 12
+  also selected the exact schedule and failed its independent runtime oracle.
+  The matcher now fingerprints all 23 numeric fields of every instruction and
+  explicitly binds all 18 slot-array and ten size-array addresses.
+  New `tests/mir-clobber/alstress.c` independently simulates the deterministic
+  allocation-state transitions and checks helper counts, final RNG state, and
+  the accumulated pattern-slot checksum.
+  `allocator-stress-wave2800-audit.py` compiles 16 stack/no-stack and
+  peep/nopeep controls, runs the eight no-stack binaries (the deliberate
+  heap-filling workload cannot coexist with the stack-collision guard), and
+  rejects all 10,267 mutations with generic fallback and zero survivors. The
+  clean stack-check selected hash is `f37f5f2e` and assembly SHA-256 is
+  `d804868b0929fc88e2f70faf045ae2143f64249972aaf434b4f625afaf26b276`.
+  The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass.
+  The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -208,6 +208,9 @@ CAMPAIGNS = (
              "recursive-byte-minimax-wave2600-audit.py",
              output_dir="recursive-byte-minimax-wave2600-audit",
              max_jobs=2),
+    Campaign("allocator-stress-schedule",
+             "allocator-stress-wave2800-audit.py",
+             output_dir="allocator-stress-wave2800-audit", max_jobs=2),
 )
 
 
