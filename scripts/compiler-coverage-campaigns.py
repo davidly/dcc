@@ -205,8 +205,8 @@ CAMPAIGNS = (
              "variadic-join-report-wave2300-audit.py",
              output_dir="variadic-join-report-wave2300-audit", max_jobs=2),
     Campaign("recursive-byte-minimax-schedule",
-             "recursive-byte-minimax-wave2500-audit.py",
-             output_dir="recursive-byte-minimax-wave2500-audit",
+             "recursive-byte-minimax-wave2600-audit.py",
+             output_dir="recursive-byte-minimax-wave2600-audit",
              max_jobs=2),
 )
 

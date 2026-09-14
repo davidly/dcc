@@ -1407,7 +1407,7 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
-Wave 2500 closes the remaining exact-schedule proof gap for
+Wave 2600 closes the remaining exact-schedule proof gap for
 `mir_match_recursive_byte_minimax_schedule` and fixes severe false acceptance.
 The previous 253-instruction matcher checked every opcode plus selected
 constants, edges, calls, locations, and dataflow, but did not bind most
@@ -1421,7 +1421,7 @@ explicit symbol, ABI, layout, constant, and source-name-independent location
 proofs. New `tests/mir-clobber/bminimax.c` compares three recursive alpha-beta
 searches against an independent implementation and checks results, move counts,
 board restoration, and an aggregate signature. New
-`recursive-byte-minimax-wave2500-audit.py` builds an isolated diagnostic
+`recursive-byte-minimax-wave2600-audit.py` builds an isolated diagnostic
 mutation compiler, runs 40 stack/no-stack and peep/nopeep controls across ten
 source variants, and rejects all 5,857 mutations over all 253 instructions,
 all 23 fingerprinted fields, and 38 meaningful identities. Each rejection

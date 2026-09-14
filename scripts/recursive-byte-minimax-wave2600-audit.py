@@ -542,7 +542,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument(
         "--output-dir",
-        default="build/recursive-byte-minimax-wave2500-audit",
+        default="build/recursive-byte-minimax-wave2600-audit",
     )
     parser.add_argument("--discover", action="store_true")
     args = parser.parse_args()
@@ -577,7 +577,7 @@ def main():
             f"!= {EXPECTED_MUTATION_OUTCOMES}"
         )
     print(
-        f"recursive byte minimax Wave 2500 "
+        f"recursive byte minimax Wave 2600 "
         f"mutations={len(MUTATION_CASES)} "
         f"{outcomes}"
     )

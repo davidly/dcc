@@ -1698,7 +1698,7 @@ locally verified execution inventory.
   Zero meaningful survivors remain. The standalone audit, all 136 Python
   script tests, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
-- Wave 2500 replaces the partial recursive-byte MinMax evidence with a complete
+- Wave 2600 replaces the partial recursive-byte MinMax evidence with a complete
   exact-schedule proof and fixes severe false acceptance in
   `mir_match_recursive_byte_minimax_schedule`. Although the old matcher checked
   all 253 opcodes, selected control edges, constants, locations, calls, and
@@ -1712,7 +1712,7 @@ locally verified execution inventory.
   New `tests/mir-clobber/bminimax.c` independently computes the recursive
   alpha-beta oracle for three initial positions and checks the exact result,
   move count, restored board, and aggregate signature. New
-  `recursive-byte-minimax-wave2500-audit.py` builds an isolated diagnostic
+  `recursive-byte-minimax-wave2600-audit.py` builds an isolated diagnostic
   mutation compiler, runs 40 stack/no-stack and peep/nopeep controls across ten
   source variants, and rejects all 5,857 mutations across all 253 instructions,
   all 23 fingerprinted fields, and 38 meaningful identities. Every mutation
