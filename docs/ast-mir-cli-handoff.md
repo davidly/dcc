@@ -1189,6 +1189,31 @@ locally verified execution inventory.
   `dc95b353f36d0e1245a68d34b22f3ed7fafdff6bdba02a991fbd1fecb22cbfbb`.
   The standalone audit, all Python script tests, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 110 closes the historical `mir_match_float_atan2_schedule` proof gap
+  and fixes a genuine exact-schedule false-acceptance class. The matcher
+  previously checked the 66-opcode fingerprint, selected constants, partial
+  value flow, parameter layout, and unary helper prototypes, but omitted
+  comparison/arithmetic result types, branch-value and several return-value
+  relationships, ratio-local identity and width, direct-call form, and the
+  complete CFG label relationships. Twenty-four meaningful diagnostic field
+  mutations across those omissions retained the unchanged exact schedule.
+  The matcher now proves the ten-block label graph, exact float/integer types,
+  nonvolatile parameter/load/local locations, the ratio store, all branch and
+  return dataflow, and the complete direct non-variadic helper ABI.
+  New `tests/mir-clobber/fatan2.c` isolates the schedule and validates nine
+  independently tabulated arctangent results across the origin, axes,
+  quadrants, and asymmetric coordinates. The dedicated
+  `float-atan2-wave110-audit.py` campaign runs 20 stack/no-stack and
+  peep/nopeep runtime controls, retaining exact selection for the baseline
+  while proving spilled fallback for variadic-helper, volatile-parameter,
+  volatile-ratio, and different-helper near matches. It rejects 34/34
+  targeted MIR mutations and independently forces
+  `DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` for every fallback, with zero
+  meaningful survivors. The clean selected hash remains `77d2fef8` and
+  assembly SHA-256 is
+  `98d3715cb1c1fcca5d9801b075cf97fda73eb079bbb35a0e8bbf37d24ab22213`.
+  The standalone audit, all Python script tests, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

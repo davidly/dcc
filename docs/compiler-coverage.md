@@ -866,6 +866,31 @@ The standalone audit, all Python script tests, and both strict 506-app release
 modes pass. Regenerate the immutable aggregate ledger before claiming new
 overall branch totals.
 
+Wave 110 closes the historical `mir_match_float_atan2_schedule` proof gap and
+fixes a genuine exact-schedule false-acceptance class. The existing matcher
+proved its 66-opcode fingerprint, ten-block count, selected constants, partial
+value flow, parameter offsets, and common unary helper identity. It did not
+prove the exact CFG label relationships, comparison and float result types,
+all branch and return operands, ratio-local identity and width, parameter-load
+identity, or direct-call ABI. Twenty-four meaningful diagnostic mutations of
+those fields retained the unchanged hard-coded schedule before the fix. Those
+structural, type, storage, dataflow, and call invariants are now explicit.
+
+New `tests/mir-clobber/fatan2.c` isolates the schedule and checks nine
+independently tabulated results covering zero, both vertical axes, all four
+quadrants, and asymmetric coordinates. New
+`float-atan2-wave110-audit.py` runs 20 stack/no-stack and peep/nopeep runtime
+controls, retains exact selection for the baseline, and proves named spilled
+fallback for variadic-helper, volatile-parameter, volatile-ratio, and
+different-helper near matches. It rejects 34/34 targeted MIR mutations and
+independently reproduces each fallback through
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot`, with zero meaningful survivors.
+The clean selected hash remains `77d2fef8` and assembly SHA-256 is
+`98d3715cb1c1fcca5d9801b075cf97fda73eb079bbb35a0e8bbf37d24ab22213`.
+The standalone audit, all Python script tests, and both strict 506-app release
+modes pass. Regenerate the immutable aggregate ledger before claiming new
+overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
