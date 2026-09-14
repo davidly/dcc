@@ -1069,6 +1069,30 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 340 closes the historical `mir_match_wraparound_bool_step` proof gap and
+fixes genuine exact-schedule false acceptances. The old matcher checked the
+94-instruction opcode shape, parameter locations, loop/branch relationships,
+wraparound index dataflow, XOR operands, local identities, and memory widths,
+but did not prove the exact types carried through those operations. Thirty-six
+of 132 representative type, width, operator, dataflow, identity, and index
+mutations retained the hard-coded schedule before the fix. The matcher now
+requires exact signed word/long, boolean, and boolean-pointer types, consistent
+binary operand types, nonvolatile indexed accesses, and canonical increment
+metadata.
+
+New `tests/mir-clobber/wrapbool.c` isolates the five-block Rule 90 step and
+checks one-, two-, and five-cell results plus zero and negative counts. New
+`wraparound-bool-step-wave340-audit.py` runs 52 stack/no-stack and peep/nopeep
+runtime controls across 13 source variants, preserves exact selection for the
+baseline and commuted-XOR forms, proves generic fallback for unsigned,
+alternate-width, volatile, and extra-CFG near matches, and rejects all 132
+targeted MIR mutations with independently forced `spilled-phi-slot` fallback.
+The clean selected hash is `f741fcea` and assembly SHA-256 is
+`6bf3bb37f7281a406177fccf9c8d67cd069a947a730a280ef0a621159cad78f1`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

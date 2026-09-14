@@ -165,6 +165,9 @@ CAMPAIGNS = (
     Campaign("indexed-member-write-schedule",
              "indexed-member-write-wave260-audit.py",
              output_dir="indexed-member-write-wave260-audit", max_jobs=2),
+    Campaign("wraparound-bool-step",
+             "wraparound-bool-step-wave340-audit.py",
+             output_dir="wraparound-bool-step-wave340-audit", max_jobs=2),
 )
 
 

@@ -7631,25 +7631,16 @@ static int mir_match_wraparound_bool_step(
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 94 || mir_cfg_block_count() != 5 ||
-        type_ptr_depth(mir.return_type) != 0 ||
-        type_is_float(mir.return_type) ||
-        type_size(mir.return_type) != 4)
+        mir.return_type != TYPE_LONG)
         return mir_machine_reject("wraparound-bool-step", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "wraparound-bool-step", "opcode");
-    if (type_ptr_depth(count->type) != 0 ||
-        (count->type & 15) != TYPE_INT ||
-        (count->type & TYPE_UNSIGNED) != 0 ||
-        type_size(count->type) != 2 ||
-        type_ptr_depth(current->type) != 1 ||
-        (current->type & 15) != TYPE_BOOL ||
-        type_size(current->type) != 2 ||
-        type_ptr_depth(next->type) != 1 ||
-        (next->type & 15) != TYPE_BOOL ||
-        type_size(next->type) != 2 ||
+    if (count->type != TYPE_INT ||
+        current->type != (TYPE_BOOL | TYPE_PTR) ||
+        next->type != (TYPE_BOOL | TYPE_PTR) ||
         mir_machine_pointee_is_volatile(current) ||
         mir_machine_pointee_is_volatile(next) ||
         !mir_machine_parameter_value_offset(
@@ -7661,12 +7652,12 @@ static int mir_match_wraparound_bool_step(
         return mir_machine_reject(
             "wraparound-bool-step", "parameters");
     if (!mir_machine_constant_equals(mir.insns[5].dst, 0) ||
-        type_size(mir.insns[5].type) != 4 ||
+        mir.insns[5].type != TYPE_LONG ||
         !mir_machine_unobservable_local_store(&mir.insns[6]) ||
         mir.insns[6].memory_size != 4 ||
         mir.insns[6].src1 != mir.insns[5].dst ||
         !mir_machine_constant_equals(mir.insns[30].dst, 0) ||
-        type_size(mir.insns[30].type) != 2 ||
+        mir.insns[30].type != TYPE_INT ||
         !mir_machine_unobservable_local_store(&mir.insns[31]) ||
         mir.insns[31].memory_size != 2 ||
         mir.insns[31].src1 != mir.insns[30].dst)
@@ -7676,32 +7667,41 @@ static int mir_match_wraparound_bool_step(
         index_phi->src2 != mir.insns[88].dst ||
         index_phi->phi_pred1 != mir.insns[0].label ||
         index_phi->phi_pred2 != mir.insns[85].label ||
-        type_size(index_phi->type) != 2 ||
-        (index_phi->type & TYPE_UNSIGNED) != 0 ||
+        index_phi->type != TYPE_INT ||
         mir.insns[42].immediate != '<' ||
         mir.insns[42].src1 != index_phi->dst ||
         mir.insns[42].src2 != count->dst ||
-        type_size(mir.insns[42].secondary_offset) != 2 ||
-        (mir.insns[42].secondary_offset & TYPE_UNSIGNED) != 0 ||
+        mir.insns[42].type != TYPE_INT ||
+        mir.insns[42].secondary_offset != TYPE_INT ||
         mir.insns[43].src1 != mir.insns[42].dst ||
         mir.insns[43].label != mir.insns[91].label)
         return mir_machine_reject(
             "wraparound-bool-step", "loop");
     if (!mir_machine_constant_equals(mir.insns[47].dst, 1) ||
+        mir.insns[47].type != TYPE_INT ||
         mir.insns[48].immediate != '-' ||
         mir.insns[48].src1 != index_phi->dst ||
         mir.insns[48].src2 != mir.insns[47].dst ||
+        mir.insns[48].type != TYPE_INT ||
+        mir.insns[48].secondary_offset != TYPE_INT ||
         mir.insns[50].immediate != '+' ||
         mir.insns[50].src1 != mir.insns[48].dst ||
         mir.insns[50].src2 != count->dst ||
+        mir.insns[50].type != TYPE_INT ||
+        mir.insns[50].secondary_offset != TYPE_INT ||
         mir.insns[52].immediate != '%' ||
         mir.insns[52].src1 != mir.insns[50].dst ||
         mir.insns[52].src2 != count->dst ||
+        mir.insns[52].type != TYPE_INT ||
+        mir.insns[52].secondary_offset != TYPE_INT ||
         mir.insns[53].src1 != current->dst ||
         mir.insns[53].src2 != mir.insns[52].dst ||
+        mir.insns[53].type != (TYPE_BOOL | TYPE_PTR) ||
         mir.insns[53].immediate != 1 ||
         mir.insns[53].memory_size != 1 ||
+        (mir.insns[53].memory_flags & (1 | 8)) != 0 ||
         mir.insns[54].src1 != mir.insns[53].dst ||
+        mir.insns[54].type != TYPE_BOOL ||
         mir.insns[54].memory_size != 1 ||
         (mir.insns[54].memory_flags & (1 | 8)) != 0 ||
         !mir_machine_unobservable_local_store(&mir.insns[55]) ||
@@ -7710,17 +7710,25 @@ static int mir_match_wraparound_bool_step(
         return mir_machine_reject(
             "wraparound-bool-step", "left");
     if (!mir_machine_constant_equals(mir.insns[59].dst, 1) ||
+        mir.insns[59].type != TYPE_INT ||
         mir.insns[60].immediate != '+' ||
         mir.insns[60].src1 != index_phi->dst ||
         mir.insns[60].src2 != mir.insns[59].dst ||
+        mir.insns[60].type != TYPE_INT ||
+        mir.insns[60].secondary_offset != TYPE_INT ||
         mir.insns[62].immediate != '%' ||
         mir.insns[62].src1 != mir.insns[60].dst ||
         mir.insns[62].src2 != count->dst ||
+        mir.insns[62].type != TYPE_INT ||
+        mir.insns[62].secondary_offset != TYPE_INT ||
         mir.insns[63].src1 != current->dst ||
         mir.insns[63].src2 != mir.insns[62].dst ||
+        mir.insns[63].type != (TYPE_BOOL | TYPE_PTR) ||
         mir.insns[63].immediate != 1 ||
         mir.insns[63].memory_size != 1 ||
+        (mir.insns[63].memory_flags & (1 | 8)) != 0 ||
         mir.insns[64].src1 != mir.insns[63].dst ||
+        mir.insns[64].type != TYPE_BOOL ||
         mir.insns[64].memory_size != 1 ||
         (mir.insns[64].memory_flags & (1 | 8)) != 0 ||
         !mir_machine_unobservable_local_store(&mir.insns[65]) ||
@@ -7730,24 +7738,32 @@ static int mir_match_wraparound_bool_step(
             "wraparound-bool-step", "right");
     if (mir.insns[68].src1 != next->dst ||
         mir.insns[68].src2 != index_phi->dst ||
+        mir.insns[68].type != (TYPE_BOOL | TYPE_PTR) ||
         mir.insns[68].immediate != 1 ||
         mir.insns[68].memory_size != 1 ||
+        (mir.insns[68].memory_flags & (1 | 8)) != 0 ||
         mir.insns[71].immediate != '^' ||
         ((mir.insns[71].src1 != mir.insns[54].dst ||
           mir.insns[71].src2 != mir.insns[64].dst) &&
          (mir.insns[71].src1 != mir.insns[64].dst ||
           mir.insns[71].src2 != mir.insns[54].dst)) ||
+        mir.insns[71].type != TYPE_INT ||
+        mir.insns[71].secondary_offset != TYPE_INT ||
         mir.insns[72].immediate != 0 ||
         mir.insns[72].src1 != mir.insns[71].dst ||
+        mir.insns[72].type != TYPE_BOOL ||
         mir.insns[73].src1 != mir.insns[68].dst ||
         mir.insns[73].src2 != mir.insns[72].dst ||
         mir.insns[73].memory_size != 1 ||
         (mir.insns[73].memory_flags & (1 | 8)) != 0 ||
         mir.insns[76].src1 != next->dst ||
         mir.insns[76].src2 != index_phi->dst ||
+        mir.insns[76].type != (TYPE_BOOL | TYPE_PTR) ||
         mir.insns[76].immediate != 1 ||
         mir.insns[76].memory_size != 1 ||
+        (mir.insns[76].memory_flags & (1 | 8)) != 0 ||
         mir.insns[77].src1 != mir.insns[76].dst ||
+        mir.insns[77].type != TYPE_BOOL ||
         mir.insns[77].memory_size != 1 ||
         (mir.insns[77].memory_flags & (1 | 8)) != 0 ||
         mir.insns[78].src1 != mir.insns[77].dst ||
@@ -7756,18 +7772,19 @@ static int mir_match_wraparound_bool_step(
             "wraparound-bool-step", "store");
     if (mir.insns[6].object < 0 ||
         mir.insns[79].object != mir.insns[6].object ||
-        type_size(mir.insns[79].type) != 4 ||
+        mir.insns[79].type != TYPE_LONG ||
         (mir.insns[79].memory_flags & (1 | 8)) != 0)
         return mir_machine_reject(
             "wraparound-bool-step", "live-load");
     if (!mir_machine_constant_equals(mir.insns[80].dst, 1) ||
-        type_size(mir.insns[80].type) != 4)
+        mir.insns[80].type != TYPE_LONG)
         return mir_machine_reject(
             "wraparound-bool-step", "live-one");
     if (mir.insns[81].immediate != '+' ||
         mir.insns[81].src1 != mir.insns[79].dst ||
         mir.insns[81].src2 != mir.insns[80].dst ||
-        type_size(mir.insns[81].type) != 4)
+        mir.insns[81].type != TYPE_LONG ||
+        mir.insns[81].secondary_offset != TYPE_LONG)
         return mir_machine_reject(
             "wraparound-bool-step", "live-add");
     if (mir.insns[82].object != mir.insns[6].object ||
@@ -7778,9 +7795,12 @@ static int mir_match_wraparound_bool_step(
             "wraparound-bool-step", "live-store");
     if (
         !mir_machine_constant_equals(mir.insns[87].dst, 1) ||
+        mir.insns[87].type != 0 ||
         mir.insns[88].immediate != '+' ||
         mir.insns[88].src1 != index_phi->dst ||
         mir.insns[88].src2 != mir.insns[87].dst ||
+        mir.insns[88].type != 0 ||
+        mir.insns[88].secondary_offset != 0 ||
         mir.insns[31].object < 0 ||
         mir.insns[89].object != mir.insns[31].object ||
         mir.insns[89].memory_size != 2 ||
@@ -7791,7 +7811,7 @@ static int mir_match_wraparound_bool_step(
             "wraparound-bool-step", "index-update");
     if (
         mir.insns[92].object != mir.insns[6].object ||
-        type_size(mir.insns[92].type) != 4 ||
+        mir.insns[92].type != TYPE_LONG ||
         (mir.insns[92].memory_flags & (1 | 8)) != 0 ||
         mir.insns[93].src1 != mir.insns[92].dst)
         return mir_machine_reject(

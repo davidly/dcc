@@ -1385,6 +1385,29 @@ locally verified execution inventory.
   `32f652d93d598292d2dbef07f11cc0493d27c3f8be9d68f61fe73c2708a4a9d1`.
   The standalone audit, all 136 Python script tests, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 340 closes the historical `mir_match_wraparound_bool_step` proof gap and
+  fixes genuine exact-schedule false acceptances. The old matcher proved the
+  94-instruction opcode fingerprint, parameter stack locations, loop/branch
+  relationships, wraparound indices, XOR operands, local identities, and
+  access widths, but accepted inconsistent same-width types throughout those
+  operations. Thirty-six of 132 representative type, width, operator,
+  dataflow, identity, and index mutations retained the exact schedule before
+  the fix. The matcher now requires the exact signed word/long, boolean, and
+  boolean-pointer types used by the emitted instructions, consistent binary
+  operand types, nonvolatile indexed accesses, and the canonical untyped
+  increment metadata.
+  New `tests/mir-clobber/wrapbool.c` isolates the five-block Rule 90 step and
+  checks one-, two-, and five-cell results plus zero and negative counts. The
+  dedicated `wraparound-bool-step-wave340-audit.py` campaign runs 52
+  stack/no-stack and peep/nopeep runtime controls across 13 source variants,
+  retains exact selection for baseline and commuted-XOR forms, and proves
+  generic fallback for unsigned, alternate-width, volatile, and extra-CFG
+  near matches. It rejects all 132 targeted MIR mutations with independently
+  forced `spilled-phi-slot` fallback and zero meaningful survivors. The clean
+  selected hash is `f741fcea` and assembly SHA-256 is
+  `6bf3bb37f7281a406177fccf9c8d67cd069a947a730a280ef0a621159cad78f1`.
+  The standalone audit, full Python script-test suite, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
