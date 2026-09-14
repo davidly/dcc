@@ -800,6 +800,27 @@ false acceptance was found. The standalone audit and all 136 Python script
 tests pass. This remains a test-only increment; regenerate the immutable
 aggregate ledger before claiming new overall branch totals.
 
+Wave 82 closes the historical `mir_match_packed_byte_report_schedule` proof
+gap without changing production code. No dedicated fixture or audit previously
+covered this exact schedule. New `tests/mir-clobber/pkbrpt.c` isolates its
+34-instruction, one-block shape and checks an asymmetric four-byte packing
+result against an independently computed runtime oracle. New
+`packed-byte-report-wave82-audit.py` runs 20 stack/no-stack and peep/nopeep
+runtime controls, retaining exact selection for baseline and renamed-helper
+forms while proving spilled generic fallback for volatile, word-width, and VLA
+buffer near matches. A forced hybrid candidate cost report confirms the clean
+scheduled candidate is the exact incumbent before diagnostic selection. The
+audit rejects 26/26 targeted MIR mutations covering buffer type and identity,
+lane indices, address dataflow, stride and memory width, byte constants, store
+operands, pack-call identity/arguments/directness/result width, print
+string/arguments/directness/result width, and the zero return. The clean
+selected hash remains `c1803b97` and assembly SHA-256 is
+`6c82b5625ae46dd0fef759670274f489aa0656b8b9a0ffc77e17b1f921c1e47b`.
+Current code already rejected every near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

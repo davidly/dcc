@@ -132,6 +132,9 @@ CAMPAIGNS = (
     Campaign("fixed-embedding-build",
              "fixed-embedding-wave80-audit.py",
              output_dir="fixed-embedding-wave80-audit", max_jobs=2),
+    Campaign("packed-byte-report-schedule",
+             "packed-byte-report-wave82-audit.py",
+             output_dir="packed-byte-report-wave82-audit", max_jobs=2),
 )
 
 
