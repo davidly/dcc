@@ -1384,6 +1384,29 @@ release modes pass.
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
 
+Wave 2400 closes the historical `mir_match_list_reverse_schedule` proof gap
+and fixes severe exact-schedule false acceptance. The old matcher verified all
+39 opcodes but explicitly constrained fields on only 15 instruction positions.
+It omitted most destinations, types, operand identities, immediates, memory
+attributes, CFG successors, PHI predecessors, and auxiliary metadata.
+Exhaustive mutation showed that 814 of 897 per-instruction field changes were
+falsely accepted.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction. It normalizes source-context-specific struct IDs while
+retaining type kind, pointer depth, width flags, and the binary operand type.
+New `tests/mir-clobber/listrev.c` independently checks node identity, six
+reversed values, list termination, and a tabulated rolling checksum. New
+`list-reverse-wave2400-audit.py` runs 20 stack/no-stack and peep/nopeep runtime
+controls across five source variants and rejects all 897 mutations with generic
+fallback; every rejection also selects forced `spilled-phi-slot` fallback.
+Zero meaningful survivors remain. The clean selected hash is `3b227728` and
+assembly SHA-256 is
+`c9140e698d415e08aac3a9a9eae20d149a44dbd7b170fdac455be0c73cfbd508`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

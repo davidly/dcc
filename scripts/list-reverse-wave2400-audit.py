@@ -498,7 +498,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument(
         "--output-dir",
-        default="build/list-reverse-wave2200-audit",
+        default="build/list-reverse-wave2400-audit",
     )
     args = parser.parse_args()
     if args.jobs < 1:
@@ -540,7 +540,7 @@ def main():
     outcomes = Counter(row[2] for row in mutation_rows)
     reject_reasons = Counter(row[3] for row in mutation_rows)
     print(
-        f"list reverse Wave 2200 mutations={len(mutation_rows)} "
+        f"list reverse Wave 2400 mutations={len(mutation_rows)} "
         f"{outcomes}"
     )
     print(f"reject reasons={reject_reasons}")

@@ -1677,6 +1677,27 @@ locally verified execution inventory.
   `ff651adf1097397693e62cb00814dd669cd2ee87301952f61204d2812214a1b9`.
   The standalone audit, all 136 Python script tests, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 2400 closes the historical `mir_match_list_reverse_schedule` proof gap
+  and fixes severe exact-schedule false acceptance. Although the old matcher
+  checked all 39 opcodes, it explicitly related fields on only 15 instruction
+  positions and omitted most destinations, types, operands, immediates, memory
+  attributes, CFG successors, PHI predecessors, and auxiliary metadata.
+  Exhaustive mutation found that 814 of 897 per-instruction field changes were
+  falsely accepted. The matcher now fingerprints all 23 numeric semantic and
+  structural fields on every instruction. Struct type IDs are normalized while
+  retaining type kind, pointer depth, width flags, and the binary operand type,
+  so equivalent declarations in different source contexts remain accepted.
+  New `tests/mir-clobber/listrev.c` independently checks node identity, six
+  reversed values, termination, and a tabulated rolling checksum. New
+  `list-reverse-wave2400-audit.py` runs 20 stack/no-stack and peep/nopeep
+  controls across baseline, renamed-function, renamed-local, volatile-member,
+  and extra-CFG variants, and rejects all 897 mutations with generic fallback.
+  Every rejection independently selects forced `spilled-phi-slot` fallback.
+  The clean selected hash is `3b227728` and assembly SHA-256 is
+  `c9140e698d415e08aac3a9a9eae20d149a44dbd7b170fdac455be0c73cfbd508`.
+  Zero meaningful survivors remain. The standalone audit, all 136 Python
+  script tests, and both strict 506-app release modes pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
