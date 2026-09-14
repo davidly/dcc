@@ -387,7 +387,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument(
         "--output-dir",
-        default="build/bcd-byte-math-wave120-audit",
+        default="build/bcd-byte-math-wave160-audit",
     )
     args = parser.parse_args()
     if args.jobs < 1:
@@ -418,7 +418,7 @@ def main():
             f"!= {EXPECTED_MUTATION_OUTCOMES}"
         )
     print(
-        f"BCD byte math Wave 120 mutations={len(mutation_rows)} "
+        f"BCD byte math Wave 160 mutations={len(mutation_rows)} "
         f"{outcomes}"
     )
     print(
