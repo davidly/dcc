@@ -1022,6 +1022,27 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 240 closes the historical `mir_match_allocator_bridge_schedule` proof gap
+and fixes genuine ABI false acceptances. The old matcher checked selected
+allocator/free/fill identities, constants, and the final merged-pointer
+relationship, but not the complete instruction types, memory contracts,
+dataflow, label graph, PHI predecessors, local identities, or call ABI.
+Fastcall replacements for allocate, free, failure, and fill could consequently
+retain the stack-call exact schedule despite incompatible calling conventions.
+
+New `tests/mir-clobber/albridge.c` isolates the allocator coalescing shape and
+checks the 3,006-byte merged allocation plus byte fill. New
+`allocator-bridge-wave240-audit.py` runs 44 stack/no-stack and peep/nopeep
+runtime controls across 11 source variants, preserves exact selection for the
+baseline and renamed function, proves generic fallback for volatile, extra-CFG,
+and fastcall near matches, and rejects all 178 targeted MIR mutations with an
+independently forced spilled fallback. The clean selected hash is `9064348e`
+and assembly SHA-256 is
+`1677aef387a62b148a677d09db0f89d3934f701ea45319424f45b1f6d5cff7fb`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

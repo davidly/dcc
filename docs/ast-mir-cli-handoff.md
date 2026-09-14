@@ -1343,6 +1343,24 @@ locally verified execution inventory.
   `d2b59eea697c24e27009b21cebe118b508ccd97bb667d702002f8fa1640dce89`.
   The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 240 closes the historical `mir_match_allocator_bridge_schedule` proof
+  gap and fixes genuine ABI false acceptances. The old matcher proved selected
+  allocator/free/fill identities, constants, and the final merged-pointer
+  check, but did not prove the complete type, memory, value, CFG, PHI, local,
+  or call-ABI contract before emitting its hard-coded allocator schedule.
+  Fastcall replacements for each of allocate, free, failure, and fill could
+  therefore retain a stack-call schedule with an incompatible ABI.
+  New `tests/mir-clobber/albridge.c` isolates the allocator coalescing shape and
+  verifies the 3,006-byte merged allocation and byte fill. The dedicated
+  `allocator-bridge-wave240-audit.py` runs 44 stack/no-stack and
+  peep/nopeep runtime controls across 11 source variants, retains exact
+  selection for baseline and renamed functions, proves generic fallback for
+  volatile, extra-CFG, and fastcall near matches, and rejects all 178 targeted
+  MIR mutations with independently forced spilled fallback. The clean selected
+  hash is `9064348e` and assembly SHA-256 is
+  `1677aef387a62b148a677d09db0f89d3934f701ea45319424f45b1f6d5cff7fb`.
+  The standalone audit, full Python script-test suite, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -159,6 +159,9 @@ CAMPAIGNS = (
     Campaign("indexed-word-sum-schedule",
              "indexed-word-sum-wave220-audit.py",
              output_dir="indexed-word-sum-wave220-audit", max_jobs=2),
+    Campaign("allocator-bridge-schedule",
+             "allocator-bridge-wave240-audit.py",
+             output_dir="allocator-bridge-wave240-audit", max_jobs=2),
 )
 
 
