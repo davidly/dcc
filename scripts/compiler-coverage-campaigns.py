@@ -236,6 +236,10 @@ CAMPAIGNS = (
              "arrow-path-wave7100-audit.py",
              output_dir="arrow-path-wave7100-audit",
              max_jobs=2),
+    Campaign("raw-conversion-check-schedule",
+             "raw-conversion-check-wave8000-audit.py",
+             output_dir="raw-conversion-check-wave8000-audit",
+             max_jobs=2),
 )
 
 

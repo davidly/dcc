@@ -1332,6 +1332,8 @@ static int mir_match_raw_conversion_check_schedule(
     int use;
     int call_count = 0;
     int instruction;
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
 
     memset(plan, 0, sizeof(*plan));
     memset(&tail, 0, sizeof(tail));
@@ -1341,6 +1343,73 @@ static int mir_match_raw_conversion_check_schedule(
         mir.insns[0].opcode != MIR_LABEL)
         return mir_machine_reject(
             "raw-conversion-check-schedule", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned int)insn->opcode,
+            (unsigned int)insn->dst,
+            (unsigned int)insn->src1,
+            (unsigned int)insn->src2,
+            (unsigned int)insn->type,
+            (unsigned int)insn->immediate,
+            (unsigned int)insn->label,
+            (unsigned int)insn->phi_pred1,
+            (unsigned int)insn->phi_pred2,
+            (unsigned int)insn->successors[0],
+            (unsigned int)insn->successors[1],
+            (unsigned int)insn->successor_count,
+            (unsigned int)insn->object,
+            (unsigned int)insn->memory_size,
+            (unsigned int)insn->memory_flags,
+            (unsigned int)insn->pointee_volatile_mask,
+            (unsigned int)insn->has_pointer_qualifiers,
+            (unsigned int)insn->bit_width,
+            (unsigned int)insn->bit_shift,
+            (unsigned int)insn->bit_mask,
+            (unsigned int)insn->secondary_offset,
+            (unsigned int)insn->inline_temp_id,
+            (unsigned int)insn->divmod_cast_types
+        };
+        const char *text;
+        size_t value;
+
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+        text = insn->name;
+        do {
+            first ^= (unsigned char)*text;
+            first *= 1099511628211ULL;
+            second ^= (unsigned char)*text +
+                0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        } while (*text++);
+        text = insn->base_name;
+        do {
+            first ^= (unsigned char)*text;
+            first *= 1099511628211ULL;
+            second ^= (unsigned char)*text +
+                0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        } while (*text++);
+    }
+    if ((first != 0x54afd78e04dc52eeULL ||
+         second != 0xc5556756410d2680ULL) &&
+        (first != 0x10dd0615f75cb6deULL ||
+         second != 0x953b8b9643e84c90ULL)) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=raw-conversion-check-schedule "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode == MIR_CALL)
             ++call_count;

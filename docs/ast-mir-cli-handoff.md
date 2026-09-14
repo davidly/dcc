@@ -1908,6 +1908,25 @@ locally verified execution inventory.
   No separate clobber manifest was needed. The standalone audit, full Python
   script-test suite, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 8000 closes the historical
+  `mir_match_raw_conversion_check_schedule` proof gap and fixes severe
+  exact-schedule false acceptance. The old 519-instruction matcher classified
+  every opcode but did not prove the complete type, SSA, memory/qualifier,
+  CFG-edge, PHI-predecessor, instruction-metadata, or symbol-identity payload.
+  It accepted 10,488 of 12,456 exhaustive per-instruction field and identity
+  mutations (84.2%), including every mutation in 14 field classes. The matcher
+  now fingerprints all 23 semantic and structural fields plus both instruction
+  symbol names on every instruction. New `tests/mir-clobber/rawconv.c` retains
+  the complete raw predicate/conversion workload and adds an independent
+  known-IEEE-bit oracle. New `raw-conversion-check-wave8000-audit.py` builds an
+  isolated diagnostic mutation compiler, runs eight stack/no-stack and
+  peep/nopeep controls across exact and renamed variants, and rejects all
+  12,456 mutations with verified generic fallback and zero survivors. The
+  clean stack-check selected hash is `e18d2405`; assembly SHA-256 is
+  `a3a945c6eda11be245173e31a571ff7a6c24d6aac87a618fe3c92cd2f100fe1c`.
+  The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass. No separate clobber manifest was needed. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
