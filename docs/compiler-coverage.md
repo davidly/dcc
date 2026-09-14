@@ -571,6 +571,45 @@ baseline plus 28/28 killed mutants, and all 136 Python script tests pass.
 This remains a test-only increment; regenerate the immutable aggregate ledger
 before claiming new overall branch totals.
 
+Wave 52 fixes a real, independently reproduced defect, found by a fresh
+post-wave-51 coverage checkpoint collection rather than by any targeted proof
+increment. Compiling `tests/mir-clobber/cmpw4.c`'s `CMPW45_EXTRA_HELPER_CALL`
+variant (a genuinely empty `static void` helper, MIR shape `insns=1
+values=0`) immediately after a normal-sized function fataled under
+`DCC_MIR_CACHE_VERIFY=1`: `; MIR CACHE MISMATCH mir_definition
+function=cmpw45_extra_helper value=0 cached=1 uncached=-1`. `mir_definition`,
+`mir_value_use_count`, and `mir_call_uses_value` bounds-check their cached
+arrays against `mir_use_cache_count_capacity` /
+`mir_use_cache_arg_head_capacity`, monotonically non-shrinking high-water
+marks, but `mir_ensure_use_cache`'s reset loop only zeroed indices up to the
+*current* function's own, possibly smaller, `next_value`/`next_call_id`. A
+function with fewer values or calls than an earlier one left high indices
+holding the earlier function's cached def-index/arg-head answers, readable
+as if legitimately defined for the new, smaller function. Reproduced
+directly: `DCC_MIR_CACHE_VERIFY=1 ./dcc -DCMPW45_EXTRA_HELPER_CALL
+tests/mir-clobber/cmpw15.c -o ...` fataled before the fix and exits 0 after.
+This is a real latent miscompile risk even in ordinary, non-cache-verified
+builds: any pass consulting these caches for an index a small function never
+used could silently receive an unrelated instruction from an earlier
+function. The fix clears the full allocated capacity on every cache rebuild
+instead of only the current function's smaller count.
+
+A new permanent host control,
+`verify_use_cache_capacity_reset_across_functions`, reproduces the exact
+shape directly in `tests/host/mir_verify.c`: a normal function defines value
+0 at instruction 1, then an immediately following, genuinely empty
+zero-value function must not see that stale definition. Reverting the fix
+was confirmed to make this control fail (`MIR verifier failures=1`); with
+the fix restored, `MIR verifier failures=0`. A full stack/no-stack selector
+census against the immediately preceding parent tree shows zero changed
+selections, zero changed output, and zero apps requiring runtime validation
+across all 3,039 functions, confirming this was a latent, previously
+undetected bug rather than a change to any existing production selection or
+output. Normal and ASan/UBSan MIR host tests pass, the full compiler
+mutation campaign has one passing baseline plus 28/28 killed mutants, both
+strict stack/no-stack full+extended release gates pass with zero failures
+and zero performance regressions, and all 136 Python script tests pass.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

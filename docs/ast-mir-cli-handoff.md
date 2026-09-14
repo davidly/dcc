@@ -912,6 +912,42 @@ locally verified execution inventory.
   than fixing a false acceptance. Normal and ASan/UBSan MIR host CTest pass
   5/5, the full compiler mutation campaign has one passing baseline plus
   28/28 killed mutants, and all 136 Python script tests pass.
+- Wave 52 fixes a real, independently reproduced defect found by the fresh
+  post-wave-51 coverage checkpoint collection, not a proof gap. Compiling
+  `tests/mir-clobber/cmpw4.c`'s new `CMPW45_EXTRA_HELPER_CALL` variant
+  (a genuinely empty `static void` helper, `insns=1 values=0`) immediately
+  after a normal-sized function fataled with
+  `DCC_MIR_CACHE_VERIFY=1`: `mir_definition` returned a stale, out-of-range
+  cached answer left over from the prior function. `mir_definition`,
+  `mir_value_use_count`, and `mir_call_uses_value` all bounds-check their
+  cached arrays against `mir_use_cache_count_capacity` /
+  `mir_use_cache_arg_head_capacity`, high-water marks that never shrink
+  between functions, but `mir_ensure_use_cache`'s reset loop only cleared
+  indices up to the *current* function's own smaller
+  `next_value`/`next_call_id`. A function with fewer values or calls than an
+  earlier one left high indices holding the earlier function's cached
+  def-index/arg-head answers, readable as if valid for the new function.
+  This was reproducible directly (`DCC_MIR_CACHE_VERIFY=1 ./dcc ... cmpw15.c`
+  fataled before the fix, exit 0 after) and is a real latent
+  miscompile risk in ordinary (non-cache-verified) builds: any pass that
+  queries `mir_definition`/`mir_value_use_count`/`mir_call_uses_value` for an
+  index unused by a small function could silently receive a wrong,
+  unrelated instruction from an earlier function. The fix clears the full
+  allocated capacity on every cache rebuild instead of only the current
+  function's smaller count. A new permanent host control
+  (`verify_use_cache_capacity_reset_across_functions`) reproduces the exact
+  shape directly (a normal function defining value 0 at instruction 1,
+  immediately followed by a zero-value function) and was confirmed to fail
+  with the fix reverted before being restored; `MIR verifier failures=0`
+  with the fix in place. A full stack/no-stack selector census against the
+  pre-fix parent shows zero changed selections, zero changed output, and
+  zero apps requiring runtime validation across all 3,039 functions,
+  confirming this was a latent, previously-undetected bug rather than a
+  change to any existing production selection or output. Normal and
+  ASan/UBSan MIR host tests pass, the full compiler mutation campaign has
+  one passing baseline plus 28/28 killed mutants, both strict stack/no-stack
+  full+extended release gates pass with zero failures and zero performance
+  regressions, and all 136 Python script tests pass.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

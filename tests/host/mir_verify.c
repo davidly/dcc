@@ -7387,6 +7387,67 @@ static void verify_diamond_mutations(void)
     printf("MIR diamond mutations=%d\n", mutation_count);
 }
 
+/* Reproduces a real fatal DCC_MIR_CACHE_VERIFY=1 divergence found compiling
+ * a genuinely empty void helper (tests/mir-clobber/cmpw4.c's
+ * cmpw45_extra_helper) immediately after a normal-sized function.
+ * mir_use_cache_count_capacity/mir_use_cache_arg_head_capacity are
+ * high-water marks that never shrink between functions, and
+ * mir_definition/mir_value_use_count/mir_call_uses_value all bounds-check
+ * against those capacities rather than the current function's own
+ * next_value/next_call_id. The reset loop in mir_ensure_use_cache used to
+ * clear only up to the CURRENT function's smaller next_value/next_call_id,
+ * leaving high indices holding a previous, unrelated function's cached
+ * def-index/arg-head answers. A later trivial function with next_value==0
+ * (or fewer calls than its predecessor) could then read stale, wrong data
+ * for an index it never legitimately used. The fix clears the full
+ * allocated capacity every time. This control proves the fix directly: a
+ * normal function establishes cache capacity with value 0 defined at
+ * instruction 1, then an immediately-following zero-value function must not
+ * see that stale definition when queried for its own (nonexistent) value 0. */
+static void verify_use_cache_capacity_reset_across_functions(void)
+{
+    int large_ok;
+    int trivial_ok;
+
+    /* A normal function: setup()'s own fixed shape defines value 0 at
+     * instruction 1 (a MIR_CONST), establishing cache capacity >= 2. */
+    setup(3, 2, 1);
+    large_ok = mir_verify_and_dump();
+    large_ok = large_ok && mir_definition(0) == &mir.insns[1];
+
+    /* An immediately-following, genuinely empty function: one label, zero
+     * values, matching cmpw45_extra_helper's real reported MIR shape
+     * ("insns=1 values=0"). Built directly rather than through setup(),
+     * which assumes at least a MIR_CONST/MIR_RETURN pair. */
+    mir_begin_function("verify_test", "_verify_test", EMIT_SINK_FINAL, 0, 0, 0);
+    mir.count = 1;
+    mir.next_value = 0;
+    mir.next_label = 1;
+    memset(&mir.insns[0], 0, sizeof(mir.insns[0]));
+    mir.insns[0].opcode = MIR_LABEL;
+    mir.insns[0].label = 0;
+    mir.insns[0].src1 = -1;
+    mir.insns[0].src2 = -1;
+    mir.insns[0].dst = -1;
+    mir.insns[0].object = -1;
+    mir.insns[0].phi_pred1 = -1;
+    mir.insns[0].phi_pred2 = -1;
+    mir.insns[0].type = TYPE_INT;
+    trivial_ok = mir_verify_and_dump();
+    /* Value 0 does not exist in this function at all (next_value == 0);
+     * the fixed cache must report no definition, not the previous
+     * function's stale instruction-1 pointer. */
+    trivial_ok = trivial_ok && mir_definition(0) == NULL;
+    trivial_ok = trivial_ok && mir_value_use_count(0) == 0;
+
+    if (!large_ok || !trivial_ok) {
+        fprintf(stderr,
+                "FAIL use-cache capacity reset across shrinking functions\n");
+        ++failures;
+    }
+    clear_liveness();
+}
+
 static void verify_conditional_callable_prototypes(void)
 {
     struct Sym left;
@@ -7673,6 +7734,7 @@ int main(void)
     }
     verify_diamond_mutations();
     verify_ast_binary_folds();
+    verify_use_cache_capacity_reset_across_functions();
     verify_conditional_callable_prototypes();
     verify_ast_assignment_support();
     verify_call_lowering_preflight();
