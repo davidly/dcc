@@ -70,28 +70,28 @@ class MutationCase:
 
 
 SOURCE_CONTROLS = (
-    SourceControl("baseline", "FA110OK", expect_exact=True),
+    SourceControl("baseline", "FA150OK", expect_exact=True),
     SourceControl(
         "variadic-helper",
-        "FA110VA",
+        "FA150VA",
         ("FATAN2_VARIADIC_ATAN",),
         expected_reject="call",
     ),
     SourceControl(
         "volatile-x",
-        "FA110VX",
+        "FA150VX",
         ("FATAN2_VOLATILE_X",),
         expected_reject="opcodes",
     ),
     SourceControl(
         "volatile-ratio",
-        "FA110VR",
+        "FA150VR",
         ("FATAN2_VOLATILE_RATIO",),
         expected_reject="opcodes",
     ),
     SourceControl(
         "different-helper",
-        "FA110DA",
+        "FA150DA",
         ("FATAN2_DIFFERENT_ATAN",),
         expected_reject="call-identity",
     ),
@@ -412,7 +412,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument(
         "--output-dir",
-        default="build/float-atan2-wave110-audit",
+        default="build/float-atan2-wave150-audit",
     )
     args = parser.parse_args()
     if args.jobs < 1:
@@ -443,7 +443,7 @@ def main():
             f"!= {EXPECTED_MUTATION_OUTCOMES}"
         )
     print(
-        f"float atan2 Wave 110 mutations={len(mutation_rows)} "
+        f"float atan2 Wave 150 mutations={len(mutation_rows)} "
         f"{outcomes}"
     )
     print(

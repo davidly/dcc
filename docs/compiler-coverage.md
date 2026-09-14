@@ -866,7 +866,7 @@ The standalone audit, all Python script tests, and both strict 506-app release
 modes pass. Regenerate the immutable aggregate ledger before claiming new
 overall branch totals.
 
-Wave 110 closes the historical `mir_match_float_atan2_schedule` proof gap and
+Wave 150 closes the historical `mir_match_float_atan2_schedule` proof gap and
 fixes a genuine exact-schedule false-acceptance class. The existing matcher
 proved its 66-opcode fingerprint, ten-block count, selected constants, partial
 value flow, parameter offsets, and common unary helper identity. It did not
@@ -879,7 +879,7 @@ structural, type, storage, dataflow, and call invariants are now explicit.
 New `tests/mir-clobber/fatan2.c` isolates the schedule and checks nine
 independently tabulated results covering zero, both vertical axes, all four
 quadrants, and asymmetric coordinates. New
-`float-atan2-wave110-audit.py` runs 20 stack/no-stack and peep/nopeep runtime
+`float-atan2-wave150-audit.py` runs 20 stack/no-stack and peep/nopeep runtime
 controls, retains exact selection for the baseline, and proves named spilled
 fallback for variadic-helper, volatile-parameter, volatile-ratio, and
 different-helper near matches. It rejects 34/34 targeted MIR mutations and

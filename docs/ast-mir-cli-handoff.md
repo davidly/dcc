@@ -1189,7 +1189,7 @@ locally verified execution inventory.
   `dc95b353f36d0e1245a68d34b22f3ed7fafdff6bdba02a991fbd1fecb22cbfbb`.
   The standalone audit, all Python script tests, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
-- Wave 110 closes the historical `mir_match_float_atan2_schedule` proof gap
+- Wave 150 closes the historical `mir_match_float_atan2_schedule` proof gap
   and fixes a genuine exact-schedule false-acceptance class. The matcher
   previously checked the 66-opcode fingerprint, selected constants, partial
   value flow, parameter layout, and unary helper prototypes, but omitted
@@ -1203,7 +1203,7 @@ locally verified execution inventory.
   New `tests/mir-clobber/fatan2.c` isolates the schedule and validates nine
   independently tabulated arctangent results across the origin, axes,
   quadrants, and asymmetric coordinates. The dedicated
-  `float-atan2-wave110-audit.py` campaign runs 20 stack/no-stack and
+  `float-atan2-wave150-audit.py` campaign runs 20 stack/no-stack and
   peep/nopeep runtime controls, retaining exact selection for the baseline
   while proving spilled fallback for variadic-helper, volatile-parameter,
   volatile-ratio, and different-helper near matches. It rejects 34/34
