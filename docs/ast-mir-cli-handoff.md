@@ -1530,6 +1530,30 @@ locally verified execution inventory.
   and assembly SHA-256 is
   `c9c86c97091c14451080c8a64ff0a0fcec70fe664049cd7a6dc0fc058568b954`.
   The broader coverage objective remains incomplete.
+- Wave 1700 closes the remaining focused proof gap for
+  `mir_match_scope_block_runner` without changing production code. The
+  pre-existing `test-mir-scope-block-mutations.ps1` diagnostic covered four
+  controls and 27 selected mutations against the broad `tforblk` application,
+  but had no isolated fixture, forced named fallback, runtime matrix, or
+  exhaustive field census. New `tests/mir-clobber/scopblk.c` isolates the
+  698-instruction, 28-block schedule and retains runtime oracles for block
+  shadowing, loop scope, static-local identity, helper results, summaries, and
+  the final return.
+  `scope-block-wave1700-audit.py` runs 64 stack/no-stack and peep/nopeep
+  runtime controls across 16 source variants, proves the clean exact schedule,
+  and proves generic fallback for volatile global/long state, changed local
+  widths and operators, alternate loop CFG, check/parameter/helper ABI and
+  identity changes, non-static helpers, duplicate calls, and summary-string
+  aliasing. It rejects 3,810/3,810 matcher-relevant mutations: 698 each of
+  type, memory width, first operand, second operand, and immediate/index
+  fields, plus all 320 meaningful storage/call identities. Every rejection is
+  independently reproduced with
+  `DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot`, with zero meaningful survivors.
+  Current production code rejected every control, so this found proof gaps
+  only and no genuine false acceptance. The clean selected hash is
+  `b3ab4a13` and assembly SHA-256 is
+  `47a208a38c9e04f30ca47e8b5ab9c28aabe5d3362e3524c42cdd565d69dccce9`.
+  The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -1223,6 +1223,32 @@ SHA-256 is
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
 
+Wave 1700 closes the remaining focused proof gap for
+`mir_match_scope_block_runner` without changing production code. The earlier
+`test-mir-scope-block-mutations.ps1` diagnostic covered four controls and 27
+selected mutations against `tforblk`, but did not isolate the schedule, run a
+runtime matrix, force a named generic candidate, or exhaustively mutate the
+fields consumed by the matcher. New `tests/mir-clobber/scopblk.c` isolates the
+698-instruction, 28-block schedule and checks block shadowing, loop scope,
+static-local identity and persistence, helper results, summaries, and return
+status.
+
+New `scope-block-wave1700-audit.py` runs 64 stack/no-stack and peep/nopeep
+runtime controls across 16 source variants. It proves exact selection for the
+clean fixture and generic fallback for volatile global/long state, changed
+local widths and operators, alternate loop CFG, check/parameter/helper ABI and
+identity changes, non-static helpers, duplicate calls, and summary-string
+aliasing. The exhaustive census rejects all 3,810 matcher-relevant mutations:
+698 each of type, memory width, first operand, second operand, and
+immediate/index fields, plus all 320 meaningful storage/call identities. Every
+mutation is independently reproduced with forced `spilled-phi-slot` fallback,
+with zero meaningful survivors. Current production code rejected every
+control, so this found proof gaps only and no genuine false acceptance. The
+clean selected hash is `b3ab4a13` and assembly SHA-256 is
+`47a208a38c9e04f30ca47e8b5ab9c28aabe5d3362e3524c42cdd565d69dccce9`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

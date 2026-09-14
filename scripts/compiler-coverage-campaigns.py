@@ -183,6 +183,9 @@ CAMPAIGNS = (
     Campaign("fixed-softmax-schedule",
              "fixed-softmax-wave1300-audit.py",
              output_dir="fixed-softmax-wave1300-audit", max_jobs=2),
+    Campaign("scope-block-runner-schedule",
+             "scope-block-wave1700-audit.py",
+             output_dir="scope-block-wave1700-audit", max_jobs=2),
 )
 
 
