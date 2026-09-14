@@ -1452,6 +1452,32 @@ locally verified execution inventory.
   `e9d0990b8b4f72d1ba4962d98b8f6cd91cf8d602eba4b60b0031b8e0cd302114`.
   The standalone audit, all 136 Python script tests, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 1100 closes the historical `mir_match_board_matrix_print_schedule`
+  proof gap and fixes genuine exact-schedule false acceptances. The old
+  matcher proved the 59-instruction, seven-block loop and call outline, the
+  8-by-8 global board layout, selected row/column flow, and variadic print
+  identities, but did not bind all scalar load/store widths and types, the
+  column-increment reload to the column local, pointer-index types, increment
+  metadata, or argument/call ABI types and flags. Thirty-three of 103
+  representative type, width, index, operand-identity, call, and dataflow
+  mutations retained the hard-coded board walk before the fix. The matcher
+  now requires exact signed-word loop state, canonical increment metadata,
+  the column reload and updates to use one nonvolatile local, bool-pointer
+  index chains, clean memory metadata, and exact variadic call metadata.
+  New `tests/mir-clobber/boardmx.c` isolates the schedule and checks an
+  asymmetric 3-by-3 board plus a failure oracle. The dedicated
+  `board-matrix-print-wave1100-audit.py` campaign runs 44 stack/no-stack and
+  peep/nopeep runtime controls across 11 source variants, retains exact
+  selection for baseline, renamed, and variadic-wrapper forms, proves generic
+  fallback for volatile/alternate-layout boards, alternate parameter types,
+  split nonvariadic print functions, extra CFG, and non-void near matches, and
+  rejects all 103 targeted MIR mutations with independently forced
+  `spilled-phi-slot` fallback. The clean selected hash remains `7d561397` and
+  assembly SHA-256 is
+  `e5027db9c92b8eade0582fa0e215731461e61ccabe8881a3ba018ef07e9b9460`.
+  The standalone audit, full Python script-test suite, and both strict
+  506-app release modes pass. The broader coverage objective remains
+  incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

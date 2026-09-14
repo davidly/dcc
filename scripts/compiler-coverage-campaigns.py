@@ -174,6 +174,9 @@ CAMPAIGNS = (
     Campaign("byte-record-copy-schedule",
              "byte-record-copy-wave1000-audit.py",
              output_dir="byte-record-copy-wave1000-audit", max_jobs=2),
+    Campaign("board-matrix-print-schedule",
+             "board-matrix-print-wave1100-audit.py",
+             output_dir="board-matrix-print-wave1100-audit", max_jobs=2),
 )
 
 

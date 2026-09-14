@@ -1144,6 +1144,34 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 1100 closes the historical `mir_match_board_matrix_print_schedule` proof
+gap and fixes genuine exact-schedule false acceptances. The old matcher proved
+the 59-instruction, seven-block loop and call outline, 8-by-8 global board
+layout, selected row/column flow, and variadic print identities, but did not
+bind all scalar load/store widths and types, the column-increment reload to the
+column local, pointer-index types, increment metadata, or argument/call ABI
+types and flags. Thirty-three of 103 representative type, width, index,
+operand-identity, call, and dataflow mutations retained the hard-coded board
+walk before the fix. The matcher now requires exact signed-word loop state,
+canonical increment metadata, the column reload and updates to use one
+nonvolatile local, bool-pointer index chains, clean memory metadata, and exact
+variadic call metadata.
+
+New `tests/mir-clobber/boardmx.c` isolates the schedule and checks an asymmetric
+3-by-3 board plus a failure oracle. New
+`board-matrix-print-wave1100-audit.py` runs 44 stack/no-stack and peep/nopeep
+runtime controls across 11 source variants, preserves exact selection for the
+baseline, renamed, and variadic-wrapper forms, proves generic fallback for
+volatile/alternate-layout boards, alternate parameter types, split
+nonvariadic print functions, extra CFG, and non-void near matches, and rejects
+all 103 targeted MIR mutations with independently forced `spilled-phi-slot`
+fallback and zero meaningful survivors. The clean selected hash remains
+`7d561397` and assembly SHA-256 is
+`e5027db9c92b8eade0582fa0e215731461e61ccabe8881a3ba018ef07e9b9460`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

@@ -10908,22 +10908,39 @@ static int mir_match_board_matrix_print_schedule(
             "board-matrix-print-schedule", "control-flow");
 
     if (!mir_board_print_signed_word_type(size->type) ||
+        size->memory_size != 0 ||
+        size->memory_flags != 0 ||
+        size->bit_width != 0 ||
+        size->bit_shift != 0 ||
+        size->bit_mask != 0 ||
         !mir_machine_parameter_value_offset(
             size->dst, &plan->size_stack_offset) ||
         plan->size_stack_offset < 2 ||
         plan->size_stack_offset + 1 > 127 ||
         !mir_board_print_word_location(
             row_store, MIR_STORE, SC_LOCAL, &row_object) ||
+        !mir_board_print_signed_word_type(row_store->type) ||
+        row_store->memory_size != 2 ||
+        row_store->memory_flags != 0 ||
+        row_store->bit_shift != 0 ||
+        row_store->bit_mask != 0 ||
         !mir_board_print_word_location(
             column_store, MIR_STORE, SC_LOCAL, &column_object) ||
+        !mir_board_print_signed_word_type(column_store->type) ||
+        column_store->memory_size != 2 ||
+        column_store->memory_flags != 0 ||
+        column_store->bit_shift != 0 ||
+        column_store->bit_mask != 0 ||
         row_object < 0 || column_object < 0 ||
         row_object == column_object)
         return mir_machine_reject(
             "board-matrix-print-schedule", "locations");
 
-    if (!mir_machine_constant_equals(mir.insns[7].dst, 0) ||
+    if (!mir_board_print_signed_word_type(mir.insns[7].type) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 0) ||
         row_store->src1 != mir.insns[7].dst ||
         mir.insns[11].object != row_object ||
+        !mir_board_print_signed_word_type(mir.insns[11].type) ||
         mir.insns[11].src1 != mir.insns[7].dst ||
         mir.insns[11].src2 != mir.insns[52].dst ||
         mir.insns[11].phi_pred1 != mir.insns[0].label ||
@@ -10935,11 +10952,17 @@ static int mir_match_board_matrix_print_schedule(
         !mir_board_print_signed_word_type(
             mir.insns[15].secondary_offset) ||
         mir.insns[16].src1 != mir.insns[15].dst ||
+        !mir_board_print_signed_word_type(mir.insns[18].type) ||
         !mir_machine_constant_equals(mir.insns[18].dst, 0) ||
         column_store->src1 != mir.insns[18].dst ||
         !mir_board_print_same_word_location(
             &mir.insns[24], MIR_LOAD, SC_LOCAL,
             column_object, column_store) ||
+        !mir_board_print_signed_word_type(mir.insns[24].type) ||
+        mir.insns[24].memory_size != 0 ||
+        mir.insns[24].memory_flags != 0 ||
+        mir.insns[24].bit_shift != 0 ||
+        mir.insns[24].bit_mask != 0 ||
         mir.insns[26].src1 != mir.insns[24].dst ||
         mir.insns[26].src2 != size->dst ||
         mir.insns[26].immediate != '<' ||
@@ -10947,21 +10970,45 @@ static int mir_match_board_matrix_print_schedule(
         !mir_board_print_signed_word_type(
             mir.insns[26].secondary_offset) ||
         mir.insns[27].src1 != mir.insns[26].dst ||
+        !mir_board_print_same_word_location(
+            &mir.insns[39], MIR_LOAD, SC_LOCAL,
+            column_object, column_store) ||
+        !mir_board_print_signed_word_type(mir.insns[39].type) ||
+        mir.insns[39].memory_size != 0 ||
+        mir.insns[39].memory_flags != 0 ||
+        mir.insns[39].bit_shift != 0 ||
+        mir.insns[39].bit_mask != 0 ||
+        mir.insns[40].type != 0 ||
         !mir_machine_constant_equals(mir.insns[40].dst, 1) ||
         mir.insns[41].src1 != mir.insns[39].dst ||
         mir.insns[41].src2 != mir.insns[40].dst ||
         mir.insns[41].immediate != '+' ||
+        mir.insns[41].type != 0 ||
+        mir.insns[41].secondary_offset != 0 ||
         !mir_board_print_same_word_location(
             &mir.insns[42], MIR_STORE, SC_LOCAL,
             column_object, column_store) ||
+        !mir_board_print_signed_word_type(mir.insns[42].type) ||
+        mir.insns[42].memory_size != 2 ||
+        mir.insns[42].memory_flags != 0 ||
+        mir.insns[42].bit_shift != 0 ||
+        mir.insns[42].bit_mask != 0 ||
         mir.insns[42].src1 != mir.insns[41].dst ||
+        mir.insns[51].type != 0 ||
         !mir_machine_constant_equals(mir.insns[51].dst, 1) ||
         mir.insns[52].src1 != mir.insns[11].dst ||
         mir.insns[52].src2 != mir.insns[51].dst ||
         mir.insns[52].immediate != '+' ||
+        mir.insns[52].type != 0 ||
+        mir.insns[52].secondary_offset != 0 ||
         !mir_board_print_same_word_location(
             &mir.insns[53], MIR_STORE, SC_LOCAL,
             row_object, row_store) ||
+        !mir_board_print_signed_word_type(mir.insns[53].type) ||
+        mir.insns[53].memory_size != 2 ||
+        mir.insns[53].memory_flags != 0 ||
+        mir.insns[53].bit_shift != 0 ||
+        mir.insns[53].bit_mask != 0 ||
         mir.insns[53].src1 != mir.insns[52].dst)
         return mir_machine_reject(
             "board-matrix-print-schedule", "loops");
@@ -10976,21 +11023,44 @@ static int mir_match_board_matrix_print_schedule(
         board->is_volatile || board->pointee_is_volatile ||
         board->array_len != plan->row_stride ||
         board->elem_size != plan->row_stride ||
+        mir.insns[30].type != (TYPE_BOOL | TYPE_PTR) ||
+        mir.insns[30].memory_size != 0 ||
+        mir.insns[30].memory_flags != 0 ||
+        mir.insns[30].bit_width != 0 ||
+        mir.insns[30].bit_shift != 0 ||
+        mir.insns[30].bit_mask != 0 ||
         mir.insns[32].src1 != mir.insns[30].dst ||
         mir.insns[32].src2 != mir.insns[11].dst ||
+        mir.insns[32].type != (TYPE_BOOL | TYPE_PTR) ||
         mir.insns[32].immediate != plan->row_stride ||
         mir.insns[32].memory_size != plan->row_stride ||
-        mir.insns[34].src1 != mir.insns[32].dst ||
-        mir.insns[34].src2 != mir.insns[33].dst ||
-        mir.insns[34].immediate != 1 ||
-        mir.insns[34].memory_size != 1 ||
+        mir.insns[32].memory_flags != 0 ||
+        mir.insns[32].bit_width != 0 ||
+        mir.insns[32].bit_shift != 0 ||
+        mir.insns[32].bit_mask != 0 ||
         !mir_board_print_same_word_location(
             &mir.insns[33], MIR_LOAD, SC_LOCAL,
             column_object, column_store) ||
+        !mir_board_print_signed_word_type(mir.insns[33].type) ||
+        mir.insns[33].memory_size != 0 ||
+        mir.insns[33].memory_flags != 0 ||
+        mir.insns[33].bit_shift != 0 ||
+        mir.insns[33].bit_mask != 0 ||
+        mir.insns[34].src1 != mir.insns[32].dst ||
+        mir.insns[34].src2 != mir.insns[33].dst ||
+        mir.insns[34].type != (TYPE_BOOL | TYPE_PTR) ||
+        mir.insns[34].immediate != 1 ||
+        mir.insns[34].memory_size != 1 ||
+        mir.insns[34].memory_flags != 0 ||
+        mir.insns[34].bit_width != 0 ||
+        mir.insns[34].bit_shift != 0 ||
+        mir.insns[34].bit_mask != 0 ||
         mir.insns[35].src1 != mir.insns[34].dst ||
         mir.insns[35].memory_size != 1 ||
         mir.insns[35].bit_width != 0 ||
-        (mir.insns[35].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[35].bit_shift != 0 ||
+        mir.insns[35].bit_mask != 0 ||
+        mir.insns[35].memory_flags != 0 ||
         !mir_board_print_bool_type(mir.insns[35].type))
         return mir_machine_reject(
             "board-matrix-print-schedule", "board");
@@ -11010,6 +11080,63 @@ static int mir_match_board_matrix_print_schedule(
         (newline_call->memory_flags & MIR_CALL_FLAG_VARIADIC) == 0 ||
         (final_newline_call->memory_flags &
          MIR_CALL_FLAG_VARIADIC) == 0 ||
+        mir.insns[28].memory_size != 0 ||
+        mir.insns[28].memory_flags != 0 ||
+        mir.insns[28].bit_width != 0 ||
+        mir.insns[28].bit_shift != 0 ||
+        mir.insns[28].bit_mask != 0 ||
+        mir.insns[29].type != (TYPE_CHAR | TYPE_PTR) ||
+        mir.insns[29].memory_size != 0 ||
+        mir.insns[29].memory_flags != 0 ||
+        mir.insns[29].bit_width != 0 ||
+        mir.insns[29].bit_shift != 0 ||
+        mir.insns[29].bit_mask != 0 ||
+        !mir_board_print_bool_type(mir.insns[36].type) ||
+        mir.insns[36].memory_size != 0 ||
+        mir.insns[36].memory_flags != 0 ||
+        mir.insns[36].bit_width != 0 ||
+        mir.insns[36].bit_shift != 0 ||
+        mir.insns[36].bit_mask != 0 ||
+        !mir_board_print_signed_word_type(value_call->type) ||
+        value_call->memory_size != 0 ||
+        value_call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        value_call->bit_width != 0 ||
+        value_call->bit_shift != 0 ||
+        value_call->bit_mask != 0 ||
+        mir.insns[45].memory_size != 0 ||
+        mir.insns[45].memory_flags != 0 ||
+        mir.insns[45].bit_width != 0 ||
+        mir.insns[45].bit_shift != 0 ||
+        mir.insns[45].bit_mask != 0 ||
+        mir.insns[46].type != (TYPE_CHAR | TYPE_PTR) ||
+        mir.insns[46].memory_size != 0 ||
+        mir.insns[46].memory_flags != 0 ||
+        mir.insns[46].bit_width != 0 ||
+        mir.insns[46].bit_shift != 0 ||
+        mir.insns[46].bit_mask != 0 ||
+        !mir_board_print_signed_word_type(newline_call->type) ||
+        newline_call->memory_size != 0 ||
+        newline_call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        newline_call->bit_width != 0 ||
+        newline_call->bit_shift != 0 ||
+        newline_call->bit_mask != 0 ||
+        mir.insns[56].memory_size != 0 ||
+        mir.insns[56].memory_flags != 0 ||
+        mir.insns[56].bit_width != 0 ||
+        mir.insns[56].bit_shift != 0 ||
+        mir.insns[56].bit_mask != 0 ||
+        mir.insns[57].type != (TYPE_CHAR | TYPE_PTR) ||
+        mir.insns[57].memory_size != 0 ||
+        mir.insns[57].memory_flags != 0 ||
+        mir.insns[57].bit_width != 0 ||
+        mir.insns[57].bit_shift != 0 ||
+        mir.insns[57].bit_mask != 0 ||
+        !mir_board_print_signed_word_type(final_newline_call->type) ||
+        final_newline_call->memory_size != 0 ||
+        final_newline_call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        final_newline_call->bit_width != 0 ||
+        final_newline_call->bit_shift != 0 ||
+        final_newline_call->bit_mask != 0 ||
         !mir_board_print_call_arguments(
             value_call, 2, value_arguments) ||
         value_arguments[0] != mir.insns[28].dst ||
