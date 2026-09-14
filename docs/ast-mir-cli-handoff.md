@@ -130,9 +130,14 @@ isolated background workers and consolidated integration gates:
   for all maintained proof layers. It includes canonical and independent
   builds, script/static audits, normal and sanitized host tests, debugger-host
   tests, isolated compiler mutants, both strict release modes, the extended MIR
-  census, and the instrumented coverage workflow. `-List` prints its ordered
-  gates without executing them. Independent preparation gates run concurrently,
-  the stack/no-stack release gates split the CPU budget, and mutation/coverage
+  census, and the instrumented coverage workflow. The concurrent preparation
+  gates also include the standalone `test-mir-fuzz-source.ps1` generator proof.
+  `-List` prints its ordered gates without executing them, `-All` is an
+  explicit no-op alias for "run everything", and `-RequireComplete` forwards
+  `DCC_COVERAGE_REQUIRE_COMPLETE=1` into the final coverage gate. Successful
+  runs also emit `<output>/receipt.json` with the effective parameters and
+  per-phase timestamps. Independent preparation gates run concurrently, the
+  stack/no-stack release gates split the CPU budget, and mutation/coverage
   phases retain their existing bounded schedulers.
 - GitHub CI intentionally runs only the standard cross-platform
   `runall.ps1 -Mode full` regression gate. Developers run the aggregate proof
