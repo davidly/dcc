@@ -821,6 +821,27 @@ false acceptance was found. The standalone audit and all 136 Python script
 tests pass. This remains a test-only increment; regenerate the immutable
 aggregate ledger before claiming new overall branch totals.
 
+Wave 90 closes the remaining focused
+`mir_match_call_safe_member_sum_schedule` proof gaps without changing
+production code. The existing Wave 17 clobber manifest already covered the
+exact baseline, local and aliasing callees, volatile and CFG near matches, and
+13 broad field mutations. New `call-safe-member-sum-wave90-audit.py` adds 32
+stack/no-stack and peep/nopeep runtime controls, retaining exact selection for
+baseline, local-callee, and aliasing-callee forms while proving named spilled
+fallback for variadic, different-callee, padded-record, and volatile-loop-state
+near matches. The audit rejects 47/47 new MIR mutations covering word types
+and widths, parameter and local identities, initializers, PHIs, loop condition
+dataflow, member layout and loads, direct call structure, every staged call
+sum, raw-member accumulation, increment, and final store flow. Forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output independently confirms every
+generic fallback, with zero meaningful survivors. The clean selected hash
+remains `99a108e6` and assembly SHA-256 is
+`865bd210a681c96c6ee1d767a513ab0ca24e169818f8d86e378a3de9c8be0534`.
+Current code already rejected every new near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

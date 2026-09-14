@@ -1141,6 +1141,27 @@ locally verified execution inventory.
   `6c82b5625ae46dd0fef759670274f489aa0656b8b9a0ffc77e17b1f921c1e47b`.
   The standalone audit and all 136 Python script tests pass. The broader
   coverage objective remains incomplete.
+- Wave 90 closes the remaining focused
+  `mir_match_call_safe_member_sum_schedule` proof gaps without changing
+  production code. The existing Wave 17 clobber manifest already covered the
+  exact baseline, local and aliasing callees, volatile and CFG near matches,
+  and 13 broad field mutations. The dedicated
+  `call-safe-member-sum-wave90-audit.py` campaign extends that evidence with
+  32 stack/no-stack and peep/nopeep runtime controls, retaining exact
+  selection for baseline, local-callee, and aliasing-callee forms while
+  proving named spilled fallback for variadic, different-callee, padded-record,
+  and volatile-loop-state near matches. The campaign rejects 47/47 new MIR
+  mutations covering word types and widths, parameter and local identities,
+  initializers, PHIs, loop condition dataflow, member layout and loads, direct
+  call structure, every staged call sum, raw-member accumulation, increment,
+  and final store flow. Each rejection is independently reproduced through
+  forced `DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output, with zero
+  meaningful survivors. Current code already rejected every new near match and
+  mutation, so no genuine false acceptance was found. The clean selected hash
+  remains `99a108e6` and assembly SHA-256 is
+  `865bd210a681c96c6ee1d767a513ab0ca24e169818f8d86e378a3de9c8be0534`.
+  The standalone audit and all 136 Python script tests pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

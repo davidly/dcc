@@ -3,11 +3,19 @@
 
 struct CallWave17Record {
     int first;
+#if defined(CALLW17_PADDED_RECORD)
+    char padding;
+#endif
     int second;
     int third;
 };
 
-#if defined(CALLW17_LOCAL_CALLEE)
+#if defined(CALLW17_VARIADIC_CALLEE)
+static int callw17_apply(int value, ...)
+{
+    return value < 0 ? -value : value;
+}
+#elif defined(CALLW17_LOCAL_CALLEE)
 static int callw17_apply(int value)
 {
     return value < 0 ? -value : value;
@@ -31,6 +39,13 @@ static int callw17_apply(int value)
 #define callw17_apply abs
 #endif
 
+#if defined(CALLW17_SECOND_CALLEE)
+static int callw17_apply_second(int value)
+{
+    return value < 0 ? -value : value;
+}
+#endif
+
 #if defined(CALLW17_VOLATILE_RECORD)
 #define CALLW17_RECORD_QUAL const volatile
 #else
@@ -40,8 +55,16 @@ static int callw17_apply(int value)
 int callw17_member_sum(
     CALLW17_RECORD_QUAL struct CallWave17Record *record, int count)
 {
+#if defined(CALLW17_VOLATILE_INDEX)
+    volatile int index;
+#else
     int index;
+#endif
+#if defined(CALLW17_VOLATILE_TOTAL)
+    volatile int total = 0;
+#else
     int total = 0;
+#endif
 
     for (index = 0; index < count; ++index) {
 #if defined(CALLW17_BRANCH_BYPASS)
@@ -49,7 +72,11 @@ int callw17_member_sum(
             continue;
 #endif
         total += callw17_apply(record->first);
+#if defined(CALLW17_SECOND_CALLEE)
+        total += callw17_apply_second(record->second);
+#else
         total += callw17_apply(record->second);
+#endif
         total += callw17_apply(record->third);
         total += record->first + record->second + record->third;
     }
