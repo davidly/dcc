@@ -150,6 +150,9 @@ CAMPAIGNS = (
     Campaign("aggregate-field-sum-schedule",
              "aggregate-field-sum-wave170-audit.py",
              output_dir="aggregate-field-sum-wave170-audit", max_jobs=2),
+    Campaign("bcd-byte-math-schedule",
+             "bcd-byte-math-wave120-audit.py",
+             output_dir="bcd-byte-math-wave120-audit", max_jobs=2),
 )
 
 

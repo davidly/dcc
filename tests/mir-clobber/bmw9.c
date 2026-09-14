@@ -38,7 +38,12 @@ static void op_bcd_math(uint8_t math, uint8_t rhs)
 static void op_bcd_math(math, rhs) uint8_t math; uint8_t rhs;
 #endif
 {
-    uint8_t alo, ahi, rlo, rhi, ad, rd, result;
+    uint8_t alo, ahi, rlo, rhi, ad, rd;
+#ifdef BMW9_BCD_VOLATILE_RESULT
+    volatile uint8_t result;
+#else
+    uint8_t result;
+#endif
 
     alo = cpu.a & 0xf;
     ahi = cpu.a >> 4;

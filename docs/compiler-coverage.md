@@ -946,6 +946,30 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 120 closes the historical `mir_match_bcd_byte_math_schedule` proof gap
+and fixes a genuine exact-schedule false-acceptance class. The old
+240-instruction matcher checked the opcode/CFG outline, byte parameters, three
+state members, and selected decimal constants, but 26/29 representative
+mutations of unproved types, operand definitions, operators, local identities,
+PHIs, and memory widths still retained the hard-coded emitter. The matcher now
+proves every instruction type, 152 operand relationships, all 66 arithmetic
+and conversion operators, all 32 constants, 36 memory accesses, 33 distinct
+labels, six PHI predecessor pairs, and all nine distinct parameter/local
+locations while retaining the existing source-independent state-member
+binding.
+
+The dedicated `bcd-byte-math-wave120-audit.py` campaign extends the existing
+`bmw9.c` 2,048-case independent arithmetic oracle. It runs eight
+stack/no-stack and peep/nopeep runtime controls, proves named
+`spilled-boolean-phi-branch` fallback for a volatile-result source near match,
+and rejects 29/29 targeted MIR mutations with forced-candidate output equality
+and zero meaningful survivors. The exact selected hash remains `14ace686` and
+assembly SHA-256 remains
+`4c1cc708a5bba78f085bd74af9e9ac13293e3d22b6e00587a2666a8cc202cafb`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. This fixes production matching but does not replace the
+immutable aggregate coverage ledger or complete the broader objective.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

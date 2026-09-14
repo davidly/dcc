@@ -1269,6 +1269,29 @@ locally verified execution inventory.
   `3e00c6e0a6c77e7df08684782db10084f71c228e2b1ec29cff820914bd86d7e3`.
   The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 120 closes the historical `mir_match_bcd_byte_math_schedule` proof gap
+  and fixes a genuine exact-schedule false-acceptance class. The prior
+  240-instruction matcher proved the opcode sequence, 33-block CFG, parameter
+  widths and offsets, three nonvolatile state members, and selected decimal
+  constants, but did not prove most result types, operand definitions,
+  arithmetic operators, PHI inputs and predecessors, local identities, or
+  memory widths. Before the fix, 26/29 representative mutations in those
+  fields retained the unchanged hard-coded BCD emitter. The matcher now proves
+  every instruction type, 152 operand-to-definition relationships, all 66
+  unary/binary operators, all 32 constants, 36 memory accesses, 33 distinct
+  labels, six PHI predecessor pairs, and the nine distinct parameter/local
+  locations in addition to its existing state binding.
+  `bcd-byte-math-wave120-audit.py` extends the existing `bmw9.c` independent
+  2,048-case arithmetic oracle, runs eight stack/no-stack and peep/nopeep
+  runtime controls, and proves named
+  `spilled-boolean-phi-branch` fallback for a volatile-result near match and
+  29/29 targeted MIR mutations. Forced
+  `DCC_MIR_SELECT_CANDIDATE=spilled-boolean-phi-branch` output independently
+  confirms every fallback with zero meaningful survivors. The clean selected
+  hash remains `14ace686` and assembly SHA-256 is
+  `4c1cc708a5bba78f085bd74af9e9ac13293e3d22b6e00587a2666a8cc202cafb`.
+  The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
