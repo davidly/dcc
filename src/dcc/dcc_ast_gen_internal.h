@@ -42,9 +42,6 @@ int is_float_arith_op(int op);
 int is_supported_binary_op(int op);
 int ast_is_plain_int_type(int t);
 int ast_ident_is_const(const char *name);
-int ast_field_array_index_stride(int base_size, int dim_count,
-                                        const int *dims, int index_count);
-int ast_mul_const_value_ok(long v);
 int ast_value_is_plain_int(const struct AstNode *n);
 int ast_node_is_const(const struct AstNode *n);
 int ast_index_composite_elem_type(const struct AstNode *n, int *out_elem);
@@ -105,10 +102,8 @@ int ast_member_lvalue_type(const struct AstNode *n, int *out_type);
 struct FieldDef *ast_unique_field_by_name(const char *name);
 int ast_deref_plain_int_read(const struct AstNode *n);
 int ast_va_arg_deref_type(const struct AstNode *n, int *out_type);
-void gen_va_arg_deref_ast(const struct AstNode *n, int val_type);
 int ast_long_va_arg_self_assign_supported(const struct AstNode *n,
                                                  const struct AstNode **out_va);
-void gen_long_va_arg_self_assign_ast(const struct AstNode *n);
 int ast_deref_pointer_word_read(const struct AstNode *n);
 int ast_deref_long_read(const struct AstNode *n);
 int ast_deref_float_read(const struct AstNode *n);
@@ -121,17 +116,6 @@ int ast_numeric_value_supported(const struct AstNode *n);
 int ast_cond_numeric_supported(const struct AstNode *n);
 int ast_cond_result_is_float(const struct AstNode *n);
 int ast_cond_result_is_long(const struct AstNode *n);
-int ast_cond_is_abs_idiom(const struct AstNode *n, const struct AstNode **out_x);
-void ast_gen_abs_idiom_value(const struct AstNode *x);
-int ast_is_byte_eq_cond(const struct AstNode *n, struct Sym **out_a,
-                               struct Sym **out_b, long *out_const);
-void ast_gen_byte_eq_branch(const struct AstNode *n, int label,
-                                   int branch_when_true);
-int ast_is_global_char_index_eq_cond(const struct AstNode *n, struct Sym **out_arr,
-                                             const struct AstNode **out_idx,
-                                             struct Sym **out_other, long *out_const);
-void ast_gen_global_char_index_eq_branch(const struct AstNode *n, int label,
-                                                 int branch_when_true);
 int ast_void_expr_supported(const struct AstNode *n);
 int ast_cond_void_supported(const struct AstNode *n);
 int ast_index_cmp_cond_supported(const struct AstNode *n);
@@ -149,10 +133,6 @@ int ast_struct_return_call_assign_supported(int lhs_type,
 int ast_struct_deref_copy_assign_supported(const struct AstNode *n);
 int ast_struct_member_copy_assign_supported(const struct AstNode *n);
 int ast_struct_chain_copy_assign_supported(const struct AstNode *n);
-const struct AstNode *ast_zero_arg_inline_body(const struct AstNode *n);
-int ast_is_byte_addr_lvalue(const struct AstNode *n, int *out_type);
-int ast_is_byte_addr_copy_assign(const struct AstNode *n);
-void gen_byte_addr_copy_assign_ast(const struct AstNode *n);
 int ast_struct_addr_expr_supported(const struct AstNode *n, int *out_type);
 int ast_struct_copy_assign_supported(const struct AstNode *n);
 int ast_is_const_zero_condition(const struct AstNode *n);
@@ -162,9 +142,6 @@ void ast_support_cache_begin(void);
 int ast_gen_supported(const struct AstNode *n);
 int ast_call_arg_word_supported(const struct AstNode *arg);
 int ast_call_struct_arg_supported(int want_type, const struct AstNode *arg);
-void gen_call_struct_arg_ast(const struct AstNode *arg, int want_type);
-void gen_struct_return_call_arg_ast(const struct AstNode *call,
-                                           int want_type);
 int ast_value_is_long_word(const struct AstNode *arg);
 int ast_long_word_type(const struct AstNode *arg, int *out_type);
 int ast_call_arg_supported(struct Sym *fn_sym, int arg_index,
@@ -181,10 +158,8 @@ int ast_pointer_assign_rhs_supported(const struct AstNode *n);
 int ast_unary_int_const_fold(const struct AstNode *n, long *out);
 int ast_int_const_cast_fold(const struct AstNode *n, long *out);
 int ast_unary_long_const_fold(const struct AstNode *n, long *out);
-int ast_unary_float_const_fold(const struct AstNode *n, unsigned long *out);
 int ast_const_scalar_fold(const struct AstNode *n, long *out);
 long ast_const_apply_int_cast(long v, int type);
-int ast_const_fold_strict(const struct AstNode *n, long *out);
 int ast_const_condition_fold(const struct AstNode *n, long *out);
 int ast_global_byte_array_const_store(const struct AstNode *n,
                                              struct Sym **out_arr,
@@ -198,47 +173,10 @@ int ast_global_byte_array_fast_store(const struct AstNode *n,
                                             struct Sym **out_rhs_sym,
                                             long *out_rhs_const,
                                             int *out_rhs_kind);
-void gen_int_lit(const struct AstNode *n);
-void gen_cast_ast(const struct AstNode *n);
-void gen_str_lit(const struct AstNode *n);
-void gen_ident(const struct AstNode *n);
-void gen_unary_ast(const struct AstNode *n);
-void gen_pointer_cmp_operand_ast(const struct AstNode *n);
-void gen_pointer_cmp_ast(const struct AstNode *n);
-void gen_pointer_diff_ast(const struct AstNode *n);
-void gen_long_cmp_ast(const struct AstNode *n);
-void gen_long_arith_ast(const struct AstNode *n);
-void gen_binop32_promote_16lhs_ast(int op, int lhs_type, int common_type);
-void gen_binary_ast(const struct AstNode *n);
-void gen_shift_ast(const struct AstNode *n);
-void gen_index_subscript_expr_ast(const struct AstNode *n);
-void gen_assign_ast(const struct AstNode *n);
-void gen_index_addr_ast(const struct AstNode *n, int *out_val_type);
-void gen_index_ast(const struct AstNode *n);
-void gen_call_star_indirect_ast(const struct AstNode *n);
-void gen_call_ast(const struct AstNode *n);
-void gen_struct_return_call_assign_ast(const struct AstNode *lhs,
-                                              const struct AstNode *rhs);
-void gen_struct_addr_expr_ast(const struct AstNode *n, int *out_type);
-void gen_struct_copy_assign_ast(const struct AstNode *n);
-void gen_struct_chain_copy_assign_ast(const struct AstNode *n);
-void gen_struct_deref_copy_assign_ast(const struct AstNode *n);
-void gen_struct_member_copy_assign_ast(const struct AstNode *n);
-void gen_member_addr_ast(const struct AstNode *n, int *out_val_type);
-void gen_member_ast(const struct AstNode *n);
 int ast_member_field_value_type(const struct AstNode *n);
-void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
-                                 int *out_no_deref);
-void gen_deref_addr_ast(const struct AstNode *n, int *out_val_type);
-void gen_logical_ast(const struct AstNode *n);
-void gen_cond_ast(const struct AstNode *n);
-void gen_postfix_ast(const struct AstNode *n);
-void ast_gen_expr(const struct AstNode *n);
 int ast_return_stmt_supported(const struct AstNode *n);
 int ast_cmp_operand_ok(const struct AstNode *e);
-int ast_operand_is_ptr_ident(const struct AstNode *e);
 int ast_is_simple_cmp_cond(const struct AstNode *n);
-int ast_is_general_const_cmp_cond(const struct AstNode *n);
 int ast_const_cmp_extract(const struct AstNode *n, struct Sym **sp,
                                  int *opp, long *cp);
 int ast_is_const_cmp_cond(const struct AstNode *n);
@@ -247,50 +185,21 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op);
 int ast_is_byte_cmp_cond(const struct AstNode *n);
 int ast_is_direct_byte_bitand_cond(const struct AstNode *n);
 int ast_is_direct_wide_bitand_cond(const struct AstNode *n);
-int ast_is_range_check_cond(const struct AstNode *n, const struct AstNode **out_x,
-                                   long *out_lo, long *out_hi);
 int ast_is_direct_long_const_eq_cond(const struct AstNode *n);
 int ast_global_char_index_cond(const struct AstNode *n, struct Sym **out_sym);
-void ast_gen_global_char_index_branch(const struct AstNode *n, int label,
-                                             int branch_when_true);
 int ast_is_float_cmp_cond(const struct AstNode *n);
 int ast_cond_generic(const struct AstNode *n);
 int ast_is_local_self_add_stmt(const struct AstNode *e);
-void ast_emit_local_self_add_stmt(const struct AstNode *e);
 struct Sym *ast_deadincdec_sym_direct(const struct AstNode *e);
 int ast_deadincdec_member_ok(const struct AstNode *e);
 int ast_incdec_addr_type_ok(int t);
 int ast_index_lvalue_elem_type(const struct AstNode *n, int *out_type);
 int ast_deadincdec_addr_lvalue_type(const struct AstNode *e, int *out_type);
-void gen_deadincdec_addr_lvalue_ast(const struct AstNode *e, int *out_type);
 int ast_dead_expr_supported(const struct AstNode *e);
-void ast_gen_dead_expr(const struct AstNode *n);
 int ast_for_init_expr_supported(const struct AstNode *e);
 int ast_expr_stmt_supported(const struct AstNode *n);
 int ast_stmt_supported(const struct AstNode *n);
 int ast_for_decl_storage_supported(const struct AstNode *n);
-void ast_gen_cmp_branch(const struct AstNode *n, int label,
-                               int branch_when_true);
-void ast_gen_const_cmp_branch(const struct AstNode *n, int label,
-                                     int branch_when_true);
-void ast_gen_byte_cmp_branch(const struct AstNode *n, int label,
-                                    int branch_when_true);
-void ast_gen_direct_byte_bitand_branch(const struct AstNode *n, int label,
-                                             int branch_when_true);
-void ast_gen_direct_wide_bitand_branch(const struct AstNode *n, int label,
-                                              int branch_when_true);
-void ast_gen_range_check_branch(const struct AstNode *n, int label,
-                                       int branch_when_true);
-void ast_gen_direct_long_const_eq_branch(const struct AstNode *n, int label,
-                                                int branch_when_true);
-void ast_gen_float_cmp_branch(const struct AstNode *n, int label,
-                                     int branch_when_true);
-void ast_gen_long_cmp_branch(const struct AstNode *n, int label,
-                                    int branch_when_true);
-void ast_gen_cond_branch(const struct AstNode *n, int label,
-                                int branch_when_true);
-int ast_switch_find_case(int value, int *vals, int ncase);
-int ast_switch_table_ok(int *case_vals, int ncase, int *minp, int *maxp);
 int ast_process_statement(void);
 
 #endif /* DCC_AST_GEN_INTERNAL_H */

@@ -1,8 +1,104 @@
 # AST/MIR Correctness: Copilot CLI Handoff
 
-Snapshot: 2026-09-13. This handoff requires no prior chat history, VS Code
+Snapshot: 2026-09-14. This handoff requires no prior chat history, VS Code
 session, local memory, or existing build artifacts. GitHub and the current
 checkout are authoritative if the snapshot becomes stale.
+
+## Current Continuation
+
+PR #194 was merged into main as
+`d49e3d7f50abc0432b25114719cd3c0252c546d6`. Its merge message records the
+compiler fixes, proof controls, infrastructure changes, and remaining work.
+The merge tree is identical to validated head
+`5e32553b2d7f6cf5efe4833deb1ae02d860b9bf5`.
+
+Continuation is on `test/ast-mir-proof-next`. The user now requires physical
+removal of all legacy codegen emitters, not merely their exclusion from
+coverage. Preserve active AST support and metadata helpers in mixed files,
+all production generated-MIR emitters, and runtime/data/debug emission.
+The initial deletion inventory is 115 classified legacy functions alongside
+178 retained active functions; inspect their external callers and exclusive
+dependencies rather than deleting mixed files wholesale.
+
+After removal, run strict `runall.ps1 -Mode full -Extended` in stack and
+no-stack modes first. Then run the complete aggregate correctness proof suite
+and any maintained standalone proof missing from it on the same cleaned tree.
+Both gates must pass before runner redesign or further proof implementation.
+Fix failures rather than dropping controls or reusing pre-removal evidence.
+
+The latest sealed pre-removal collection is
+`build/mir-proof-suite-20260914-005110-3133574/compiler-coverage`, at the
+validated head above. It contains 397 hashed raw profiles and 9,698 unique
+clobber executions. Its scoped totals are 4,617/4,617 functions,
+190,992/202,799 lines, 104,410/155,968 native branch outcomes, and
+173,590/183,486 regions; 51,300 raw branch records remain unreviewed.
+`inputs.json` SHA-256 is
+`81da76ece50728aadadadaef399d51c6a18319b659a34380fe3e18c87d4fc6dd`.
+Keep this evidence as the pre-removal baseline and collect fresh profiles after
+cleanup. Source deletion and changes in denominators are not new test coverage.
+
+**Removal completed.** All 115 manifest-classified legacy functions across
+`dcc_ast_gen.c` (7), `dcc_ast_gen_cond.c` (27), `dcc_ast_gen_expr.c` (73), and
+`dcc_ast_gen_support.c` (8) were deleted, along with their exclusive local
+state and forward declarations. Two follow-on fixes were required and are
+recorded here for the next reader:
+
+- `dcc_decl.c`'s bitfield-initializer parser still called the now-removed
+  `ast_gen_expr()` inside a dead `!mir_is_active()` fallback branch. It now
+  calls `mir_capture_bitfield_init_expr()` unconditionally, matching every
+  other initializer path in that file. The now-orphaned
+  `emit_store_bitfield_from_hl()` helper (`dcc_expr.c`/`dcc.h`) was removed too.
+- A header-cleanup script transiently deleted the unrelated declaration of
+  `ast_stmt_supported()` from `dcc_ast.h` as collateral damage (a trailing
+  comment after a semicolon defeated the "end of declaration" heuristic for
+  the neighboring `ast_gen_expr()` removal). Restored it and refreshed the
+  stale "AST codegen is the compiler's only codegen path" comment above it.
+- `scripts/ast-function-coverage.json` needed its 115 `"legacy"` entries and
+  7 `guarded_edges` cleared; the manifest's static validator otherwise reports
+  them as stale (classified but no longer present in source). All 178
+  production functions remain classified and unchanged.
+
+`scripts/build-dcc.ps1` does **not** track header dependencies for incremental
+compilation: editing a header without touching dependent `.c` files can leave
+a stale `.o` silently linked. A full `rm -rf build/dcc build/dccpeep
+build/dccrtlstrip build/dccmake build/m80c build/l80c` before rebuilding is
+required after any header-only change during cleanup work like this.
+
+Both mandatory user-ordered gates passed on a genuinely clean rebuild:
+strict `runall.ps1 -Mode full -Extended` in stack and no-stack modes (482
+passed, 24 documented skips, zero failures, zero performance regressions
+each), and the complete `run-mir-proof-suite.ps1` 11-phase suite (canonical
+and independent builds, 134 script tests, normal and ASan/UBSan host suites
+5/5 each, debugger-host tests, one passing baseline plus 24/24 killed
+compiler mutants, both strict release gates, all four 3,039-function debug
+censuses, and a sealed coverage collection with 9,698 unique clobber leaves).
+Parent and stack/no-stack censuses before and after removal are byte-identical
+across all 3,039 functions: this was a pure dead-code deletion.
+
+The fresh post-removal coverage checkpoint is
+`build/legacy-removal-proof-suite/compiler-coverage`; its `inputs.json`
+SHA-256 is `78c9ddac16468a1d53b065129d9e88e58e248e538e0447fd9d023f5f62f328ab`.
+Its scoped totals are 4,617/4,617 functions, 190,968/202,741 lines (94.19%),
+104,401/155,940 native branch outcomes (66.95%), and 173,573/183,450 regions
+(94.62%); 51,281 raw branch records remain unreviewed. Relative to the
+pre-removal collection, the function-scoped denominator shrank by 58 lines,
+28 branch outcomes, and 36 regions, entirely from deleting the now-unreachable
+`!mir_is_active()` fallback branches inside five still-active production
+functions (`ast_emit_init_expr`, `ast_emit_discarded_expr`,
+`ast_emit_struct_init_expr_assign`, `prepare_inline_arg_temps`,
+`prepare_inline_local_temp`). This is a justified denominator reduction from
+deleting genuinely dead code, not a new executed-coverage claim.
+
+This removal work is committed and pushed without waiting for GitHub Actions,
+per the user's local-validation policy. Continue with runner-inventory
+hardening and the ranked correctness waves next; the broad 100%
+correctness-coverage objective remains incomplete.
+
+The sections below retain historical checkpoints. Instructions to leave legacy
+emitters for future removal, wait for GitHub Actions, or continue from an older
+branch are superseded: remove the legacy emitters now, fully validate locally,
+push, and do not wait for Actions. The broad 100% correctness-coverage objective
+remains incomplete.
 
 ## Mission
 

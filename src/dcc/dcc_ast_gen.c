@@ -4,8 +4,8 @@
  *
  * @par Role
  * Resolves scalar, pointer, array, member, dereference, aggregate, comparison,
- * and assignment shapes used by statement gating, MIR lowering, initializer
- * handling, and retained low-level AST helpers.
+ * and assignment shapes used by statement gating, MIR lowering, and
+ * initializer handling.
  *
  * @par Key entry points
  * ast_pointer_expr_type(), ast_member_lvalue_type(),
@@ -152,26 +152,6 @@ int ast_switch_gate_depth;
  * dereference lvalue address. */
 
 /* Forward declaration: emit pointer equality/inequality into HL as 0/1. */
-
-int ast_field_array_index_stride(int base_size, int dim_count,
-                                        const int *dims, int index_count)
-{
-    int stride;
-    int di;
-    stride = base_size;
-    for (di = index_count + 1; di < dim_count; ++di)
-        stride *= dims[di];
-    return stride;
-}
-
-/* True for the emit_mul_hl_const fast-path multipliers (0,1,3,5,10,pow2).
- * Applied only for a non-long multiply whose literal is the RHS. */
-int ast_mul_const_value_ok(long v)
-{
-    long m = v & 0xffffL;
-    return m == 0 || m == 1 || m == 3 || m == 5 || m == 6 || m == 7 ||
-           m == 9 || m == 10 || int_log2_pow2((int)m) >= 0;
-}
 
 /* Conservative: returns 1 only when the node is CERTAIN to evaluate to a plain
  * 16-bit int value.  Anything uncertain returns 0 (not supported here). */
@@ -2009,29 +1989,6 @@ int ast_va_arg_deref_type(const struct AstNode *n, int *out_type)
     return 1;
 }
 
-void gen_va_arg_deref_ast(const struct AstNode *n, int val_type)
-{
-    const struct AstNode *call = n->a->a;
-    struct Sym *ap = find_sym(call->list[0]->sval);
-    int sz = type_size(val_type);
-
-    if (sz < 2)
-        sz = 2;
-    emit_load_sym_addr(ap);          /* HL = &ap */
-    emit("\tpush hl\n");
-    emit_load_from_hl(ap->type);     /* HL = old ap */
-    emit("\tpush hl\n");          /* save old ap as result */
-    emit_add_const_to_hl(sz);        /* HL = new ap */
-    emit("\tex de,hl\n");
-    emit("\tpop bc\n");           /* BC = old ap */
-    emit("\tpop hl\n");           /* HL = &ap */
-    emit_store_de_to_addr_hl(ap->type);
-    emit("\tld h,b\n\tld l,c\n"); /* HL = old ap */
-    emit_load_from_hl(val_type);
-    g_expr.type = val_type;
-    g_expr.long_from16 = 0;
-}
-
 int ast_long_va_arg_self_assign_supported(const struct AstNode *n,
                                                  const struct AstNode **out_va)
 {
@@ -2064,25 +2021,6 @@ int ast_long_va_arg_self_assign_supported(const struct AstNode *n,
     if (out_va != NULL)
         *out_va = va_term;
     return 1;
-}
-
-void gen_long_va_arg_self_assign_ast(const struct AstNode *n)
-{
-    const struct AstNode *va_term;
-    struct Sym *s = find_sym(n->a->sval);
-    int saved_dead;
-
-    ast_long_va_arg_self_assign_supported(n, &va_term);
-    emit_load_sym_value_direct(s);
-    emit("\tpush de\n\tpush hl\n");
-    saved_dead = expr_result_dead;
-    expr_result_dead = 0;
-    gen_va_arg_deref_ast(va_term, s->type);
-    expr_result_dead = saved_dead;
-    gen_binop32_typed('+', s->type);
-    emit_store_hl_to_sym_direct(s);
-    g_expr.type = s->type;
-    g_expr.long_from16 = 0;
 }
 
 int ast_deref_pointer_word_read(const struct AstNode *n)
@@ -2646,99 +2584,6 @@ int ast_struct_member_copy_assign_supported(const struct AstNode *n)
     return rhs != NULL && !rhs->is_const_value && rhs->storage != SC_FUNC &&
            !rhs->is_array && type_is_struct_object(rhs->type) &&
            same_struct_type(lhs_type, rhs->type);
-}
-
-/* A zero-argument call to a "simple" static inline function (one whose body
- * is a single captured return-expression - see record_inline_function_if_simple)
- * substitutes to that expression verbatim: no parameters means no argument
- * substitution or hidden-temp side-effect bookkeeping is needed at all, so
- * the callee's own body can stand in for the call node directly. Returns
- * NULL if `n` isn't such a call. */
-const struct AstNode *ast_zero_arg_inline_body(const struct AstNode *n)
-{
-    struct Sym *fn;
-
-    /* Under -g, keep static inline functions as real out-of-line callables so
-     * breakpoints and stepping resolve to their bodies (same reason
-     * try_gen_inline_call_ast declines when opt_debug is set). Without this the
-     * byte-copy fast paths that look through a zero-arg inline call (see
-     * ast_is_byte_addr_lvalue / ast_is_byte_addr_copy_assign) would still
-     * substitute the body and drop the function from the debug info. */
-    if (opt_debug)
-        return NULL;
-    if (n == NULL || n->kind != AST_CALL || n->a == NULL ||
-        n->a->kind != AST_IDENT || n->list_len != 0)
-        return NULL;
-    fn = find_global(n->a->sval);
-    if (fn == NULL || !fn->is_static || !fn->is_inline ||
-        fn->proto_nargs != 0 || fn->inline_return_expr == NULL)
-        return NULL;
-    return fn->inline_return_expr;
-}
-
-/* Does `n` name an addressable byte lvalue (a struct/union member, an array
- * element, or a pointer dereference) of a plain 1-byte scalar type? Bitfields
- * are already excluded by ast_member_lvalue_type/ast_index_lvalue_elem_type
- * (both decline when the field has bit_width > 0). Pointers and _Bool are
- * excluded explicitly: a byte pointer element doesn't exist (pointers are
- * always 2 bytes), and _Bool's stored representation must stay normalized to
- * exactly 0/1, which this fast path deliberately does not handle.
- *
- * Also looks through a zero-arg static inline call (e.g. `pop()`) to its
- * substituted body, so a `dst = pop();`-shaped byte copy still gets the
- * direct address-to-address fast path instead of falling back to the
- * generic promote-through-a-register assignment path. */
-int ast_is_byte_addr_lvalue(const struct AstNode *n, int *out_type)
-{
-    int t;
-    const struct AstNode *sub;
-
-    if (n == NULL)
-        return 0;
-    if (n->kind == AST_MEMBER) {
-        if (!ast_member_lvalue_type(n, &t))
-            return 0;
-    } else if (n->kind == AST_INDEX) {
-        if (!ast_index_lvalue_elem_type(n, &t))
-            return 0;
-    } else if (n->kind == AST_UNARY && n->op == '*') {
-        if (!ast_deref_lvalue_type(n, &t))
-            return 0;
-    } else {
-        sub = ast_zero_arg_inline_body(n);
-        if (sub == NULL)
-            return 0;
-        return ast_is_byte_addr_lvalue(sub, out_type);
-    }
-    if (type_size(t) != 1 || type_ptr_depth(t) > 0 || type_is_bool(t))
-        return 0;
-    if (out_type)
-        *out_type = t;
-    return 1;
-}
-
-/* Is `n` a plain `dst = src;` where both sides are addressable byte lvalues
- * (ast_is_byte_addr_lvalue) reached through a member/index/deref - i.e. NOT
- * a bare identifier on either side (those already have their own direct
- * fast paths elsewhere) - and the assignment's own value is unused? This is
- * exactly the shape of a hand-written struct-field-by-field copy like
- * `d->from = s->from;` (an int8_t field): the generic non-identifier-lvalue
- * assignment path reads the source byte via the ordinary byte-load path,
- * which sign/zero-extends it to a full 16-bit int, only to truncate it
- * straight back down to one byte on the store - the promotion is pure waste,
- * since nothing else ever observes the widened value. */
-int ast_is_byte_addr_copy_assign(const struct AstNode *n)
-{
-    int lhs_type;
-    int rhs_type;
-
-    if (n == NULL || n->kind != AST_ASSIGN || n->op != '=' || !expr_result_dead)
-        return 0;
-    if (!ast_is_byte_addr_lvalue(n->a, &lhs_type))
-        return 0;
-    if (!ast_is_byte_addr_lvalue(n->b, &rhs_type))
-        return 0;
-    return ast_gen_supported(n->a) && ast_gen_supported(n->b);
 }
 
 int ast_struct_addr_expr_supported(const struct AstNode *n, int *out_type)
