@@ -2899,8 +2899,219 @@ static void verify_deferred_metadata_alias_bounds(void)
     mir_resolve_deferred_metadata();
     ok = ok && !strcmp(mir.insns[1].name, "outer");
     ok = ok && !strcmp(mir.insns[3].name, "outer");
+
+    setup(8, 2, 2);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "outer#b1#0");
+    mir.objects[0].type = TYPE_INT;
+    mir.insns[1].opcode = MIR_LOAD;
+    mir.insns[1].dst = 0;
+    strcpy(mir.insns[1].name, "outer");
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_LOAD;
+    mir.insns[3].dst = 1;
+    strcpy(mir.insns[3].name, "outer");
+    mir.insns[4].opcode = MIR_MEMBER_ADDRESS;
+    strcpy(mir.insns[4].name, "field");
+    strcpy(mir.insns[4].base_name, "outer");
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 1;
+    mir.insns[6].opcode = MIR_LOAD;
+    strcpy(mir.insns[6].name, "outer");
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 7;
+    mir.declaration_scope_labels[0] = 1;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "outer");
+    strcpy(mir.alias_internal_names[0], "outer#b1#0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[1].name, "outer");
+    ok = ok && !strcmp(mir.insns[3].name, "outer#b1#0");
+    ok = ok && mir.insns[3].object == 0;
+    ok = ok && !strcmp(mir.insns[4].name, "field");
+    ok = ok && !strcmp(mir.insns[4].base_name, "outer#b1#0");
+    ok = ok && !strcmp(mir.insns[6].name, "outer");
+
+    setup(7, 2, 2);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "outer#b1#0");
+    mir.objects[0].type = TYPE_INT;
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_LOAD;
+    mir.insns[3].dst = 1;
+    strcpy(mir.insns[3].name, "outer");
+    mir.insns[4].opcode = MIR_LOAD;
+    strcpy(mir.insns[4].name, "outer");
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 6;
+    mir.declaration_scope_labels[0] = 0;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "outer");
+    strcpy(mir.alias_internal_names[0], "outer#b1#0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[3].name, "outer");
+    ok = ok && !strcmp(mir.insns[4].name, "outer");
     if (!ok) {
         fprintf(stderr, "FAIL deferred metadata alias bounds\n");
+        ++failures;
+    }
+}
+
+static void verify_deferred_for_init_alias_window(void)
+{
+    int ok = 1;
+
+    setup(10, 4, 3);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "counter#1#0");
+    mir.objects[0].type = TYPE_INT;
+    mir.insns[1].opcode = MIR_LABEL;
+    mir.insns[1].label = 1;
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_BRANCH_FALSE;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].label = 1;
+    mir.insns[4].opcode = MIR_LOAD;
+    mir.insns[4].dst = 1;
+    strcpy(mir.insns[4].name, "counter");
+    mir.insns[5].opcode = MIR_BRANCH_FALSE;
+    mir.insns[5].src1 = 0;
+    mir.insns[5].label = 2;
+    mir.insns[6].opcode = MIR_LOAD;
+    mir.insns[6].dst = 2;
+    strcpy(mir.insns[6].name, "counter");
+    mir.insns[7].opcode = MIR_LABEL;
+    mir.insns[7].label = 2;
+    mir.insns[8].opcode = MIR_LOAD;
+    mir.insns[8].dst = 3;
+    strcpy(mir.insns[8].name, "counter");
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 9;
+    mir.declaration_scope_labels[0] = -1;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "counter");
+    strcpy(mir.alias_internal_names[0], "counter#1#0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[4].name, "counter#1#0");
+    ok = ok && mir.insns[4].object == 0;
+    ok = ok && !strcmp(mir.insns[6].name, "counter#1#0");
+    ok = ok && mir.insns[6].object == 0;
+    ok = ok && !strcmp(mir.insns[8].name, "counter");
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred for-init alias window\n");
+        ++failures;
+    }
+}
+
+static void verify_deferred_metadata_merge_demotion(void)
+{
+    struct Sym array;
+    int ok = 1;
+
+    setup(4, 3, 1);
+    memset(&array, 0, sizeof(array));
+    strcpy(array.name, "shadow_array");
+    array.type = TYPE_INT;
+    array.storage = SC_LOCAL;
+    array.offset = -4;
+    array.size = 4;
+    array.is_array = 1;
+    array.array_len = 2;
+    array.dim_count = 1;
+    array.dims[0] = 2;
+    array.elem_size = 2;
+    mir_note_declared_symbol(&array);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "live_shadow");
+    mir.objects[0].type = TYPE_LONG;
+    mir.objects[0].storage = SC_LOCAL;
+    mir.objects[0].offset = -8;
+    mir.insns[1].opcode = MIR_OBJECT_MERGE;
+    mir.insns[1].dst = 1;
+    mir.insns[1].type = TYPE_INT;
+    strcpy(mir.insns[1].name, array.name);
+    mir.insns[2].opcode = MIR_OBJECT_MERGE;
+    mir.insns[2].dst = 2;
+    mir.insns[2].type = TYPE_INT;
+    mir.insns[2].object = 0;
+    strcpy(mir.insns[2].name, "live_shadow");
+    mir.insns[3].src1 = 1;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.insns[1].opcode == MIR_ADDRESS;
+    ok = ok && mir.insns[1].type == type_add_ptr(TYPE_INT);
+    ok = ok && mir.insns[1].object == -1;
+    ok = ok && !strcmp(mir.insns[1].name, array.name);
+    ok = ok && mir.insns[2].opcode == MIR_OBJECT_MERGE;
+    ok = ok && mir.insns[2].type == TYPE_LONG;
+    ok = ok && mir.insns[2].object == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred metadata merge demotion\n");
+        ++failures;
+    }
+}
+
+static void verify_deferred_scoped_type_repair(void)
+{
+    struct Sym local;
+    int ok = 1;
+
+    setup(8, 5, 1);
+    memset(&local, 0, sizeof(local));
+    strcpy(local.name, "shadow");
+    local.type = TYPE_LONG;
+    local.storage = SC_LOCAL;
+    local.offset = -4;
+    local.size = 4;
+    mir_note_declared_symbol(&local);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "shadow#b1#0");
+    mir.objects[0].type = TYPE_LONG;
+    mir.objects[0].storage = SC_LOCAL;
+    mir.objects[0].offset = -4;
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_LOAD;
+    mir.insns[3].dst = 1;
+    mir.insns[3].type = TYPE_INT;
+    strcpy(mir.insns[3].name, "shadow");
+    mir.insns[4].opcode = MIR_UNARY;
+    mir.insns[4].dst = 2;
+    mir.insns[4].src1 = 1;
+    mir.insns[4].type = TYPE_INT;
+    mir.insns[4].immediate = '+';
+    mir.insns[5].opcode = MIR_PHI;
+    mir.insns[5].dst = 3;
+    mir.insns[5].src1 = 1;
+    mir.insns[5].src2 = 1;
+    mir.insns[5].type = TYPE_INT;
+    mir.insns[6].opcode = MIR_UNARY;
+    mir.insns[6].dst = 4;
+    mir.insns[6].src1 = 1;
+    mir.insns[6].type = TYPE_INT;
+    mir.insns[6].immediate = '!';
+    mir.insns[7].src1 = 4;
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 7;
+    mir.declaration_scope_labels[0] = -1;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "shadow");
+    strcpy(mir.alias_internal_names[0], "shadow#b1#0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[3].name, "shadow#b1#0");
+    ok = ok && mir.insns[3].object == 0;
+    ok = ok && mir.insns[3].type == TYPE_LONG;
+    ok = ok && mir.insns[4].type == TYPE_LONG;
+    ok = ok && mir.insns[5].type == TYPE_LONG;
+    ok = ok && mir.insns[6].type == TYPE_INT;
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred scoped type repair\n");
         ++failures;
     }
 }
@@ -7482,6 +7693,9 @@ int main(void)
     verify_deferred_binary_conversion();
     verify_deferred_metadata_coordinates();
     verify_deferred_metadata_alias_bounds();
+    verify_deferred_for_init_alias_window();
+    verify_deferred_metadata_merge_demotion();
+    verify_deferred_scoped_type_repair();
     verify_deferred_metadata_call_ordering();
     verify_five_call_arguments();
     verify_spilled_feature_defaults();

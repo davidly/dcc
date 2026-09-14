@@ -319,6 +319,7 @@ int main(int argc, char **argv) {
             "global-field-vn-call-barrier": "killed",
             "deferred-call-transaction": "killed",
             "debug-conversion-gate": "killed",
+            "deferred-merge-demotion": "killed",
             "phi-call-prototype": "killed",
             "conditional-call-prototype": "killed",
             "conditional-call-compatibility": "killed",
@@ -345,6 +346,8 @@ $fieldCacheMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "global-field-vn-cache"
 $fieldCallMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "global-field-vn-call-barrier"
+$deferredMergeMutation = Get-MirCompilerMutations |
+    Where-Object Name -eq "deferred-merge-demotion"
 $homedAggregateMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "homed-aggregate-copy-size"
 $spilledCallMutation = Get-MirCompilerMutations |
@@ -356,6 +359,7 @@ $pairedByteMutation = Get-MirCompilerMutations |
 $hostLog = "FAIL branch value cannot escape join`nMIR verifier failures=1`n"
 $cacheLog = "; MIR CACHE MISMATCH mir_definition function=f value=1 cached=2 uncached=-1`ndcc: fatal: MIR use-cache mismatch`n"
 $fieldCallLog = "FAIL isolated global field unsafe-call barrier`nMIR verifier failures=1`n"
+$deferredMergeLog = "FAIL deferred metadata merge demotion`nMIR verifier failures=1`n"
 $homedAggregateLog = "FAIL homed aggregate copy exact rejection`nMIR verifier failures=1`n"
 $spilledCallLog = "FAIL spilled call ABI exact rejection`nMIR verifier failures=1`n"
 $matcherLog = "FAIL allocation matcher accepted mutated first result`nMIR matcher restoration failures=1`n"
@@ -378,6 +382,10 @@ foreach ($case in @(
     @($fieldCallMutation, $fieldCallLog, 134, $false, "invalid"),
     @($fieldCallMutation, $fieldCallLog.Replace("unsafe-call", "call"), 1, $false, "invalid"),
     @($fieldCallMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
+    @($deferredMergeMutation, $deferredMergeLog, 1, $false, "killed"),
+    @($deferredMergeMutation, $deferredMergeLog, 134, $false, "invalid"),
+    @($deferredMergeMutation, $deferredMergeLog.Replace("merge demotion", "merge"), 1, $false, "invalid"),
+    @($deferredMergeMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
     @($homedAggregateMutation, $homedAggregateLog, 1, $false, "killed"),
     @($homedAggregateMutation, $homedAggregateLog, 134, $false, "invalid"),
     @($homedAggregateMutation, $homedAggregateLog.Replace("aggregate copy", "aggregate"), 1, $false, "invalid"),
