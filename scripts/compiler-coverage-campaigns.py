@@ -192,6 +192,9 @@ CAMPAIGNS = (
     Campaign("global-array-fma-schedule",
              "global-array-fma-wave1800-audit.py",
              output_dir="global-array-fma-wave1800-audit", max_jobs=2),
+    Campaign("wide-hash33-schedule",
+             "wide-hash33-wave1900-audit.py",
+             output_dir="wide-hash33-wave1900-audit", max_jobs=2),
 )
 
 

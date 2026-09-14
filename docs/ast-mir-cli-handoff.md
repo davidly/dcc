@@ -1608,6 +1608,28 @@ locally verified execution inventory.
   selected hash is `68dc3c28` and assembly SHA-256 is
   `5bebfa8ada44767c744c777b6113c6c254ae84a3a8fde6f8bde2c26a963e7dfe`.
   The broader coverage objective remains incomplete.
+- Wave 1900 closes the historical `mir_match_wide_hash33` proof gap and fixes
+  severe exact-schedule false acceptance. The old 32-instruction matcher
+  explicitly constrained only 19 instruction positions and left complete
+  opcode, destination, type, CFG-edge, PHI-predecessor, qualifier, memory-flag,
+  bitfield, and metadata coverage unproved. Exhaustive mutation found that it
+  accepted 687 of 746 per-instruction field and storage-identity changes.
+  The matcher now verifies the complete 23-field payload of every instruction,
+  including both CFG successors and PHI predecessors, and explicitly binds all
+  parameter loads and the pointer update to the same parameter location.
+  Source identifier spelling remains irrelevant.
+  New `tests/mir-clobber/whash33.c` isolates the schedule and independently
+  checks five tabulated 32-bit hash results, including high-bit bytes. New
+  `wide-hash33-wave1900-audit.py` builds an isolated diagnostic mutation
+  compiler, runs 20 stack/no-stack and peep/nopeep controls across baseline,
+  renamed-function, renamed-local, volatile, and alternate-CFG forms, and
+  rejects all 746 mutations across every instruction and payload field. Every
+  mutation independently selects forced `spilled-phi-slot` fallback. The clean
+  selected hash is `4fd89752` and assembly SHA-256 is
+  `bf0ced071ba71d9e4ff2a9f109a80ef9d2fa1d1f925e285ceeaad241f0a11ec0`.
+  Zero meaningful survivors remain. The standalone audit, all 136 Python
+  script tests, and both strict 506-app release modes pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

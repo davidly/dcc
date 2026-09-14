@@ -1305,6 +1305,33 @@ fallback. Zero meaningful survivors remain. The clean selected hash is
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
 
+Wave 1900 closes the historical `mir_match_wide_hash33` proof gap and fixes a
+severe exact-schedule false acceptance. The old 32-instruction matcher
+explicitly constrained only 19 instruction positions. It did not prove the
+complete opcode/destination/type stream, CFG successors, PHI predecessors,
+parameter-update identity, pointer qualifiers, memory flags, bitfield state,
+or remaining instruction metadata. Exhaustive mutation showed that 687 of 746
+per-instruction field and storage-identity changes were falsely accepted.
+
+The matcher now fingerprints 23 semantic and structural fields on every
+instruction, including both CFG successors and PHI predecessors, and
+explicitly binds every parameter load and update to the original parameter
+location without depending on source identifier spelling. New
+`tests/mir-clobber/whash33.c` checks five independently tabulated 32-bit
+hashes, including a high-bit-byte input. New
+`wide-hash33-wave1900-audit.py` builds an isolated diagnostic mutation
+compiler, runs 20 stack/no-stack and peep/nopeep runtime controls across five
+source variants, and rejects all 746 mutations over all 32 instructions and
+all 23 fingerprinted fields plus meaningful storage identities. Every
+mutation independently selects forced `spilled-phi-slot` fallback. Zero
+meaningful survivors remain. The clean selected hash is `4fd89752` and
+assembly SHA-256 is
+`bf0ced071ba71d9e4ff2a9f109a80ef9d2fa1d1f925e285ceeaad241f0a11ec0`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
