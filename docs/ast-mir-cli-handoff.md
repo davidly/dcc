@@ -806,6 +806,23 @@ locally verified execution inventory.
   and the final failure-load type. Current code already rejected every new
   near match and mutation, so this increment closes proof gaps rather than
   fixing a false acceptance. All 136 Python script tests pass.
+- Wave 46 closes the next `mir_match_symbol_insert_schedule` proof gaps
+  without changing production code. The earlier symbol-insert campaigns
+  already covered the baseline exact schedule, a broad field-mutation census,
+  and selected limit/copy/field-offset near matches, but they did not keep a
+  focused campaign over exact fallback reasons for return-shape drift, direct
+  error/copy helper signature changes, a non-canonical memset target, or
+  count/name/field-store argument rewires. New `symbol-insert-wave46`
+  MIR-clobber cases add five source near matches plus eight direct
+  selector-mutant cases, for 56 passing target configurations. The dedicated
+  `symbol-insert-wave46-audit.py` script now runs 24 stack/no-stack and
+  peep/nopeep runtime controls and rejects 8/8 targeted MIR mutations
+  covering the error call's string source, memset destination argument,
+  strncpy destination argument, the indexed-record count source, and the
+  kind/scope/size/element-size store value sources. Current code already
+  rejected every new near match and mutation, so this increment closes proof
+  gaps rather than fixing a false acceptance. All 136 Python script tests
+  pass.
 - Wave 46 closes the next spilled generic-fallback proof gaps without
   changing production code. Existing malformed-MIR transaction tests already
   exercised nearby `MIR_LOAD_INDIRECT`, `MIR_CALL`, `MIR_CALL_AGGREGATE`, and

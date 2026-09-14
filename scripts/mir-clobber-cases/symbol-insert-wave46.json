@@ -1,0 +1,255 @@
+[
+  {
+    "Name": "sym46ok",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireExact": true
+  },
+  {
+    "Name": "sym46shape",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_UNSIGNED_RETURN"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym46error",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_INT_DIE"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym46memset",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_MEMSET_ALIAS"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym46copy",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_COPY_WRAPPER_VOID_RETURN"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0",
+      "copy=3 order=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym46cfg",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": ["SYMBOL_INSERT_EXTRA_HELPER_CALL"],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "sym46arg",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "9:src1:8",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "sym46memarg",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "22:src1:8",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "sym46copyarg",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "33:src1:24",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "sym46index",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "44:src2:20",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "sym46kind",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "48:src2:1",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "sym46scope",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "55:src2:2",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "sym46size",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "61:src2:10",
+    "MachineMutationFunction": "sym_add"
+  },
+  {
+    "Name": "sym46esize",
+    "Group": "symbol-insert-wave46",
+    "Sources": ["tests/mir-clobber/syminspf.c"],
+    "Defines": [],
+    "Expected": [
+      "ids=0,0,1,1,2 counts=1,1,2,2,3 layout=27/27,16,17,18,19,21,23,24,26 alloc=1 old=OLD/5/7 new=NEW-SYMBOL-1234/2/3 final=THIRD/255/0 zero=1 failures=0"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "symbol-insert-schedule",
+    "ExactFunction": "sym_add",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "sym_add",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "68:src2:35",
+    "MachineMutationFunction": "sym_add"
+  }
+]

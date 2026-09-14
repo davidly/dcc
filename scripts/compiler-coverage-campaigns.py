@@ -104,6 +104,8 @@ CAMPAIGNS = (
              output_dir="callback-registration-wave27-audit", max_jobs=2),
     Campaign("compound-check", "compound-wave45-audit.py",
              output_dir="compound-wave45-audit", max_jobs=2),
+    Campaign("symbol-insert-schedule", "symbol-insert-wave46-audit.py",
+             output_dir="symbol-insert-wave46-audit", max_jobs=2),
 )
 
 

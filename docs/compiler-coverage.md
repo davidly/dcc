@@ -449,6 +449,24 @@ this increment closes proof gaps rather than fixing a false acceptance. All
 136 Python script tests pass. This remains a test-only increment; regenerate
 the immutable aggregate ledger before claiming new overall branch totals.
 
+Wave 46 closes the next `mir_match_symbol_insert_schedule` proof gaps without
+changing production code. The earlier symbol-insert coverage already proved
+the exact baseline, the wide field-mutation census, and selected symbol-limit
+and field-offset near matches, but it did not keep a focused campaign over
+return-shape drift, direct helper-signature mismatches, a non-canonical
+memset call target, or several still-unproven argument/source identities.
+New `symbol-insert-wave46` MIR-clobber cases add five source near matches and
+eight direct selector-mutant cases, and the full group passes in 56 target
+configurations. A new `symbol-insert-wave46-audit.py` campaign then runs 24
+stack/no-stack and peep/nopeep runtime controls and rejects 8/8 targeted MIR
+mutations that cover the error-call string argument, memset destination
+argument, strncpy destination argument, the indexed-record count source, and
+the kind/scope/size/element-size store sources. Current code already rejected
+every new mutation and near match, so this increment closes proof gaps rather
+than fixing a false acceptance. All 136 Python script tests pass. This
+remains a test-only increment; regenerate the immutable aggregate ledger
+before claiming new overall branch totals.
+
 Wave 46 closes the next spilled generic-fallback proof gaps without changing
 production code. Existing malformed-MIR transaction tests already exercised
 nearby `MIR_LOAD_INDIRECT`, `MIR_CALL`, `MIR_CALL_AGGREGATE`, and
