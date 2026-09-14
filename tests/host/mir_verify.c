@@ -38,6 +38,25 @@ static void clear_liveness(void)
     mir.live_out = NULL;
 }
 
+static void scan_global_write_info_for_source(const char *text)
+{
+    char *saved_src = src;
+    long saved_src_len = src_len;
+    size_t len = strlen(text);
+
+    src = (char *)xmalloc(len + 1);
+    memcpy(src, text, len + 1);
+    src_len = (long)len;
+    g_src_generation++;
+    reset_preproc_scan_state();
+    scan_global_write_info();
+    free(src);
+    src = saved_src;
+    src_len = saved_src_len;
+    g_src_generation++;
+    reset_preproc_scan_state();
+}
+
 static void setup(int count, int values, int labels)
 {
     int instruction;
@@ -1798,6 +1817,8 @@ static void verify_member_metadata_and_address(void)
     struct AstNode member;
     struct FieldDef *field;
     struct Sym *global;
+    struct Sym *unsafe_global;
+    struct Sym *callee;
     struct MirResolvedNamedAddress resolved;
     int sid = add_struct_def("verify_record_type");
     int ok = 1;
@@ -1892,6 +1913,113 @@ static void verify_member_metadata_and_address(void)
         ++failures;
     } else if (!mir_verify_and_dump()) {
         fprintf(stderr, "FAIL isolated global field value numbering\n");
+        ++failures;
+    }
+    clear_liveness();
+
+    callee = add_global("verify_field_barrier_call", TYPE_VOID, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 0;
+    setup(10, 6, 1);
+    mir.next_call_id = 1;
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].type = type_add_ptr(global->type);
+    strcpy(mir.insns[1].name, global->name);
+    mir.insns[2].opcode = MIR_MEMBER_ADDRESS;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    mir.insns[2].immediate = field->offset;
+    strcpy(mir.insns[2].name, field->name);
+    mir.insns[3].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 1;
+    mir.insns[3].memory_size = 2;
+    mir.insns[4].opcode = MIR_CALL;
+    mir.insns[4].dst = -1;
+    mir.insns[4].type = TYPE_VOID;
+    mir.insns[4].secondary_offset = 0;
+    strcpy(mir.insns[4].name, callee->name);
+    mir.insns[5].opcode = MIR_CONST;
+    mir.insns[5].dst = 3;
+    mir.insns[5].immediate = 7;
+    mir.insns[6].opcode = MIR_STORE_INDIRECT;
+    mir.insns[6].src1 = 1;
+    mir.insns[6].src2 = 3;
+    mir.insns[6].memory_size = 2;
+    mir.insns[7].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[7].dst = 4;
+    mir.insns[7].src1 = 1;
+    mir.insns[7].memory_size = 2;
+    mir.insns[8].opcode = MIR_BINARY;
+    mir.insns[8].dst = 5;
+    mir.insns[8].src1 = 2;
+    mir.insns[8].src2 = 4;
+    mir.insns[8].immediate = '+';
+    mir.insns[8].secondary_offset = TYPE_INT;
+    mir.insns[9].src1 = 5;
+    if (!mir_verify_and_dump() ||
+        mir_value_number_global_field_loads() != 0 ||
+        mir_global_field_value_numbering_count() != 0 ||
+        mir.insns[7].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[8].src1 != 2 || mir.insns[8].src2 != 4 ||
+        !mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL isolated global field store barrier\n");
+        ++failures;
+    }
+    clear_liveness();
+
+    unsafe_global = add_global(
+        "verify_record_call_unsafe", make_struct_type(sid), SC_GLOBAL);
+    unsafe_global->is_static = 1;
+    scan_global_write_info_for_source(
+        "int verify_scan_left(void) {\n"
+        "    verify_record_call_unsafe.value = 1;\n"
+        "    return 0;\n"
+        "}\n"
+        "int verify_scan_right(void) {\n"
+        "    verify_record_call_unsafe.value = 2;\n"
+        "    return 0;\n"
+        "}\n");
+    setup(8, 5, 1);
+    mir.next_call_id = 1;
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].type = type_add_ptr(unsafe_global->type);
+    strcpy(mir.insns[1].name, unsafe_global->name);
+    mir.insns[2].opcode = MIR_MEMBER_ADDRESS;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    mir.insns[2].immediate = field->offset;
+    strcpy(mir.insns[2].name, field->name);
+    mir.insns[3].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 1;
+    mir.insns[3].memory_size = 2;
+    mir.insns[4].opcode = MIR_CALL;
+    mir.insns[4].dst = -1;
+    mir.insns[4].type = TYPE_VOID;
+    mir.insns[4].secondary_offset = 0;
+    strcpy(mir.insns[4].name, callee->name);
+    mir.insns[5].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[5].dst = 3;
+    mir.insns[5].src1 = 1;
+    mir.insns[5].memory_size = 2;
+    mir.insns[6].opcode = MIR_BINARY;
+    mir.insns[6].dst = 4;
+    mir.insns[6].src1 = 2;
+    mir.insns[6].src2 = 3;
+    mir.insns[6].immediate = '+';
+    mir.insns[6].secondary_offset = TYPE_INT;
+    mir.insns[7].src1 = 4;
+    if (global_text_field_write_count(unsafe_global->name, field->name) != 2 ||
+        !mir_verify_and_dump() ||
+        mir_value_number_global_field_loads() != 0 ||
+        mir_global_field_value_numbering_count() != 0 ||
+        mir.insns[5].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[6].src1 != 2 || mir.insns[6].src2 != 3 ||
+        !mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL isolated global field unsafe-call barrier\n");
         ++failures;
     }
     clear_liveness();
