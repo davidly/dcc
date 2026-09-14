@@ -1361,6 +1361,30 @@ locally verified execution inventory.
   `1677aef387a62b148a677d09db0f89d3934f701ea45319424f45b1f6d5cff7fb`.
   The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 260 closes the historical `mir_match_indexed_member_write` proof gap
+  and fixes genuine exact-schedule false acceptances. The old matcher proved
+  the single-block opcode counts, destination outline, common state root,
+  positive stride, bounded pointer adjustment, and parameter stack offset,
+  but not the complete parameter/local memory contract, state and element
+  field declarations, pointer/index/arithmetic types, or store value identity.
+  Forty-three of 68 representative mutations retained the exact schedule
+  before the fix. The matcher now binds both state-member accesses to the same
+  typed root and declared fields, proves qualifiers, widths, offsets, stride
+  and arithmetic types, verifies the local address round trip, and matches the
+  destination field and stored parameter exactly.
+  New `tests/mir-clobber/idxmwrit.c` isolates the indexed structure-member
+  store and checks the target, adjacent guards, neighboring elements, and
+  enclosing state. The dedicated `indexed-member-write-wave260-audit.py`
+  campaign runs 68 stack/no-stack and peep/nopeep runtime controls across 17
+  source variants, retains exact selection for baseline, renamed, adjusted,
+  and reversed-add forms, and proves generic fallback for volatile, narrow,
+  wide, bitfield, extra-parameter, CFG, and non-void near matches. It rejects
+  all 68 targeted MIR mutations with independently forced
+  `spilled-store-address` fallback and zero meaningful survivors. The clean
+  selected hash remains `c37f081a` and assembly SHA-256 is
+  `32f652d93d598292d2dbef07f11cc0493d27c3f8be9d68f61fe73c2708a4a9d1`.
+  The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

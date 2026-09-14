@@ -162,6 +162,9 @@ CAMPAIGNS = (
     Campaign("allocator-bridge-schedule",
              "allocator-bridge-wave240-audit.py",
              output_dir="allocator-bridge-wave240-audit", max_jobs=2),
+    Campaign("indexed-member-write-schedule",
+             "indexed-member-write-wave260-audit.py",
+             output_dir="indexed-member-write-wave260-audit", max_jobs=2),
 )
 
 
