@@ -1093,6 +1093,32 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 520 closes the historical `mir_match_modular_product_schedule` proof gap
+and fixes genuine exact-schedule false acceptances. The old matcher proved the
+13-instruction opcode outline, one-block CFG, selected dataflow, 32-bit widths,
+and parameter stack locations, but not unsigned parameter/arithmetic types,
+cast identities, or unused width metadata. Twenty of 33 representative type,
+width, operator, dataflow, and parameter-identity mutations retained the
+hard-coded unsigned `__m1mu` schedule before the fix. A signed-input source
+near match also retained it and returned `2,43,31` instead of `3,89,31`.
+The matcher now requires the exact unsigned-word parameter and unsigned-long
+arithmetic contract, zero-width non-memory metadata, canonical conversions,
+complete multiply/modulo/return flow, and an empty fixed frame.
+
+New `tests/mir-clobber/modprod.c` isolates the fused modular product and checks
+three independently tabulated results, including large operands. New
+`modular-product-wave520-audit.py` runs 36 stack/no-stack and peep/nopeep
+runtime controls across nine source variants, retains exact selection for the
+baseline and renamed function, and proves generic fallback for signed, narrow,
+volatile, alternate-return/arithmetic, extra-CFG, and local-state near matches.
+It rejects all 33 targeted MIR mutations with independently forced
+`spilled-wide-binary-lhs` fallback and zero meaningful survivors. The clean
+selected hash remains `8e867beb` and assembly SHA-256 is
+`329398a141cf6aa1b045f256eb26e2f15b4c0725794d733fc7f2f20adc524d4e`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

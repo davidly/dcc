@@ -1408,6 +1408,27 @@ locally verified execution inventory.
   `6bf3bb37f7281a406177fccf9c8d67cd069a947a730a280ef0a621159cad78f1`.
   The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 520 closes the historical `mir_match_modular_product_schedule` proof gap
+  and fixes genuine exact-schedule false acceptances. The old matcher proved
+  the 13-instruction opcode outline, one-block CFG, selected dataflow, 32-bit
+  widths, and parameter stack locations, but not unsigned parameter/arithmetic
+  types, canonical casts, or unused width metadata. Twenty of 33 representative
+  type, width, operator, dataflow, and parameter-identity mutations retained
+  the hard-coded unsigned `__m1mu` schedule before the fix. A signed-input
+  source near match also selected it and returned `2,43,31` instead of
+  `3,89,31`.
+  New `tests/mir-clobber/modprod.c` isolates the fused modular product and
+  validates three independently tabulated results including large operands.
+  The dedicated `modular-product-wave520-audit.py` campaign runs 36
+  stack/no-stack and peep/nopeep runtime controls across nine source variants,
+  retains exact selection for baseline and renamed functions, proves generic
+  fallback for signed, narrow, volatile, alternate-return/arithmetic,
+  extra-CFG, and local-state near matches, and rejects all 33 targeted MIR
+  mutations with independently forced `spilled-wide-binary-lhs` fallback.
+  The clean selected hash remains `8e867beb` and assembly SHA-256 is
+  `329398a141cf6aa1b045f256eb26e2f15b4c0725794d733fc7f2f20adc524d4e`.
+  The standalone audit, full Python script-test suite, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

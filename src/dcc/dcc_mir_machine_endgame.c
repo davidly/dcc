@@ -11415,42 +11415,88 @@ static void mir_emit_no_stack_wide_binary(
 static int mir_match_modular_product_schedule(
     struct MirModularProductSchedule *plan)
 {
+    const int unsigned_word = TYPE_INT | TYPE_UNSIGNED;
+    const int unsigned_long = TYPE_LONG | TYPE_UNSIGNED;
+
     if (mir.count != 13 ||
         mir_cfg_block_count() != 1 || mir.has_vla ||
-        type_size(mir.return_type) != 4 ||
+        mir.local_bytes != 0 || mir.aggregate_temp_bytes != 0 ||
+        mir.return_type != unsigned_long)
+        return mir_machine_reject(
+            "modular-product-schedule", "preflight");
+    if (
         mir.insns[0].opcode != MIR_LABEL ||
         mir.insns[1].opcode != MIR_PARAM ||
         mir.insns[2].opcode != MIR_PARAM ||
         mir.insns[3].opcode != MIR_PARAM ||
         mir.insns[4].opcode != MIR_NOP ||
         mir.insns[5].opcode != MIR_UNARY ||
-        mir.insns[5].src1 != mir.insns[1].dst ||
-        type_size(mir.insns[5].type) != 4 ||
         mir.insns[6].opcode != MIR_NOP ||
         mir.insns[7].opcode != MIR_UNARY ||
-        mir.insns[7].src1 != mir.insns[2].dst ||
-        type_size(mir.insns[7].type) != 4 ||
         mir.insns[8].opcode != MIR_BINARY ||
-        mir.insns[8].immediate != '*' ||
-        mir.insns[8].src1 != mir.insns[5].dst ||
-        mir.insns[8].src2 != mir.insns[7].dst ||
         mir.insns[9].opcode != MIR_NOP ||
         mir.insns[10].opcode != MIR_UNARY ||
-        mir.insns[10].src1 != mir.insns[3].dst ||
-        type_size(mir.insns[10].type) != 4 ||
         mir.insns[11].opcode != MIR_BINARY ||
-        mir.insns[11].immediate != '%' ||
+        mir.insns[12].opcode != MIR_RETURN)
+        return mir_machine_reject(
+            "modular-product-schedule", "shape");
+    if (
+        mir.insns[1].type != unsigned_word ||
+        mir.insns[2].type != unsigned_word ||
+        mir.insns[3].type != unsigned_word)
+        return mir_machine_reject(
+            "modular-product-schedule", "parameter-types");
+    if (
+        mir.insns[5].type != unsigned_long ||
+        mir.insns[7].type != unsigned_long ||
+        mir.insns[8].type != unsigned_long ||
+        mir.insns[8].secondary_offset != unsigned_long ||
+        mir.insns[10].type != unsigned_long ||
+        mir.insns[11].type != unsigned_long ||
+        mir.insns[11].secondary_offset != unsigned_long)
+        return mir_machine_reject(
+            "modular-product-schedule", "arithmetic-types");
+    if (
+        mir.insns[1].memory_size != 0 ||
+        mir.insns[2].memory_size != 0 ||
+        mir.insns[3].memory_size != 0 ||
+        mir.insns[5].memory_size != 0 ||
+        mir.insns[7].memory_size != 0 ||
+        mir.insns[8].memory_size != 0 ||
+        mir.insns[10].memory_size != 0 ||
+        mir.insns[11].memory_size != 0)
+        return mir_machine_reject(
+            "modular-product-schedule", "widths");
+    if (
+        mir.insns[5].immediate != 0 ||
+        mir.insns[7].immediate != 0 ||
+        mir.insns[8].immediate != '*' ||
+        mir.insns[10].immediate != 0 ||
+        mir.insns[11].immediate != '%')
+        return mir_machine_reject(
+            "modular-product-schedule", "operators");
+    if (
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[7].src1 != mir.insns[2].dst ||
+        mir.insns[8].src1 != mir.insns[5].dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[3].dst ||
         mir.insns[11].src1 != mir.insns[8].dst ||
         mir.insns[11].src2 != mir.insns[10].dst ||
-        mir.insns[12].opcode != MIR_RETURN ||
         mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].memory_size != 0)
+        return mir_machine_reject(
+            "modular-product-schedule", "flow");
+    if (
         !mir_machine_parameter_value_offset(
             mir.insns[1].dst, &plan->left_offset) ||
         !mir_machine_parameter_value_offset(
             mir.insns[2].dst, &plan->right_offset) ||
         !mir_machine_parameter_value_offset(
             mir.insns[3].dst, &plan->modulus_offset))
-        return 0;
+        return mir_machine_reject(
+            "modular-product-schedule", "parameters");
+    mir_machine_accept("modular-product-schedule");
     return 1;
 }
 

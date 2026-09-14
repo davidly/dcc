@@ -168,6 +168,9 @@ CAMPAIGNS = (
     Campaign("wraparound-bool-step",
              "wraparound-bool-step-wave340-audit.py",
              output_dir="wraparound-bool-step-wave340-audit", max_jobs=2),
+    Campaign("modular-product-schedule",
+             "modular-product-wave520-audit.py",
+             output_dir="modular-product-wave520-audit", max_jobs=2),
 )
 
 
