@@ -415,6 +415,22 @@ ASan/UBSan host tests pass 5/5, the full compiler campaign has one passing
 baseline plus 25/25 killed mutants, and all 136 Python script tests pass.
 Commit `31c13e7c` contains the invariant and mutant.
 
+Wave 44 closes the next `mir_try_emit_homed_scalar_cfg` proof gap without
+changing production code. The existing homed transaction tests already built
+nearby malformed `MIR_PARAM`, `MIR_LOAD_INDIRECT`, and `MIR_COPY_AGGREGATE`
+graphs, but they did not prove the exact `mir_homed_reject` reasons that the
+production generic fallback reports. New host controls now capture
+`DCC_MIR_HOMED_REPORT` and require the precise `parameter-object`,
+`parameter-type`, `indirect-load-type`, and `aggregate-copy-size` diagnostics,
+each with preserved output prefixes and repaired same-stream retries that
+match clean controls byte-for-byte. The clean-build mutant
+`homed-aggregate-copy-size` disables only the aggregate size guard and is
+killed by the exact `FAIL homed aggregate copy exact rejection` assertion.
+Normal and ASan/UBSan host tests pass 5/5, the full compiler campaign has one
+passing baseline plus 26/26 killed mutants, and all 136 Python script tests
+pass. This remains a test-only increment; the authoritative aggregate totals
+still await a fresh immutable collection.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

@@ -775,6 +775,20 @@ locally verified execution inventory.
   mutation campaign has one passing baseline plus 25/25 killed mutants, and
   all 136 Python script tests pass. Commit `31c13e7c` contains the invariant
   and mutant.
+- Wave 44 closes the next homed generic-fallback proof gap without changing
+  production code. Existing malformed-MIR transaction tests already exercised
+  nearby `MIR_PARAM`, `MIR_LOAD_INDIRECT`, and `MIR_COPY_AGGREGATE` shapes,
+  but they did not prove the exact `mir_homed_reject` surface. New host
+  controls now capture `DCC_MIR_HOMED_REPORT` and require the precise
+  `parameter-object`, `parameter-type`, `indirect-load-type`, and
+  `aggregate-copy-size` rejections, each with empty-output rollback and a
+  repaired same-stream retry that matches a clean control byte-for-byte. The
+  clean-build mutant `homed-aggregate-copy-size` disables only the aggregate
+  size guard and is killed by the exact
+  `FAIL homed aggregate copy exact rejection` assertion. Normal and
+  ASan/UBSan host tests pass 5/5, the full compiler mutation campaign has one
+  passing baseline plus 26/26 killed mutants, and all 136 Python script tests
+  pass.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

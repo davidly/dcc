@@ -5,6 +5,19 @@
 #include "dcc_ast_gen_internal.h"
 #include "dcc_mir_machine_internal.h"
 #include <limits.h>
+#ifdef _WIN32
+#include <io.h>
+#define mir_verify_dup _dup
+#define mir_verify_dup2 _dup2
+#define mir_verify_close _close
+#define mir_verify_fileno _fileno
+#else
+#include <unistd.h>
+#define mir_verify_dup dup
+#define mir_verify_dup2 dup2
+#define mir_verify_close close
+#define mir_verify_fileno fileno
+#endif
 
 static int failures;
 
@@ -2964,6 +2977,62 @@ static void expect_spilled_candidate_transaction_rejection(
     clear_liveness();
 }
 
+static int try_homed_scalar_cfg_with_report(
+    MirStream *stream,
+    char *report,
+    size_t report_size)
+{
+    FILE *capture;
+    int saved_stderr;
+    int result;
+    size_t bytes;
+
+    if (report == NULL || report_size < 2)
+        fatal("invalid homed report capture buffer");
+    report[0] = '\0';
+    capture = tmpfile();
+    if (capture == NULL)
+        fatal("cannot allocate homed report capture");
+    saved_stderr = mir_verify_dup(mir_verify_fileno(stderr));
+    if (saved_stderr < 0) {
+        fclose(capture);
+        fatal("cannot duplicate stderr for homed report capture");
+    }
+    fflush(stderr);
+    if (mir_verify_dup2(mir_verify_fileno(capture),
+                        mir_verify_fileno(stderr)) < 0) {
+        mir_verify_close(saved_stderr);
+        fclose(capture);
+        fatal("cannot redirect stderr for homed report capture");
+    }
+    set_test_environment("DCC_MIR_HOMED_REPORT", "1");
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(stream);
+    clear_test_environment("DCC_MIR_HOMED_REPORT");
+    fflush(stderr);
+    if (mir_verify_dup2(saved_stderr, mir_verify_fileno(stderr)) < 0)
+        fatal("cannot restore stderr after homed report capture");
+    mir_verify_close(saved_stderr);
+    if (fseek(capture, 0, SEEK_SET) != 0) {
+        fclose(capture);
+        fatal("cannot rewind homed report capture");
+    }
+    bytes = fread(report, 1, report_size - 1, capture);
+    report[bytes] = '\0';
+    fclose(capture);
+    return result;
+}
+
+static int homed_report_mentions_reason(
+    const char *report,
+    const char *reason)
+{
+    char expected[128];
+
+    snprintf(expected, sizeof(expected), "reject=%s", reason);
+    return strstr(report, expected) != NULL;
+}
+
 static void verify_homed_parameter_preflight_transaction(void)
 {
     MirStream *control;
@@ -3069,6 +3138,149 @@ static void verify_homed_parameter_preflight_transaction(void)
     }
     if (!ok) {
         fprintf(stderr, "FAIL homed parameter preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_parameter_exact_rejections(void)
+{
+    struct ParameterMutation {
+        const char *name;
+        const char *reason;
+        int storage;
+        int type;
+    };
+    static const struct ParameterMutation mutations[] = {
+        { "object storage", "parameter-object", SC_LOCAL, TYPE_INT },
+        { "void object type", "parameter-type", SC_PARAM, TYPE_VOID }
+    };
+    struct MirInsn control_insns[5];
+    struct MirObject control_object;
+    MirStream *control;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int saved_color;
+    int saved_spill;
+    int saved_spill_count;
+    size_t mutation;
+    int result;
+    int ok = 1;
+
+    setup(5, 1, 2);
+    mir.return_type = TYPE_INT;
+    mir.object_count = 1;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    mir.objects[0].storage = SC_PARAM;
+    mir.objects[0].type = TYPE_INT;
+    mir.objects[0].offset = 4;
+    strcpy(mir.objects[0].name, "verify_homed_parameter_exact");
+    mir.insns[1].opcode = MIR_PARAM;
+    mir.insns[1].object = 0;
+    strcpy(mir.insns[1].name, mir.objects[0].name);
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].dst = -1;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].dst = -1;
+    mir.insns[3].label = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed parameter exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    if (control == NULL) {
+        fprintf(stderr, "FAIL homed parameter exact stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    saved_color = mir.allocation_colors[0];
+    saved_spill = mir.allocation_spills[0];
+    saved_spill_count = mir.allocation_spill_count;
+    memcpy(control_insns, mir.insns, sizeof(control_insns));
+    control_object = mir.objects[0];
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    for (mutation = 0;
+         mutation < sizeof(mutations) / sizeof(mutations[0]);
+         ++mutation) {
+        MirStream *retry = mir_stream_open();
+        long prefix_end;
+        int mutation_ok = 1;
+
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        mir_stream_puts("; preserved prefix\n", retry);
+        prefix_end = mir_stream_tell(retry);
+        label_id = first_label;
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        mir.objects[0] = control_object;
+        mir.allocation_colors[0] = saved_color;
+        mir.allocation_spills[0] = saved_spill;
+        mir.allocation_spill_count = saved_spill_count;
+        mir.objects[0].storage = mutations[mutation].storage;
+        mir.objects[0].type = mutations[mutation].type;
+        mir_invalidate_use_cache();
+        result = try_homed_scalar_cfg_with_report(
+            retry, report, sizeof(report));
+        mutation_ok = mutation_ok && result == 0;
+        mutation_ok = mutation_ok &&
+            mir_stream_tell(retry) == prefix_end &&
+            mir_stream_size(retry) == prefix_end;
+        mutation_ok = mutation_ok && label_id == first_label;
+        mutation_ok =
+            mutation_ok && mir.allocation_colors[0] == saved_color;
+        mutation_ok =
+            mutation_ok && mir.allocation_spills[0] == saved_spill;
+        mutation_ok =
+            mutation_ok && mir.allocation_spill_count == saved_spill_count;
+        mutation_ok = mutation_ok &&
+            homed_report_mentions_reason(
+                report, mutations[mutation].reason);
+
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        mir.objects[0] = control_object;
+        mir.allocation_colors[0] = saved_color;
+        mir.allocation_spills[0] = saved_spill;
+        mir.allocation_spill_count = saved_spill_count;
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 1;
+        mutation_ok = mutation_ok &&
+            mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text);
+        mutation_ok = mutation_ok && control_bytes == retry_bytes;
+        mutation_ok = mutation_ok &&
+            memcmp(control_text, retry_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr,
+                    "FAIL homed parameter exact %s rejection\n",
+                    mutations[mutation].name);
+        ok = ok && mutation_ok;
+        mir_stream_close(retry);
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL homed parameter exact rejections\n");
         ++failures;
     }
     mir_stream_close(control);
@@ -3878,6 +4090,168 @@ static void verify_homed_memory_preflight_transaction(void)
         fprintf(stderr, "FAIL homed memory preflight transaction\n");
         ++failures;
     }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_indirect_load_exact_rejection(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    int ok = 1;
+
+    setup(4, 2, 1);
+    mir.insns[1].type = TYPE_VOID | TYPE_PTR;
+    mir.insns[1].immediate = 4096;
+    mir.insns[2].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT;
+    mir.insns[2].memory_size = 2;
+    mir.insns[3].src1 = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed indirect load exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL homed indirect load exact stream allocation\n");
+        ++failures;
+        mir_stream_close(retry);
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir_stream_puts("; preserved prefix\n", retry);
+    mir.insns[2].memory_size = 3;
+    mir_invalidate_use_cache();
+    label_id = first_label;
+    result = try_homed_scalar_cfg_with_report(retry, report, sizeof(report));
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == (long)strlen("; preserved prefix\n");
+    ok = ok && mir_stream_size(retry) == (long)strlen("; preserved prefix\n");
+    ok = ok && label_id == first_label;
+    ok = ok && homed_report_mentions_reason(report, "indirect-load-type");
+
+    mir.insns[2].memory_size = 2;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(retry);
+    ok = ok && result == 1;
+    ok = ok && mir_stream_seek(
+        retry, (long)strlen("; preserved prefix\n"), SEEK_SET) == 0;
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL homed indirect load exact rejection\n");
+        ++failures;
+    }
+    mir_stream_close(retry);
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_aggregate_copy_exact_rejection(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    int ok = 1;
+
+    setup(5, 2, 1);
+    mir.return_type = TYPE_VOID | TYPE_PTR;
+    mir.insns[1].type = TYPE_VOID | TYPE_PTR;
+    mir.insns[1].immediate = 4096;
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[2].type = TYPE_VOID | TYPE_PTR;
+    mir.insns[2].immediate = 8192;
+    mir.insns[3].opcode = MIR_COPY_AGGREGATE;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].memory_size = 4;
+    mir.insns[4].src1 = 0;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed aggregate copy exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL homed aggregate copy exact stream allocation\n");
+        ++failures;
+        mir_stream_close(retry);
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir_stream_puts("; preserved prefix\n", retry);
+    mir.insns[3].memory_size = 0;
+    mir_invalidate_use_cache();
+    label_id = first_label;
+    result = try_homed_scalar_cfg_with_report(retry, report, sizeof(report));
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == (long)strlen("; preserved prefix\n");
+    ok = ok && mir_stream_size(retry) == (long)strlen("; preserved prefix\n");
+    ok = ok && label_id == first_label;
+    ok = ok && homed_report_mentions_reason(report, "aggregate-copy-size");
+
+    mir.insns[3].memory_size = 4;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(retry);
+    ok = ok && result == 1;
+    ok = ok && mir_stream_seek(
+        retry, (long)strlen("; preserved prefix\n"), SEEK_SET) == 0;
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL homed aggregate copy exact rejection\n");
+        ++failures;
+    }
+    mir_stream_close(retry);
     mir_stream_close(control);
     clear_liveness();
 }
@@ -6612,12 +6986,15 @@ int main(void)
     verify_five_call_arguments();
     verify_spilled_feature_defaults();
     verify_homed_parameter_preflight_transaction();
+    verify_homed_parameter_exact_rejections();
     verify_homed_value_operand_preflight_transaction();
     verify_homed_branch_target_preflight_transaction();
     verify_homed_dimension_preflight_transaction();
     verify_homed_noncall_preflight_transaction();
     verify_homed_noncall_dominance_transaction();
     verify_homed_memory_preflight_transaction();
+    verify_homed_indirect_load_exact_rejection();
+    verify_homed_aggregate_copy_exact_rejection();
     verify_homed_phi_preflight_transaction();
     verify_homed_call_preflight_transaction();
     verify_homed_call_dominance_preflight_transaction();

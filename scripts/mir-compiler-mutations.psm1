@@ -27,6 +27,7 @@ function Get-MirCompilerMutations {
         @{ Name = "wide-call-crossing-allocation"; Before = '            if (cross_call[value]) {'; After = '            if (0 && cross_call[value]) {'; ExpectedFailure = 'FAIL wide value retained caller-clobbered home across call' },
         @{ Name = "guarded-call-preservation"; Source = "src/dcc/dcc_mir_homed_cfg.c"; Before = '                preserve_de = mir_home_color_live_across('; After = '                preserve_de = 0 && mir_home_color_live_across('; ExpectedFailure = 'FAIL guarded call DE preservation' },
         @{ Name = "wide-guarded-call-preservation"; Source = "src/dcc/dcc_mir_homed_cfg.c"; Before = '                preserve_bc_iy = mir_home_color_live_across('; After = '                preserve_bc_iy = 0 && mir_home_color_live_across('; ExpectedFailure = 'FAIL guarded call BC:IY preservation' },
+        @{ Name = "homed-aggregate-copy-size"; Source = "src/dcc/dcc_mir_homed_cfg.c"; Before = '            if (insn->memory_size <= 0 || insn->memory_size > 1024)'; After = '            if (0 && (insn->memory_size <= 0 || insn->memory_size > 1024))'; ExpectedFailure = 'FAIL homed aggregate copy exact rejection' },
         @{ Name = "paired-byte-adjacency"; Source = "src/dcc/dcc_mir_homed_cfg.c"; Before = '    if (out->offsets[0] + 1 != out->offsets[1] &&'; After = '    if (0 && out->offsets[0] + 1 != out->offsets[1] &&'; PairedByteProbe = $true; ExpectedFailure = 'FAIL paired-byte matcher accepted nonadjacent fields' },
         @{
             Name = "allocation-first-result"

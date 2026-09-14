@@ -328,6 +328,7 @@ int main(int argc, char **argv) {
             "wide-call-crossing-allocation": "killed",
             "guarded-call-preservation": "killed",
             "wide-guarded-call-preservation": "killed",
+            "homed-aggregate-copy-size": "killed",
             "paired-byte-adjacency": "killed",
             "allocation-first-result": "killed",
             "allocation-store-width": "killed",
@@ -343,6 +344,8 @@ $fieldCacheMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "global-field-vn-cache"
 $fieldCallMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "global-field-vn-call-barrier"
+$homedAggregateMutation = Get-MirCompilerMutations |
+    Where-Object Name -eq "homed-aggregate-copy-size"
 $matcherMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "allocation-first-result"
 $pairedByteMutation = Get-MirCompilerMutations |
@@ -350,6 +353,7 @@ $pairedByteMutation = Get-MirCompilerMutations |
 $hostLog = "FAIL branch value cannot escape join`nMIR verifier failures=1`n"
 $cacheLog = "; MIR CACHE MISMATCH mir_definition function=f value=1 cached=2 uncached=-1`ndcc: fatal: MIR use-cache mismatch`n"
 $fieldCallLog = "FAIL isolated global field unsafe-call barrier`nMIR verifier failures=1`n"
+$homedAggregateLog = "FAIL homed aggregate copy exact rejection`nMIR verifier failures=1`n"
 $matcherLog = "FAIL allocation matcher accepted mutated first result`nMIR matcher restoration failures=1`n"
 $pairedByteLog = "FAIL paired-byte matcher accepted nonadjacent fields`nMIR paired-byte mutation failures=1`n"
 foreach ($case in @(
@@ -370,6 +374,10 @@ foreach ($case in @(
     @($fieldCallMutation, $fieldCallLog, 134, $false, "invalid"),
     @($fieldCallMutation, $fieldCallLog.Replace("unsafe-call", "call"), 1, $false, "invalid"),
     @($fieldCallMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
+    @($homedAggregateMutation, $homedAggregateLog, 1, $false, "killed"),
+    @($homedAggregateMutation, $homedAggregateLog, 134, $false, "invalid"),
+    @($homedAggregateMutation, $homedAggregateLog.Replace("aggregate copy", "aggregate"), 1, $false, "invalid"),
+    @($homedAggregateMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
     @($matcherMutation, $matcherLog, 1, $false, "killed"),
     @($matcherMutation, $matcherLog, 134, $false, "invalid"),
     @($matcherMutation, $matcherLog.Replace("first result", "other"), 1, $false, "invalid"),
