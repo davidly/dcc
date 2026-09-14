@@ -449,6 +449,23 @@ this increment closes proof gaps rather than fixing a false acceptance. All
 136 Python script tests pass. This remains a test-only increment; regenerate
 the immutable aggregate ledger before claiming new overall branch totals.
 
+Wave 46 closes the next spilled generic-fallback proof gaps without changing
+production code. Existing malformed-MIR transaction tests already exercised
+nearby `MIR_LOAD_INDIRECT`, `MIR_CALL`, `MIR_CALL_AGGREGATE`, and
+`MIR_VLA_SIZE` graphs, but they did not prove the exact
+`mir_scalar_cfg_preflight_reject` reasons reported by spilled generic
+preflight. New host controls now capture `DCC_MIR_SELECT_REPORT` and require
+the precise `indirect-width`, `call-abi`, `aggregate-call-abi`, and
+`frame-offset` diagnostics, each with preserved output prefixes,
+empty-output rollback, and repaired same-stream retries that match clean
+controls byte-for-byte. The clean-build mutant `spilled-call-abi` disables
+only the empty-name branch of the direct-call ABI guard and is killed by the
+exact `FAIL spilled call ABI exact rejection` assertion. Normal and
+ASan/UBSan host tests pass 5/5, the full compiler campaign has one passing
+baseline plus 27/27 killed mutants, and all 136 Python script tests pass.
+This remains a test-only increment; the authoritative aggregate totals still
+await a fresh immutable collection.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

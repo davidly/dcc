@@ -329,6 +329,7 @@ int main(int argc, char **argv) {
             "guarded-call-preservation": "killed",
             "wide-guarded-call-preservation": "killed",
             "homed-aggregate-copy-size": "killed",
+            "spilled-call-abi": "killed",
             "paired-byte-adjacency": "killed",
             "allocation-first-result": "killed",
             "allocation-store-width": "killed",
@@ -346,6 +347,8 @@ $fieldCallMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "global-field-vn-call-barrier"
 $homedAggregateMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "homed-aggregate-copy-size"
+$spilledCallMutation = Get-MirCompilerMutations |
+    Where-Object Name -eq "spilled-call-abi"
 $matcherMutation = Get-MirCompilerMutations |
     Where-Object Name -eq "allocation-first-result"
 $pairedByteMutation = Get-MirCompilerMutations |
@@ -354,6 +357,7 @@ $hostLog = "FAIL branch value cannot escape join`nMIR verifier failures=1`n"
 $cacheLog = "; MIR CACHE MISMATCH mir_definition function=f value=1 cached=2 uncached=-1`ndcc: fatal: MIR use-cache mismatch`n"
 $fieldCallLog = "FAIL isolated global field unsafe-call barrier`nMIR verifier failures=1`n"
 $homedAggregateLog = "FAIL homed aggregate copy exact rejection`nMIR verifier failures=1`n"
+$spilledCallLog = "FAIL spilled call ABI exact rejection`nMIR verifier failures=1`n"
 $matcherLog = "FAIL allocation matcher accepted mutated first result`nMIR matcher restoration failures=1`n"
 $pairedByteLog = "FAIL paired-byte matcher accepted nonadjacent fields`nMIR paired-byte mutation failures=1`n"
 foreach ($case in @(
@@ -378,6 +382,10 @@ foreach ($case in @(
     @($homedAggregateMutation, $homedAggregateLog, 134, $false, "invalid"),
     @($homedAggregateMutation, $homedAggregateLog.Replace("aggregate copy", "aggregate"), 1, $false, "invalid"),
     @($homedAggregateMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
+    @($spilledCallMutation, $spilledCallLog, 1, $false, "killed"),
+    @($spilledCallMutation, $spilledCallLog, 134, $false, "invalid"),
+    @($spilledCallMutation, $spilledCallLog.Replace("call ABI", "call"), 1, $false, "invalid"),
+    @($spilledCallMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
     @($matcherMutation, $matcherLog, 1, $false, "killed"),
     @($matcherMutation, $matcherLog, 134, $false, "invalid"),
     @($matcherMutation, $matcherLog.Replace("first result", "other"), 1, $false, "invalid"),
