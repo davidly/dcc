@@ -630,6 +630,26 @@ increment closes proof gaps rather than fixing a false acceptance. All 136
 Python script tests pass. This remains a test-only increment; regenerate the
 immutable aggregate ledger before claiming new overall branch totals.
 
+Wave 60 closes the next `mir_match_catalan_driver_schedule` proof gaps
+without changing production code. The earlier Catalan coverage already proved
+the exact baseline, the alternate `_pflio` full-I/O exact path, renamed
+helpers, unsigned/volatile source near matches, and the broad Wave 23
+compile-only field census, but it did not keep a focused runtime-backed
+campaign over helper-identity drift across the `zero`/`is_zero`/`add_term`/
+`div_small` families, fixed-print and wrapped-`putchar` near matches, or the
+remaining metadata, initializer, report, and print-loop legality checks. New
+`catalan-wave60` MIR-clobber cases add six source near matches plus 11
+runtime-safe selector-mutant cases, and all 72 target configurations pass. A
+new `catalan-wave60-audit.py` campaign then runs 28 stack/no-stack and
+peep/nopeep runtime controls and rejects 11/11 targeted MIR mutations that
+cover helper-identity drift, metadata and array-initializer mutations, both
+loop headers and tails, the initial report argument source, and the
+outer-print, inner-print, digit, and newline tails. Current code already
+rejected every new near match and mutation, so this increment closes proof
+gaps rather than fixing a false acceptance. All 136 Python script tests pass.
+This remains a test-only increment; regenerate the immutable aggregate ledger
+before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

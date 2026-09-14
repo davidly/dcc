@@ -966,7 +966,26 @@ locally verified execution inventory.
   accepted or rejected every new control as intended, so this increment closes
   proof gaps rather than fixing a false acceptance. All 136 Python script
   tests pass.
-
+- Wave 60 closes the next `mir_match_catalan_driver_schedule` proof gaps
+  without changing production code. Existing Catalan coverage already proved
+  the exact baseline, the alternate `_pflio` full-I/O exact path, renamed
+  helpers, unsigned/volatile source near matches, and the broad Wave 23
+  compile-only field census, but it did not keep a focused runtime-backed
+  proof over helper-identity drift across the `zero`/`is_zero`/`add_term`/
+  `div_small` families, fixed-print and wrapped-`putchar` near matches, or
+  the remaining metadata, initializer, report, and print-loop legality
+  checks. `tests/mir-clobber/catw23.c` now adds six source-level wrapper
+  controls (second-array `zero`, `is_zero`, `add_term`, and `div_small`
+  indirection plus fixed-print and wrapped-`putchar` variants), and the new
+  `scripts/mir-clobber-cases/catalan-wave60.json` group adds 11 runtime-safe
+  selector mutants. All 72 target configurations pass. The dedicated
+  `catalan-wave60-audit.py` script runs 28 stack/no-stack and peep/nopeep
+  runtime controls and rejects 11/11 targeted MIR mutations covering
+  helper-identity drift, metadata and array-initializer mutations, both loop
+  headers and tails, the initial report argument source, and the outer-print,
+  inner-print, digit, and newline tails. Current code already rejected every
+  new near match and mutation, so this increment closes proof gaps rather
+  than fixing a false acceptance. All 136 Python script tests pass.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

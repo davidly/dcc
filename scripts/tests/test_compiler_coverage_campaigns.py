@@ -18,7 +18,7 @@ SPEC.loader.exec_module(campaigns)
 class CompilerCoverageCampaignTests(unittest.TestCase):
     def test_campaign_inventory_is_complete_and_unique(self):
         names = [campaign.name for campaign in campaigns.CAMPAIGNS]
-        self.assertEqual(len(names), 44)
+        self.assertEqual(len(names), 45)
         self.assertEqual(len(set(names)), len(names))
         root = Path(__file__).resolve().parents[2]
         for campaign in campaigns.CAMPAIGNS:

@@ -53,6 +53,8 @@ CAMPAIGNS = (
              output_dir="affine-fill-wave25-audit"),
     Campaign("catalan", "catalan-wave23-audit.py",
              output_dir="catalan-wave23-audit"),
+    Campaign("catalan-driver-schedule", "catalan-wave60-audit.py",
+             output_dir="catalan-wave60-audit", max_jobs=2),
     Campaign("promotion", "promotion-wave25-campaign.py",
              ("--skip-runtime",), "promotion-wave25-audit"),
     Campaign("byte-rotate", "byte-rotate-wave24-audit.py",
