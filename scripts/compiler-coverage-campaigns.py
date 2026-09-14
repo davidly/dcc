@@ -228,6 +228,10 @@ CAMPAIGNS = (
              "unnamed-bitfield-report-wave6100-audit.py",
              output_dir="unnamed-bitfield-report-wave6100-audit",
              max_jobs=2),
+    Campaign("backward-pass-schedule",
+             "backward-pass-wave7000-audit.py",
+             output_dir="backward-pass-wave7000-audit",
+             max_jobs=2),
 )
 
 

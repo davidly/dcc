@@ -1856,6 +1856,33 @@ locally verified execution inventory.
   No separate clobber manifest was needed. The standalone audit, full Python
   script-test suite, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 7000 closes the historical `mir_match_backward_pass_schedule` proof gap
+  and fixes severe exact-schedule false acceptance. The old matcher checked all
+  730 semantic opcodes, 101 constants, 70 binary operators/types, 61 global
+  locations, 24 calls, 24 branch/jump edges, and seven PHIs, but left most
+  destinations, operands, types, memory/qualifier state, CFG successors,
+  object identities, bitfields, and auxiliary metadata unproved. It falsely
+  accepted 15,393 of 17,520 exhaustive per-instruction field and identity
+  mutations (87.86%), including every CFG-successor, object, qualifier,
+  bitfield, and inline/divmod metadata mutation.
+  The matcher now fingerprints all 23 numeric semantic and structural fields
+  plus source/base-name identity on every semantic instruction while retaining
+  the existing constant, location-alias, call-ABI, argument, branch, jump, and
+  PHI proofs. Separate fingerprints cover the production `attnc11`
+  address-chain form and the standalone fixture's equivalent direct-global
+  form.
+  New `tests/mir-clobber/backpass.c` isolates the six-stage gradient schedule
+  and checks all twelve output arrays against a fixed checksum independently
+  reproduced by the Python audit oracle. New
+  `backward-pass-wave7000-audit.py` builds an isolated diagnostic mutation
+  compiler, runs 16 stack/no-stack and peep/nopeep controls across baseline,
+  renamed-function, volatile-logit, and extra-CFG variants, and rejects all
+  17,520 mutations with generic fallback and zero survivors. A clean forced
+  control selects `spilled-rhs-forward`. The clean selected hash remains
+  `e16e3e51` and assembly SHA-256 is
+  `c5f1c953dee335ce0bc389da9fcb803439136d19ea6e21ca6538cac2cd05586c`.
+  The standalone audit, full Python script-test suite, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

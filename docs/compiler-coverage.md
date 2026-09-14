@@ -1579,6 +1579,33 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. No separate clobber manifest was added. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 7000 closes the historical `mir_match_backward_pass_schedule` proof gap
+and fixes severe exact-schedule false acceptance. The prior matcher checked the
+730-instruction semantic opcode stream plus selected constants, binaries,
+locations, calls, edges, and PHIs, but omitted most destinations, operands,
+types, memory/qualifier state, CFG successors, object identities, bitfields,
+and auxiliary metadata. It falsely accepted 15,393 of 17,520 exhaustive
+per-instruction field and identity mutations (87.86%). Every successor,
+object, qualifier, bitfield, and inline/divmod metadata mutation survived.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields
+plus source/base-name identity on every semantic instruction while retaining
+its explicit constant, location-alias, call-ABI, argument, branch, jump, and
+PHI checks. It admits separately proven fingerprints for the production
+`attnc11` address-chain form and the equivalent direct-global fixture form.
+New `tests/mir-clobber/backpass.c` isolates the six-stage backward pass and
+checks all twelve result arrays using the fixed checksum independently
+reproduced by the audit's Python implementation.
+`backward-pass-wave7000-audit.py` builds an isolated diagnostic mutation
+compiler, runs 16 stack/no-stack and peep/nopeep controls across four source
+variants, and rejects all 17,520 mutations with generic fallback and zero
+survivors. A clean forced control selects `spilled-rhs-forward`. The clean
+selected hash remains `e16e3e51`; assembly SHA-256 is
+`c5f1c953dee335ce0bc389da9fcb803439136d19ea6e21ca6538cac2cd05586c`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

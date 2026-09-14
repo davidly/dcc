@@ -3155,6 +3155,8 @@ static int mir_match_backward_pass_schedule(
     int instruction;
     int call;
     int edge;
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     const struct MirInsn *instructions[730];
     int instruction_count = mir_backward_semantic_instructions(
         instructions, (int)(sizeof(instructions) / sizeof(instructions[0])));
@@ -3169,10 +3171,59 @@ static int mir_match_backward_pass_schedule(
         const struct MirInsn *insn = instructions[instruction];
         char code = insn->opcode == MIR_MEMBER_ADDRESS
             ? 'A' : mir_backward_opcode_code(insn->opcode);
+        unsigned long long values[23];
+        const char *text;
+        size_t value;
 
         if (code == 0 || code != expected_opcodes[instruction])
             return mir_machine_reject(
                 "backward-pass-schedule", "opcodes");
+        values[0] = (unsigned int)insn->opcode;
+        values[1] = (unsigned int)insn->dst;
+        values[2] = (unsigned int)insn->src1;
+        values[3] = (unsigned int)insn->src2;
+        values[4] = (unsigned int)insn->type;
+        values[5] = (unsigned int)insn->immediate;
+        values[6] = (unsigned int)insn->label;
+        values[7] = (unsigned int)insn->phi_pred1;
+        values[8] = (unsigned int)insn->phi_pred2;
+        values[9] = (unsigned int)insn->successors[0];
+        values[10] = (unsigned int)insn->successors[1];
+        values[11] = (unsigned int)insn->successor_count;
+        values[12] = (unsigned int)insn->object;
+        values[13] = (unsigned int)insn->memory_size;
+        values[14] = (unsigned int)insn->memory_flags;
+        values[15] = insn->pointee_volatile_mask;
+        values[16] = (unsigned int)insn->has_pointer_qualifiers;
+        values[17] = (unsigned int)insn->bit_width;
+        values[18] = (unsigned int)insn->bit_shift;
+        values[19] = (unsigned int)insn->bit_mask;
+        values[20] = (unsigned int)insn->secondary_offset;
+        values[21] = (unsigned int)insn->inline_temp_id;
+        values[22] = (unsigned int)insn->divmod_cast_types;
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+        text = insn->name;
+        do {
+            first ^= (unsigned char)*text;
+            first *= 1099511628211ULL;
+            second ^= (unsigned char)*text +
+                0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        } while (*text++);
+        text = insn->base_name;
+        do {
+            first ^= (unsigned char)*text;
+            first *= 1099511628211ULL;
+            second ^= (unsigned char)*text +
+                0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        } while (*text++);
         if (insn->opcode == MIR_CONST) {
             if (constant >= 101 ||
                 insn->type != expected_constant_types[constant] ||
@@ -3231,6 +3282,19 @@ static int mir_match_backward_pass_schedule(
     if (constant != 101 || binary != 70 || location != 61)
         return mir_machine_reject(
             "backward-pass-schedule", "instruction-counts");
+    if (!((first == 0xf6195a54200c2f5cULL &&
+           second == 0x5dc5cd337597008eULL) ||
+          (first == 0x674e4237d63dd218ULL &&
+           second == 0x7922e7b072a13f7dULL))) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=backward-pass-schedule "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
 
     for (call = 0; call < 24; ++call) {
         const struct MirInsn *insn =
