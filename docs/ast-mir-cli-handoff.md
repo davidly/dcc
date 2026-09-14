@@ -1054,6 +1054,28 @@ locally verified execution inventory.
   and mutation, so this increment closes proof gaps rather than fixing a
   false acceptance. All 136 Python script tests pass. The broader coverage
   objective remains incomplete.
+- Wave 70 closes the historical `mir_match_whitespace_scan_schedule` proof
+  gap without changing production code. Commit `0401e793` introduced the
+  exact schedule before focused per-matcher audits, and no dedicated fixture
+  or campaign remained in the tree. New `tests/mir-clobber/wsscan.c` isolates
+  the 60-instruction, eight-block schedule and checks bounded, empty,
+  multiline, and helper-mutated state against independent cursor, line, and
+  call-count oracles. The dedicated `whitespace-scan-wave70-audit.py` campaign
+  runs 16 stack/no-stack and peep/nopeep runtime controls, retaining exact
+  selection for baseline and renamed-helper forms while proving hybrid generic
+  fallback for variadic-helper and extra-CFG near matches. A forced
+  `DCC_MIR_SELECT_CANDIDATE=hybrid` cost control confirms that the clean
+  scheduled stream is the exact incumbent before the requested diagnostic
+  alternative is selected. The campaign rejects 25/25 targeted MIR mutations
+  covering signed bounds, source/index/byte flow, helper identity and ABI,
+  short-circuit PHIs, post-call reloads, newline comparison, line/cursor
+  updates, and state overlap/range checks, with zero meaningful survivors.
+  Current code already rejected every new near match and mutation, so no
+  genuine false acceptance was found. The clean selected hash remains
+  `0259e664` and assembly SHA-256 is
+  `31c83b5f4d79640c9908a480717fa7a952afd7d570e3069daebc3860cb92850b`.
+  The standalone audit and all 136 Python script tests pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

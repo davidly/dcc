@@ -735,6 +735,28 @@ false acceptance was found. The standalone audit and all 136 Python script
 tests pass. This remains a test-only increment; regenerate the immutable
 aggregate ledger before claiming new overall branch totals.
 
+Wave 70 closes the historical `mir_match_whitespace_scan_schedule` proof gap
+without changing production code. Commit `0401e793` introduced the exact
+schedule before focused per-matcher audits, and no dedicated fixture or
+campaign remained in the tree. New `tests/mir-clobber/wsscan.c` isolates the
+60-instruction, eight-block schedule and validates bounded, empty, multiline,
+and helper-mutated state with independent cursor, line, and helper-call
+oracles. New `whitespace-scan-wave70-audit.py` runs 16 stack/no-stack and
+peep/nopeep runtime controls, retaining exact selection for the baseline and
+renamed-helper forms while proving hybrid generic fallback for variadic-helper
+and extra-CFG near matches. A forced hybrid candidate cost report confirms the
+clean scheduled candidate is the exact incumbent before diagnostic selection.
+The audit rejects 25/25 targeted MIR mutations covering bound signedness and
+dataflow, source/index/byte access, helper identity and ABI, short-circuit
+flow, post-call reloads, newline comparison, both state updates, and member
+overlap/range checks. The clean selected hash remains `0259e664` and assembly
+SHA-256 is
+`31c83b5f4d79640c9908a480717fa7a952afd7d570e3069daebc3860cb92850b`.
+Current code already rejected every near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

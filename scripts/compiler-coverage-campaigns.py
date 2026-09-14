@@ -123,6 +123,9 @@ CAMPAIGNS = (
     Campaign("float-tangent-rational",
              "float-tangent-wave64-audit.py",
              output_dir="float-tangent-wave64-audit", max_jobs=2),
+    Campaign("whitespace-scan-schedule",
+             "whitespace-scan-wave70-audit.py",
+             output_dir="whitespace-scan-wave70-audit", max_jobs=2),
 )
 
 
