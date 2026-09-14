@@ -138,6 +138,9 @@ CAMPAIGNS = (
     Campaign("call-safe-member-sum-schedule",
              "call-safe-member-sum-wave90-audit.py",
              output_dir="call-safe-member-sum-wave90-audit", max_jobs=2),
+    Campaign("gnarly-runner-schedule",
+             "gnarly-runner-wave100-audit.py",
+             output_dir="gnarly-runner-wave100-audit", max_jobs=2),
 )
 
 

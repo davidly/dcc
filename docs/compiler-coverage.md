@@ -842,6 +842,30 @@ false acceptance was found. The standalone audit and all 136 Python script
 tests pass. This remains a test-only increment; regenerate the immutable
 aggregate ledger before claiming new overall branch totals.
 
+Wave 100 closes the historical `mir_match_gnarly_runner` proof gap and fixes a
+genuine exact-schedule false-acceptance class. The existing matcher proves the
+564-instruction opcode fingerprint, 22-block CFG, constants, value/PHI
+relationships, conversions, string identities, direct, indirect, and variadic
+call ABI, array aliases and strides, structure copy, object identities, and
+return flow. Fresh diagnostic mutations showed that binary and PHI result
+types plus array and structure-member pointer types were not part of that
+proof, allowing unsupported type-mutated candidates to retain the hard-coded
+schedule. Those type and width invariants are now explicit.
+
+New `tests/mir-clobber/gnarly.c` preserves the exact main-function shape and
+adds an independent helper-side runtime oracle for the Duff copy, structure
+argument, implicit call, repeated function-pointer call, and old-style sum.
+New `gnarly-runner-wave100-audit.py` runs eight stack/no-stack and peep/nopeep
+runtime controls, retains exact selection for the baseline, and proves named
+spilled fallback for a volatile-count near match. It rejects 22/22 targeted
+MIR mutations and independently reproduces every fallback with forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output. The clean selected hash
+remains `a855a26c` and assembly SHA-256 is
+`dc95b353f36d0e1245a68d34b22f3ed7fafdff6bdba02a991fbd1fecb22cbfbb`.
+The standalone audit, all Python script tests, and both strict 506-app release
+modes pass. Regenerate the immutable aggregate ledger before claiming new
+overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

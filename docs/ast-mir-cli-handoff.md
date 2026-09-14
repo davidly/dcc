@@ -1162,6 +1162,33 @@ locally verified execution inventory.
   `865bd210a681c96c6ee1d767a513ab0ca24e169818f8d86e378a3de9c8be0534`.
   The standalone audit and all 136 Python script tests pass. The broader
   coverage objective remains incomplete.
+- Wave 100 closes the historical `mir_match_gnarly_runner` proof gap and fixes
+  a genuine exact-schedule false-acceptance class. The 564-instruction,
+  22-block matcher already proved the complete opcode fingerprint, constants,
+  value and PHI relationships, branch targets, conversions, 39-call ABI,
+  distinct and reused strings, array identities and strides, structure-copy
+  layout, object numbering, and return flow. It did not prove result types for
+  its binary and PHI nodes or pointer/member types used by its hard-coded
+  array and structure accesses; diagnostic type mutations therefore retained
+  the unchanged exact schedule. The matcher now checks signed-word versus
+  word-pointer binary results, signed-word PHIs, both Duff arrays, every main
+  array address/index result, and word/byte structure-member addresses.
+  New `tests/mir-clobber/gnarly.c` retains the original language-stress shape
+  while its called helpers independently validate the copy, structure,
+  implicit-call, function-pointer, and old-style-call path and report
+  `gnarly oracle failures=0`. The dedicated
+  `gnarly-runner-wave100-audit.py` campaign runs eight stack/no-stack and
+  peep/nopeep runtime controls, retaining exact selection for the baseline and
+  proving named spilled fallback for a volatile-count near match. It rejects
+  22/22 targeted MIR mutations across constants, operations, PHIs, control
+  flow, conversions, strings, direct/indirect and variadic calls, array
+  identities/types/widths, structure-copy members, and object identity.
+  Forced `DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output independently
+  confirms every generic fallback with zero meaningful survivors. The clean
+  selected hash remains `a855a26c` and assembly SHA-256 is
+  `dc95b353f36d0e1245a68d34b22f3ed7fafdff6bdba02a991fbd1fecb22cbfbb`.
+  The standalone audit, all Python script tests, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
