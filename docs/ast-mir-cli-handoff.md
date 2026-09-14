@@ -1037,6 +1037,23 @@ locally verified execution inventory.
   and near match as intended, so this increment closes proof gaps rather than
   fixing a false acceptance. The standalone audit and all 136 Python script
   tests pass. The broader coverage objective remains incomplete.
+- Wave 65 closes the next `mir_match_exec_recursion_schedule` proof gaps
+  without changing production code. The existing Wave 14 campaign already
+  proved all hardcoded binary operators and word-dataflow loads with its
+  127-mutation audit, plus selected ABI, width, volatility, and source
+  near matches. The new `exec-recursion-wave64` clobber group adds exact
+  renamed-helper/global controls; pointer-ABI, fixed-reporter, signedness,
+  volatility, CFG, and VLA near matches; and 35 runtime-safe selector
+  mutations covering parameter types, entry control, vector construction,
+  exec/report/recursive call arguments, constants, local/global identities,
+  failure side effects, branch values, and final returns. All 94 target
+  configurations pass. The dedicated `exec-recursion-wave65-audit.py`
+  campaign runs 48 stack/no-stack and peep/nopeep runtime controls and
+  rejects 35/35 targeted mutations with named spilled fallback and zero
+  meaningful survivors. Current code already rejected every new near match
+  and mutation, so this increment closes proof gaps rather than fixing a
+  false acceptance. All 136 Python script tests pass. The broader coverage
+  objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

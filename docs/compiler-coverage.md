@@ -713,6 +713,28 @@ false acceptance was found. The standalone audit and all 136 Python script
 tests pass. This remains a test-only increment; regenerate the immutable
 aggregate ledger before claiming new overall branch totals.
 
+Wave 65 closes the next `mir_match_exec_recursion_schedule` proof gaps without
+changing production code. The existing Wave 14 fixture and clobber campaign
+already proved every hardcoded binary operator and word-dataflow load through
+its 127-mutation audit, plus selected call ABI, memory-width, volatile-result,
+and source-expression boundaries. It did not retain a focused runtime-backed
+campaign over renamed valid controls, pointer and reporter ABI drift,
+return/parameter signedness, recursive-local volatility, extra CFG/VLA shape,
+or several remaining entry, vector, call-argument, constant, identity,
+side-effect, branch-value, and return predicates. The new
+`exec-recursion-wave64` clobber group adds 12 source controls and 35
+runtime-safe selector mutations; all 94 target configurations pass. A new
+`exec-recursion-wave65-audit.py` campaign runs 48 stack/no-stack and
+peep/nopeep runtime controls, retains exact selection for the baseline and
+renamed-helper/global variants, and rejects 35/35 targeted MIR mutations with
+the expected named reason and `spilled-scalar-cfg` fallback. The baseline
+retains selected hash `794b3954` and assembly SHA-256
+`28bb381ce9849a6df141705e538c20d53dc48d7588199ec41b0f3fda37a5765a`.
+Current code already rejected every new near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
