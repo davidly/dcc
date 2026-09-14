@@ -603,7 +603,9 @@ static int mir_match_matrix_product_clear(
 {
     const struct MirInsn *call = &mir.insns[18];
     struct Sym *function;
+    static const int argument_instructions[] = {8, 10, 17};
     int arguments[3];
+    int argument;
 
     if (!mir_attention_call_arguments(call, 3, arguments) ||
         arguments[0] != mir.insns[6].dst ||
@@ -625,16 +627,34 @@ static int mir_match_matrix_product_clear(
             mir.insns[15].secondary_offset) ||
         type_ptr_depth(call->type) == 0 ||
         type_size(call->type) != 2 ||
+        call->src1 != -1 || call->src2 != -1 ||
+        call->immediate != 0 || call->memory_size != 0 ||
         (call->memory_flags &
          (MIR_CALL_FLAG_VARIADIC |
           MIR_CALL_FLAG_FORMAT_RUNTIME |
-          MIR_CALL_FLAG_INLINE_SUBSTITUTABLE)) != 0)
+          MIR_CALL_FLAG_INLINE_SUBSTITUTABLE)) != 0 ||
+        call->pointee_volatile_mask != 0 ||
+        call->has_pointer_qualifiers ||
+        call->bit_width != 0 || call->bit_shift != 0 ||
+        call->bit_mask != 0 || call->divmod_cast_types != 0)
         return 0;
+    for (argument = 0; argument < 3; ++argument) {
+        const struct MirInsn *arg =
+            &mir.insns[argument_instructions[argument]];
+
+        if (arg->src1 != arguments[argument] ||
+            arg->src2 != -1 ||
+            arg->immediate != argument ||
+            arg->memory_size != 0 ||
+            !mir_matrix_product_clean_auxiliary_metadata(arg))
+            return 0;
+    }
     function = find_global(call->name);
     if (function == NULL || function->storage != SC_FUNC ||
         function->is_funcptr || function->is_noreturn ||
         !function->has_proto || function->proto_variadic ||
         function->proto_nargs != 3 ||
+        function->type != call->type ||
         type_ptr_depth(function->proto_types[0]) == 0 ||
         type_size(function->proto_types[0]) != 2 ||
         type_ptr_depth(function->proto_types[1]) != 0 ||
@@ -693,9 +713,62 @@ static int mir_match_matrix_product_schedule_kind(
         MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
         MIR_LABEL
     };
+    static const int transposed_pointer_types[] = {
+        6, 23, 24, 34, 35, 36, 45, 46, 58, 59, 60, 72, 74, 76, 77
+    };
+    static const int outer_pointer_types[] = {
+        10, 11, 22, 23, 24, 33, 34, 49, 60, 61, 62, 65, 66
+    };
+    static const int transposed_count_types[] = {
+        20, 27, 42, 52, 73, 87, 88, 89, 96, 97
+    };
+    static const int outer_count_types[] = {
+        7, 15, 30, 41, 48, 76, 77, 78, 85, 86
+    };
+    static const int transposed_word_types[] = {
+        9, 12, 14, 15, 30, 31, 32, 38, 54, 55, 56, 62, 64,
+        70, 78, 80, 84
+    };
+    static const int outer_word_types[] = {
+        18, 19, 20, 26, 43, 44, 45, 50, 54, 58, 67, 69, 73
+    };
+    static const int transposed_long_types[] = {
+        65, 67, 68, 69, 79, 81, 82, 83
+    };
+    static const int outer_long_types[] = {
+        53, 55, 56, 57, 68, 70, 71, 72
+    };
     const int *expected = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
         ? transposed_opcodes : outer_opcodes;
+    const int *pointer_types = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
+        ? transposed_pointer_types : outer_pointer_types;
+    const int *count_types = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
+        ? transposed_count_types : outer_count_types;
+    const int *word_types = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
+        ? transposed_word_types : outer_word_types;
+    const int *long_types = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
+        ? transposed_long_types : outer_long_types;
     int count = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 101 : 90;
+    int pointer_type_count = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
+        ? (int)(sizeof(transposed_pointer_types) /
+                sizeof(transposed_pointer_types[0]))
+        : (int)(sizeof(outer_pointer_types) /
+                sizeof(outer_pointer_types[0]));
+    int count_type_count = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
+        ? (int)(sizeof(transposed_count_types) /
+                sizeof(transposed_count_types[0]))
+        : (int)(sizeof(outer_count_types) /
+                sizeof(outer_count_types[0]));
+    int word_type_count = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
+        ? (int)(sizeof(transposed_word_types) /
+                sizeof(transposed_word_types[0]))
+        : (int)(sizeof(outer_word_types) /
+                sizeof(outer_word_types[0]));
+    int long_type_count = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
+        ? (int)(sizeof(transposed_long_types) /
+                sizeof(transposed_long_types[0]))
+        : (int)(sizeof(outer_long_types) /
+                sizeof(outer_long_types[0]));
     int outer_initial = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 20 : 7;
     int outer_store = outer_initial + 1;
     int outer_label = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 22 : 9;
@@ -731,9 +804,12 @@ static int mir_match_matrix_product_schedule_kind(
     int outer_jump = outer_continue + 5;
     int outer_done = outer_continue + 6;
     int instruction;
+    int item;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != count || mir_cfg_block_count() != 7 ||
+    if ((kind != MIR_MATRIX_PRODUCT_TRANSPOSED &&
+         kind != MIR_MATRIX_PRODUCT_OUTER) ||
+        mir.count != count || mir_cfg_block_count() != 7 ||
         mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
         mir.aggregate_temp_bytes != 0)
         return 0;
@@ -758,6 +834,82 @@ static int mir_match_matrix_product_schedule_kind(
         !mir_match_matrix_product_clear(plan))
         return mir_machine_reject(
             "matrix-product-schedule", "clear");
+
+    for (instruction = 0; instruction < count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const struct MirInsn *source;
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (insn->opcode == MIR_BINARY &&
+            insn->secondary_offset != insn->type)
+            return mir_machine_reject(
+                "matrix-product-schedule", "binary-types");
+        if (insn->opcode == MIR_LOAD ||
+            insn->opcode == MIR_STORE) {
+            if (!mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                insn->type != memory_type ||
+                !mir_machine_named_nonvolatile(insn))
+                return mir_machine_reject(
+                    "matrix-product-schedule", "named-memory");
+            if (insn->opcode == MIR_LOAD) {
+                if (insn->memory_size != 0)
+                    return mir_machine_reject(
+                        "matrix-product-schedule", "named-memory");
+            } else {
+                source = mir_definition(insn->src1);
+                if (source == NULL || source->type != memory_type ||
+                    insn->memory_size != type_size(memory_type))
+                    return mir_machine_reject(
+                        "matrix-product-schedule", "named-memory");
+            }
+        } else if (insn->opcode == MIR_LOAD_INDIRECT) {
+            if (!mir_match_matrix_product_word_type(insn->type) ||
+                insn->memory_size != 2)
+                return mir_machine_reject(
+                    "matrix-product-schedule", "indirect-load");
+        } else if (insn->opcode == MIR_INDEX_ADDRESS) {
+            if (!mir_match_matrix_product_pointer_type(insn->type) ||
+                insn->immediate != 2 || insn->memory_size != 2)
+                return mir_machine_reject(
+                    "matrix-product-schedule", "index-address");
+        } else if (insn->opcode == MIR_STORE_INDIRECT) {
+            const struct MirInsn *address =
+                mir_definition(insn->src1);
+            const struct MirInsn *value =
+                mir_definition(insn->src2);
+
+            if (address == NULL || value == NULL ||
+                !mir_match_matrix_product_pointer_type(address->type) ||
+                !mir_match_matrix_product_word_type(value->type) ||
+                insn->memory_size != 2)
+                return mir_machine_reject(
+                    "matrix-product-schedule", "indirect-store");
+        }
+    }
+    for (item = 0; item < pointer_type_count; ++item)
+        if (!mir_match_matrix_product_pointer_type(
+                mir.insns[pointer_types[item]].type))
+            return mir_machine_reject(
+                "matrix-product-schedule", "pointer-types");
+    for (item = 0; item < count_type_count; ++item)
+        if (!mir_match_matrix_product_count_type(
+                mir.insns[count_types[item]].type))
+            return mir_machine_reject(
+                "matrix-product-schedule", "count-types");
+    for (item = 0; item < word_type_count; ++item)
+        if (!mir_match_matrix_product_word_type(
+                mir.insns[word_types[item]].type))
+            return mir_machine_reject(
+                "matrix-product-schedule", "word-types");
+    for (item = 0; item < long_type_count; ++item)
+        if (!mir_match_matrix_product_long_type(
+                mir.insns[long_types[item]].type))
+            return mir_machine_reject(
+                "matrix-product-schedule", "long-types");
 
     if (!mir_machine_constant_equals(
             mir.insns[outer_initial].dst, 0) ||

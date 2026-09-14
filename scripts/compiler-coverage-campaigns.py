@@ -144,6 +144,9 @@ CAMPAIGNS = (
     Campaign("gnarly-runner-schedule",
              "gnarly-runner-wave100-audit.py",
              output_dir="gnarly-runner-wave100-audit", max_jobs=2),
+    Campaign("matrix-product-kind-schedule",
+             "matrix-product-kind-wave140-audit.py",
+             output_dir="matrix-product-kind-wave140-audit", max_jobs=2),
 )
 
 

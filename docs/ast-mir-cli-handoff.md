@@ -1214,6 +1214,32 @@ locally verified execution inventory.
   `98d3715cb1c1fcca5d9801b075cf97fda73eb079bbb35a0e8bbf37d24ab22213`.
   The standalone audit, all Python script tests, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 140 closes the historical
+  `mir_match_matrix_product_schedule_kind` proof gap for both the 101-
+  instruction transposed and 90-instruction outer schedules and fixes a
+  genuine exact-schedule false-acceptance class. The matcher already proved
+  both opcode fingerprints, seven-block loop structure, parameter layout,
+  counter and pointer dataflow, per-product conversion and saturating-add call
+  identities, and final stores. Fresh diagnostic mutations showed that many
+  named-memory widths, pointer/count/word/long result types, binary operand
+  types, and indexed/indirect access types were not part of that proof: 73 of
+  85 representative mutations retained the unchanged hard-coded schedule.
+  The matcher now validates those type and width invariants for both kinds and
+  tightens the transposed `memset` call and argument metadata.
+  New `tests/mir-clobber/matkind.c` contains both exact source functions and
+  independently calculated matrix-result oracles, including saturation and
+  negative fixed-point products. The dedicated
+  `matrix-product-kind-wave140-audit.py` campaign runs 12 stack/no-stack and
+  peep/nopeep runtime controls, retains both exact schedules in clean builds,
+  isolates source near matches for each kind, and rejects 95/95 targeted MIR
+  mutations (49 transposed and 46 outer). Forced
+  `DCC_MIR_SELECT_CANDIDATE=spilled-store-address` output independently
+  confirms every generic fallback with zero meaningful survivors. The clean
+  selected hashes remain `88cdd4b5` and `eca25a44`; combined fixture assembly
+  SHA-256 is
+  `b3d565637021d445de314147095b9e7aba6fcd7a5de036f89e130d952a263452`.
+  The standalone audit, full Python script-test suite, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

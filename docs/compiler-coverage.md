@@ -891,6 +891,33 @@ The standalone audit, all Python script tests, and both strict 506-app release
 modes pass. Regenerate the immutable aggregate ledger before claiming new
 overall branch totals.
 
+Wave 140 closes the historical
+`mir_match_matrix_product_schedule_kind` proof gap for both its transposed and
+outer variants and fixes a genuine exact-schedule false-acceptance class. The
+existing matcher proves the 101- and 90-instruction opcode fingerprints,
+seven-block loop structure, parameter layout, pointer and counter dataflow,
+direct conversion and clamp calls, and output stores. Fresh diagnostic
+mutations showed that named-memory widths, pointer/count/word/long result
+types, binary operand types, and indexed/indirect access types were not fully
+proved, allowing 73 of 85 representative type and width mutations to retain
+the unchanged hard-coded schedule. Those invariants are now explicit for both
+kinds, and the transposed clear call also validates its complete call and
+argument metadata.
+
+New `tests/mir-clobber/matkind.c` exercises both exact source shapes and checks
+their results against independently calculated fixed-point matrix oracles.
+New `matrix-product-kind-wave140-audit.py` runs 12 stack/no-stack and
+peep/nopeep runtime controls, retains both clean exact schedules, isolates a
+source near match for each kind, and rejects 95/95 targeted MIR mutations (49
+transposed and 46 outer). Forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-store-address` output independently confirms
+every generic fallback with zero meaningful survivors. The clean selected
+hashes remain `88cdd4b5` and `eca25a44`; combined fixture assembly SHA-256 is
+`b3d565637021d445de314147095b9e7aba6fcd7a5de036f89e130d952a263452`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
