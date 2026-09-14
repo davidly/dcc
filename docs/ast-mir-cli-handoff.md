@@ -823,7 +823,7 @@ locally verified execution inventory.
   rejected every new near match and mutation, so this increment closes proof
   gaps rather than fixing a false acceptance. All 136 Python script tests
   pass.
-- Wave 46 closes the next spilled generic-fallback proof gaps without
+- Wave 47 closes the next spilled generic-fallback proof gaps without
   changing production code. Existing malformed-MIR transaction tests already
   exercised nearby `MIR_LOAD_INDIRECT`, `MIR_CALL`, `MIR_CALL_AGGREGATE`, and
   `MIR_VLA_SIZE` shapes, but they did not prove the exact

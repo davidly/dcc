@@ -467,7 +467,7 @@ than fixing a false acceptance. All 136 Python script tests pass. This
 remains a test-only increment; regenerate the immutable aggregate ledger
 before claiming new overall branch totals.
 
-Wave 46 closes the next spilled generic-fallback proof gaps without changing
+Wave 47 closes the next spilled generic-fallback proof gaps without changing
 production code. Existing malformed-MIR transaction tests already exercised
 nearby `MIR_LOAD_INDIRECT`, `MIR_CALL`, `MIR_CALL_AGGREGATE`, and
 `MIR_VLA_SIZE` graphs, but they did not prove the exact
