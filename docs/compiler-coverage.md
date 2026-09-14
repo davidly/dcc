@@ -399,6 +399,22 @@ compiler campaign retains one passing baseline plus 24/24 killed mutants.
 This test-only increment changes no production output; regenerate the exact
 aggregate ledger before updating global totals.
 
+Wave 43 closes the next `mir_value_number_global_field_loads` proof gap
+without changing production code. The earlier host control already proved
+positive redundant-load elimination; two new graphs now prove the missing
+same-field-store and unsafe-call barriers. One keeps the first field load live
+across a call-safe direct call, stores the same isolated static field, and
+requires the later load not to fold to the stale value. The other seeds the
+whole-file scan with two textual writes to the same field, inserts an
+intervening call, and likewise requires no fold. Current code passes both
+graphs, so this was a proof gap rather than a correctness defect. A new
+clean-build mutant, `global-field-vn-call-barrier`, disables only the
+non-call-safe call eviction and is killed by the exact
+`FAIL isolated global field unsafe-call barrier` assertion. Normal and
+ASan/UBSan host tests pass 5/5, the full compiler campaign has one passing
+baseline plus 25/25 killed mutants, and all 136 Python script tests pass.
+Commit `31c13e7c` contains the invariant and mutant.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

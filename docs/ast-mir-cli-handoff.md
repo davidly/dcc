@@ -761,6 +761,20 @@ locally verified execution inventory.
   tests pass, and the compiler campaign retains one baseline plus 24/24 killed
   mutants. Production output is unchanged; exact aggregate totals remain
   pending recollection.
+- Wave 43 closes the next `mir_value_number_global_field_loads` proof gap
+  without changing production code. The existing positive control already
+  proved redundant isolated-field load elimination; two new host graphs now
+  prove the missing barriers: a call-safe intervening call plus same-field
+  store must not leave a stale cached value reusable, and a field whose
+  whole-file scan sees two textual writers must be evicted across any
+  intervening call. Current code passes both graphs, so this increment proved
+  an untested barrier rather than fixing a miscompile. The clean-build mutant
+  `global-field-vn-call-barrier` disables only the non-call-safe call eviction
+  and is killed by the exact `FAIL isolated global field unsafe-call barrier`
+  assertion. Normal and ASan/UBSan host tests pass 5/5, the full compiler
+  mutation campaign has one passing baseline plus 25/25 killed mutants, and
+  all 136 Python script tests pass. Commit `31c13e7c` contains the invariant
+  and mutant.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
