@@ -22,6 +22,7 @@ RENAMED_FUNCTION = "renamed_fortran_grow_fixture"
 SOURCE = "tests/mir-clobber/fortgrow.c"
 TEMPLATE = "fortran-grow-schedule"
 FORCED_CANDIDATE = "spilled-phi-slot"
+INSTRUCTION_COUNT = 92
 SELECTION = re.compile(
     r"MIR selection function=(?P<function>\S+) "
     r"selector=(?P<selector>\S+) result=mir"
@@ -61,44 +62,58 @@ class MutationCase:
 
 
 SOURCE_CONTROLS = (
-    SourceControl("baseline", "FG19BASE", expect_exact=True),
+    SourceControl("baseline", "FG20BASE", expect_exact=True),
     SourceControl(
-        "renamed", "FG19NAME", ("FORTGROW_RENAMED",),
+        "renamed", "FG20NAME", ("FORTGROW_RENAMED",),
         RENAMED_FUNCTION, expect_exact=True,
     ),
     SourceControl(
-        "fill-one", "FG19FILL", ("FORTGROW_FILL_ONE",),
+        "fill-one", "FG20FILL", ("FORTGROW_FILL_ONE",),
         expected_reject="semantic-payload",
     ),
     SourceControl(
-        "volatile-capacity", "FG19VOL",
+        "volatile-capacity", "FG20VOL",
         ("FORTGROW_VOLATILE_CAPACITY",),
         expected_reject="semantic-payload",
     ),
     SourceControl(
-        "extra-cfg", "FG19CFG", ("FORTGROW_EXTRA_CFG",),
+        "extra-cfg", "FG20CFG", ("FORTGROW_EXTRA_CFG",),
         expected_reject="semantic-payload",
     ),
     SourceControl(
-        "alternate-message", "FG19MSG",
+        "alternate-message", "FG20MSG",
         ("FORTGROW_ALT_MESSAGE",),
     ),
     SourceControl(
-        "split-failure", "FG19FAIL",
+        "split-failure", "FG20FAIL",
         ("FORTGROW_SPLIT_FAILURE",),
     ),
 )
 
-# The diagnostic mutation hook exposes five scalar fields for every MIR
-# instruction. Exercise all five at every one of the 92 instruction indices,
-# including labels and branches, so no unchecked instruction can hide behind
-# a hand-picked field list.
 MUTATED_FIELDS = (
-    ("type", 400),
-    ("memory_size", 7),
+    ("opcode", 999),
+    ("dst", 120),
     ("src1", 120),
     ("src2", 121),
+    ("type", 400),
     ("immediate", 12345),
+    ("label", 120),
+    ("phi_pred1", 120),
+    ("phi_pred2", 121),
+    ("successor0", 120),
+    ("successor1", 121),
+    ("successor_count", 7),
+    ("object", 120),
+    ("memory_size", 7),
+    ("memory_flags", 127),
+    ("pointee_volatile_mask", 127),
+    ("has_pointer_qualifiers", 7),
+    ("bit_width", 7),
+    ("bit_shift", 7),
+    ("bit_mask", 127),
+    ("secondary_offset", 12345),
+    ("inline_temp_id", 120),
+    ("divmod_cast_types", 127),
 )
 
 # Identity mutations are meaningful only where the baseline instruction owns
@@ -116,7 +131,7 @@ MUTATION_CASES = tuple(
         None if field == "immediate" and instruction in (12, 69)
         else "semantic-payload",
     )
-    for instruction in range(92)
+    for instruction in range(INSTRUCTION_COUNT)
     for field, value in MUTATED_FIELDS
 ) + tuple(
     MutationCase(
@@ -125,6 +140,59 @@ MUTATION_CASES = tuple(
     for instruction in IDENTITY_INSTRUCTIONS
 )
 EXPECTED_MUTATION_OUTCOMES = Counter(rejected=len(MUTATION_CASES))
+
+MUTATION_HOOK_NEEDLE = """\
+    else if (!strcmp(field, "memory_size"))
+        insn->memory_size = (int)value;
+    else if (!strcmp(field, "src1"))
+        insn->src1 = (int)value;
+    else if (!strcmp(field, "src2"))
+        insn->src2 = (int)value;
+"""
+MUTATION_HOOK_REPLACEMENT = """\
+    else if (!strcmp(field, "opcode"))
+        insn->opcode = (int)value;
+    else if (!strcmp(field, "dst"))
+        insn->dst = (int)value;
+    else if (!strcmp(field, "memory_size"))
+        insn->memory_size = (int)value;
+    else if (!strcmp(field, "src1"))
+        insn->src1 = (int)value;
+    else if (!strcmp(field, "src2"))
+        insn->src2 = (int)value;
+    else if (!strcmp(field, "label"))
+        insn->label = (int)value;
+    else if (!strcmp(field, "phi_pred1"))
+        insn->phi_pred1 = (int)value;
+    else if (!strcmp(field, "phi_pred2"))
+        insn->phi_pred2 = (int)value;
+    else if (!strcmp(field, "successor0"))
+        insn->successors[0] = (int)value;
+    else if (!strcmp(field, "successor1"))
+        insn->successors[1] = (int)value;
+    else if (!strcmp(field, "successor_count"))
+        insn->successor_count = (int)value;
+    else if (!strcmp(field, "object"))
+        insn->object = (int)value;
+    else if (!strcmp(field, "memory_flags"))
+        insn->memory_flags = (int)value;
+    else if (!strcmp(field, "pointee_volatile_mask"))
+        insn->pointee_volatile_mask = (unsigned int)value;
+    else if (!strcmp(field, "has_pointer_qualifiers"))
+        insn->has_pointer_qualifiers = (int)value;
+    else if (!strcmp(field, "bit_width"))
+        insn->bit_width = (int)value;
+    else if (!strcmp(field, "bit_shift"))
+        insn->bit_shift = (int)value;
+    else if (!strcmp(field, "bit_mask"))
+        insn->bit_mask = (unsigned int)value;
+    else if (!strcmp(field, "secondary_offset"))
+        insn->secondary_offset = (int)value;
+    else if (!strcmp(field, "inline_temp_id"))
+        insn->inline_temp_id = (int)value;
+    else if (!strcmp(field, "divmod_cast_types"))
+        insn->divmod_cast_types = (int)value;
+"""
 
 
 def run(command, env=None, timeout=180):
@@ -147,17 +215,39 @@ def run(command, env=None, timeout=180):
     return completed.stdout
 
 
-def compiler_path():
-    configured = os.environ.get("DCC")
-    compiler = (
-        Path(configured)
-        if configured
-        else ROOT / ("dcc.exe" if os.name == "nt" else "dcc")
+def prepare_mutation_compiler(output_dir):
+    source_dir = output_dir / "mutation-compiler-src"
+    build_dir = output_dir / "mutation-compiler-build"
+    binary_dir = output_dir / "mutation-compiler-bin"
+    shutil.copytree(ROOT / "src" / "dcc", source_dir)
+    emit_path = source_dir / "dcc_mir_machine_emit.c"
+    emit_text = emit_path.read_text(encoding="utf-8")
+    if emit_text.count(MUTATION_HOOK_NEEDLE) != 1:
+        raise RuntimeError("diagnostic mutation hook shape changed")
+    emit_path.write_text(
+        emit_text.replace(
+            MUTATION_HOOK_NEEDLE, MUTATION_HOOK_REPLACEMENT
+        ),
+        encoding="utf-8",
     )
-    if not compiler.is_absolute():
-        compiler = (ROOT / compiler).resolve()
+    run(
+        [
+            "cmake", "-S", str(source_dir), "-B", str(build_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DDCC_RUNTIME_OUTPUT_DIRECTORY={binary_dir}",
+        ],
+        timeout=300,
+    )
+    run(
+        [
+            "cmake", "--build", str(build_dir), "--parallel",
+            "--target", "dcc",
+        ],
+        timeout=600,
+    )
+    compiler = binary_dir / ("dcc.exe" if os.name == "nt" else "dcc")
     if not compiler.is_file():
-        raise RuntimeError(f"DCC compiler not found: {compiler}")
+        raise RuntimeError(f"mutation compiler not found: {compiler}")
     return compiler
 
 
@@ -369,25 +459,46 @@ def run_source_controls(compiler, dccmake, output_dir):
 
 
 def run_mutation(compiler, work_dir, case):
-    output_path = work_dir / f"{case.name}.MAC"
+    ordinary_path = work_dir / f"{case.name}-ordinary.MAC"
+    forced_path = work_dir / f"{case.name}-forced.MAC"
     environment = diagnostic_environment()
     environment.update(
         DCC_MIR_MACHINE_MUTATE_FUNCTION=FUNCTION,
         DCC_MIR_MACHINE_MUTATE=case.spec,
     )
     report = run(
-        compiler_command(compiler, output_path), environment
+        compiler_command(compiler, ordinary_path), environment
     )
     selector = require_generic(
         report, FUNCTION, case.name, case.expected_reject
     )
-    output_path.unlink(missing_ok=True)
+    forced_environment = environment.copy()
+    forced_environment["DCC_MIR_SELECT_CANDIDATE"] = FORCED_CANDIDATE
+    forced_report = run(
+        compiler_command(compiler, forced_path), forced_environment
+    )
+    require_generic(
+        forced_report, FUNCTION, f"{case.name} forced",
+        case.expected_reject,
+    )
+    forced_cost = (
+        f"MIR cost-selected function={FUNCTION} "
+        f"candidate={FORCED_CANDIDATE} selector=spilled-scalar-cfg"
+    )
+    if forced_cost not in forced_report:
+        raise RuntimeError(
+            f"{case.name} did not select the forced fallback\n"
+            f"{forced_report}"
+        )
+    ordinary_path.unlink(missing_ok=True)
+    forced_path.unlink(missing_ok=True)
     return (
         case.name,
         case.spec,
         "rejected",
         selector,
         reject_reason_from(report, FUNCTION) or "",
+        FORCED_CANDIDATE,
     )
 
 
@@ -430,14 +541,14 @@ def main():
     if args.jobs < 1:
         parser.error("--jobs must be positive")
 
-    compiler = compiler_path()
-    dccmake = dccmake_path()
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
         output_dir = ROOT / output_dir
     shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(parents=True)
 
+    compiler = prepare_mutation_compiler(output_dir)
+    dccmake = dccmake_path()
     baseline_digest = baseline_compile(compiler, output_dir)
     forced_fallback_control(compiler, output_dir)
     source_rows = run_source_controls(
@@ -458,7 +569,7 @@ def main():
         output_dir / "mutation-census.tsv",
         (
             "name", "mutation", "outcome", "selector",
-            "reject_reason",
+            "reject_reason", "forced_candidate",
         ),
         mutation_rows,
     )
@@ -472,6 +583,11 @@ def main():
     print(
         f"fortran grow Wave 2000 mutations={len(mutation_rows)} "
         f"{outcomes}"
+    )
+    print(
+        f"instructions={INSTRUCTION_COUNT} "
+        f"fields-per-instruction={len(MUTATED_FIELDS)} "
+        f"identity-mutations={len(IDENTITY_INSTRUCTIONS)}"
     )
     print(
         f"source controls={len(source_rows)} "

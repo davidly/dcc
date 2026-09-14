@@ -1349,10 +1349,11 @@ callees; and validates both emitted failure strings. New
 `tests/mir-clobber/fortgrow.c` isolates growth and independently checks
 no-growth, small-step, large-step, clamp, preservation, and fill behavior.
 `fortran-grow-wave2000-audit.py` runs 28 stack/no-stack and peep/nopeep runtime
-controls across seven source variants and rejects all 489 type, width,
-operand, immediate/operator, and meaningful identity mutations with generic
-fallback and zero survivors. The clean selected hash is `41574932` and
-assembly SHA-256 is
+controls across seven source variants and rejects all 2,145 mutations: all 23
+fingerprinted fields at every instruction plus 29 meaningful storage/call
+identities. Every mutation independently selects forced
+`spilled-phi-slot` fallback, with zero survivors. The clean selected hash is
+`41574932` and assembly SHA-256 is
 `b45cda486ecdd0330ca0784e70fdcadc20edcd5d5418a94751305c325b593e59`.
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
