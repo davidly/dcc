@@ -1407,6 +1407,32 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 2500 closes the remaining exact-schedule proof gap for
+`mir_match_recursive_byte_minimax_schedule` and fixes severe false acceptance.
+The previous 253-instruction matcher checked every opcode plus selected
+constants, edges, calls, locations, and dataflow, but did not bind most
+destinations, types, operands, CFG successors, PHI predecessors,
+memory/qualifier/bitfield state, or auxiliary metadata. It accepted 4,899 of
+5,857 exhaustive per-instruction field and storage-identity mutations.
+
+The matcher now fingerprints 23 semantic and structural fields on every
+instruction, including both successors and PHI predecessors, while retaining
+explicit symbol, ABI, layout, constant, and source-name-independent location
+proofs. New `tests/mir-clobber/bminimax.c` compares three recursive alpha-beta
+searches against an independent implementation and checks results, move counts,
+board restoration, and an aggregate signature. New
+`recursive-byte-minimax-wave2500-audit.py` builds an isolated diagnostic
+mutation compiler, runs 40 stack/no-stack and peep/nopeep controls across ten
+source variants, and rejects all 5,857 mutations over all 253 instructions,
+all 23 fingerprinted fields, and 38 meaningful identities. Each rejection
+retains generic MIR emission and independently supports forced
+`spilled-phi-slot` fallback. Zero meaningful survivors remain. The clean
+selected hash is `8b08568e`; assembly SHA-256 is
+`8b677c720df6a1ae17b3236fd665e83bc4e786532262b3fa5e6456be43a43d4f`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

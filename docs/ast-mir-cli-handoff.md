@@ -1698,6 +1698,30 @@ locally verified execution inventory.
   Zero meaningful survivors remain. The standalone audit, all 136 Python
   script tests, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 2500 replaces the partial recursive-byte MinMax evidence with a complete
+  exact-schedule proof and fixes severe false acceptance in
+  `mir_match_recursive_byte_minimax_schedule`. Although the old matcher checked
+  all 253 opcodes, selected control edges, constants, locations, calls, and
+  dataflow, it did not bind most instruction destinations, types, operands,
+  CFG successors, PHI predecessors, memory/qualifier/bitfield state, or
+  auxiliary metadata. It falsely accepted 4,899 of 5,857 exhaustive
+  per-instruction and storage-identity mutations.
+  The matcher now fingerprints 23 semantic and structural fields on every
+  instruction, including both CFG successors and PHI predecessors, while its
+  existing symbol and location checks preserve source-name independence.
+  New `tests/mir-clobber/bminimax.c` independently computes the recursive
+  alpha-beta oracle for three initial positions and checks the exact result,
+  move count, restored board, and aggregate signature. New
+  `recursive-byte-minimax-wave2500-audit.py` builds an isolated diagnostic
+  mutation compiler, runs 40 stack/no-stack and peep/nopeep controls across ten
+  source variants, and rejects all 5,857 mutations across all 253 instructions,
+  all 23 fingerprinted fields, and 38 meaningful identities. Every mutation
+  retains verified generic fallback, including forced `spilled-phi-slot`
+  selection. The clean selected hash is `8b08568e` and assembly SHA-256 is
+  `8b677c720df6a1ae17b3236fd665e83bc4e786532262b3fa5e6456be43a43d4f`.
+  Zero meaningful survivors remain. The standalone audit, all 136 Python
+  script tests, and both strict 506-app release modes pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -10331,6 +10331,8 @@ static int mir_match_recursive_byte_minimax_schedule(
     int moves_type;
     int moves_storage;
     int moves_offset;
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     int instruction;
     int edge;
     int argument;
@@ -10347,6 +10349,53 @@ static int mir_match_recursive_byte_minimax_schedule(
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "recursive-byte-minimax-schedule", "opcodes");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[23];
+        size_t value;
+
+        values[0] = (unsigned int)insn->opcode;
+        values[1] = (unsigned int)insn->dst;
+        values[2] = (unsigned int)insn->src1;
+        values[3] = (unsigned int)insn->src2;
+        values[4] = (unsigned int)insn->type;
+        values[5] = (unsigned int)insn->immediate;
+        values[6] = (unsigned int)insn->label;
+        values[7] = (unsigned int)insn->phi_pred1;
+        values[8] = (unsigned int)insn->phi_pred2;
+        values[9] = (unsigned int)insn->successors[0];
+        values[10] = (unsigned int)insn->successors[1];
+        values[11] = (unsigned int)insn->successor_count;
+        values[12] = (unsigned int)insn->object;
+        values[13] = (unsigned int)insn->memory_size;
+        values[14] = (unsigned int)insn->memory_flags;
+        values[15] = insn->pointee_volatile_mask;
+        values[16] = (unsigned int)insn->has_pointer_qualifiers;
+        values[17] = (unsigned int)insn->bit_width;
+        values[18] = (unsigned int)insn->bit_shift;
+        values[19] = (unsigned int)insn->bit_mask;
+        values[20] = (unsigned int)insn->secondary_offset;
+        values[21] = (unsigned int)insn->inline_temp_id;
+        values[22] = (unsigned int)insn->divmod_cast_types;
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0x13f98b7a0d139762ULL ||
+        second != 0x5b426763e4f9b566ULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=recursive-byte-minimax-schedule "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     for (edge = 0;
          edge < (int)(sizeof(control_edges) /
                       sizeof(control_edges[0]));
