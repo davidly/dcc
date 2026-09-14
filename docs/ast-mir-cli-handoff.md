@@ -1269,7 +1269,7 @@ locally verified execution inventory.
   `3e00c6e0a6c77e7df08684782db10084f71c228e2b1ec29cff820914bd86d7e3`.
   The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
-- Wave 160 closes the historical `mir_match_bcd_byte_math_schedule` proof gap
+- Wave 200 closes the historical `mir_match_bcd_byte_math_schedule` proof gap
   and fixes a genuine exact-schedule false-acceptance class. The prior
   240-instruction matcher proved the opcode sequence, 33-block CFG, parameter
   widths and offsets, three nonvolatile state members, and selected decimal
@@ -1281,7 +1281,7 @@ locally verified execution inventory.
   unary/binary operators, all 32 constants, 36 memory accesses, 33 distinct
   labels, six PHI predecessor pairs, and the nine distinct parameter/local
   locations in addition to its existing state binding.
-  `bcd-byte-math-wave160-audit.py` extends the existing `bmw9.c` independent
+  `bcd-byte-math-wave200-audit.py` extends the existing `bmw9.c` independent
   2,048-case arithmetic oracle, runs eight stack/no-stack and peep/nopeep
   runtime controls, and proves named
   `spilled-boolean-phi-branch` fallback for a volatile-result near match and

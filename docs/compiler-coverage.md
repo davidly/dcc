@@ -946,7 +946,7 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
-Wave 160 closes the historical `mir_match_bcd_byte_math_schedule` proof gap
+Wave 200 closes the historical `mir_match_bcd_byte_math_schedule` proof gap
 and fixes a genuine exact-schedule false-acceptance class. The old
 240-instruction matcher checked the opcode/CFG outline, byte parameters, three
 state members, and selected decimal constants, but 26/29 representative
@@ -958,7 +958,7 @@ labels, six PHI predecessor pairs, and all nine distinct parameter/local
 locations while retaining the existing source-independent state-member
 binding.
 
-The dedicated `bcd-byte-math-wave160-audit.py` campaign extends the existing
+The dedicated `bcd-byte-math-wave200-audit.py` campaign extends the existing
 `bmw9.c` 2,048-case independent arithmetic oracle. It runs eight
 stack/no-stack and peep/nopeep runtime controls, proves named
 `spilled-boolean-phi-branch` fallback for a volatile-result source near match,
