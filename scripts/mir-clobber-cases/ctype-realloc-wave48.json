@@ -1,0 +1,250 @@
+[
+  {
+    "Name": "crw48ok",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": [],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireExact": true
+  },
+  {
+    "Name": "crw48allocfix",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW48_FIXED_PRINT", "CRW48_SOURCE_ALLOC_FIXED_PRINT"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "crw48growfix",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW48_FIXED_PRINT", "CRW48_SOURCE_GROW_FIXED_PRINT"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "crw48growalias",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW48_ALIAS_RESIZE", "CRW48_SOURCE_GROW_ALIAS_RESIZE"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "crw48comparevar",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW48_COMPARE_VARIADIC", "CRW48_SOURCE_COMPARE_VARIADIC"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "crw48bytealias",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW48_ALIAS_CHECK", "CRW48_SOURCE_BYTE_CHECK_ALIAS"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "crw48successfix",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW48_FIXED_PRINT", "CRW48_SOURCE_SUCCESS_FIXED_PRINT"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "crw48allocarg",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": [],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "138:immediate:1",
+    "MachineMutationFunction": "crw7_exact"
+  },
+  {
+    "Name": "crw48growarg",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": [],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "163:immediate:1",
+    "MachineMutationFunction": "crw7_exact"
+  },
+  {
+    "Name": "crw48finalarg",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": [],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "243:immediate:0",
+    "MachineMutationFunction": "crw7_exact"
+  },
+  {
+    "Name": "crw48resizeid",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW48_ALIAS_RESIZE"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "155:identity:88",
+    "MachineMutationFunction": "crw7_exact"
+  },
+  {
+    "Name": "crw48checkid",
+    "Group": "ctype-realloc-wave48",
+    "Sources": ["tests/mir-clobber/ctyper7.c"],
+    "Defines": ["CRW48_ALIAS_CHECK"],
+    "Expected": [
+      "ctype/realloc ok",
+      "CRW7 oracle failures=0 ctype=14 hash=62753",
+      "alloc=3/1 resize=3/1 free=2 live=0",
+      "width=32773,32779 bounds=1"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "ctype-realloc-schedule",
+    "ExactFunction": "crw7_exact",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "crw7_exact",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "222:identity:88",
+    "MachineMutationFunction": "crw7_exact"
+  }
+]

@@ -509,6 +509,27 @@ branches do not map cleanly onto an existing single-condition mutation with a
 distinct downstream oracle. This remains a test-only increment; the
 authoritative aggregate totals still await a fresh immutable collection.
 
+Wave 49 closes the next `mir_match_ctype_realloc_schedule` proof gaps without
+changing production code. The earlier ctype/realloc coverage already proved
+the exact baseline, the exhaustive Wave 21 field-mutation census, the wave7
+fastcall near matches, and selected ABI, width, string, and dataflow
+mutations, but it did not keep a focused proof over fixed-prototype
+allocation/grow/success printers, grow/shrink helper identity consistency,
+variadic compare drift, late check-helper consistency, or several remaining
+pointer-slot, argument-source, stride, and final-tail legality checks. New
+`ctype-realloc-wave48` MIR-clobber cases add seven runtime controls plus five
+runtime-safe selector-mutant controls, and all 48 target configurations pass.
+A new `ctype-realloc-wave48-audit.py` campaign then runs 28 stack/no-stack and
+peep/nopeep runtime controls and rejects 18/18 targeted MIR mutations that
+cover pointer-store/load identity, allocation/grow/shrink null-test
+operators, allocation/grow/final failure argument ordering, copy/preserve
+dataflow, resize/check helper identity, byte-store and byte-check stride,
+byte-check normalization, free-call argument indexing, and the final success
+constant. Current code already rejected every new mutation and near match, so
+this increment closes proof gaps rather than fixing a false acceptance. All
+136 Python script tests pass. This remains a test-only increment; regenerate
+the immutable aggregate ledger before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

@@ -857,6 +857,26 @@ locally verified execution inventory.
   5/5, all 136 Python script tests pass, and no clean compiler mutant was
   added because these classifier-only cases do not expose a narrow existing
   mutation hook with a distinct downstream oracle.
+- Wave 49 closes the next `mir_match_ctype_realloc_schedule` proof gaps
+  without changing production code. The earlier ctype/realloc coverage already
+  proved the baseline exact schedule, the broad Wave 21 field-mutation census,
+  the wave7 fastcall near matches, and selected ABI, width, and string
+  mutations, but it did not keep a focused campaign over fixed-prototype
+  failure/success printers, grow/shrink helper identity consistency,
+  variadic-compare drift, late check-helper consistency, or several still
+  unpinned pointer-slot, argument-source, and stride predicates. New
+  `ctype-realloc-wave48` MIR-clobber cases add seven exact/generic runtime
+  controls plus five runtime-safe selector-mutant controls, for 48 passing
+  target configurations. The dedicated `ctype-realloc-wave48-audit.py` script
+  now runs 28 stack/no-stack and peep/nopeep runtime controls and rejects
+  18/18 targeted MIR mutations covering pointer-store/load identity,
+  allocation/grow/shrink null-test operators, allocation/grow/final failure
+  argument ordering, copy/preserve dataflow, resize/check helper identity,
+  byte-store and byte-check stride, byte-check normalization, free-call
+  argument indexing, and the final success constant. Current code already
+  rejected every new near match and mutation, so this increment closes proof
+  gaps rather than fixing a false acceptance. All 136 Python script tests
+  pass.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
