@@ -1653,6 +1653,30 @@ locally verified execution inventory.
   `41574932` and assembly SHA-256 is
   `b45cda486ecdd0330ca0784e70fdcadc20edcd5d5418a94751305c325b593e59`.
   The broader coverage objective remains incomplete.
+- Wave 2300 closes the historical `mir_match_variadic_join_report` proof gap
+  and fixes severe exact-schedule false acceptance. The old 63-instruction,
+  five-block matcher touched 41 instruction positions but fully verified none:
+  it checked selected opcodes, constants, argument relationships, and branch
+  labels while leaving most types, destinations, operands, widths, memory
+  flags, CFG successors, PHI predecessors, object identities, qualifiers, and
+  instruction metadata unproved. Exhaustive mutation found that it falsely
+  accepted 1,366 of 1,470 changes, including all 63 type, memory-width,
+  memory-flag, qualifier, bitfield, object, successor, and PHI-predecessor
+  mutations.
+  The matcher now fingerprints all 23 numeric semantic and structural fields
+  on every instruction, canonical source-name identity relationships, and both
+  emitted callee contracts. New `tests/mir-clobber/varjoin.c` isolates the
+  schedule and independently derives the expected joined length, separator
+  count, and complete output text. New
+  `variadic-join-report-wave2300-audit.py` builds an isolated diagnostic
+  mutation compiler, runs 24 stack/no-stack and peep/nopeep controls across
+  six source variants, and rejects all 1,470 mutations with generic fallback
+  and zero survivors. Every rejection independently selects forced
+  `spilled-phi-slot` fallback. The clean selected hash is `c6508ce3` and
+  assembly SHA-256 is
+  `ff651adf1097397693e62cb00814dd669cd2ee87301952f61204d2812214a1b9`.
+  The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

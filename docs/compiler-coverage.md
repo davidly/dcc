@@ -1358,6 +1358,32 @@ identities. Every mutation independently selects forced
 Regenerate the immutable aggregate ledger before claiming new overall branch
 totals.
 
+Wave 2300 closes the historical `mir_match_variadic_join_report` proof gap and
+fixes severe exact-schedule false acceptance. The previous 63-instruction,
+five-block matcher touched 41 instruction positions through selected opcode,
+constant, argument, and branch checks, but did not completely verify any
+instruction. It falsely accepted 1,366 of 1,470 exhaustive mutations. The
+survivors included all 63 type, memory-width, memory-flag, pointer-qualifier,
+bitfield, object, successor, and PHI-predecessor changes; only 104 mutations
+were rejected.
+
+The matcher now fingerprints every instruction's 23 numeric semantic and
+structural fields, canonical identifier-equivalence relationships, and the
+complete join/report callee contracts without depending on source spelling.
+New `tests/mir-clobber/varjoin.c` independently computes the expected joined
+length, separator count, and complete string. New
+`variadic-join-report-wave2300-audit.py` runs 24 stack/no-stack and
+peep/nopeep runtime controls across baseline, renamed-function,
+renamed-locals, renamed-helper, volatile-count, and alternate-CFG variants.
+It rejects all 1,470 mutations with generic fallback, independently forces
+`spilled-phi-slot` for every rejection, and leaves zero survivors. The clean
+selected hash is `c6508ce3` and assembly SHA-256 is
+`ff651adf1097397693e62cb00814dd669cd2ee87301952f61204d2812214a1b9`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

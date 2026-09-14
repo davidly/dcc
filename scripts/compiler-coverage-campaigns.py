@@ -201,6 +201,9 @@ CAMPAIGNS = (
     Campaign("list-reverse-schedule",
              "list-reverse-wave2200-audit.py",
              output_dir="list-reverse-wave2200-audit", max_jobs=2),
+    Campaign("variadic-join-report-schedule",
+             "variadic-join-report-wave2300-audit.py",
+             output_dir="variadic-join-report-wave2300-audit", max_jobs=2),
 )
 
 
