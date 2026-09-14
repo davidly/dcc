@@ -14539,6 +14539,62 @@ static int mir_match_unnamed_bitfield_report_schedule(
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "unnamed-bitfield-report", "opcodes");
+    {
+        unsigned long long first = 1469598103934665603ULL;
+        unsigned long long second = 0x9e3779b97f4a7c15ULL;
+
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+            unsigned long long values[] = {
+                (unsigned long long)(uint32_t)insn->opcode,
+                (unsigned long long)(uint32_t)insn->dst,
+                (unsigned long long)(uint32_t)insn->src1,
+                (unsigned long long)(uint32_t)insn->src2,
+                (unsigned long long)(uint32_t)insn->type,
+                (unsigned long long)(uint32_t)insn->immediate,
+                (unsigned long long)(uint32_t)insn->label,
+                (unsigned long long)(uint32_t)insn->phi_pred1,
+                (unsigned long long)(uint32_t)insn->phi_pred2,
+                (unsigned long long)(uint32_t)insn->successors[0],
+                (unsigned long long)(uint32_t)insn->successors[1],
+                (unsigned long long)(uint32_t)insn->successor_count,
+                (unsigned long long)(uint32_t)insn->object,
+                (unsigned long long)(uint32_t)insn->memory_size,
+                (unsigned long long)(uint32_t)insn->memory_flags,
+                (unsigned long long)insn->pointee_volatile_mask,
+                (unsigned long long)(uint32_t)
+                    insn->has_pointer_qualifiers,
+                (unsigned long long)(uint32_t)insn->bit_width,
+                (unsigned long long)(uint32_t)insn->bit_shift,
+                (unsigned long long)insn->bit_mask,
+                (unsigned long long)(uint32_t)
+                    insn->secondary_offset,
+                (unsigned long long)(uint32_t)insn->inline_temp_id,
+                (unsigned long long)(uint32_t)
+                    insn->divmod_cast_types
+            };
+            size_t value;
+
+            for (value = 0;
+                 value < sizeof(values) / sizeof(values[0]); ++value) {
+                first ^= values[value];
+                first *= 1099511628211ULL;
+                second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                    (second << 6) + (second >> 2);
+            }
+        }
+        if (first != 0x865d5f436fa368fbULL ||
+            second != 0xef19b9f9338001f2ULL) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=unnamed-bitfield-report "
+                        "reject=semantic-payload "
+                        "fingerprint=%016llx:%016llx\n",
+                        mir.name, first, second);
+            return 0;
+        }
+    }
     for (field = 0; field < 11; ++field) {
         int call_slot = field_call_slots[field][0];
         int value_slot = field_call_slots[field][1];

@@ -1556,6 +1556,29 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall totals.
 
+Wave 6100 closes the historical
+`mir_match_unnamed_bitfield_report_schedule` proof gap and fixes severe exact-
+schedule false acceptance. The old 99-instruction matcher checked every opcode
+but inspected payload fields at only 61 instruction positions, and it did not
+prove the complete type, SSA, memory/qualifier, CFG-edge, PHI-predecessor, or
+metadata stream. It accepted 1,900 of 2,302 exhaustive meaningful mutations
+(82.5%).
+
+The matcher now fingerprints all 23 semantic and structural fields on every
+instruction before applying its existing bitfield-layout, value, print-call,
+argument, size, and return checks. New `tests/mir-clobber/unbitfld.c` isolates
+the six-report unnamed-padding and zero-width-bitfield schedule and validates
+all field values and aggregate sizes against independent constants.
+`unnamed-bitfield-report-wave6100-audit.py` builds an isolated diagnostic
+mutation compiler, runs 16 stack/no-stack and peep/nopeep controls across
+exact, renamed, volatile-local, and extra-CFG variants, and rejects all 2,302
+mutations with generic fallback and zero survivors. The clean stack-check
+selected hash remains `c6ee54c1`; assembly SHA-256 is
+`d7648ba588d804d0d4de5416727beb020e52e8ccf8fb5293dd6309d967f6c15b`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

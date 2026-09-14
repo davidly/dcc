@@ -1835,6 +1835,27 @@ locally verified execution inventory.
   `fae46f9c6ebbd1d2cc1dc6af6b716c607e85cc1d06b502bb7f61c3a104fde630`.
   The standalone audit, all 136 Python script tests, and both strict 506-app
   release modes pass. The broader coverage objective remains incomplete.
+- Wave 6100 closes the historical
+  `mir_match_unnamed_bitfield_report_schedule` proof gap and fixes severe
+  exact-schedule false acceptance. The old 99-instruction matcher checked every
+  opcode but inspected payload fields at only 61 instruction positions. It did
+  not prove the complete type, SSA, memory/qualifier, CFG-edge,
+  PHI-predecessor, or metadata stream, and accepted 1,900 of 2,302 exhaustive
+  meaningful mutations (82.5%). The matcher now fingerprints all 23 semantic
+  and structural fields on every instruction before applying its existing
+  bitfield-layout, value, print-call, argument, size, and return checks. New
+  `tests/mir-clobber/unbitfld.c` isolates all six unnamed-padding and zero-width
+  bitfield reports and checks their values and aggregate sizes against
+  independent constants. New
+  `unnamed-bitfield-report-wave6100-audit.py` builds an isolated diagnostic
+  mutation compiler, runs 16 stack/no-stack and peep/nopeep controls across
+  exact, renamed, volatile-local, and extra-CFG variants, and rejects all 2,302
+  mutations with verified generic fallback and zero survivors. The clean
+  stack-check selected hash remains `c6ee54c1` and assembly SHA-256 is
+  `d7648ba588d804d0d4de5416727beb020e52e8ccf8fb5293dd6309d967f6c15b`.
+  No separate clobber manifest was needed. The standalone audit, full Python
+  script-test suite, and both strict 506-app release modes pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

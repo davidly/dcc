@@ -224,6 +224,10 @@ CAMPAIGNS = (
     Campaign("board-attack-schedule",
              "board-attack-wave6000-audit.py",
              output_dir="board-attack-wave6000-audit", max_jobs=2),
+    Campaign("unnamed-bitfield-report-schedule",
+             "unnamed-bitfield-report-wave6100-audit.py",
+             output_dir="unnamed-bitfield-report-wave6100-audit",
+             max_jobs=2),
 )
 
 
