@@ -102,6 +102,8 @@ CAMPAIGNS = (
              output_dir="for-increment-wave26-audit", max_jobs=2),
     Campaign("callback-registration", "callback-registration-wave27-audit.py",
              output_dir="callback-registration-wave27-audit", max_jobs=2),
+    Campaign("compound-check", "compound-wave45-audit.py",
+             output_dir="compound-wave45-audit", max_jobs=2),
 )
 
 

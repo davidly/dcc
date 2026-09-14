@@ -431,6 +431,24 @@ passing baseline plus 26/26 killed mutants, and all 136 Python script tests
 pass. This remains a test-only increment; the authoritative aggregate totals
 still await a fresh immutable collection.
 
+Wave 45 closes the next `mir_match_compound_check_runner` proof gaps without
+changing production code. The earlier compound coverage already proved the
+exact baseline and selected ABI, memory-width, and final-tail mutations, but
+it did not force generic fallback for five important near matches: a volatile
+failure counter, an extra helper call, a harmless extra CFG block, a VLA
+variant, and a fixed-prototype success printer. New `compound-wave45`
+MIR-clobber cases add those controls plus four direct selector-mutant cases,
+and the full group passes in 40 target configurations. A new
+`compound-wave45-audit.py` campaign then runs 24 stack/no-stack and
+peep/nopeep runtime controls and rejects 13/13 targeted MIR mutations that
+cover store source-range validation, check-call identity, local-address and
+pointer-load identity, indirect-load address/type, index-address source/type,
+member offset/width, indirect-store value kind, and the final failure-load
+type. Current code already rejected every new mutation and near match, so
+this increment closes proof gaps rather than fixing a false acceptance. All
+136 Python script tests pass. This remains a test-only increment; regenerate
+the immutable aggregate ledger before claiming new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

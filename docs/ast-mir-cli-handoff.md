@@ -789,6 +789,23 @@ locally verified execution inventory.
   ASan/UBSan host tests pass 5/5, the full compiler mutation campaign has one
   passing baseline plus 26/26 killed mutants, and all 136 Python script tests
   pass.
+- Wave 45 closes the next `mir_match_compound_check_runner` proof gaps
+  without changing production code. The earlier compound campaigns already
+  proved the baseline exact schedule plus selected ABI and width mutations,
+  but they did not force generic fallback for a volatile failure flag, an
+  extra helper call, a harmless extra CFG block, a VLA-bearing near match, or
+  a fixed-prototype success printer, and they left several
+  local-address/index/member/indirect legality branches without direct
+  mutation evidence. New `compound-wave45` MIR-clobber cases add those five
+  source near matches plus four direct selector-mutant cases, for 40 passing
+  target configurations. The dedicated `compound-wave45-audit.py` script now
+  runs 24 stack/no-stack and peep/nopeep runtime controls and rejects 13/13
+  targeted MIR mutations covering store source range, check-call identity,
+  local-address and pointer-load identity, indirect-load address/type,
+  index-address source/type, member offset/width, indirect-store value kind,
+  and the final failure-load type. Current code already rejected every new
+  near match and mutation, so this increment closes proof gaps rather than
+  fixing a false acceptance. All 136 Python script tests pass.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
