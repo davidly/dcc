@@ -3222,61 +3222,110 @@ static int mir_match_random_wide_fill(
     const struct MirInsn *count = &mir.insns[2];
     const struct MirInsn *index_phi = &mir.insns[9];
     const struct MirInsn *call = &mir.insns[14];
+    const struct MirInsn *index_address = &mir.insns[23];
+    const struct MirInsn *wide_store = &mir.insns[28];
     int instruction;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 37 || mir_cfg_block_count() != 4 ||
-        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        mir.has_vla || mir.return_type != TYPE_VOID)
         return mir_machine_reject("random-wide-fill", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode != expected_opcodes[instruction])
             return mir_machine_reject("random-wide-fill", "opcode");
     if (type_ptr_depth(pointer->type) != 1 ||
-        type_size(count->type) != 2 ||
-        (count->type & TYPE_UNSIGNED) != 0 ||
+        type_decay_ptr(pointer->type) != TYPE_LONG ||
+        type_size(pointer->type) != 2 ||
+        count->type != TYPE_INT ||
         !mir_machine_parameter_value_offset(
             pointer->dst, &plan->pointer_stack_offset) ||
         !mir_machine_parameter_value_offset(
             count->dst, &plan->count_stack_offset) ||
         !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        mir.insns[3].type != TYPE_INT ||
         !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].memory_size != 2 ||
+        index_phi->type != TYPE_INT ||
+        !mir_machine_same_location(index_phi, &mir.insns[5]) ||
         index_phi->src1 != mir.insns[3].dst ||
         index_phi->src2 != mir.insns[33].dst ||
         index_phi->phi_pred1 != mir.insns[0].label ||
         index_phi->phi_pred2 != mir.insns[30].label ||
         mir.insns[12].immediate != '<' ||
+        mir.insns[12].type != TYPE_INT ||
+        mir.insns[12].secondary_offset != TYPE_INT ||
         mir.insns[12].src1 != index_phi->dst ||
         mir.insns[12].src2 != count->dst ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
         mir.insns[13].label != mir.insns[36].label)
         return mir_machine_reject("random-wide-fill", "loop");
     if (!mir_machine_call_has_no_arguments(call) ||
+        call->type != TYPE_INT || call->memory_flags != 0 ||
         mir.insns[15].immediate != 255 ||
+        mir.insns[15].type != TYPE_INT ||
         mir.insns[16].immediate != '&' ||
+        mir.insns[16].type != TYPE_INT ||
+        mir.insns[16].secondary_offset != TYPE_INT ||
         mir.insns[16].src1 != call->dst ||
         mir.insns[16].src2 != mir.insns[15].dst ||
         mir.insns[17].immediate != 128 ||
+        mir.insns[17].type != TYPE_INT ||
         mir.insns[18].immediate != '-' ||
+        mir.insns[18].type != TYPE_INT ||
+        mir.insns[18].secondary_offset != TYPE_INT ||
         mir.insns[18].src1 != mir.insns[16].dst ||
         mir.insns[18].src2 != mir.insns[17].dst ||
-        mir.insns[23].src1 != pointer->dst ||
-        mir.insns[23].src2 != index_phi->dst ||
-        mir.insns[23].immediate != 4 ||
+        !mir_machine_unobservable_local_store(&mir.insns[20]) ||
+        mir.insns[20].src1 != mir.insns[18].dst ||
+        mir.insns[20].memory_size != 2 ||
+        mir_machine_same_location(&mir.insns[20], &mir.insns[5]) ||
+        index_address->type != pointer->type ||
+        index_address->src1 != pointer->dst ||
+        index_address->src2 != index_phi->dst ||
+        index_address->immediate != 4 ||
+        index_address->memory_size != 4 ||
+        index_address->memory_flags != 0 ||
+        index_address->bit_width != 0 ||
         mir.insns[25].immediate != 0 ||
+        mir.insns[25].type != TYPE_LONG ||
         mir.insns[25].src1 != mir.insns[18].dst ||
         mir.insns[26].immediate != 256 ||
+        mir.insns[26].type != TYPE_LONG ||
         mir.insns[27].immediate != '*' ||
+        mir.insns[27].type != TYPE_LONG ||
+        mir.insns[27].secondary_offset != TYPE_LONG ||
         mir.insns[27].src1 != mir.insns[25].dst ||
         mir.insns[27].src2 != mir.insns[26].dst ||
-        mir.insns[28].src1 != mir.insns[23].dst ||
-        mir.insns[28].src2 != mir.insns[27].dst ||
-        mir.insns[28].memory_size != 4)
+        wide_store->src1 != index_address->dst ||
+        wide_store->src2 != mir.insns[27].dst ||
+        wide_store->memory_size != 4 ||
+        wide_store->memory_flags != 0 ||
+        wide_store->bit_width != 0)
         return mir_machine_reject("random-wide-fill", "body");
     plan->function = find_global(call->name);
-    if (plan->function == NULL || !plan->function->is_defined ||
-        plan->function->is_funcptr ||
+    if (plan->function == NULL ||
+        plan->function->storage != SC_FUNC ||
+        !plan->function->is_defined ||
+        plan->function->is_funcptr || plan->function->is_noreturn ||
+        !plan->function->has_proto ||
+        plan->function->proto_variadic ||
+        plan->function->proto_nargs != 0 ||
+        plan->function->type != TYPE_INT ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(sym_asm_name(plan->function)))) ||
         !mir_machine_constant_equals(mir.insns[32].dst, 1) ||
+        mir.insns[32].type != TYPE_INT ||
         mir.insns[33].immediate != '+' ||
+        mir.insns[33].type != TYPE_INT ||
+        mir.insns[33].secondary_offset != TYPE_INT ||
         mir.insns[33].src1 != index_phi->dst ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[34]) ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[34].memory_size != 2 ||
+        !mir_machine_same_location(&mir.insns[34], &mir.insns[5]) ||
         mir.insns[35].label != mir.insns[6].label)
         return mir_machine_reject("random-wide-fill", "result");
     return 1;

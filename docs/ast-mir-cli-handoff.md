@@ -1076,6 +1076,27 @@ locally verified execution inventory.
   `31c83b5f4d79640c9908a480717fa7a952afd7d570e3069daebc3860cb92850b`.
   The standalone audit and all 136 Python script tests pass. The broader
   coverage objective remains incomplete.
+- Wave 71 closes the historical `mir_match_random_wide_fill` proof gap and
+  fixes genuine selector false acceptances. New
+  `tests/mir-clobber/rndwide.c` isolates the 37-instruction, four-block
+  schedule and checks eight deterministic wide results against a fixed oracle.
+  The dedicated `random-wide-fill-wave71-audit.py` campaign runs 24
+  stack/no-stack and peep/nopeep runtime controls, retaining exact selection
+  for baseline and renamed-helper forms while proving spilled generic fallback
+  for helper-width, count-signedness, volatile-destination, and
+  volatile-temporary near matches. A forced
+  `DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` cost control confirms that the
+  clean scheduled stream is the exact incumbent before the requested
+  diagnostic alternative is selected. The matcher now proves exact scalar
+  types, branch and increment dataflow, local-store identity, memory width and
+  volatility, and the direct helper ABI. The campaign rejects 38/38 targeted
+  MIR mutations with zero meaningful survivors; before the fix, mutations of
+  the branch condition, increment step, local identities, and multiple type
+  fields retained the unchanged exact schedule. The clean selected hash
+  remains `2dc38a8d` and assembly SHA-256 is
+  `464c9dc3af8d8081d2548e3049bae1cf16623bf6309f31a387c95db0f7662a7c`.
+  The standalone audit, all Python script tests, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - Wave 80 closes the historical `mir_match_fixed_embedding_build` proof gap
   without changing production code. Commit `9299371d` introduced the exact
   schedule before focused per-matcher audits, and no dedicated fixture or
