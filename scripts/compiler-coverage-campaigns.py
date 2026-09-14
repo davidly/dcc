@@ -198,6 +198,9 @@ CAMPAIGNS = (
     Campaign("fortran-grow-schedule",
              "fortran-grow-wave2000-audit.py",
              output_dir="fortran-grow-wave2000-audit", max_jobs=2),
+    Campaign("list-reverse-schedule",
+             "list-reverse-wave2200-audit.py",
+             output_dir="list-reverse-wave2200-audit", max_jobs=2),
 )
 
 
