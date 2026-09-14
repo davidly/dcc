@@ -1478,6 +1478,34 @@ locally verified execution inventory.
   The standalone audit, full Python script-test suite, and both strict
   506-app release modes pass. The broader coverage objective remains
   incomplete.
+- Wave 1200 closes the historical `mir_match_qsort_edge_schedule` proof gap
+  and fixes genuine exact-schedule false acceptances. The old matcher checked
+  only the 344-instruction/40-block envelope, one array address, seven sort
+  and failure call identities, seven string-address opcodes, and 22 constants.
+  It accepted 523 of 561 targeted MIR mutations: all 177 type changes, all 48
+  width changes, all 114 first-operand changes, all 59 second-operand changes,
+  83 of 105 immediate/stride changes, and 42 of 58 symbol/local-identity
+  changes. Separate alternate-comparator and second-array source controls also
+  selected the exact schedule and each failed its runtime oracle.
+  The matcher now proves the exact numeric MIR semantic payload, complete CFG
+  and SSA relationships, every memory flag and width, all 25 array aliases,
+  all seven comparator aliases, and the sort/failure/comparator ABI. String
+  IDs remain intentionally normalized because the emitter preserves the
+  matched source strings.
+  New `tests/mir-clobber/qsedge.c` isolates the seven qsort edge workloads and
+  includes observable alternate-comparator and second-array regressions. The
+  dedicated `qsort-edge-wave1200-audit.py` campaign runs 48 stack/no-stack and
+  peep/nopeep runtime controls across 12 source variants, preserves exact
+  selection for baseline and renamed functions, proves generic fallback for
+  volatile and alternate-width arrays, changed array extent, volatile and
+  unsigned loop state, alternate comparator/failure identities, a second
+  array, and extra CFG, and rejects all 561 type, width, stride/immediate,
+  operand, and identity mutations with independently forced
+  `spilled-phi-slot` fallback. The clean selected hash is `7564150d` and
+  assembly SHA-256 is
+  `a55e6f4cb97df1564115bc1f3fc1b1790141469b4dbff8f706dd5127f6ef4113`.
+  The standalone audit, all 136 Python script tests, and both strict 506-app
+  release modes pass. The broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

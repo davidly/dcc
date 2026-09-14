@@ -1172,6 +1172,31 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall branch totals.
 
+Wave 1200 closes the historical `mir_match_qsort_edge_schedule` proof gap and
+fixes genuine exact-schedule false acceptances. The old matcher checked the
+344-instruction/40-block envelope, only the first global-array identity, seven
+sort and failure call identities, seven string-address opcodes, and 22
+constants. It accepted 523 of 561 targeted MIR mutations: 177/177 types,
+48/48 widths, 114/114 first operands, 59/59 second operands, 83/105
+immediates/strides, and 42/58 symbol or local identities. Alternate-comparator
+and second-array source variants also selected the exact schedule and each
+failed its runtime oracle.
+
+The matcher now requires the exact numeric MIR semantic payload, complete CFG
+and SSA relationships, every memory flag and width, all 25 array aliases, all
+seven comparator aliases, and the sort/failure/comparator ABI. String IDs are
+normalized because the emitted failure calls retain the source strings. New
+`tests/mir-clobber/qsedge.c` isolates the seven qsort edge workloads and makes
+the two alias defects observable. New `qsort-edge-wave1200-audit.py` runs 48
+stack/no-stack and peep/nopeep runtime controls across 12 source variants and
+rejects all 561 type, width, stride/immediate, operand, and identity mutations
+with independently forced `spilled-phi-slot` fallback and zero survivors. The
+clean selected hash is `7564150d` and assembly SHA-256 is
+`a55e6f4cb97df1564115bc1f3fc1b1790141469b4dbff8f706dd5127f6ef4113`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

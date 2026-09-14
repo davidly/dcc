@@ -177,6 +177,9 @@ CAMPAIGNS = (
     Campaign("board-matrix-print-schedule",
              "board-matrix-print-wave1100-audit.py",
              output_dir="board-matrix-print-wave1100-audit", max_jobs=2),
+    Campaign("qsort-edge-schedule",
+             "qsort-edge-wave1200-audit.py",
+             output_dir="qsort-edge-wave1200-audit", max_jobs=2),
 )
 
 
