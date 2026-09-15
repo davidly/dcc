@@ -1972,6 +1972,26 @@ locally verified execution inventory.
   The standalone audit, full Python script-test suite, and both strict 506-app
   release modes pass. No separate clobber manifest was added. The broader
   coverage objective remains incomplete.
+- Wave 8300 closes the historical `mir_match_matrix_multiply_schedule` proof
+  gap and fixes severe exact-schedule false acceptance. The old 89-instruction
+  matcher checked every opcode and referenced 75 instruction positions in
+  direct semantic predicates, but did not prove the complete type, SSA,
+  memory/qualifier, CFG-edge, PHI-predecessor, instruction-metadata, or symbol
+  identity payload. It accepted 1,869 of 2,225 exhaustive per-instruction field
+  and identity mutations (84.0%). The matcher now fingerprints all 23 numeric
+  semantic and structural fields plus both instruction symbol names, object
+  metadata, declarations, aliases, and whole-function state. New
+  `tests/mir-clobber/matmul.c` isolates the retained 2x2 signed-word kernel and
+  checks two products through a fixed runtime oracle. New
+  `matrix-multiply-wave8300-audit.py` builds an isolated diagnostic mutation
+  compiler, runs 20 stack/no-stack and peep/nopeep exact, renamed, qualifier,
+  type, and CFG controls, and rejects all 2,225 mutations with generic fallback
+  and zero survivors. A clean forced control selects `spilled-phi-slot`. The
+  clean stack-check selected hash remains `30f3adf0`; assembly SHA-256 is
+  `e7fee9195a4108b30ab88b122399291d859dcac26e9a75c0be8f8654dba56f3a`.
+  No separate clobber manifest was needed. The standalone audit, full Python
+  script-test suite, and both strict 506-app release modes pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -248,6 +248,10 @@ CAMPAIGNS = (
              "nested-for-runner-wave8200-audit.py",
              output_dir="nested-for-runner-wave8200-audit",
              max_jobs=2),
+    Campaign("matrix-multiply-schedule",
+             "matrix-multiply-wave8300-audit.py",
+             output_dir="matrix-multiply-wave8300-audit",
+             max_jobs=2),
 )
 
 

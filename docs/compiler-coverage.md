@@ -1701,6 +1701,27 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. No separate clobber manifest was added. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 8300 closes the historical `mir_match_matrix_multiply_schedule` proof gap
+and fixes severe false acceptance. The old 89-instruction matcher checked every
+opcode and referenced 75 instruction positions in direct semantic predicates,
+but did not prove the complete type, SSA, memory and qualifier, CFG successor,
+PHI predecessor, instruction-metadata, or symbol-identity payload. It accepted
+1,869 of 2,225 exhaustive per-instruction field and identity mutations (84.0%).
+
+The matcher now fingerprints all 23 numeric semantic and structural fields plus
+both instruction symbol names, object metadata, declarations, aliases, and
+whole-function state. New `tests/mir-clobber/matmul.c` isolates the retained 2x2
+signed-word kernel and checks two products through a fixed runtime oracle.
+`matrix-multiply-wave8300-audit.py` builds an isolated diagnostic mutation
+compiler, runs 20 stack/no-stack and peep/nopeep exact, renamed, qualifier,
+type, and CFG controls, and rejects all 2,225 mutations with generic fallback
+and zero survivors. A clean forced control selects `spilled-phi-slot`. The
+clean stack-check selected hash remains `30f3adf0`; assembly SHA-256 is
+`e7fee9195a4108b30ab88b122399291d859dcac26e9a75c0be8f8654dba56f3a`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
