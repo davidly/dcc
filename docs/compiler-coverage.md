@@ -1939,6 +1939,33 @@ with generic fallback and zero survivors. The clean selected hash remains
 No separate clobber manifest was added. The standalone audit, full Python
 script-test suite, and both strict 506-app release modes pass. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
+Wave 9600 closes the historical
+`mir_match_local_declaration_return_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The old nine-instruction matcher checked all
+nine opcodes and referenced eight instruction positions in direct semantic
+predicates, but it did not prove the complete destination, operand, type,
+immediate, memory/qualifier, CFG-successor, object, bitfield, auxiliary
+metadata, or normalized symbol-identity payload. It accepted 195 of 225
+exhaustive per-instruction field and identity mutations (86.67%), including
+all 18 CFG-successor mutations, and accepted the changed-return near-match in
+all four runtime modes.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction and validates normalized instruction symbol identities
+before retaining its existing function-symbol, local-location, volatility,
+layout, SSA, single-block, and return checks. New
+`tests/mir-clobber/localdeclret.c` isolates the retained local
+function-pointer-array declaration and checks its result plus helper behavior
+through an independent checksum oracle.
+`local-declaration-return-wave9600-audit.py` builds an isolated diagnostic
+mutation compiler, runs 28 stack/no-stack and peep/nopeep controls across
+exact, renamed-function, renamed-symbol, changed-return, qualifier, array-size,
+and extra-CFG variants, verifies a clean `spilled-phi-slot` fallback, and
+rejects all 225 mutations with generic fallback and zero survivors. The clean
+selected hash remains `0c83fd27`; assembly SHA-256 is
+`1e2d5f8f1f80459eeefb037c11fc9ef1780c4c6689b06701b2a8243f79306ad3`.
+No separate clobber manifest was added. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
 
 ## Full workload
 

@@ -12701,6 +12701,71 @@ static int mir_match_local_declaration_return_schedule(
                 expected_opcodes[instruction])
             return mir_machine_reject(
                 "local-declaration-return-schedule", "opcodes");
+    {
+        unsigned long long first_hash = 1469598103934665603ULL;
+        unsigned long long second_hash = 0x9e3779b97f4a7c15ULL;
+
+#define MIR_LOCAL_DECLARATION_RETURN_MIX(value) do { \
+        unsigned long long mixed_value = \
+            (unsigned long long)(uint32_t)(value); \
+        first_hash ^= mixed_value; \
+        first_hash *= 1099511628211ULL; \
+        second_hash ^= mixed_value + 0x9e3779b97f4a7c15ULL + \
+            (second_hash << 6) + (second_hash >> 2); \
+    } while (0)
+
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->opcode);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->dst);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->src1);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->src2);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->type);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->immediate);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->label);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->phi_pred1);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->phi_pred2);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->successors[0]);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->successors[1]);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->successor_count);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->object);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->memory_size);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->memory_flags);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(
+                insn->pointee_volatile_mask);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(
+                insn->has_pointer_qualifiers);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->bit_width);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->bit_shift);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->bit_mask);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(
+                insn->secondary_offset);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(insn->inline_temp_id);
+            MIR_LOCAL_DECLARATION_RETURN_MIX(
+                insn->divmod_cast_types);
+        }
+#undef MIR_LOCAL_DECLARATION_RETURN_MIX
+        if (first_hash != 0x203b8b6803a1de98ULL ||
+            second_hash != 0x8a76ba231556b3f8ULL) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=local-declaration-return-schedule "
+                        "reject=semantic-payload "
+                        "fingerprint=%016llx:%016llx\n",
+                        mir.name, first_hash, second_hash);
+            return 0;
+        }
+    }
+    for (instruction = 0; instruction < 9; ++instruction) {
+        if (mir.insns[instruction].base_name[0] != 0 ||
+            ((instruction < 1 || instruction > 5) &&
+             mir.insns[instruction].name[0] != 0))
+            return mir_machine_reject(
+                "local-declaration-return-schedule",
+                "semantic-payload");
+    }
     first = find_global(mir.insns[1].name);
     second = find_global(mir.insns[3].name);
     if (first == NULL || second == NULL || first == second ||

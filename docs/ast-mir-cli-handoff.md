@@ -2187,6 +2187,27 @@ locally verified execution inventory.
   No separate clobber manifest was needed. The standalone audit, full Python
   script-test suite, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 9600 closes the historical
+  `mir_match_local_declaration_return_schedule` proof gap and fixes severe
+  exact-schedule false acceptance. The old nine-instruction matcher checked
+  every opcode and directly referenced eight positions, but did not prove the
+  complete semantic and structural instruction payload. It accepted 195 of
+  225 exhaustive field and identity mutations (86.67%), including every CFG
+  successor mutation, and accepted a changed-return near-match in all four
+  runtime modes.
+  The matcher now fingerprints all 23 numeric fields on every instruction and
+  validates normalized symbol identities before applying its existing
+  function, local-layout, volatility, SSA, CFG, and return proofs. New
+  `tests/mir-clobber/localdeclret.c` checks the isolated function result and
+  independently exercises both helper targets.
+  `local-declaration-return-wave9600-audit.py` builds an isolated diagnostic
+  mutation compiler, runs 28 stack/no-stack and peep/nopeep controls across
+  seven source variants, verifies `spilled-phi-slot` fallback, and rejects all
+  225 mutations with generic fallback and zero survivors. The clean selected
+  hash remains `0c83fd27`; assembly SHA-256 is
+  `1e2d5f8f1f80459eeefb037c11fc9ef1780c4c6689b06701b2a8243f79306ad3`.
+  No separate clobber manifest was added. The broader coverage objective
+  remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

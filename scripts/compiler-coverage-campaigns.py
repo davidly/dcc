@@ -288,6 +288,10 @@ CAMPAIGNS = (
              "reloaded-best-record-wave9500-audit.py",
              output_dir="reloaded-best-record-wave9500-audit",
              max_jobs=2),
+    Campaign("local-declaration-return-schedule",
+             "local-declaration-return-wave9600-audit.py",
+             output_dir="local-declaration-return-wave9600-audit",
+             max_jobs=2),
 )
 
 
