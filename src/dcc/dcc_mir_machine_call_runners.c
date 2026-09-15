@@ -12476,9 +12476,13 @@ static int mir_match_arrow_path_schedule(
     struct Sym *print_function = NULL;
     struct Sym *flush_function = NULL;
     long cave_offset;
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     int edge;
     int instruction;
     int item;
+    int object;
+    int declared;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 131 || mir_cfg_block_count() != 10 ||
@@ -12488,6 +12492,207 @@ static int mir_match_arrow_path_schedule(
         (mir.return_type & 15) != TYPE_INT ||
         type_size(mir.return_type) != 2)
         return 0;
+#define MIR_ARROW_HASH_VALUE(value) do { \
+    unsigned long long hash_value = (value); \
+    first ^= hash_value; \
+    first *= 1099511628211ULL; \
+    second ^= hash_value + 0x9e3779b97f4a7c15ULL + \
+        (second << 6) + (second >> 2); \
+} while (0)
+    if (mir.object_count < 0 ||
+        mir.object_count >
+            (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)insn->type,
+            (unsigned long long)(unsigned int)
+                (insn->opcode == MIR_STRING_ADDRESS
+                    ? 0 : insn->immediate),
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            (unsigned long long)(unsigned int)insn->object,
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)
+                insn->secondary_offset,
+            (unsigned long long)(unsigned int)insn->inline_temp_id,
+            (unsigned long long)(unsigned int)
+                insn->divmod_cast_types
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            MIR_ARROW_HASH_VALUE(values[item]);
+        if (insn->opcode == MIR_STRING_ADDRESS) {
+            const char *text;
+
+            if (insn->immediate < 0 ||
+                insn->immediate >= nstrings ||
+                strings[insn->immediate] == NULL)
+                return mir_machine_reject(
+                    "arrow-path-schedule", "strings");
+            text = strings[insn->immediate];
+            do {
+                MIR_ARROW_HASH_VALUE((unsigned char)*text);
+            } while (*text++);
+        }
+    }
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->storage);
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->type);
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->offset);
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->entry_value);
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->is_register);
+    }
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)
+                mir.declared_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_type_unstable[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_storage[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dim_counts[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_elem_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_vla_size_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_vla[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_array[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_volatile[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_pointee_is_volatile[declared],
+            (unsigned long long)
+                mir.declared_pointee_volatile_masks[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dynamic_strides[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_const[declared],
+            (unsigned long long)
+                mir.declared_const_values[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_funcptr[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_funcptr_return_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_has_proto[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_nargs[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_variadic[declared]
+        };
+
+        if (mir.declared_dim_counts[declared] < 0 ||
+            mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+            mir.declared_proto_nargs[declared] < 0 ||
+            mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+            return 0;
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            MIR_ARROW_HASH_VALUE(values[item]);
+        for (item = 0;
+             item < mir.declared_dim_counts[declared]; ++item)
+            MIR_ARROW_HASH_VALUE(
+                (unsigned long long)(unsigned int)
+                    mir.declared_dims[declared][item]);
+        for (item = 0;
+             item < mir.declared_proto_nargs[declared]; ++item)
+            MIR_ARROW_HASH_VALUE(
+                (unsigned long long)(unsigned int)
+                    mir.declared_proto_types[declared][item]);
+    }
+    for (item = 0; item < mir.alias_count; ++item)
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)
+                mir.alias_declaration_indices[item]);
+    {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)mir.count,
+            (unsigned long long)(unsigned int)mir.next_value,
+            (unsigned long long)(unsigned int)mir.next_label,
+            (unsigned long long)(unsigned int)mir.next_call_id,
+            (unsigned long long)(unsigned int)
+                mir.has_indirect_incdec,
+            (unsigned long long)(unsigned int)
+                mir.has_pointer_difference,
+            (unsigned long long)(unsigned int)
+                mir.has_narrowed_for_counter,
+            (unsigned long long)(unsigned int)
+                mir.has_compound_literal,
+            (unsigned long long)(unsigned int)mir.has_vla,
+            (unsigned long long)(unsigned int)
+                mir.implicit_zero_return,
+            (unsigned long long)(unsigned int)
+                mir.has_runtime_stride_param,
+            (unsigned long long)(unsigned int)
+                mir.is_variadic_function,
+            (unsigned long long)(unsigned int)mir.return_type,
+            (unsigned long long)(unsigned int)mir.local_bytes,
+            (unsigned long long)(unsigned int)
+                mir.dead_local_suffix_bytes,
+            (unsigned long long)(unsigned int)
+                mir.aggregate_temp_bytes,
+            (unsigned long long)(unsigned int)mir.opaque_count,
+            (unsigned long long)(unsigned int)mir.object_count,
+            (unsigned long long)(unsigned int)
+                mir.has_declared_register_object,
+            (unsigned long long)(unsigned int)mir.declared_count,
+            (unsigned long long)(unsigned int)mir.alias_count,
+            (unsigned long long)(unsigned int)mir.sink_purpose
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            MIR_ARROW_HASH_VALUE(values[item]);
+    }
+#undef MIR_ARROW_HASH_VALUE
+    if (first != 0x74e74883d3e237a9ULL ||
+        second != 0xf8502b6f9395e890ULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=arrow-path-schedule "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
