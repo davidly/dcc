@@ -300,6 +300,10 @@ CAMPAIGNS = (
              "for-init-pointer-walk-wave9800-audit.py",
              output_dir="for-init-pointer-walk-wave9800-audit",
              max_jobs=2),
+    Campaign("matrix-bitops-schedule",
+             "matrix-bitops-wave9900-audit.py",
+             output_dir="matrix-bitops-wave9900-audit",
+             max_jobs=2),
 )
 
 

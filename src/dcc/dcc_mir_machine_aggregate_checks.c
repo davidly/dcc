@@ -10787,6 +10787,58 @@ static int mir_match_matrix_bitops_schedule(
         mir.aggregate_temp_bytes != 0 ||
         (mir.return_type & 15) != TYPE_VOID)
         return 0;
+    {
+        unsigned long long first = 1469598103934665603ULL;
+        unsigned long long second = 0x9e3779b97f4a7c15ULL;
+
+#define MIR_MATRIX_BITOPS_MIX(value) do { \
+        unsigned long long mixed_value = \
+            (unsigned long long)(uint32_t)(value); \
+        first ^= mixed_value; \
+        first *= 1099511628211ULL; \
+        second ^= mixed_value + 0x9e3779b97f4a7c15ULL + \
+            (second << 6) + (second >> 2); \
+    } while (0)
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+
+            MIR_MATRIX_BITOPS_MIX(insn->opcode);
+            MIR_MATRIX_BITOPS_MIX(insn->dst);
+            MIR_MATRIX_BITOPS_MIX(insn->src1);
+            MIR_MATRIX_BITOPS_MIX(insn->src2);
+            MIR_MATRIX_BITOPS_MIX(insn->type);
+            MIR_MATRIX_BITOPS_MIX(insn->immediate);
+            MIR_MATRIX_BITOPS_MIX(insn->label);
+            MIR_MATRIX_BITOPS_MIX(insn->phi_pred1);
+            MIR_MATRIX_BITOPS_MIX(insn->phi_pred2);
+            MIR_MATRIX_BITOPS_MIX(insn->successors[0]);
+            MIR_MATRIX_BITOPS_MIX(insn->successors[1]);
+            MIR_MATRIX_BITOPS_MIX(insn->successor_count);
+            MIR_MATRIX_BITOPS_MIX(insn->object);
+            MIR_MATRIX_BITOPS_MIX(insn->memory_size);
+            MIR_MATRIX_BITOPS_MIX(insn->memory_flags);
+            MIR_MATRIX_BITOPS_MIX(insn->pointee_volatile_mask);
+            MIR_MATRIX_BITOPS_MIX(insn->has_pointer_qualifiers);
+            MIR_MATRIX_BITOPS_MIX(insn->bit_width);
+            MIR_MATRIX_BITOPS_MIX(insn->bit_shift);
+            MIR_MATRIX_BITOPS_MIX(insn->bit_mask);
+            MIR_MATRIX_BITOPS_MIX(insn->secondary_offset);
+            MIR_MATRIX_BITOPS_MIX(insn->inline_temp_id);
+            MIR_MATRIX_BITOPS_MIX(insn->divmod_cast_types);
+        }
+#undef MIR_MATRIX_BITOPS_MIX
+        if (first != 0x37fe05bd54bbe155ULL ||
+            second != 0x94a185f2630eabdaULL) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=matrix-bitops-schedule "
+                        "reject=semantic-payload "
+                        "fingerprint=%016llx:%016llx\n",
+                        mir.name, first, second);
+            return 0;
+        }
+    }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 

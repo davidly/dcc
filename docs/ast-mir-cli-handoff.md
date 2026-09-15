@@ -2250,6 +2250,26 @@ locally verified execution inventory.
   `7dee6b9ff0ec8842ee29f2e82955f1f45d06999445e8dffda7181a9c5f81b0a3`.
   No separate clobber manifest was needed. The standalone audit, full Python
   script-test suite, and both strict 506-app release modes pass. The broader
+- Wave 9900 closes the historical `mir_match_matrix_bitops_schedule` proof gap
+  and fixes severe exact-schedule false acceptance. The old 89-instruction
+  matcher checked every opcode, but its position-specific semantic predicates
+  referenced only 69 instructions, leaving 20 without direct payload evidence.
+  It accepted 1,683 of 2,047 exhaustive per-instruction field mutations
+  (82.22%), with survivors at every instruction position.
+  The matcher now fingerprints all 23 numeric semantic and structural fields
+  on every instruction before retaining its existing matrix parameter,
+  nested-loop, member/index, constant, operation, memory, and update checks.
+  New `tests/mir-clobber/matbitops.c` isolates the five compound matrix updates
+  and verifies all four results through an independent weighted checksum. New
+  `matrix-bitops-wave9900-audit.py` builds an isolated diagnostic mutation
+  compiler, runs 24 stack/no-stack and peep/nopeep controls across exact,
+  renamed, changed-constant, qualifier, element-type, and extra-CFG variants,
+  and rejects all 2,047 mutations with generic fallback and zero survivors. A
+  clean forced control selects `spilled-phi-slot`. The clean selected hash
+  remains `6eaf1744`; assembly SHA-256 is
+  `ece644935f884b1ef8d9a940dab5597734ba53ff19b046aa1e7fadfc26ce1982`.
+  No separate clobber manifest was needed. The standalone audit, all 136
+  Python script tests, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
