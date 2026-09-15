@@ -2035,6 +2035,31 @@ No separate clobber manifest was added. The standalone audit, all 136 Python
 script tests, and both strict 506-app release modes pass. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 10000 closes the historical
+`mir_match_initializer_check_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The 59-instruction fixture stream was
+visited instruction-by-instruction, but zero positions had a complete
+field-level proof; the matcher admitted broad opcode classes and recovered
+only the values needed to emit calls. It accepted 1,214 of 1,416 exhaustive
+per-instruction semantic, structural, and identity mutations (85.73%).
+
+The matcher now fingerprints all 23 numeric instruction fields on every
+instruction for both fixture forms and all three retained production streams
+before retaining its existing local-store, global-load, call-ABI, volatility,
+single-block, and value-recovery checks. New
+`tests/mir-clobber/initcheck.c` isolates the six-call schedule and validates
+every call plus an independent checksum.
+`initializer-check-wave10000-audit.py` builds an isolated diagnostic mutation
+compiler, runs 20 stack/no-stack and peep/nopeep controls across exact,
+renamed, changed-value, volatile-local, and extra-CFG variants, verifies a
+clean `spilled-phi-slot` fallback, and rejects all 1,416 mutations with
+generic fallback and zero survivors. The clean selected hash remains
+`6e73ca19`; assembly SHA-256 is
+`cba82f0539d903e7f0420fece4b1cfba195aead5de622cd44f9f63306025d059`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

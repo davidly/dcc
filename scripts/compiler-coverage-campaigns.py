@@ -304,6 +304,10 @@ CAMPAIGNS = (
              "matrix-bitops-wave9900-audit.py",
              output_dir="matrix-bitops-wave9900-audit",
              max_jobs=2),
+    Campaign("initializer-check-schedule",
+             "initializer-check-wave10000-audit.py",
+             output_dir="initializer-check-wave10000-audit",
+             max_jobs=2),
 )
 
 

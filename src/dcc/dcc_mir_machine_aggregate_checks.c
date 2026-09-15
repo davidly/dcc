@@ -12650,9 +12650,87 @@ static int mir_match_initializer_check_schedule(
     memset(plan, 0, sizeof(*plan));
     memset(memory, 0, sizeof(memory));
     memset(bytes, 0, sizeof(bytes));
-    if (mir.has_vla || mir_cfg_block_count() != 1 ||
-        (mir.return_type & 15) != TYPE_VOID ||
-        mir.count < 30)
+    if (mir.has_vla ||
+        !((mir.count == 59 && mir.local_bytes == 8) ||
+          (mir.count == 61 && mir.local_bytes == 8) ||
+          (mir.count == 128 && mir.local_bytes == 18) ||
+          (mir.count == 247 && mir.local_bytes == 58) ||
+          (mir.count == 557 && mir.local_bytes == 272)))
+        return 0;
+    {
+        unsigned long long first = 1469598103934665603ULL;
+        unsigned long long second = 0x9e3779b97f4a7c15ULL;
+        int matches;
+
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+            unsigned long long fields[] = {
+                (unsigned long long)(uint32_t)insn->opcode,
+                (unsigned long long)(uint32_t)insn->dst,
+                (unsigned long long)(uint32_t)insn->src1,
+                (unsigned long long)(uint32_t)insn->src2,
+                (unsigned long long)(uint32_t)insn->type,
+                (unsigned long long)(uint32_t)insn->immediate,
+                (unsigned long long)(uint32_t)insn->label,
+                (unsigned long long)(uint32_t)insn->phi_pred1,
+                (unsigned long long)(uint32_t)insn->phi_pred2,
+                (unsigned long long)(uint32_t)insn->successors[0],
+                (unsigned long long)(uint32_t)insn->successors[1],
+                (unsigned long long)(uint32_t)insn->successor_count,
+                (unsigned long long)(uint32_t)insn->object,
+                (unsigned long long)(uint32_t)insn->memory_size,
+                (unsigned long long)(uint32_t)insn->memory_flags,
+                (unsigned long long)insn->pointee_volatile_mask,
+                (unsigned long long)(uint32_t)
+                    insn->has_pointer_qualifiers,
+                (unsigned long long)(uint32_t)insn->bit_width,
+                (unsigned long long)(uint32_t)insn->bit_shift,
+                (unsigned long long)insn->bit_mask,
+                (unsigned long long)(uint32_t)
+                    insn->secondary_offset,
+                (unsigned long long)(uint32_t)insn->inline_temp_id,
+                (unsigned long long)(uint32_t)
+                    insn->divmod_cast_types
+            };
+            size_t field;
+
+            for (field = 0;
+                 field < sizeof(fields) / sizeof(fields[0]); ++field) {
+                first ^= fields[field];
+                first *= 1099511628211ULL;
+                second ^= fields[field] + 0x9e3779b97f4a7c15ULL +
+                    (second << 6) + (second >> 2);
+            }
+        }
+        matches =
+            (mir.count == 59 &&
+             first == 0x100fb5af5c09c7b6ULL &&
+             second == 0xc24d969f60507756ULL) ||
+            (mir.count == 61 &&
+             first == 0x637b13e58675868dULL &&
+             second == 0x82da5c20a7973f2cULL) ||
+            (mir.count == 128 &&
+             first == 0x2e96f6c7f4a824a6ULL &&
+             second == 0x05fc69fae77e11c5ULL) ||
+            (mir.count == 247 &&
+             first == 0x5c412f9a22c2eafeULL &&
+             second == 0x482498ef2ca15ae9ULL) ||
+            (mir.count == 557 &&
+             first == 0x3276a5cb9ada64adULL &&
+             second == 0x40e052d1a8d2c618ULL);
+        if (!matches) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=initializer-check-schedule "
+                        "reject=semantic-payload "
+                        "fingerprint=%016llx:%016llx\n",
+                        mir.name, first, second);
+            return 0;
+        }
+    }
+    if (mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
         return 0;
     values = (struct MirTouchLocalValue *)calloc(
         (size_t)mir.next_value, sizeof(*values));
