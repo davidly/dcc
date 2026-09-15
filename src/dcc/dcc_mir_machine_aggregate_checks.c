@@ -11479,6 +11479,69 @@ static int mir_match_direct_byte_sum_loop_schedule(
                 expected_opcodes[instruction])
             return mir_machine_reject(
                 "byte-sum-loop-schedule", "direct-opcodes");
+    {
+        unsigned long long first = 1469598103934665603ULL;
+        unsigned long long second = 0x9e3779b97f4a7c15ULL;
+
+#define MIR_DIRECT_BYTE_SUM_MIX(value) do { \
+        unsigned long long mixed_value = \
+            (unsigned long long)(uint32_t)(value); \
+        first ^= mixed_value; \
+        first *= 1099511628211ULL; \
+        second ^= mixed_value + 0x9e3779b97f4a7c15ULL + \
+            (second << 6) + (second >> 2); \
+    } while (0)
+#define MIR_DIRECT_BYTE_SUM_MIX_STRING(text) do { \
+        const unsigned char *text_cursor = \
+            (const unsigned char *)(text); \
+        do { \
+            MIR_DIRECT_BYTE_SUM_MIX(*text_cursor); \
+        } while (*text_cursor++); \
+    } while (0)
+
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+
+            MIR_DIRECT_BYTE_SUM_MIX(insn->opcode);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->dst);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->src1);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->src2);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->type);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->immediate);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->label);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->phi_pred1);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->phi_pred2);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->successors[0]);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->successors[1]);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->successor_count);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->object);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->memory_size);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->memory_flags);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->pointee_volatile_mask);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->has_pointer_qualifiers);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->bit_width);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->bit_shift);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->bit_mask);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->secondary_offset);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->inline_temp_id);
+            MIR_DIRECT_BYTE_SUM_MIX(insn->divmod_cast_types);
+            MIR_DIRECT_BYTE_SUM_MIX_STRING(insn->name);
+            MIR_DIRECT_BYTE_SUM_MIX_STRING(insn->base_name);
+        }
+#undef MIR_DIRECT_BYTE_SUM_MIX_STRING
+#undef MIR_DIRECT_BYTE_SUM_MIX
+        if (first != 0xd94ee288ba4417baULL ||
+            second != 0x58e7cba644a31e56ULL) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=byte-sum-loop-schedule "
+                        "reject=direct-semantic-payload "
+                        "fingerprint=%016llx:%016llx\n",
+                        mir.name, first, second);
+            return 0;
+        }
+    }
     if (!mir_machine_parameter_value_offset(
             pointer->dst, &plan->pointer_stack_offset) ||
         !mir_machine_parameter_value_offset(

@@ -292,6 +292,10 @@ CAMPAIGNS = (
              "local-declaration-return-wave9600-audit.py",
              output_dir="local-declaration-return-wave9600-audit",
              max_jobs=2),
+    Campaign("direct-byte-sum-loop-schedule",
+             "direct-byte-sum-loop-wave9700-audit.py",
+             output_dir="direct-byte-sum-loop-wave9700-audit",
+             max_jobs=2),
 )
 
 

@@ -2208,6 +2208,26 @@ locally verified execution inventory.
   `1e2d5f8f1f80459eeefb037c11fc9ef1780c4c6689b06701b2a8243f79306ad3`.
   No separate clobber manifest was added. The broader coverage objective
   remains incomplete.
+- Wave 9700 closes the historical
+  `mir_match_direct_byte_sum_loop_schedule` proof gap and fixes severe
+  exact-schedule false acceptance. The 45-instruction matcher checked every
+  opcode, but payload predicates referenced only 35 instruction positions,
+  leaving 10 positions without direct field checks. It accepted 976 of 1,125
+  exhaustive per-instruction field and identity mutations (86.76%). The
+  matcher now fingerprints all 23 scalar MIR fields plus both symbol-name
+  fields on every instruction before retaining its existing parameter,
+  local-state, CFG, PHI, byte-load, zero-test, accumulation, and return
+  checks. New `tests/mir-clobber/dbytesum.c` independently compares the exact
+  function against a reference implementation. New
+  `direct-byte-sum-loop-wave9700-audit.py` builds an isolated diagnostic
+  mutation compiler, runs 28 stack/no-stack and peep/nopeep controls across
+  exact, renamed, signedness, volatility, condition, accumulation, and
+  extra-CFG variants, and rejects all 1,125 mutations with generic fallback
+  and zero survivors. A clean forced control selects `spilled-phi-slot`.
+  The clean selected hash remains `8aa7f1fe`; assembly SHA-256 is
+  `65d00157b1c7f3e58f3b5e82174387ec7ef10c4e7e276c345d5b1fe15b06ba18`.
+  No separate clobber manifest was added. The broader coverage objective
+  remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -1967,6 +1967,27 @@ selected hash remains `0c83fd27`; assembly SHA-256 is
 No separate clobber manifest was added. Regenerate the immutable aggregate
 ledger before claiming new overall totals.
 
+Wave 9700 closes the historical
+`mir_match_direct_byte_sum_loop_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The previous 45-instruction matcher checked
+every opcode, but its payload predicates referenced only 35 instruction
+positions, leaving 10 positions without direct field checks. It accepted 976
+of 1,125 exhaustive per-instruction field and identity mutations (86.76%).
+The matcher now fingerprints all 23 scalar MIR fields plus both symbol-name
+fields on every instruction before retaining the existing parameter,
+local-state, CFG, PHI, byte-load, zero-test, accumulation, and return checks.
+New `tests/mir-clobber/dbytesum.c` compares the scheduled result against an
+independent reference implementation.
+`direct-byte-sum-loop-wave9700-audit.py` builds an isolated diagnostic mutation
+compiler, runs 28 stack/no-stack and peep/nopeep controls across exact,
+renamed, signedness, volatility, condition, accumulation, and extra-CFG
+variants, and rejects all 1,125 mutations with generic fallback and zero
+survivors. A clean forced control selects `spilled-phi-slot`. The clean
+selected hash remains `8aa7f1fe`; assembly SHA-256 is
+`65d00157b1c7f3e58f3b5e82174387ec7ef10c4e7e276c345d5b1fe15b06ba18`.
+No separate clobber manifest was added. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
