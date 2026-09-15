@@ -485,7 +485,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument(
         "--output-dir",
-        default="build/arrow-path-wave6100-audit",
+        default="build/arrow-path-wave7100-audit",
     )
     args = parser.parse_args()
     if args.jobs < 1:
@@ -526,7 +526,7 @@ def main():
 
     outcomes = Counter(row[2] for row in mutation_rows)
     print(
-        f"arrow path Wave 6100 mutations={len(mutation_rows)} "
+        f"arrow path Wave 7100 mutations={len(mutation_rows)} "
         f"{outcomes}"
     )
     print(

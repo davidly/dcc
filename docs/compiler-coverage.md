@@ -1606,6 +1606,32 @@ The standalone audit, full Python script-test suite, and both strict 506-app
 release modes pass. Regenerate the immutable aggregate ledger before claiming
 new overall totals.
 
+Wave 7100 closes the historical `mir_match_arrow_path_schedule` proof gap and
+fixes severe exact-schedule false acceptance. The prior 131-instruction matcher
+checked every opcode and seven selected control edges, but directly referenced
+only 66 instruction positions in its remaining parameter, member, constant,
+global, call, and string checks. It falsely accepted 2,785 of 3,038 exhaustive
+meaningful per-instruction field and identity mutations (91.67%), including
+every CFG-successor, PHI-predecessor, object, pointer-qualifier, bitfield, and
+inline/divmod metadata mutation.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction, hashes string contents independently of source-local string
+IDs, and covers object, declared-local, alias, and whole-function metadata.
+The existing source-name-independent parameter, aggregate-member, global-cave,
+constant, direct-call, argument, and control-flow checks remain in place. New
+`tests/mir-clobber/arrpath.c` checks direct, self-hit, and randomized paths
+against an independent implementation. `arrow-path-wave7100-audit.py` builds
+an isolated diagnostic mutation compiler, runs 16 stack/no-stack and
+peep/nopeep controls across four source variants, and rejects all 3,038
+mutations with generic fallback and zero survivors. A clean forced control
+selects `spilled-phi-slot`. The clean selected hash remains `f6139204`;
+assembly SHA-256 is
+`889228334debb9cb522f4a9d41beaa92a8542470f893637dd271e92427da5f2e`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
