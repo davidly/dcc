@@ -244,6 +244,10 @@ CAMPAIGNS = (
              "directory-enumeration-runner-wave8100-audit.py",
              output_dir="directory-enumeration-runner-wave8100-audit",
              max_jobs=2),
+    Campaign("nested-for-runner-schedule",
+             "nested-for-runner-wave8200-audit.py",
+             output_dir="nested-for-runner-wave8200-audit",
+             max_jobs=2),
 )
 
 

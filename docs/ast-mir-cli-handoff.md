@@ -1948,6 +1948,30 @@ locally verified execution inventory.
   No genuine false acceptance remains and no separate clobber manifest was
   needed. The standalone audit and full Python script-test suite pass. The
   broader coverage objective remains incomplete.
+- Wave 8200 closes the historical `mir_match_nested_for_runner` proof gap and
+  fixes severe exact-schedule false acceptance. The old 288-instruction,
+  24-block matcher checked every opcode and had at least one payload check at
+  220 instruction positions, but it did not prove the complete destination,
+  operand, type, immediate, memory/qualifier, CFG-successor, object, bitfield,
+  or auxiliary-metadata stream. It falsely accepted 5,919 of 6,912 exhaustive
+  per-instruction field and identity mutations (85.63%), including every CFG
+  successor, pointee-qualifier, bitfield, inline-temp, and div/mod metadata
+  mutation.
+  The matcher now fingerprints all 23 numeric semantic and structural fields
+  on every instruction while retaining its existing aggregate-layout,
+  location-alias, call-ABI, argument, string, branch, jump, and PHI proofs.
+  New `tests/mir-clobber/nestfor.c` isolates the exact runner and exercises the
+  sieve, wide/float/pointer indexed conditions, global nested indexing, and
+  variable-stride loops. New `nested-for-runner-wave8200-audit.py` derives the
+  expected prime count, largest gap, masks, stride sum, and countdown in
+  Python, runs all four stack/no-stack and peep/nopeep target controls, and
+  rejects all 6,912 mutations with generic fallback and zero survivors. A
+  clean forced control selects `spilled-phi-slot`. The clean selected hash
+  remains `60341a7a`; assembly SHA-256 is
+  `c48be9cfd4c2969eac4b061e3f4f06d80e7b16605164ba98891a8def1fce14b4`.
+  The standalone audit, full Python script-test suite, and both strict 506-app
+  release modes pass. No separate clobber manifest was added. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

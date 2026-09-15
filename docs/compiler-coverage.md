@@ -1677,6 +1677,30 @@ No genuine matcher defect or separate clobber manifest was found. The
 standalone audit and full Python script-test suite pass. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 8200 closes the historical `mir_match_nested_for_runner` proof gap and
+fixes severe exact-schedule false acceptance. The old 288-instruction,
+24-block matcher verified every opcode but had payload-specific checks at only
+220 instruction positions. It accepted 5,919 of 6,912 exhaustive
+per-instruction field and identity mutations (85.63%); all CFG-successor,
+pointee-qualifier, bitfield, inline-temp, and div/mod metadata mutations
+survived.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction while retaining its explicit aggregate, global, local,
+call-ABI, string, dataflow, branch, jump, and PHI checks. New
+`tests/mir-clobber/nestfor.c` isolates the exact schedule and exercises the
+sieve, indexed long/float/pointer conditions, global nested indexing, and
+variable-stride loops. `nested-for-runner-wave8200-audit.py` independently
+computes the expected prime count, largest gap, masks, stride sum, and
+countdown, runs all four stack/no-stack and peep/nopeep target controls, and
+rejects all 6,912 mutations with generic fallback and zero survivors. A clean
+forced control selects `spilled-phi-slot`. The clean selected hash remains
+`60341a7a`; assembly SHA-256 is
+`c48be9cfd4c2969eac4b061e3f4f06d80e7b16605164ba98891a8def1fce14b4`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

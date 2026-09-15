@@ -8212,6 +8212,8 @@ static int mir_match_nested_for_runner(
         {279, 281, -1}
     };
     struct Sym *direct_functions[10];
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     int s_offset;
     int b_offset;
     int call_count = 0;
@@ -8508,6 +8510,53 @@ static int mir_match_nested_for_runner(
         if (direct_functions[item] == plan->print_function)
             return mir_machine_reject(
                 "nested-for-call-runner", "print-alias");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[23];
+        size_t value;
+
+        values[0] = (unsigned int)insn->opcode;
+        values[1] = (unsigned int)insn->dst;
+        values[2] = (unsigned int)insn->src1;
+        values[3] = (unsigned int)insn->src2;
+        values[4] = (unsigned int)insn->type;
+        values[5] = (unsigned int)insn->immediate;
+        values[6] = (unsigned int)insn->label;
+        values[7] = (unsigned int)insn->phi_pred1;
+        values[8] = (unsigned int)insn->phi_pred2;
+        values[9] = (unsigned int)insn->successors[0];
+        values[10] = (unsigned int)insn->successors[1];
+        values[11] = (unsigned int)insn->successor_count;
+        values[12] = (unsigned int)insn->object;
+        values[13] = (unsigned int)insn->memory_size;
+        values[14] = (unsigned int)insn->memory_flags;
+        values[15] = (unsigned int)insn->pointee_volatile_mask;
+        values[16] = (unsigned int)insn->has_pointer_qualifiers;
+        values[17] = (unsigned int)insn->bit_width;
+        values[18] = (unsigned int)insn->bit_shift;
+        values[19] = (unsigned int)insn->bit_mask;
+        values[20] = (unsigned int)insn->secondary_offset;
+        values[21] = (unsigned int)insn->inline_temp_id;
+        values[22] = (unsigned int)insn->divmod_cast_types;
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0x4e44e8e283fcd393ULL ||
+        second != 0x40d82a64b805875fULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=nested-for-call-runner "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     return 1;
 }
 
