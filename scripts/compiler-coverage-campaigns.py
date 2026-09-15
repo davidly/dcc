@@ -296,6 +296,10 @@ CAMPAIGNS = (
              "direct-byte-sum-loop-wave9700-audit.py",
              output_dir="direct-byte-sum-loop-wave9700-audit",
              max_jobs=2),
+    Campaign("for-init-pointer-walk-schedule",
+             "for-init-pointer-walk-wave9800-audit.py",
+             output_dir="for-init-pointer-walk-wave9800-audit",
+             max_jobs=2),
 )
 
 

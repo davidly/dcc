@@ -13999,6 +13999,7 @@ static int mir_match_for_init_pointer_walk_schedule(
     int steps_local_offset;
     int pointer_offset;
     int length_offset;
+    int instruction;
 
     memset(plan, 0, sizeof(*plan));
     if (!mir_recovery_opcode_sequence(
@@ -14039,6 +14040,184 @@ static int mir_match_for_init_pointer_walk_schedule(
         mir.insns[8].object < 0)
         return mir_machine_reject(
             "for-init-pointer-walk-schedule", "shape");
+    {
+        unsigned long long first = 1469598103934665603ULL;
+        unsigned long long second = 0x9e3779b97f4a7c15ULL;
+        int object;
+        int declared;
+        int item;
+
+#define MIR_FOR_INIT_POINTER_WALK_MIX(value) do { \
+        unsigned long long mixed_value = \
+            (unsigned long long)(uint32_t)(value); \
+        first ^= mixed_value; \
+        first *= 1099511628211ULL; \
+        second ^= mixed_value + 0x9e3779b97f4a7c15ULL + \
+            (second << 6) + (second >> 2); \
+    } while (0)
+#define MIR_FOR_INIT_POINTER_WALK_MIX_STRING(text) do { \
+        const unsigned char *text_cursor = \
+            (const unsigned char *)(text); \
+        do { \
+            MIR_FOR_INIT_POINTER_WALK_MIX(*text_cursor); \
+        } while (*text_cursor++); \
+    } while (0)
+
+        if (mir.object_count < 0 ||
+            mir.object_count >
+                (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+            mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+            mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+            return 0;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->opcode);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->dst);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->src1);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->src2);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->type);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->immediate);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->label);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->phi_pred1);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->phi_pred2);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->successors[0]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->successors[1]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->successor_count);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->object);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->memory_size);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->memory_flags);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                insn->pointee_volatile_mask);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                insn->has_pointer_qualifiers);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->bit_width);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->bit_shift);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->bit_mask);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->secondary_offset);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->inline_temp_id);
+            MIR_FOR_INIT_POINTER_WALK_MIX(insn->divmod_cast_types);
+            MIR_FOR_INIT_POINTER_WALK_MIX_STRING(insn->name);
+            MIR_FOR_INIT_POINTER_WALK_MIX_STRING(insn->base_name);
+        }
+        for (object = 0; object < mir.object_count; ++object) {
+            const struct MirObject *entry = &mir.objects[object];
+
+            MIR_FOR_INIT_POINTER_WALK_MIX_STRING(entry->name);
+            MIR_FOR_INIT_POINTER_WALK_MIX(entry->storage);
+            MIR_FOR_INIT_POINTER_WALK_MIX(entry->type);
+            MIR_FOR_INIT_POINTER_WALK_MIX(entry->offset);
+            MIR_FOR_INIT_POINTER_WALK_MIX(entry->entry_value);
+            MIR_FOR_INIT_POINTER_WALK_MIX(entry->is_register);
+        }
+        for (declared = 0; declared < mir.declared_count; ++declared) {
+            if (mir.declared_dim_counts[declared] < 0 ||
+                mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+                mir.declared_proto_nargs[declared] < 0 ||
+                mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+                return 0;
+            MIR_FOR_INIT_POINTER_WALK_MIX_STRING(
+                mir.declared_names[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_types[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_type_unstable[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_storage[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_offsets[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_sizes[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_dim_counts[declared]);
+            for (item = 0;
+                 item < mir.declared_dim_counts[declared]; ++item)
+                MIR_FOR_INIT_POINTER_WALK_MIX(
+                    mir.declared_dims[declared][item]);
+            MIR_FOR_INIT_POINTER_WALK_MIX_STRING(
+                mir.declared_link_names[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_elem_sizes[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_vla_size_offsets[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_is_vla[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_is_array[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_is_volatile[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_pointee_is_volatile[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_pointee_volatile_masks[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_dynamic_strides[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX_STRING(
+                mir.declared_runtime_stride_names[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_is_const[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_const_values[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_is_funcptr[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_funcptr_return_types[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_has_proto[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_proto_nargs[declared]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.declared_proto_variadic[declared]);
+            for (item = 0;
+                 item < mir.declared_proto_nargs[declared]; ++item)
+                MIR_FOR_INIT_POINTER_WALK_MIX(
+                    mir.declared_proto_types[declared][item]);
+        }
+        for (item = 0; item < mir.alias_count; ++item) {
+            MIR_FOR_INIT_POINTER_WALK_MIX_STRING(
+                mir.alias_source_names[item]);
+            MIR_FOR_INIT_POINTER_WALK_MIX_STRING(
+                mir.alias_internal_names[item]);
+            MIR_FOR_INIT_POINTER_WALK_MIX(
+                mir.alias_declaration_indices[item]);
+        }
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.count);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.next_value);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.next_label);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.next_call_id);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.has_indirect_incdec);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.has_pointer_difference);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.has_narrowed_for_counter);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.has_compound_literal);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.has_vla);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.implicit_zero_return);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.has_runtime_stride_param);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.is_variadic_function);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.return_type);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.local_bytes);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.dead_local_suffix_bytes);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.aggregate_temp_bytes);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.opaque_count);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.object_count);
+        MIR_FOR_INIT_POINTER_WALK_MIX(
+            mir.has_declared_register_object);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.declared_count);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.alias_count);
+        MIR_FOR_INIT_POINTER_WALK_MIX(mir.sink_purpose);
+#undef MIR_FOR_INIT_POINTER_WALK_MIX_STRING
+#undef MIR_FOR_INIT_POINTER_WALK_MIX
+        if (first != 0xc011e661145cb8f3ULL ||
+            second != 0x5cdc75f6fbb9d5daULL) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=for-init-pointer-walk-schedule "
+                        "reject=semantic-payload "
+                        "fingerprint=%016llx:%016llx\n",
+                        mir.name, first, second);
+            return 0;
+        }
+    }
     if (!mir_machine_same_location(&mir.insns[9], &mir.insns[6]) ||
         !mir_machine_constant_equals(mir.insns[10].dst, 1) ||
         mir.insns[11].src1 != mir.insns[9].dst ||

@@ -1988,6 +1988,30 @@ selected hash remains `8aa7f1fe`; assembly SHA-256 is
 No separate clobber manifest was added. Regenerate the immutable aggregate
 ledger before claiming new overall totals.
 
+Wave 9800 closes the historical
+`mir_match_for_init_pointer_walk_schedule` proof gap and fixes genuine
+exact-schedule false acceptance. The 34-instruction matcher classified every
+opcode, but only 30 instruction positions had any payload or CFG relationship
+check; the four `MIR_NOP` positions were opcode-only, and no instruction had a
+complete semantic-field proof. It accepted 729 of 850 exhaustive
+per-instruction semantic and structural field mutations (85.76%).
+
+The matcher now fingerprints all 23 numeric instruction fields plus both
+symbol-name fields on every instruction, object metadata, declarations,
+aliases, and whole-function state before retaining its parameter,
+local-location, CFG, PHI, type, volatility, constant, and SSA checks. New
+`tests/mir-clobber/forinitptr.c` isolates prefix and postfix pointer
+for-initializers and verifies multiple lengths through an independent
+checksum. `for-init-pointer-walk-wave9800-audit.py` builds an isolated
+diagnostic mutation compiler, runs 40 stack/no-stack and peep/nopeep controls
+across ten source variants, verifies a clean `spilled-phi-slot` fallback, and
+rejects all 850 mutations with generic fallback and zero survivors. The clean
+selected hash remains `ad66cb79`; assembly SHA-256 is
+`7dee6b9ff0ec8842ee29f2e82955f1f45d06999445e8dffda7181a9c5f81b0a3`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
