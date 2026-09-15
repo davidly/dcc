@@ -1011,7 +1011,6 @@ int expected_arg_type(struct Sym *fn, int arg_index, int *ptype);
 void emit_cleanup_stack_bytes(int bytes);
 void emit_call_hl_from_stack_offset(int off);
 void emit_extract_bitfield(void);
-void emit_store_bitfield_from_hl(void);
 void emit_store_bitfield_de_to_addr_hl(int keep_result);
 int paren_starts_cast(void);
 void emit_incdec_value_in_dehl(int type, int op);

@@ -9,6 +9,12 @@
 #endif
 #define MAXNAME 16
 
+#ifdef SYMBOL_INSERT_UNSIGNED_RETURN
+#define SYMBOL_INSERT_RESULT unsigned int
+#else
+#define SYMBOL_INSERT_RESULT int
+#endif
+
 struct Sym {
     char name[MAXNAME];
     unsigned char kind;
@@ -35,10 +41,21 @@ static unsigned int nsym;
 static int nsym;
 #endif
 
-#ifdef SYMBOL_INSERT_COPY_WRAPPER
+#if defined(SYMBOL_INSERT_COPY_WRAPPER) || \
+    defined(SYMBOL_INSERT_COPY_WRAPPER_VOID_RETURN)
 static int copy_calls;
 static int copy_order_ok = 1;
 
+#ifdef SYMBOL_INSERT_COPY_WRAPPER_VOID_RETURN
+static void *copy_name(char *destination, const char *source,
+                       unsigned int count)
+{
+    ++copy_calls;
+    if (nsym <= 0 || destination != sym[nsym - 1].name)
+        copy_order_ok = 0;
+    return strncpy(destination, source, count);
+}
+#else
 static char *copy_name(char *destination, const char *source,
                       unsigned int count)
 {
@@ -47,22 +64,48 @@ static char *copy_name(char *destination, const char *source,
         copy_order_ok = 0;
     return strncpy(destination, source, count);
 }
+#endif
 #define SYMBOL_COPY copy_name
 #else
 #define SYMBOL_COPY strncpy
 #endif
 
+#ifdef SYMBOL_INSERT_MEMSET_ALIAS
+static void *clear_record_bytes(void *destination, int fill,
+                                unsigned int count)
+{
+    return memset(destination, fill, count);
+}
+#define SYMBOL_CLEAR clear_record_bytes
+#else
+#define SYMBOL_CLEAR memset
+#endif
+
+#if defined(SYMBOL_INSERT_INT_DIE)
+static int die(const char *message)
+#else
 static void die(const char *message)
+#endif
 {
     printf("error=%s\n", message);
     exit(1);
+#ifdef SYMBOL_INSERT_INT_DIE
+    return 0;
+#endif
 }
 
+#ifdef SYMBOL_INSERT_EXTRA_HELPER_CALL
+static int helper_name_byte(const char *name)
+{
+    return (unsigned char)name[0];
+}
+#endif
+
 #ifdef SYMBOL_INSERT_UNSIGNED_PARAMETERS
-static int sym_add(const char *name, unsigned int kind,
-                   unsigned int scope)
+static SYMBOL_INSERT_RESULT sym_add(const char *name, unsigned int kind,
+                                    unsigned int scope)
 #else
-static int sym_add(const char *name, int kind, int scope)
+static SYMBOL_INSERT_RESULT sym_add(const char *name, int kind, int scope)
 #endif
 {
     int index;
@@ -70,7 +113,11 @@ static int sym_add(const char *name, int kind, int scope)
     if (nsym >= MAXSYM)
         die("symbol table full");
     index = nsym++;
-    memset(&sym[index], 0, sizeof(sym[index]));
+    SYMBOL_CLEAR(&sym[index], 0, sizeof(sym[index]));
+#ifdef SYMBOL_INSERT_EXTRA_HELPER_CALL
+    if (kind == -32768 && helper_name_byte(name) == 255)
+        sym[index].proc = 1;
+#endif
 #ifdef SYMBOL_INSERT_WIDE_COPY
     SYMBOL_COPY(sym[index].name, name, MAXNAME);
 #else
@@ -221,7 +268,8 @@ int main(void)
         (unsigned)sym[1].kind, (unsigned)sym[1].scope,
         sym[2].name, (unsigned)sym[2].kind,
         (unsigned)sym[2].scope, record_zero(&sym[3]), failures);
-#ifdef SYMBOL_INSERT_COPY_WRAPPER
+#if defined(SYMBOL_INSERT_COPY_WRAPPER) || \
+    defined(SYMBOL_INSERT_COPY_WRAPPER_VOID_RETURN)
     printf("copy=%d order=%d\n", copy_calls, copy_order_ok);
 #endif
     free(sym);

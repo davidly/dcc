@@ -1294,9 +1294,9 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
              * field's storage unit the first time it's reached (see
              * bf_unit_offs above) so an omitted sibling still defaults to 0
              * - exactly the codegen an ordinary `s.field = expr;` assignment
-             * statement already gets, reused here (via
-             * mir_capture_bitfield_init_expr, or directly below for the
-             * non-MIR fallback) instead of a bespoke implementation.
+             * statement already gets, reused here via
+             * mir_capture_bitfield_init_expr instead of a bespoke
+             * implementation.
              */
             seen = 0;
             for (j = 0; j < bf_nunits; ++j)
@@ -1309,18 +1309,7 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
 
             rhs = ast_build_assign_expr(&g_ast_init_arena);
             ast_validate_expr_symbols(rhs);
-            if (mir_is_active()) {
-                mir_capture_bitfield_init_expr(s, baseoff + fd->offset, fd, rhs);
-            } else {
-                emit_load_sym_addr(s);
-                emit_add_const_to_hl(baseoff + fd->offset);
-                emit("\tpush hl\n");
-                ast_gen_expr(rhs);
-                current_field_bit_width = fd->bit_width;
-                current_field_bit_shift = fd->bit_shift;
-                current_field_bit_mask = fd->bit_mask;
-                emit_store_bitfield_from_hl();
-            }
+            mir_capture_bitfield_init_expr(s, baseoff + fd->offset, fd, rhs);
             ast_arena_reset(&g_ast_init_arena);
 
             end_used = fd->offset + fd->size;

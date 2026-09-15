@@ -31,6 +31,17 @@ static void crw7_release_body(void *pointer);
 extern unsigned int cw7dsp(
     unsigned int operation, unsigned int first, unsigned int second);
 
+#ifdef CRW48_ALIAS_POINTER_GLOBAL
+static char *X;
+#endif
+
+#ifdef CRW48_FIXED_PRINT
+static int crw7_fixed_print(const char *text)
+{
+    return printf("%s", text);
+}
+#endif
+
 static void crw7_fail(const char *name)
 {
     printf("FAIL %s\n", name);
@@ -321,6 +332,13 @@ static void *crw7_resize(void *pointer, unsigned int size)
 }
 #endif
 
+#ifdef CRW48_ALIAS_RESIZE
+static void *Xrw7_resize(void *pointer, unsigned int size)
+{
+    return crw7_resize(pointer, size);
+}
+#endif
+
 static int crw7_compare_body(
     const char *left, const char *right)
 {
@@ -350,6 +368,14 @@ static int crw7_compare(const char *left, const char *right)
 {
     return (int)cw7dsp(
         6, (unsigned int)left, (unsigned int)right);
+}
+#endif
+
+#ifdef CRW48_COMPARE_VARIADIC
+static int crw7_compare_variadic(
+    const char *left, const char *right, ...)
+{
+    return crw7_compare(left, right);
 }
 #endif
 
@@ -388,6 +414,13 @@ static void crw7_release(void *pointer)
 }
 #endif
 
+#ifdef CRW48_ALIAS_CHECK
+static void Xrw7_check(int condition, const char *name)
+{
+    crw7_check(condition, name);
+}
+#endif
+
 static int crw7_exact(void)
 {
 #ifdef CRW21_VOLATILE_POINTER
@@ -413,19 +446,38 @@ static int crw7_exact(void)
 
     p = (char *)crw7_allocate(4);
     if (!p) {
+#ifdef CRW48_SOURCE_ALLOC_FIXED_PRINT
+        crw7_fixed_print("FAIL malloc 4\n");
+#else
         printf("FAIL malloc 4\n");
+#endif
         return 1;
     }
 
     crw7_copy(p, "abc");
 
-    p = (char *)crw7_resize(p, 8);
+    p = (char *)
+#ifdef CRW48_SOURCE_GROW_ALIAS_RESIZE
+        Xrw7_resize(p, 8);
+#else
+        crw7_resize(p, 8);
+#endif
     if (!p) {
+#ifdef CRW48_SOURCE_GROW_FIXED_PRINT
+        crw7_fixed_print("FAIL realloc grow null\n");
+#else
         printf("FAIL realloc grow null\n");
+#endif
         return 1;
     }
 
-    crw7_check(crw7_compare(p, "abc") == 0, "realloc grow preserve");
+    crw7_check(
+#ifdef CRW48_SOURCE_COMPARE_VARIADIC
+        crw7_compare_variadic(p, "abc") == 0,
+#else
+        crw7_compare(p, "abc") == 0,
+#endif
+        "realloc grow preserve");
 
     p[3] = 'd';
     p[4] = 0;
@@ -436,8 +488,13 @@ static int crw7_exact(void)
         return 1;
     }
 
+#ifdef CRW48_SOURCE_BYTE_CHECK_ALIAS
+    Xrw7_check(p[0] == 'a', "realloc shrink byte0");
+    Xrw7_check(p[1] == 'b', "realloc shrink byte1");
+#else
     crw7_check(p[0] == 'a', "realloc shrink byte0");
     crw7_check(p[1] == 'b', "realloc shrink byte1");
+#endif
 
     crw7_release(p);
 
@@ -446,7 +503,11 @@ static int crw7_exact(void)
         return 1;
     }
 
+#ifdef CRW48_SOURCE_SUCCESS_FIXED_PRINT
+    crw7_fixed_print("ctype/realloc ok\n");
+#else
     printf("ctype/realloc ok\n");
+#endif
     return 0;
 }
 

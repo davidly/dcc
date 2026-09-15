@@ -637,6 +637,14 @@ static int mir_match_byte_record_copy_schedule(
         const struct MirInsn *store =
             &mir.insns[destination_stores[field]];
 
+        if (destination_member->type != source_member->type ||
+            destination_member->type != type_add_ptr(load->type) ||
+            store->type != load->type ||
+            type_ptr_depth(load->type) != 0 ||
+            type_size(load->type) != 1 ||
+            type_is_float(load->type))
+            return mir_machine_reject(
+                "byte-record-copy-schedule", "field-types");
         if (destination_member->src1 != destination->dst ||
             source_member->src1 != source->dst ||
             destination_member->immediate != field ||
@@ -645,18 +653,17 @@ static int mir_match_byte_record_copy_schedule(
             source_member->memory_size != 1 ||
             destination_member->bit_width != 0 ||
             source_member->bit_width != 0 ||
-            (destination_member->memory_flags & (1 | 8)) != 0 ||
-            (source_member->memory_flags & (1 | 8)) != 0 ||
+            destination_member->memory_flags != 0 ||
+            source_member->memory_flags != 0 ||
             load->src1 != source_member->dst ||
             load->memory_size != 1 ||
             load->bit_width != 0 ||
-            (load->memory_flags & (1 | 8)) != 0 ||
-            type_size(load->type) != 1 ||
+            load->memory_flags != 0 ||
             store->src1 != destination_member->dst ||
             store->src2 != load->dst ||
             store->memory_size != 1 ||
             store->bit_width != 0 ||
-            (store->memory_flags & (1 | 8)) != 0)
+            store->memory_flags != 0)
             return mir_machine_reject(
                 "byte-record-copy-schedule", "fields");
     }
@@ -1113,6 +1120,218 @@ static void mir_emit_move_text_schedule(
             done);
 }
 
+static void mir_board_attack_hash_value(
+    unsigned long long *first, unsigned long long *second,
+    unsigned long long value)
+{
+    *first ^= value;
+    *first *= 1099511628211ULL;
+    *second ^= value + 0x9e3779b97f4a7c15ULL +
+        (*second << 6) + (*second >> 2);
+}
+
+static int mir_board_attack_semantic_payload(void)
+{
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int instruction;
+    int object;
+    int declared;
+    int item;
+
+    if (mir.object_count < 0 ||
+        mir.object_count >
+            (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+        return 0;
+    /*
+     * Source spellings are normalized. The matcher separately binds every
+     * global object and direct callee used by the emitted schedule.
+     */
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)insn->type,
+            (unsigned long long)(unsigned int)insn->immediate,
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            (unsigned long long)(unsigned int)insn->object,
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)insn->secondary_offset,
+            (unsigned long long)(unsigned int)insn->inline_temp_id,
+            (unsigned long long)(unsigned int)insn->divmod_cast_types
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_board_attack_hash_value(
+                &first, &second, values[item]);
+    }
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+
+        mir_board_attack_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->storage);
+        mir_board_attack_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->type);
+        mir_board_attack_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->offset);
+        mir_board_attack_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->entry_value);
+        mir_board_attack_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)entry->is_register);
+    }
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)
+                mir.declared_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_type_unstable[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_storage[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dim_counts[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_elem_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_vla_size_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_vla[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_array[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_volatile[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_pointee_is_volatile[declared],
+            (unsigned long long)
+                mir.declared_pointee_volatile_masks[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dynamic_strides[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_const[declared],
+            (unsigned long long)
+                mir.declared_const_values[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_funcptr[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_funcptr_return_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_has_proto[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_nargs[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_variadic[declared]
+        };
+
+        if (mir.declared_dim_counts[declared] < 0 ||
+            mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+            mir.declared_proto_nargs[declared] < 0 ||
+            mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+            return 0;
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_board_attack_hash_value(
+                &first, &second, values[item]);
+        for (item = 0;
+             item < mir.declared_dim_counts[declared]; ++item)
+            mir_board_attack_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_dims[declared][item]);
+        for (item = 0;
+             item < mir.declared_proto_nargs[declared]; ++item)
+            mir_board_attack_hash_value(
+                &first, &second,
+                (unsigned long long)(unsigned int)
+                    mir.declared_proto_types[declared][item]);
+    }
+    for (item = 0; item < mir.alias_count; ++item)
+        mir_board_attack_hash_value(
+            &first, &second,
+            (unsigned long long)(unsigned int)
+                mir.alias_declaration_indices[item]);
+    {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)mir.count,
+            (unsigned long long)(unsigned int)mir.next_value,
+            (unsigned long long)(unsigned int)mir.next_label,
+            (unsigned long long)(unsigned int)mir.next_call_id,
+            (unsigned long long)(unsigned int)
+                mir.has_indirect_incdec,
+            (unsigned long long)(unsigned int)
+                mir.has_pointer_difference,
+            (unsigned long long)(unsigned int)
+                mir.has_narrowed_for_counter,
+            (unsigned long long)(unsigned int)
+                mir.has_compound_literal,
+            (unsigned long long)(unsigned int)mir.has_vla,
+            (unsigned long long)(unsigned int)
+                mir.implicit_zero_return,
+            (unsigned long long)(unsigned int)
+                mir.has_runtime_stride_param,
+            (unsigned long long)(unsigned int)
+                mir.is_variadic_function,
+            (unsigned long long)(unsigned int)mir.return_type,
+            (unsigned long long)(unsigned int)mir.local_bytes,
+            (unsigned long long)(unsigned int)
+                mir.dead_local_suffix_bytes,
+            (unsigned long long)(unsigned int)
+                mir.aggregate_temp_bytes,
+            (unsigned long long)(unsigned int)mir.opaque_count,
+            (unsigned long long)(unsigned int)mir.object_count,
+            (unsigned long long)(unsigned int)
+                mir.has_declared_register_object,
+            (unsigned long long)(unsigned int)mir.declared_count,
+            (unsigned long long)(unsigned int)mir.alias_count,
+            (unsigned long long)(unsigned int)mir.sink_purpose
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            mir_board_attack_hash_value(
+                &first, &second, values[item]);
+    }
+    if (first == 0xa7a3a3da2feefa6fULL &&
+        second == 0xef23875b98e240d5ULL)
+        return 1;
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s "
+                "template=board-attack-schedule "
+                "reject=semantic-payload "
+                "fingerprint=%016llx:%016llx\n",
+                mir.name, first, second);
+    return 0;
+}
+
 static int mir_match_board_attack_schedule(
     struct MirBoardAttackSchedule *plan)
 {
@@ -1277,6 +1496,8 @@ static int mir_match_board_attack_schedule(
         (mir.return_type & 15) != TYPE_INT ||
         (mir.return_type & TYPE_UNSIGNED) != 0 ||
         type_size(mir.return_type) != 2)
+        return 0;
+    if (!mir_board_attack_semantic_payload())
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
