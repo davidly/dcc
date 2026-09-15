@@ -1746,6 +1746,27 @@ No separate clobber manifest was needed. The standalone audit, full Python
 script-test suite, and both strict 506-app release modes pass. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 8500 closes the historical `mir_match_best_record_schedule` proof gap
+and fixes severe false acceptance. The matcher classified all 77 opcodes but
+directly inspected semantic payload at only 32 instruction positions, leaving
+45 positions without direct evidence. It accepted 1,551 of 1,771 exhaustive
+per-instruction semantic and structural field mutations (87.6%).
+
+The matcher now fingerprints all 23 numeric instruction fields on every
+instruction. New
+`tests/mir-clobber/bestrecord.c` preserves the record-selection workload and
+checks the highest open record, the next result after mutation, and the empty
+result through an independently specified checksum.
+`best-record-wave8500-audit.py` builds an isolated diagnostic mutation
+compiler, runs 28 stack/no-stack and peep/nopeep controls across exact,
+renamed, qualifier, type, predicate, CFG, and comparison variants, verifies a
+clean `spilled-phi-slot` fallback, and rejects all 1,771 mutations with generic
+fallback and zero survivors. The clean selected hash remains `78bade6e`;
+assembly SHA-256 is
+`59e826326054cfb944ba11a09a52e2cb0a740bca755873f2b802a035d43896ae`.
+No separate clobber manifest was added. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

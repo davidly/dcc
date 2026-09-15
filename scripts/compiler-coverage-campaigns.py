@@ -256,6 +256,10 @@ CAMPAIGNS = (
              "union-alias-runner-wave8400-audit.py",
              output_dir="union-alias-runner-wave8400-audit",
              max_jobs=2),
+    Campaign("best-record-schedule",
+             "best-record-wave8500-audit.py",
+             output_dir="best-record-wave8500-audit",
+             max_jobs=2),
 )
 
 

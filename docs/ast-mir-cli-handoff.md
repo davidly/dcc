@@ -2014,6 +2014,22 @@ locally verified execution inventory.
   No separate clobber manifest was needed. The standalone audit, full Python
   script-test suite, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 8500 closes the historical `mir_match_best_record_schedule` proof gap
+  and fixes severe exact-schedule false acceptance. The 77-instruction matcher
+  checked every opcode but directly inspected payload at only 32 instruction
+  positions, leaving a 45-position evidence gap. It accepted 1,551 of 1,771
+  exhaustive per-instruction semantic and structural field mutations (87.6%).
+  The matcher now fingerprints all 23 numeric fields on every instruction. New
+  `tests/mir-clobber/bestrecord.c` preserves the retained record search and
+  checks three result states through an independent checksum.
+  `best-record-wave8500-audit.py` builds an isolated diagnostic mutation
+  compiler, runs 28 stack/no-stack and peep/nopeep controls across seven
+  source variants, verifies the `spilled-phi-slot` fallback, and rejects all
+  1,771 mutations with generic fallback and zero survivors. The clean selected
+  hash remains `78bade6e`; assembly SHA-256 is
+  `59e826326054cfb944ba11a09a52e2cb0a740bca755873f2b802a035d43896ae`.
+  No separate clobber manifest was needed. The broader coverage objective
+  remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
