@@ -2098,6 +2098,27 @@ locally verified execution inventory.
   `c12414d78dada56849ccdd1526bafde3190c8ea60c1eb6cfc538760cd6812037`.
   No separate clobber manifest was added. The broader coverage objective
   remains incomplete.
+- Wave 8900 closes the historical
+  `mir_match_post_index_report_schedule` proof gap and fixes severe
+  exact-schedule false acceptance. The 43-instruction matcher classified
+  every opcode but directly inspected payload at only 32 positions, leaving
+  11 positions without direct evidence and most structural fields unchecked.
+  It accepted 885 of 1,032 exhaustive per-instruction field and identity
+  mutations (85.76%).
+  The matcher now fingerprints all 23 numeric semantic and structural fields
+  on every instruction before retaining its global/local object, post-index,
+  call-ABI, volatility, and single-block proofs. New
+  `tests/mir-clobber/postindex.c` reproduces the retained `tpostidx` stream and
+  checks the reported post-increment values plus an independent global-state
+  checksum. `post-index-report-wave8900-audit.py` builds an isolated
+  diagnostic mutation compiler, runs 28 stack/no-stack and peep/nopeep
+  controls across exact, renamed, changed-value, qualifier, type, index, and
+  CFG variants, and rejects all 1,032 mutations with generic fallback and zero
+  survivors. A clean forced control selects `spilled-phi-slot`. The clean
+  selected hash is `357dcd2f`; assembly SHA-256 is
+  `3d7f6e59dc654d8e26f13bb5083c3df0b276db511026d84af3dc99c7ba285591`.
+  No separate clobber manifest was added. The broader coverage objective
+  remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

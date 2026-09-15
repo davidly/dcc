@@ -1841,6 +1841,29 @@ No separate clobber manifest was added. The standalone audit, full Python
 script-test suite, and both strict 506-app release modes pass. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 8900 closes the historical
+`mir_match_post_index_report_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The previous matcher classified all 43
+opcodes but directly inspected payload at only 32 instruction positions,
+leaving 11 positions without direct evidence and most structural fields
+unchecked. It accepted 885 of 1,032 exhaustive per-instruction field and
+identity mutations (85.76%).
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction before applying its existing global/local object,
+post-index, call-ABI, volatility, and single-block checks. New
+`tests/mir-clobber/postindex.c` reproduces the retained `tpostidx` stream and
+validates the reported post-increment values plus an independent global-state
+checksum. `post-index-report-wave8900-audit.py` builds an isolated diagnostic
+mutation compiler, runs 28 stack/no-stack and peep/nopeep controls across
+exact, renamed, changed-value, qualifier, type, index, and CFG variants,
+verifies a clean `spilled-phi-slot` fallback, and rejects all 1,032 mutations
+with generic fallback and zero survivors. The clean selected hash is
+`357dcd2f`; assembly SHA-256 is
+`3d7f6e59dc654d8e26f13bb5083c3df0b276db511026d84af3dc99c7ba285591`.
+No separate clobber manifest was needed. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

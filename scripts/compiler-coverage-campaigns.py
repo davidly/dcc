@@ -272,6 +272,10 @@ CAMPAIGNS = (
              "aggregate-word-sum-wave8800-audit.py",
              output_dir="aggregate-word-sum-wave8800-audit",
              max_jobs=2),
+    Campaign("post-index-report-schedule",
+             "post-index-report-wave8900-audit.py",
+             output_dir="post-index-report-wave8900-audit",
+             max_jobs=2),
 )
 
 
