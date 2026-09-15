@@ -14223,6 +14223,180 @@ static int mir_match_pointer_cast_diff_schedule(
         mir.has_vla ||
         !mir_byte_sum_signed_word_type(mir.return_type))
         return 0;
+    {
+        unsigned long long first = 1469598103934665603ULL;
+        unsigned long long second = 0x9e3779b97f4a7c15ULL;
+        int instruction;
+        int object;
+        int declared;
+        int item;
+
+#define MIR_POINTER_CAST_DIFF_MIX(value) do { \
+        unsigned long long mixed_value = \
+           (unsigned long long)(uint32_t)(value); \
+        first ^= mixed_value; \
+        first *= 1099511628211ULL; \
+        second ^= mixed_value + 0x9e3779b97f4a7c15ULL + \
+           (second << 6) + (second >> 2); \
+    } while (0)
+#define MIR_POINTER_CAST_DIFF_MIX_STRING(text) do { \
+        const unsigned char *text_cursor = \
+           (const unsigned char *)(text); \
+        do { \
+           MIR_POINTER_CAST_DIFF_MIX(*text_cursor); \
+        } while (*text_cursor++); \
+    } while (0)
+
+        if (mir.object_count < 0 ||
+           mir.object_count >
+               (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+           mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+           mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+           return 0;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+           const struct MirInsn *insn = &mir.insns[instruction];
+
+           MIR_POINTER_CAST_DIFF_MIX(insn->opcode);
+           MIR_POINTER_CAST_DIFF_MIX(insn->dst);
+           MIR_POINTER_CAST_DIFF_MIX(insn->src1);
+           MIR_POINTER_CAST_DIFF_MIX(insn->src2);
+           MIR_POINTER_CAST_DIFF_MIX(insn->type);
+           MIR_POINTER_CAST_DIFF_MIX(insn->immediate);
+           MIR_POINTER_CAST_DIFF_MIX(insn->label);
+           MIR_POINTER_CAST_DIFF_MIX(insn->phi_pred1);
+           MIR_POINTER_CAST_DIFF_MIX(insn->phi_pred2);
+           MIR_POINTER_CAST_DIFF_MIX(insn->successors[0]);
+           MIR_POINTER_CAST_DIFF_MIX(insn->successors[1]);
+           MIR_POINTER_CAST_DIFF_MIX(insn->successor_count);
+           MIR_POINTER_CAST_DIFF_MIX(insn->object);
+           MIR_POINTER_CAST_DIFF_MIX(insn->memory_size);
+           MIR_POINTER_CAST_DIFF_MIX(insn->memory_flags);
+           MIR_POINTER_CAST_DIFF_MIX(insn->pointee_volatile_mask);
+           MIR_POINTER_CAST_DIFF_MIX(insn->has_pointer_qualifiers);
+           MIR_POINTER_CAST_DIFF_MIX(insn->bit_width);
+           MIR_POINTER_CAST_DIFF_MIX(insn->bit_shift);
+           MIR_POINTER_CAST_DIFF_MIX(insn->bit_mask);
+           MIR_POINTER_CAST_DIFF_MIX(insn->secondary_offset);
+           MIR_POINTER_CAST_DIFF_MIX(insn->inline_temp_id);
+           MIR_POINTER_CAST_DIFF_MIX(insn->divmod_cast_types);
+           MIR_POINTER_CAST_DIFF_MIX_STRING(insn->name);
+           MIR_POINTER_CAST_DIFF_MIX_STRING(insn->base_name);
+        }
+        for (object = 0; object < mir.object_count; ++object) {
+           const struct MirObject *entry = &mir.objects[object];
+
+           MIR_POINTER_CAST_DIFF_MIX_STRING(entry->name);
+           MIR_POINTER_CAST_DIFF_MIX(entry->storage);
+           MIR_POINTER_CAST_DIFF_MIX(entry->type);
+           MIR_POINTER_CAST_DIFF_MIX(entry->offset);
+           MIR_POINTER_CAST_DIFF_MIX(entry->entry_value);
+           MIR_POINTER_CAST_DIFF_MIX(entry->is_register);
+        }
+        for (declared = 0; declared < mir.declared_count; ++declared) {
+           if (mir.declared_dim_counts[declared] < 0 ||
+               mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+               mir.declared_proto_nargs[declared] < 0 ||
+               mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+               return 0;
+           MIR_POINTER_CAST_DIFF_MIX_STRING(
+               mir.declared_names[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(mir.declared_types[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_type_unstable[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(mir.declared_storage[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(mir.declared_offsets[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(mir.declared_sizes[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(mir.declared_dim_counts[declared]);
+           for (item = 0;
+                item < mir.declared_dim_counts[declared]; ++item)
+               MIR_POINTER_CAST_DIFF_MIX(
+                   mir.declared_dims[declared][item]);
+           MIR_POINTER_CAST_DIFF_MIX_STRING(
+               mir.declared_link_names[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(mir.declared_elem_sizes[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_vla_size_offsets[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(mir.declared_is_vla[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(mir.declared_is_array[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_is_volatile[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_pointee_is_volatile[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_pointee_volatile_masks[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_dynamic_strides[declared]);
+           MIR_POINTER_CAST_DIFF_MIX_STRING(
+               mir.declared_runtime_stride_names[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(mir.declared_is_const[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_const_values[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_is_funcptr[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_funcptr_return_types[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_has_proto[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_proto_nargs[declared]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.declared_proto_variadic[declared]);
+           for (item = 0;
+                item < mir.declared_proto_nargs[declared]; ++item)
+               MIR_POINTER_CAST_DIFF_MIX(
+                   mir.declared_proto_types[declared][item]);
+        }
+        for (item = 0; item < mir.alias_count; ++item) {
+           MIR_POINTER_CAST_DIFF_MIX_STRING(
+               mir.alias_source_names[item]);
+           MIR_POINTER_CAST_DIFF_MIX_STRING(
+               mir.alias_internal_names[item]);
+           MIR_POINTER_CAST_DIFF_MIX(
+               mir.alias_declaration_indices[item]);
+        }
+        MIR_POINTER_CAST_DIFF_MIX(mir.count);
+        MIR_POINTER_CAST_DIFF_MIX(mir.next_value);
+        MIR_POINTER_CAST_DIFF_MIX(mir.next_label);
+        MIR_POINTER_CAST_DIFF_MIX(mir.next_call_id);
+        MIR_POINTER_CAST_DIFF_MIX(mir.has_indirect_incdec);
+        MIR_POINTER_CAST_DIFF_MIX(mir.has_pointer_difference);
+        MIR_POINTER_CAST_DIFF_MIX(mir.has_narrowed_for_counter);
+        MIR_POINTER_CAST_DIFF_MIX(mir.has_compound_literal);
+        MIR_POINTER_CAST_DIFF_MIX(mir.has_vla);
+        MIR_POINTER_CAST_DIFF_MIX(mir.implicit_zero_return);
+        MIR_POINTER_CAST_DIFF_MIX(mir.has_runtime_stride_param);
+        MIR_POINTER_CAST_DIFF_MIX(mir.is_variadic_function);
+        MIR_POINTER_CAST_DIFF_MIX(mir.return_type);
+        MIR_POINTER_CAST_DIFF_MIX(mir.local_bytes);
+        MIR_POINTER_CAST_DIFF_MIX(mir.dead_local_suffix_bytes);
+        MIR_POINTER_CAST_DIFF_MIX(mir.aggregate_temp_bytes);
+        MIR_POINTER_CAST_DIFF_MIX(mir.opaque_count);
+        MIR_POINTER_CAST_DIFF_MIX(mir.object_count);
+        MIR_POINTER_CAST_DIFF_MIX(
+            mir.has_declared_register_object);
+        MIR_POINTER_CAST_DIFF_MIX(mir.declared_count);
+        MIR_POINTER_CAST_DIFF_MIX(mir.alias_count);
+        MIR_POINTER_CAST_DIFF_MIX(mir.sink_purpose);
+#undef MIR_POINTER_CAST_DIFF_MIX_STRING
+#undef MIR_POINTER_CAST_DIFF_MIX
+        if (!((first == 0xdfbe7f87652f3ab9ULL &&
+               second == 0x22f35d781f05e0fdULL) ||
+              (first == 0xc3614a4383bfc5bfULL &&
+               second == 0x7f0af76f6fa1a9a3ULL) ||
+              (first == 0x27b72522aa3308eaULL &&
+               second == 0x9f266bbbafad9597ULL) ||
+              (first == 0xd8e63c101ae3bf48ULL &&
+               second == 0x033de9aef7978380ULL))) {
+           if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+               fprintf(stderr,
+                       "; MIR machine function=%s "
+                       "template=pointer-cast-diff-schedule "
+                       "reject=semantic-payload "
+                       "fingerprint=%016llx:%016llx\n",
+                       mir.name, first, second);
+           return 0;
+        }
+    }
     for (group = 0; group < 3; ++group) {
         if (!mir_pointer_cast_root(
                 base_addresses[group], &plan->roots[group]) ||

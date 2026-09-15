@@ -1888,6 +1888,33 @@ with generic fallback and zero survivors. Clean forced controls select
 No separate clobber manifest was added. Regenerate the immutable aggregate
 ledger before claiming new overall totals.
 
+Wave 9100 closes the historical
+`mir_match_pointer_cast_diff_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The previous 100-instruction matcher checked
+every opcode, but its direct semantic predicates referenced only 67
+instruction positions, leaving 33 positions without direct payload-specific
+checks. It accepted 2,195 of 2,500 exhaustive per-instruction field and
+identity mutations (87.80%), with survivors at every instruction position,
+and accepted the changed-count near-match in all four runtime modes.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields
+plus both symbol-name fields on every instruction, object metadata,
+declarations, aliases, and whole-function state before retaining its existing
+array-root, constant, local-location, CFG, call-ABI, argument, and SSA
+relationship checks. New `tests/mir-clobber/ptrcastdiff.c` isolates the three
+pointer-cast difference calculations and checks their combined runtime value
+through an independent checksum oracle.
+`pointer-cast-diff-wave9100-audit.py` builds an isolated diagnostic mutation
+compiler, runs 28 stack/no-stack and peep/nopeep controls across exact,
+renamed, changed-count, qualifier, type, failure-call, and extra-CFG variants,
+and rejects all 2,500 mutations with generic fallback and zero survivors. A
+clean forced control selects `spilled-phi-slot`. The clean selected hash
+remains `d4f39cb6`; assembly SHA-256 is
+`7214aadd91a2310b86f8688550e5fc2ee8eb2bdd4b37174ffb357a0fefd06fe8`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a
