@@ -2052,6 +2052,28 @@ locally verified execution inventory.
   `517061dcfb3c0f22ae5b1527b73801a42ba5dd5d7f3aabf3e2b79b15807c34ca`.
   No separate clobber manifest was added. The broader coverage objective
   remains incomplete.
+- Wave 8700 closes the historical `mir_match_for_init_sum_schedule` proof gap
+  and fixes severe exact-schedule false acceptance. The old 32-instruction
+  matcher checked every opcode, but its direct semantic predicates referenced
+  only 17 instruction positions; even including the two edge and two PHI
+  helpers, nine positions had no payload-specific proof. It accepted 706 of
+  800 exhaustive per-instruction field and identity mutations (88.25%).
+  The matcher now fingerprints all 23 numeric semantic and structural fields
+  plus both symbol-name fields on every instruction, object metadata,
+  declarations, aliases, and whole-function state before retaining its
+  explicit parameter, local-location, constant, CFG, PHI, and SSA checks. New
+  `tests/mir-clobber/forinitsum.c` isolates the prefix-initialized sum loop and
+  adds renamed-function, parameter-type, volatile-local, wide-local, alternate
+  loop, and extra-CFG controls. New `for-init-sum-wave8700-audit.py` builds an
+  isolated diagnostic mutation compiler, runs 28 stack/no-stack and
+  peep/nopeep controls across seven source variants, and rejects all 800
+  mutations with generic fallback and zero survivors. A clean forced control
+  selects `spilled-phi-slot`. The clean selected hash remains `adb96508` and
+  assembly SHA-256 is
+  `ae8836d8a7fc0dfed3adc4337e97492d7f4ddcc5d67ef12c3514a6a178e0ed6c`.
+  No separate clobber manifest was needed. The standalone audit, full Python
+  script-test suite, and both strict 506-app release modes pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

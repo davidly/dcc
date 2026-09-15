@@ -1791,6 +1791,30 @@ forced controls select `spilled-phi-slot`. The fixture selected hashes remain
 No separate clobber manifest was needed. Regenerate the immutable aggregate
 ledger before claiming new overall totals.
 
+Wave 8700 closes the historical `mir_match_for_init_sum_schedule` proof gap
+and fixes severe exact-schedule false acceptance. The old 32-instruction
+matcher checked all opcodes, but direct semantic predicates referenced only 17
+instruction positions; even including its two edge and two PHI helpers, nine
+positions had no payload-specific proof. It accepted 706 of 800 exhaustive
+per-instruction field and identity mutations (88.25%).
+
+The matcher now fingerprints all 23 numeric semantic and structural fields
+plus both symbol-name fields on every instruction, object metadata,
+declarations, aliases, and whole-function state before retaining its existing
+parameter, local-location, constant, CFG, PHI, and SSA checks. New
+`tests/mir-clobber/forinitsum.c` isolates the prefix-initialized sum loop and
+adds renamed-function, parameter-type, volatile-local, wide-local, alternate
+loop, and extra-CFG controls. `for-init-sum-wave8700-audit.py` builds an
+isolated diagnostic mutation compiler, runs 28 stack/no-stack and peep/nopeep
+controls across seven source variants, and rejects all 800 mutations with
+generic fallback and zero survivors. A clean forced control selects
+`spilled-phi-slot`. The clean selected hash remains `adb96508`; assembly
+SHA-256 is
+`ae8836d8a7fc0dfed3adc4337e97492d7f4ddcc5d67ef12c3514a6a178e0ed6c`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

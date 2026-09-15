@@ -264,6 +264,10 @@ CAMPAIGNS = (
              "local-initializer-wave8600-audit.py",
              output_dir="local-initializer-wave8600-audit",
              max_jobs=2),
+    Campaign("for-init-sum-schedule",
+             "for-init-sum-wave8700-audit.py",
+             output_dir="for-init-sum-wave8700-audit",
+             max_jobs=2),
 )
 
 
