@@ -468,6 +468,342 @@ static void apply_vla_mutation(enum VlaMutation mutation)
     }
 }
 
+enum VlaBranchMutationKind {
+    VLA_BRANCH_MUTATE_INSN_FIELD,
+    VLA_BRANCH_MUTATE_INSN_NAME,
+    VLA_BRANCH_MUTATE_OBJECT_DECL_OFFSET,
+    VLA_BRANCH_MUTATE_OBJECT_DECL_TYPE
+};
+
+enum VlaBranchInsnField {
+    VLA_BRANCH_FIELD_DST,
+    VLA_BRANCH_FIELD_SRC1,
+    VLA_BRANCH_FIELD_SRC2,
+    VLA_BRANCH_FIELD_IMMEDIATE,
+    VLA_BRANCH_FIELD_LABEL,
+    VLA_BRANCH_FIELD_PHI_PRED1,
+    VLA_BRANCH_FIELD_PHI_PRED2,
+    VLA_BRANCH_FIELD_OBJECT
+};
+
+enum VlaBranchValueKind {
+    VLA_BRANCH_VALUE_LITERAL,
+    VLA_BRANCH_VALUE_INSN_DST,
+    VLA_BRANCH_VALUE_INSN_LABEL,
+    VLA_BRANCH_VALUE_INSN_OBJECT
+};
+
+struct VlaBranchMutationCase {
+    const char *name;
+    int kind;
+    int index;
+    int field;
+    int value_kind;
+    long value;
+    const char *text;
+};
+
+static const struct VlaBranchMutationCase vla_branch_mutations[] = {
+    {"w parameter value", VLA_BRANCH_MUTATE_INSN_FIELD, 2,
+     VLA_BRANCH_FIELD_DST, VLA_BRANCH_VALUE_LITERAL, 88, NULL},
+    {"src parameter offset", VLA_BRANCH_MUTATE_OBJECT_DECL_OFFSET, 2,
+     0, VLA_BRANCH_VALUE_LITERAL, 12, NULL},
+    {"dst parameter object type", VLA_BRANCH_MUTATE_OBJECT_DECL_TYPE, 3,
+     0, VLA_BRANCH_VALUE_LITERAL, TYPE_LONG | TYPE_PTR, NULL},
+    {"parameter use object", VLA_BRANCH_MUTATE_INSN_FIELD, 87,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 1, NULL},
+    {"changed anchor name", VLA_BRANCH_MUTATE_INSN_NAME, 7,
+     0, VLA_BRANCH_VALUE_LITERAL, 0, "changed_x"},
+    {"half anchor name", VLA_BRANCH_MUTATE_INSN_NAME, 11,
+     0, VLA_BRANCH_VALUE_LITERAL, 0, "half_x"},
+    {"index anchor name", VLA_BRANCH_MUTATE_INSN_NAME, 25,
+     0, VLA_BRANCH_VALUE_LITERAL, 0, "i#0#0x"},
+    {"sum anchor name", VLA_BRANCH_MUTATE_INSN_NAME, 44,
+     0, VLA_BRANCH_VALUE_LITERAL, 0, "sum#b1#0x"},
+    {"count anchor name", VLA_BRANCH_MUTATE_INSN_NAME, 47,
+     0, VLA_BRANCH_VALUE_LITERAL, 0, "count#b1#1x"},
+    {"loop index anchor name", VLA_BRANCH_MUTATE_INSN_NAME, 52,
+     0, VLA_BRANCH_VALUE_LITERAL, 0, "j#1#0x"},
+    {"local upper bound", VLA_BRANCH_MUTATE_OBJECT_DECL_OFFSET, 9,
+     0, VLA_BRANCH_VALUE_LITERAL, -1, NULL},
+    {"local use object", VLA_BRANCH_MUTATE_INSN_FIELD, 109,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 52, NULL},
+    {"changed alias store local", VLA_BRANCH_MUTATE_INSN_FIELD, 126,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 44, NULL},
+    {"changed accumulation store local", VLA_BRANCH_MUTATE_INSN_FIELD, 129,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 44, NULL},
+    {"changed return load local", VLA_BRANCH_MUTATE_INSN_FIELD, 139,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 44, NULL},
+    {"sum loop load local", VLA_BRANCH_MUTATE_INSN_FIELD, 86,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 7, NULL},
+    {"sum accumulation store local", VLA_BRANCH_MUTATE_INSN_FIELD, 93,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 7, NULL},
+    {"sum division load local", VLA_BRANCH_MUTATE_INSN_FIELD, 111,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 7, NULL},
+    {"count loop load local", VLA_BRANCH_MUTATE_INSN_FIELD, 94,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 25, NULL},
+    {"count increment store local", VLA_BRANCH_MUTATE_INSN_FIELD, 97,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 25, NULL},
+    {"count division load local", VLA_BRANCH_MUTATE_INSN_FIELD, 112,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 25, NULL},
+    {"j loop bound load local", VLA_BRANCH_MUTATE_INSN_FIELD, 64,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 25, NULL},
+    {"j lower bound load local", VLA_BRANCH_MUTATE_INSN_FIELD, 70,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 25, NULL},
+    {"j upper bound load local", VLA_BRANCH_MUTATE_INSN_FIELD, 74,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 25, NULL},
+    {"j source index local", VLA_BRANCH_MUTATE_INSN_FIELD, 88,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 25, NULL},
+    {"j increment load local", VLA_BRANCH_MUTATE_INSN_FIELD, 102,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 25, NULL},
+    {"j increment store local", VLA_BRANCH_MUTATE_INSN_FIELD, 105,
+     VLA_BRANCH_FIELD_OBJECT, VLA_BRANCH_VALUE_INSN_OBJECT, 25, NULL},
+    {"constant value", VLA_BRANCH_MUTATE_INSN_FIELD, 103,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, 2, NULL},
+    {"initial changed source", VLA_BRANCH_MUTATE_INSN_FIELD, 7,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 9, NULL},
+    {"initial divide operator", VLA_BRANCH_MUTATE_INSN_FIELD, 10,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '+', NULL},
+    {"initial divide lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 10,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 1, NULL},
+    {"initial divide rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 10,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 6, NULL},
+    {"initial half store source", VLA_BRANCH_MUTATE_INSN_FIELD, 11,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 9, NULL},
+    {"initial i store source", VLA_BRANCH_MUTATE_INSN_FIELD, 25,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 9, NULL},
+    {"outer phi initial source", VLA_BRANCH_MUTATE_INSN_FIELD, 33,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 9, NULL},
+    {"outer phi backedge source", VLA_BRANCH_MUTATE_INSN_FIELD, 33,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 134, NULL},
+    {"outer phi entry predecessor", VLA_BRANCH_MUTATE_INSN_FIELD, 33,
+     VLA_BRANCH_FIELD_PHI_PRED1, VLA_BRANCH_VALUE_INSN_LABEL, 26, NULL},
+    {"outer phi backedge predecessor", VLA_BRANCH_MUTATE_INSN_FIELD, 33,
+     VLA_BRANCH_FIELD_PHI_PRED2, VLA_BRANCH_VALUE_INSN_LABEL, 130, NULL},
+    {"outer compare operator", VLA_BRANCH_MUTATE_INSN_FIELD, 39,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, TOK_LE, NULL},
+    {"outer compare lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 39,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 51, NULL},
+    {"outer compare rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 39,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 2, NULL},
+    {"outer branch value", VLA_BRANCH_MUTATE_INSN_FIELD, 40,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 33, NULL},
+    {"outer branch label", VLA_BRANCH_MUTATE_INSN_FIELD, 40,
+     VLA_BRANCH_FIELD_LABEL, VLA_BRANCH_VALUE_INSN_LABEL, 107, NULL},
+    {"inner sum source", VLA_BRANCH_MUTATE_INSN_FIELD, 44,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 6, NULL},
+    {"inner count source", VLA_BRANCH_MUTATE_INSN_FIELD, 47,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 24, NULL},
+    {"inner subtract operator", VLA_BRANCH_MUTATE_INSN_FIELD, 51,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '+', NULL},
+    {"inner subtract lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 51,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 64, NULL},
+    {"inner subtract rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 51,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 9, NULL},
+    {"inner j source", VLA_BRANCH_MUTATE_INSN_FIELD, 52,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 10, NULL},
+    {"inner add operator", VLA_BRANCH_MUTATE_INSN_FIELD, 67,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '-', NULL},
+    {"inner add lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 67,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 64, NULL},
+    {"inner add rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 67,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 9, NULL},
+    {"inner bound lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 68,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 33, NULL},
+    {"inner bound rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 68,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 10, NULL},
+    {"valid ge operator", VLA_BRANCH_MUTATE_INSN_FIELD, 72,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '>', NULL},
+    {"valid ge lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 72,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 64, NULL},
+    {"valid ge rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 72,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 10, NULL},
+    {"valid lower branch value", VLA_BRANCH_MUTATE_INSN_FIELD, 73,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 68, NULL},
+    {"valid lower branch label", VLA_BRANCH_MUTATE_INSN_FIELD, 73,
+     VLA_BRANCH_FIELD_LABEL, VLA_BRANCH_VALUE_INSN_LABEL, 83, NULL},
+    {"valid lt operator", VLA_BRANCH_MUTATE_INSN_FIELD, 76,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, TOK_LE, NULL},
+    {"valid lt lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 76,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 70, NULL},
+    {"valid lt rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 76,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 2, NULL},
+    {"valid upper branch value", VLA_BRANCH_MUTATE_INSN_FIELD, 77,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 68, NULL},
+    {"valid upper branch label", VLA_BRANCH_MUTATE_INSN_FIELD, 77,
+     VLA_BRANCH_FIELD_LABEL, VLA_BRANCH_VALUE_INSN_LABEL, 83, NULL},
+    {"valid index jump label", VLA_BRANCH_MUTATE_INSN_FIELD, 80,
+     VLA_BRANCH_FIELD_LABEL, VLA_BRANCH_VALUE_INSN_LABEL, 99, NULL},
+    {"valid phi first source", VLA_BRANCH_MUTATE_INSN_FIELD, 84,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 82, NULL},
+    {"valid phi second source", VLA_BRANCH_MUTATE_INSN_FIELD, 84,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 79, NULL},
+    {"valid phi first predecessor", VLA_BRANCH_MUTATE_INSN_FIELD, 84,
+     VLA_BRANCH_FIELD_PHI_PRED1, VLA_BRANCH_VALUE_INSN_LABEL, 81, NULL},
+    {"valid phi second predecessor", VLA_BRANCH_MUTATE_INSN_FIELD, 84,
+     VLA_BRANCH_FIELD_PHI_PRED2, VLA_BRANCH_VALUE_INSN_LABEL, 78, NULL},
+    {"valid index branch value", VLA_BRANCH_MUTATE_INSN_FIELD, 85,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 82, NULL},
+    {"valid index branch label", VLA_BRANCH_MUTATE_INSN_FIELD, 85,
+     VLA_BRANCH_FIELD_LABEL, VLA_BRANCH_VALUE_INSN_LABEL, 107, NULL},
+    {"accumulation load source", VLA_BRANCH_MUTATE_INSN_FIELD, 90,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 110, NULL},
+    {"accumulation add operator", VLA_BRANCH_MUTATE_INSN_FIELD, 91,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '-', NULL},
+    {"accumulation add lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 91,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 111, NULL},
+    {"accumulation add rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 91,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 119, NULL},
+    {"accumulation store source", VLA_BRANCH_MUTATE_INSN_FIELD, 93,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 86, NULL},
+    {"count add operator", VLA_BRANCH_MUTATE_INSN_FIELD, 96,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '-', NULL},
+    {"count add lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 96,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 95, NULL},
+    {"count add rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 96,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 94, NULL},
+    {"count store source", VLA_BRANCH_MUTATE_INSN_FIELD, 97,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 95, NULL},
+    {"increment operator", VLA_BRANCH_MUTATE_INSN_FIELD, 104,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '-', NULL},
+    {"increment lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 104,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 64, NULL},
+    {"increment rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 104,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 95, NULL},
+    {"increment store source", VLA_BRANCH_MUTATE_INSN_FIELD, 105,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 102, NULL},
+    {"increment jump label", VLA_BRANCH_MUTATE_INSN_FIELD, 106,
+     VLA_BRANCH_FIELD_LABEL, VLA_BRANCH_VALUE_INSN_LABEL, 81, NULL},
+    {"average store index", VLA_BRANCH_MUTATE_INSN_FIELD, 110,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 52, NULL},
+    {"average divide operator", VLA_BRANCH_MUTATE_INSN_FIELD, 113,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '+', NULL},
+    {"average divide lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 113,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 86, NULL},
+    {"average divide rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 113,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 94, NULL},
+    {"average cast immediate", VLA_BRANCH_MUTATE_INSN_FIELD, 114,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, 1, NULL},
+    {"average cast source", VLA_BRANCH_MUTATE_INSN_FIELD, 114,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 111, NULL},
+    {"average store pointer", VLA_BRANCH_MUTATE_INSN_FIELD, 115,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 118, NULL},
+    {"average store value", VLA_BRANCH_MUTATE_INSN_FIELD, 115,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 113, NULL},
+    {"alias dst index", VLA_BRANCH_MUTATE_INSN_FIELD, 118,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 52, NULL},
+    {"alias dst load source", VLA_BRANCH_MUTATE_INSN_FIELD, 119,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 122, NULL},
+    {"alias src index", VLA_BRANCH_MUTATE_INSN_FIELD, 122,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 52, NULL},
+    {"alias src load source", VLA_BRANCH_MUTATE_INSN_FIELD, 123,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 118, NULL},
+    {"alias compare operator", VLA_BRANCH_MUTATE_INSN_FIELD, 124,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, TOK_EQ, NULL},
+    {"alias compare lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 124,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 123, NULL},
+    {"alias compare rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 124,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 119, NULL},
+    {"alias branch value", VLA_BRANCH_MUTATE_INSN_FIELD, 125,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 81, NULL},
+    {"alias branch label", VLA_BRANCH_MUTATE_INSN_FIELD, 125,
+     VLA_BRANCH_FIELD_LABEL, VLA_BRANCH_VALUE_INSN_LABEL, 107, NULL},
+    {"changed add operator", VLA_BRANCH_MUTATE_INSN_FIELD, 128,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '-', NULL},
+    {"changed add lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 128,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 127, NULL},
+    {"changed add rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 128,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 126, NULL},
+    {"changed store source", VLA_BRANCH_MUTATE_INSN_FIELD, 129,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 126, NULL},
+    {"return add operator", VLA_BRANCH_MUTATE_INSN_FIELD, 135,
+     VLA_BRANCH_FIELD_IMMEDIATE, VLA_BRANCH_VALUE_LITERAL, '-', NULL},
+    {"return add lhs", VLA_BRANCH_MUTATE_INSN_FIELD, 135,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 134, NULL},
+    {"return add rhs", VLA_BRANCH_MUTATE_INSN_FIELD, 135,
+     VLA_BRANCH_FIELD_SRC2, VLA_BRANCH_VALUE_INSN_DST, 95, NULL},
+    {"return store source", VLA_BRANCH_MUTATE_INSN_FIELD, 136,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 134, NULL},
+    {"return jump label", VLA_BRANCH_MUTATE_INSN_FIELD, 137,
+     VLA_BRANCH_FIELD_LABEL, VLA_BRANCH_VALUE_INSN_LABEL, 53, NULL},
+    {"return value source", VLA_BRANCH_MUTATE_INSN_FIELD, 140,
+     VLA_BRANCH_FIELD_SRC1, VLA_BRANCH_VALUE_INSN_DST, 126, NULL}
+};
+
+static long vla_branch_mutation_value(
+    const struct VlaBranchMutationCase *mutation)
+{
+    if (mutation->value_kind == VLA_BRANCH_VALUE_INSN_DST)
+        return mir.insns[mutation->value].dst;
+    if (mutation->value_kind == VLA_BRANCH_VALUE_INSN_LABEL)
+        return mir.insns[mutation->value].label;
+    if (mutation->value_kind == VLA_BRANCH_VALUE_INSN_OBJECT)
+        return mir.insns[mutation->value].object;
+    return mutation->value;
+}
+
+static void apply_vla_branch_mutation(
+    const struct VlaBranchMutationCase *mutation)
+{
+    long value = vla_branch_mutation_value(mutation);
+
+    switch (mutation->kind) {
+    case VLA_BRANCH_MUTATE_INSN_FIELD:
+        switch (mutation->field) {
+        case VLA_BRANCH_FIELD_DST:
+            mir.insns[mutation->index].dst = (int)value;
+            break;
+        case VLA_BRANCH_FIELD_SRC1:
+            mir.insns[mutation->index].src1 = (int)value;
+            break;
+        case VLA_BRANCH_FIELD_SRC2:
+            mir.insns[mutation->index].src2 = (int)value;
+            break;
+        case VLA_BRANCH_FIELD_IMMEDIATE:
+            mir.insns[mutation->index].immediate = value;
+            break;
+        case VLA_BRANCH_FIELD_LABEL:
+            mir.insns[mutation->index].label = (int)value;
+            break;
+        case VLA_BRANCH_FIELD_PHI_PRED1:
+            mir.insns[mutation->index].phi_pred1 = (int)value;
+            break;
+        case VLA_BRANCH_FIELD_PHI_PRED2:
+            mir.insns[mutation->index].phi_pred2 = (int)value;
+            break;
+        case VLA_BRANCH_FIELD_OBJECT:
+            mir.insns[mutation->index].object = (int)value;
+            break;
+        }
+        break;
+    case VLA_BRANCH_MUTATE_INSN_NAME:
+        strcpy(mir.insns[mutation->index].name, mutation->text);
+        break;
+    case VLA_BRANCH_MUTATE_OBJECT_DECL_OFFSET:
+        mir.objects[mutation->index].offset = (int)value;
+        mir.declared_offsets[mutation->index] = (int)value;
+        break;
+    case VLA_BRANCH_MUTATE_OBJECT_DECL_TYPE:
+        mir.objects[mutation->index].type = (int)value;
+        mir.declared_types[mutation->index] = (int)value;
+        break;
+    }
+}
+
+static void apply_vla_touching_layout(void)
+{
+    mir.objects[4].offset = -6;
+    mir.declared_offsets[4] = -6;
+    mir.objects[5].offset = -8;
+    mir.declared_offsets[5] = -8;
+    mir.objects[6].offset = -10;
+    mir.declared_offsets[6] = -10;
+    mir.objects[7].offset = -14;
+    mir.declared_offsets[7] = -14;
+    mir.objects[8].offset = -2;
+    mir.declared_offsets[8] = -2;
+}
+
 static int emit_vla_smooth_candidate(MirStream *out)
 {
     return mir_try_emit_vla_smooth_isolation(out);
@@ -486,7 +822,8 @@ static size_t read_vla_stream(
     return bytes;
 }
 
-static int verify_vla_control(int stack_check)
+static int verify_vla_control_variant(
+    int stack_check, void (*mutate_fixture)(void))
 {
     MirStream *stream = mir_stream_open();
     char text[32768];
@@ -498,6 +835,8 @@ static int verify_vla_control(int stack_check)
     if (stream == NULL)
         fatal("cannot create VLA smooth control stream");
     setup_vla_smooth_fixture();
+    if (mutate_fixture != NULL)
+        mutate_fixture();
     opt_stack_check = stack_check;
     label_id = 100;
     accepted = mir_try_selector(stream, emit_vla_smooth_candidate);
@@ -511,6 +850,17 @@ static int verify_vla_control(int stack_check)
     opt_stack_check = saved_stack_check;
     mir_stream_close(stream);
     return ok;
+}
+
+static int verify_vla_control(int stack_check)
+{
+    return verify_vla_control_variant(stack_check, NULL);
+}
+
+static int verify_vla_touching_layout_control(int stack_check)
+{
+    return verify_vla_control_variant(
+        stack_check, apply_vla_touching_layout);
 }
 
 static int verify_vla_mutations(void)
@@ -552,15 +902,64 @@ static int verify_vla_mutations(void)
     return survivors == 0;
 }
 
+static int verify_vla_branch_mutations(void)
+{
+    int survivors = 0;
+    int mutation;
+
+    for (mutation = 0;
+         mutation < (int)(sizeof(vla_branch_mutations) /
+                          sizeof(vla_branch_mutations[0]));
+         ++mutation) {
+        MirStream *stream = mir_stream_open();
+        char text[32];
+        size_t bytes;
+        int accepted;
+
+        if (stream == NULL)
+            fatal("cannot create VLA smooth branch mutation stream");
+        setup_vla_smooth_fixture();
+        apply_vla_branch_mutation(&vla_branch_mutations[mutation]);
+        label_id = 317;
+        mir_stream_puts("prefix\n", stream);
+        accepted = mir_try_selector(stream, emit_vla_smooth_candidate);
+        if (accepted != 0) {
+            fprintf(stderr, "VLA branch mutation survived: %s\n",
+                    vla_branch_mutations[mutation].name);
+            ++survivors;
+        } else {
+            bytes = read_vla_stream(stream, text, sizeof(text));
+            if (bytes != 7 || memcmp(text, "prefix\n", 7) != 0 ||
+                label_id != 317) {
+                fprintf(stderr,
+                        "VLA branch mutation contaminated candidate: %s\n",
+                        vla_branch_mutations[mutation].name);
+                ++survivors;
+            }
+        }
+        mir_stream_close(stream);
+    }
+    printf("VLA smooth branch mutation survivors=%d/%d\n",
+           survivors,
+           (int)(sizeof(vla_branch_mutations) /
+                 sizeof(vla_branch_mutations[0])));
+    return survivors == 0;
+}
+
 int main(void)
 {
     int ok = 1;
 
-    if (!verify_vla_control(0) || !verify_vla_control(1)) {
+    if (!verify_vla_control(0) ||
+        !verify_vla_control(1) ||
+        !verify_vla_touching_layout_control(0) ||
+        !verify_vla_touching_layout_control(1)) {
         fputs("VLA smooth valid control failed\n", stderr);
         ok = 0;
     }
     if (!verify_vla_mutations())
+        ok = 0;
+    if (!verify_vla_branch_mutations())
         ok = 0;
     if (!ok)
         return 1;

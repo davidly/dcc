@@ -399,6 +399,1667 @@ compiler campaign retains one passing baseline plus 24/24 killed mutants.
 This test-only increment changes no production output; regenerate the exact
 aggregate ledger before updating global totals.
 
+Wave 43 closes the next `mir_value_number_global_field_loads` proof gap
+without changing production code. The earlier host control already proved
+positive redundant-load elimination; two new graphs now prove the missing
+same-field-store and unsafe-call barriers. One keeps the first field load live
+across a call-safe direct call, stores the same isolated static field, and
+requires the later load not to fold to the stale value. The other seeds the
+whole-file scan with two textual writes to the same field, inserts an
+intervening call, and likewise requires no fold. Current code passes both
+graphs, so this was a proof gap rather than a correctness defect. A new
+clean-build mutant, `global-field-vn-call-barrier`, disables only the
+non-call-safe call eviction and is killed by the exact
+`FAIL isolated global field unsafe-call barrier` assertion. Normal and
+ASan/UBSan host tests pass 5/5, the full compiler campaign has one passing
+baseline plus 25/25 killed mutants, and all 136 Python script tests pass.
+Commit `31c13e7c` contains the invariant and mutant.
+
+Wave 44 closes the next `mir_try_emit_homed_scalar_cfg` proof gap without
+changing production code. The existing homed transaction tests already built
+nearby malformed `MIR_PARAM`, `MIR_LOAD_INDIRECT`, and `MIR_COPY_AGGREGATE`
+graphs, but they did not prove the exact `mir_homed_reject` reasons that the
+production generic fallback reports. New host controls now capture
+`DCC_MIR_HOMED_REPORT` and require the precise `parameter-object`,
+`parameter-type`, `indirect-load-type`, and `aggregate-copy-size` diagnostics,
+each with preserved output prefixes and repaired same-stream retries that
+match clean controls byte-for-byte. The clean-build mutant
+`homed-aggregate-copy-size` disables only the aggregate size guard and is
+killed by the exact `FAIL homed aggregate copy exact rejection` assertion.
+Normal and ASan/UBSan host tests pass 5/5, the full compiler campaign has one
+passing baseline plus 26/26 killed mutants, and all 136 Python script tests
+pass. This remains a test-only increment; the authoritative aggregate totals
+still await a fresh immutable collection.
+
+Wave 45 closes the next `mir_match_compound_check_runner` proof gaps without
+changing production code. The earlier compound coverage already proved the
+exact baseline and selected ABI, memory-width, and final-tail mutations, but
+it did not force generic fallback for five important near matches: a volatile
+failure counter, an extra helper call, a harmless extra CFG block, a VLA
+variant, and a fixed-prototype success printer. New `compound-wave45`
+MIR-clobber cases add those controls plus four direct selector-mutant cases,
+and the full group passes in 40 target configurations. A new
+`compound-wave45-audit.py` campaign then runs 24 stack/no-stack and
+peep/nopeep runtime controls and rejects 13/13 targeted MIR mutations that
+cover store source-range validation, check-call identity, local-address and
+pointer-load identity, indirect-load address/type, index-address source/type,
+member offset/width, indirect-store value kind, and the final failure-load
+type. Current code already rejected every new mutation and near match, so
+this increment closes proof gaps rather than fixing a false acceptance. All
+136 Python script tests pass. This remains a test-only increment; regenerate
+the immutable aggregate ledger before claiming new overall branch totals.
+
+Wave 46 closes the next `mir_match_symbol_insert_schedule` proof gaps without
+changing production code. The earlier symbol-insert coverage already proved
+the exact baseline, the wide field-mutation census, and selected symbol-limit
+and field-offset near matches, but it did not keep a focused campaign over
+return-shape drift, direct helper-signature mismatches, a non-canonical
+memset call target, or several still-unproven argument/source identities.
+New `symbol-insert-wave46` MIR-clobber cases add five source near matches and
+eight direct selector-mutant cases, and the full group passes in 56 target
+configurations. A new `symbol-insert-wave46-audit.py` campaign then runs 24
+stack/no-stack and peep/nopeep runtime controls and rejects 8/8 targeted MIR
+mutations that cover the error-call string argument, memset destination
+argument, strncpy destination argument, the indexed-record count source, and
+the kind/scope/size/element-size store sources. Current code already rejected
+every new mutation and near match, so this increment closes proof gaps rather
+than fixing a false acceptance. All 136 Python script tests pass. This
+remains a test-only increment; regenerate the immutable aggregate ledger
+before claiming new overall branch totals.
+
+Wave 47 closes the next spilled generic-fallback proof gaps without changing
+production code. Existing malformed-MIR transaction tests already exercised
+nearby `MIR_LOAD_INDIRECT`, `MIR_CALL`, `MIR_CALL_AGGREGATE`, and
+`MIR_VLA_SIZE` graphs, but they did not prove the exact
+`mir_scalar_cfg_preflight_reject` reasons reported by spilled generic
+preflight. New host controls now capture `DCC_MIR_SELECT_REPORT` and require
+the precise `indirect-width`, `call-abi`, `aggregate-call-abi`, and
+`frame-offset` diagnostics, each with preserved output prefixes,
+empty-output rollback, and repaired same-stream retries that match clean
+controls byte-for-byte. The clean-build mutant `spilled-call-abi` disables
+only the empty-name branch of the direct-call ABI guard and is killed by the
+exact `FAIL spilled call ABI exact rejection` assertion. Normal and
+ASan/UBSan host tests pass 5/5, the full compiler campaign has one passing
+baseline plus 27/27 killed mutants, and all 136 Python script tests pass.
+This remains a test-only increment; the authoritative aggregate totals still
+await a fresh immutable collection.
+
+Wave 48 closes the next `ast_assign_supported_uncached` proof gaps without
+changing production code. The existing host matrix already covered broad
+identifier, indexed, pointer-array, multidimensional, and wide-scalar
+assignment families, but it did not directly pin several member and
+dereference classification branches in the remaining ledger. New direct-AST
+controls in `tests/host/mir_verify.c` now assert support or rejection for:
+
+- direct `.` and `->` pointer-member `+=`/`-=` compounds, plus rejection of a
+  pointer rhs for those compounds;
+- float-to-bitfield `=` conversion and bitfield `<<=` with a plain-int rhs;
+- float-to-`_Bool` member `=` acceptance and `_Bool` member compound rejection;
+- dead-result pointer-identifier `+=` acceptance with live-result rejection;
+- dereferenced long `>>=` acceptance, dereferenced float `+=` acceptance, and
+  dereferenced float `%=` rejection.
+
+`tests/mir-clobber/assigncv.c` also adds a cheap end-to-end proof for local
+pointer compounds, `box_pointer` member-pointer compounds, and bitfield
+compound stores; manual `dccmake` peep/nopeep runs both report
+`assignment coverage failures=0`. Normal and ASan/UBSan MIR host CTest pass
+5/5, and all 136 Python script tests pass. No clean compiler mutant was
+added: this predicate is a pure support classifier, and the newly covered
+branches do not map cleanly onto an existing single-condition mutation with a
+distinct downstream oracle. This remains a test-only increment; the
+authoritative aggregate totals still await a fresh immutable collection.
+
+Wave 49 closes the next `mir_match_ctype_realloc_schedule` proof gaps without
+changing production code. The earlier ctype/realloc coverage already proved
+the exact baseline, the exhaustive Wave 21 field-mutation census, the wave7
+fastcall near matches, and selected ABI, width, string, and dataflow
+mutations, but it did not keep a focused proof over fixed-prototype
+allocation/grow/success printers, grow/shrink helper identity consistency,
+variadic compare drift, late check-helper consistency, or several remaining
+pointer-slot, argument-source, stride, and final-tail legality checks. New
+`ctype-realloc-wave48` MIR-clobber cases add seven runtime controls plus five
+runtime-safe selector-mutant controls, and all 48 target configurations pass.
+A new `ctype-realloc-wave48-audit.py` campaign then runs 28 stack/no-stack and
+peep/nopeep runtime controls and rejects 18/18 targeted MIR mutations that
+cover pointer-store/load identity, allocation/grow/shrink null-test
+operators, allocation/grow/final failure argument ordering, copy/preserve
+dataflow, resize/check helper identity, byte-store and byte-check stride,
+byte-check normalization, free-call argument indexing, and the final success
+constant. Current code already rejected every new mutation and near match, so
+this increment closes proof gaps rather than fixing a false acceptance. All
+136 Python script tests pass. This remains a test-only increment; regenerate
+the immutable aggregate ledger before claiming new overall branch totals.
+
+Wave 50 closes the next `mir_match_vla_smooth` proof gaps without changing
+production code. The earlier VLA smoothing coverage already proved the exact
+baseline, stack and debug modes, volatile and near-match source rejection,
+alias/stride/restoration runtime behavior, and 54 direct metadata/ABI/object
+mutations through the dedicated host harness plus `tests/mir-clobber/vla18.c`,
+but it did not directly pin the matcher's remaining top-level relation
+guards. `tests/host/mir_vla_smooth_isolation.c` now adds a
+touching-but-non-overlapping local-layout acceptance control plus 112 direct
+branch mutations covering the secondary parameter ABI checks,
+parameter/local object-use mismatches, same-slot alias drift,
+constant/value-link breakage, outer/inner loop relations, valid-index
+PHI/branch plumbing, accumulation and increment links, average-store wiring,
+alias-compare edges, and the return graph. Current code already rejected
+every new mutation and accepted the boundary-layout control, so this
+increment closes proof gaps rather than fixing a false acceptance. Normal and
+ASan/UBSan MIR host CTest each pass `mir-vla-smooth-isolation`, and all 136
+Python script tests pass. This remains a test-only increment; the
+authoritative aggregate totals still await a fresh immutable collection.
+
+Wave 51 closes the next `mir_resolve_deferred_metadata` proof gaps without
+changing production code. Existing host deferred-metadata coverage already
+proved function-pointer insertion, direct-call conversion repair, coordinate
+updates, basic alias bounds, and malformed call ordering, but it did not
+directly pin alias windows with explicit scope labels, for-init loop-exit
+truncation, orphaned `MIR_OBJECT_MERGE` demotion, or the `#b`-gated scoped
+unary/PHI type-repair loop. New direct MIR controls in
+`tests/host/mir_verify.c` now assert scope-label alias renaming plus
+`base_name` repair, non-repair when the scope label precedes the declaration
+window, forward exit-branch truncation while ignoring a backward-targeted
+`MIR_BRANCH_FALSE`, invalid array-object merge demotion to `MIR_ADDRESS`
+while leaving a valid merge intact, and unary/PHI type repair after a block
+alias retargets a named load. The clean-build mutant
+`deferred-merge-demotion` disables only the invalid-merge fallback and is
+killed by the exact `FAIL deferred metadata merge demotion` assertion.
+Current code already satisfied every new invariant, so this increment closes
+proof gaps rather than fixing a false acceptance. Normal and ASan/UBSan MIR
+host CTest pass 5/5, the full compiler mutation campaign has one passing
+baseline plus 28/28 killed mutants, and all 136 Python script tests pass.
+This remains a test-only increment; regenerate the immutable aggregate ledger
+before claiming new overall branch totals.
+
+Wave 52 fixes a real, independently reproduced defect, found by a fresh
+post-wave-51 coverage checkpoint collection rather than by any targeted proof
+increment. Compiling `tests/mir-clobber/cmpw4.c`'s `CMPW45_EXTRA_HELPER_CALL`
+variant (a genuinely empty `static void` helper, MIR shape `insns=1
+values=0`) immediately after a normal-sized function fataled under
+`DCC_MIR_CACHE_VERIFY=1`: `; MIR CACHE MISMATCH mir_definition
+function=cmpw45_extra_helper value=0 cached=1 uncached=-1`. `mir_definition`,
+`mir_value_use_count`, and `mir_call_uses_value` bounds-check their cached
+arrays against `mir_use_cache_count_capacity` /
+`mir_use_cache_arg_head_capacity`, monotonically non-shrinking high-water
+marks, but `mir_ensure_use_cache`'s reset loop only zeroed indices up to the
+*current* function's own, possibly smaller, `next_value`/`next_call_id`. A
+function with fewer values or calls than an earlier one left high indices
+holding the earlier function's cached def-index/arg-head answers, readable
+as if legitimately defined for the new, smaller function. Reproduced
+directly: `DCC_MIR_CACHE_VERIFY=1 ./dcc -DCMPW45_EXTRA_HELPER_CALL
+tests/mir-clobber/cmpw15.c -o ...` fataled before the fix and exits 0 after.
+This is a real latent miscompile risk even in ordinary, non-cache-verified
+builds: any pass consulting these caches for an index a small function never
+used could silently receive an unrelated instruction from an earlier
+function. The fix clears the full allocated capacity on every cache rebuild
+instead of only the current function's smaller count.
+
+A new permanent host control,
+`verify_use_cache_capacity_reset_across_functions`, reproduces the exact
+shape directly in `tests/host/mir_verify.c`: a normal function defines value
+0 at instruction 1, then an immediately following, genuinely empty
+zero-value function must not see that stale definition. Reverting the fix
+was confirmed to make this control fail (`MIR verifier failures=1`); with
+the fix restored, `MIR verifier failures=0`. A full stack/no-stack selector
+census against the immediately preceding parent tree shows zero changed
+selections, zero changed output, and zero apps requiring runtime validation
+across all 3,039 functions, confirming this was a latent, previously
+undetected bug rather than a change to any existing production selection or
+output. Normal and ASan/UBSan MIR host tests pass, the full compiler
+mutation campaign has one passing baseline plus 28/28 killed mutants, both
+strict stack/no-stack full+extended release gates pass with zero failures
+and zero performance regressions, and all 136 Python script tests pass.
+
+Wave 53 closes the next `mir_match_byte_math_flags` proof gaps without
+changing production code. The earlier byte-math coverage already proved the
+exact baseline, the broad Wave 19 field-mutation census, and the source-level
+mask/compare/complement/add/overflow/logic near matches, but it did not keep
+a focused campaign over prototype-bearing helper acceptance, variadic
+call-flag instruction-metadata drift, or top-level non-void/VLA shape
+rejection, and it left several named fallback reasons unpinned in the
+standalone audit. `tests/mir-clobber/bytemath.c` now adds ANSI helper,
+compare-variadic, decimal-variadic, non-void-return, and VLA source variants.
+A new `byte-math-wave53-audit.py` campaign then runs 24 stack/no-stack and
+peep/nopeep runtime controls, retaining exact selection for the baseline and
+prototype-bearing helper variants while forcing generic fallback for the four
+new near matches, and rejects 7/7 targeted MIR mutations that cover
+instruction-metadata type drift, wide-store width, state-pointer typing,
+compare/decimal call indirection, and both early return-value paths. Current
+code already accepted or rejected every new control as intended, so this
+increment closes proof gaps rather than fixing a false acceptance. All 136
+Python script tests pass. This remains a test-only increment; regenerate the
+immutable aggregate ledger before claiming new overall branch totals.
+
+Wave 60 closes the next `mir_match_catalan_driver_schedule` proof gaps
+without changing production code. The earlier Catalan coverage already proved
+the exact baseline, the alternate `_pflio` full-I/O exact path, renamed
+helpers, unsigned/volatile source near matches, and the broad Wave 23
+compile-only field census, but it did not keep a focused runtime-backed
+campaign over helper-identity drift across the `zero`/`is_zero`/`add_term`/
+`div_small` families, fixed-print and wrapped-`putchar` near matches, or the
+remaining metadata, initializer, report, and print-loop legality checks. New
+`catalan-wave60` MIR-clobber cases add six source near matches plus 11
+runtime-safe selector-mutant cases, and all 72 target configurations pass. A
+new `catalan-wave60-audit.py` campaign then runs 28 stack/no-stack and
+peep/nopeep runtime controls and rejects 11/11 targeted MIR mutations that
+cover helper-identity drift, metadata and array-initializer mutations, both
+loop headers and tails, the initial report argument source, and the
+outer-print, inner-print, digit, and newline tails. Current code already
+rejected every new near match and mutation, so this increment closes proof
+gaps rather than fixing a false acceptance. All 136 Python script tests pass.
+This remains a test-only increment; regenerate the immutable aggregate ledger
+before claiming new overall branch totals.
+
+Wave 62 closes the next `mir_match_symbol_find_schedule` proof gaps without
+changing production code. The earlier symbol-find coverage already proved the
+exact baseline, the broad Wave 21 field-mutation census, capacity and memory
+boundaries, unsigned globals/fields/indexes, volatile table rejection, and
+comparison-call global-clobber safety. It did not keep a focused runtime-backed
+proof over unsigned return shape, variadic compare and error helpers,
+void/variadic copy helpers, count/table address escapes, or several remaining
+type, dataflow, helper-identity, and boundary predicates. New
+`symbol-find-wave62` MIR-clobber cases add seven source near matches plus ten
+runtime-safe selector mutants, and all 72 target configurations pass. A new
+`symbol-find-wave62-audit.py` campaign runs 32 stack/no-stack and peep/nopeep
+runtime controls and rejects 19/19 targeted MIR mutations covering unsigned
+scalar and member-pointer types, PHI/loop/compare/copy/store/return dataflow,
+direct helper identity/indirection, and the memory-limit upper boundary.
+Current code already rejected every new near match and mutation, so this
+increment closes proof gaps rather than fixing a false acceptance. All 136
+Python script tests pass. This remains a test-only increment;
+regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
+Wave 63 closes the next `mir_match_ptr_condition_main` proof gaps without
+changing its accepted program set or generated schedule. The matcher now runs
+its complete semantic signature after the explicit constant, call, ABI,
+global, alias, and aggregate-layout checks. This preserves the catch-all proof
+while allowing targeted mutations to exercise the specific rejection branches
+that the earlier signature placement masked. `tests/tptrcnd.c` adds
+runtime-safe alternate init/fail/check/picker helpers, a volatile failure
+counter, and renamed-global and loop-picker alias controls. A new
+`pointer-condition-wave63-audit.py` campaign runs 52 stack/no-stack and
+peep/nopeep controls, retaining exact selection for the baseline,
+static-global, and fastcall-picker variants while forcing named spilled
+fallback for ten near matches. It rejects 19/19 targeted MIR mutations covering
+byte promotion, operations, memory and index layout, constants, call and
+argument identities, globals, local/global/function aliasing, initialization,
+and return layout, with zero meaningful survivors. No genuine false acceptance
+was found: the baseline assembly SHA-256 remains
+`8816c4cf4df3c7a7bccb69042a4a814d5c72ea979642204b95fcc23f896ffbfb`
+and the selected hash remains `d4d8d799`. The standalone audit, full Python
+script suite, and focused strict stack/no-stack `tptrcnd` release gates pass.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals; the broader coverage objective remains incomplete.
+
+Wave 64 closes the next `mir_match_float_tangent_rational` proof gaps without
+changing production code. Historical commit `16e9a5f9` introduced the exact
+schedule before focused per-matcher audits, and no dedicated tangent fixture
+or audit existed. New `tests/mir-clobber/tanrat.c` isolates the
+114-instruction schedule and checks zero, signed, quadrant-inverted, and
+period-reduced results against seven independently computed mathematical
+tangent values. New `float-tangent-wave64-audit.py` runs 12 stack/no-stack
+and peep/nopeep runtime controls, retaining exact selection for the baseline
+and proving spilled fallback for extra-arithmetic opcode/shape and
+variadic-remainder ABI near matches. It rejects 13/13 targeted MIR mutations
+covering parameter and call types, local width and identity, call arguments,
+repeated constants, negation,
+period/quadrant/rational/result dataflow and operators, zero-result flow, and
+the final PHI. The clean baseline retains selected hash `948521bf` and
+assembly SHA-256
+`e0acbc154ecc7efc3491c561749c56a7ea4ece401de8e14b89955a11421db41c`.
+Current code already rejected every near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
+Wave 65 closes the next `mir_match_exec_recursion_schedule` proof gaps without
+changing production code. The existing Wave 14 fixture and clobber campaign
+already proved every hardcoded binary operator and word-dataflow load through
+its 127-mutation audit, plus selected call ABI, memory-width, volatile-result,
+and source-expression boundaries. It did not retain a focused runtime-backed
+campaign over renamed valid controls, pointer and reporter ABI drift,
+return/parameter signedness, recursive-local volatility, extra CFG/VLA shape,
+or several remaining entry, vector, call-argument, constant, identity,
+side-effect, branch-value, and return predicates. The new
+`exec-recursion-wave64` clobber group adds 12 source controls and 35
+runtime-safe selector mutations; all 94 target configurations pass. A new
+`exec-recursion-wave65-audit.py` campaign runs 48 stack/no-stack and
+peep/nopeep runtime controls, retains exact selection for the baseline and
+renamed-helper/global variants, and rejects 35/35 targeted MIR mutations with
+the expected named reason and `spilled-scalar-cfg` fallback. The baseline
+retains selected hash `794b3954` and assembly SHA-256
+`28bb381ce9849a6df141705e538c20d53dc48d7588199ec41b0f3fda37a5765a`.
+Current code already rejected every new near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
+Wave 70 closes the historical `mir_match_whitespace_scan_schedule` proof gap
+without changing production code. Commit `0401e793` introduced the exact
+schedule before focused per-matcher audits, and no dedicated fixture or
+campaign remained in the tree. New `tests/mir-clobber/wsscan.c` isolates the
+60-instruction, eight-block schedule and validates bounded, empty, multiline,
+and helper-mutated state with independent cursor, line, and helper-call
+oracles. New `whitespace-scan-wave70-audit.py` runs 16 stack/no-stack and
+peep/nopeep runtime controls, retaining exact selection for the baseline and
+renamed-helper forms while proving hybrid generic fallback for variadic-helper
+and extra-CFG near matches. A forced hybrid candidate cost report confirms the
+clean scheduled candidate is the exact incumbent before diagnostic selection.
+The audit rejects 25/25 targeted MIR mutations covering bound signedness and
+dataflow, source/index/byte access, helper identity and ABI, short-circuit
+flow, post-call reloads, newline comparison, both state updates, and member
+overlap/range checks. The clean selected hash remains `0259e664` and assembly
+SHA-256 is
+`31c83b5f4d79640c9908a480717fa7a952afd7d570e3069daebc3860cb92850b`.
+Current code already rejected every near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
+Wave 71 closes the historical `mir_match_random_wide_fill` proof gap and fixes
+genuine selector false acceptances. New `tests/mir-clobber/rndwide.c` isolates
+the 37-instruction, four-block schedule and checks eight deterministic wide
+results against a fixed oracle. New `random-wide-fill-wave71-audit.py` runs 24
+stack/no-stack and peep/nopeep runtime controls, retaining exact selection for
+baseline and renamed-helper forms while proving spilled generic fallback for
+helper-width, count-signedness, volatile-destination, and volatile-temporary
+near matches. A forced `spilled-phi-slot` candidate cost report confirms the
+clean scheduled candidate is the exact incumbent before diagnostic selection.
+The matcher now proves exact scalar types, branch and increment dataflow,
+unobservable local-store identity, indirect memory width and volatility, and
+the direct helper ABI. The audit rejects 38/38 targeted MIR mutations with
+zero meaningful survivors; before the fix, mutations of the branch condition,
+increment step, local identities, and multiple type fields retained the
+unchanged exact schedule. The clean selected hash remains `2dc38a8d` and
+assembly SHA-256 is
+`464c9dc3af8d8081d2548e3049bae1cf16623bf6309f31a387c95db0f7662a7c`.
+The standalone audit, all Python script tests, and both strict 506-app release
+modes pass. Regenerate the immutable aggregate ledger before claiming new
+overall branch totals.
+
+Wave 80 closes the historical `mir_match_fixed_embedding_build` proof gap
+without changing production code. Commit `9299371d` introduced the exact
+schedule before focused per-matcher audits, and no dedicated fixture or
+campaign remained in the tree. New `tests/mir-clobber/fxembd.c` isolates the
+77-instruction, seven-block schedule and validates all 128 embedding outputs,
+including 16 lower and 16 upper saturations, with an independently indexed and
+clamped oracle. New `fixed-embedding-wave80-audit.py` runs 12 stack/no-stack
+and peep/nopeep runtime controls, retaining exact selection for the baseline
+while proving named spilled fallback for volatile-token and variadic-clamp
+near matches. Exact and fallback `DCC_MIR_COST_REPORT` assertions plus forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` controls verify candidate identity.
+The audit rejects 24/24 targeted MIR mutations covering global/local identity,
+initialization, PHI and loop bounds, indexing, widths, pointer increments,
+signed-wide promotion/addition, call ABI/dataflow, result storage, and loop
+updates, with zero meaningful survivors. The clean selected hash remains
+`e979e278` and assembly SHA-256 is
+`399f0d1374c4e85d8da4744ccaf930010a55a07c7169e4675822bdb36ec7f2e4`.
+Current code already rejected every near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
+Wave 82 closes the historical `mir_match_packed_byte_report_schedule` proof
+gap without changing production code. No dedicated fixture or audit previously
+covered this exact schedule. New `tests/mir-clobber/pkbrpt.c` isolates its
+34-instruction, one-block shape and checks an asymmetric four-byte packing
+result against an independently computed runtime oracle. New
+`packed-byte-report-wave82-audit.py` runs 20 stack/no-stack and peep/nopeep
+runtime controls, retaining exact selection for baseline and renamed-helper
+forms while proving spilled generic fallback for volatile, word-width, and VLA
+buffer near matches. A forced hybrid candidate cost report confirms the clean
+scheduled candidate is the exact incumbent before diagnostic selection. The
+audit rejects 26/26 targeted MIR mutations covering buffer type and identity,
+lane indices, address dataflow, stride and memory width, byte constants, store
+operands, pack-call identity/arguments/directness/result width, print
+string/arguments/directness/result width, and the zero return. The clean
+selected hash remains `c1803b97` and assembly SHA-256 is
+`6c82b5625ae46dd0fef759670274f489aa0656b8b9a0ffc77e17b1f921c1e47b`.
+Current code already rejected every near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
+Wave 90 closes the remaining focused
+`mir_match_call_safe_member_sum_schedule` proof gaps without changing
+production code. The existing Wave 17 clobber manifest already covered the
+exact baseline, local and aliasing callees, volatile and CFG near matches, and
+13 broad field mutations. New `call-safe-member-sum-wave90-audit.py` adds 32
+stack/no-stack and peep/nopeep runtime controls, retaining exact selection for
+baseline, local-callee, and aliasing-callee forms while proving named spilled
+fallback for variadic, different-callee, padded-record, and volatile-loop-state
+near matches. The audit rejects 47/47 new MIR mutations covering word types
+and widths, parameter and local identities, initializers, PHIs, loop condition
+dataflow, member layout and loads, direct call structure, every staged call
+sum, raw-member accumulation, increment, and final store flow. Forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output independently confirms every
+generic fallback, with zero meaningful survivors. The clean selected hash
+remains `99a108e6` and assembly SHA-256 is
+`865bd210a681c96c6ee1d767a513ab0ca24e169818f8d86e378a3de9c8be0534`.
+Current code already rejected every new near match and mutation, so no genuine
+false acceptance was found. The standalone audit and all 136 Python script
+tests pass. This remains a test-only increment; regenerate the immutable
+aggregate ledger before claiming new overall branch totals.
+
+Wave 100 closes the historical `mir_match_gnarly_runner` proof gap and fixes a
+genuine exact-schedule false-acceptance class. The existing matcher proves the
+564-instruction opcode fingerprint, 22-block CFG, constants, value/PHI
+relationships, conversions, string identities, direct, indirect, and variadic
+call ABI, array aliases and strides, structure copy, object identities, and
+return flow. Fresh diagnostic mutations showed that binary and PHI result
+types plus array and structure-member pointer types were not part of that
+proof, allowing unsupported type-mutated candidates to retain the hard-coded
+schedule. Those type and width invariants are now explicit.
+
+New `tests/mir-clobber/gnarly.c` preserves the exact main-function shape and
+adds an independent helper-side runtime oracle for the Duff copy, structure
+argument, implicit call, repeated function-pointer call, and old-style sum.
+New `gnarly-runner-wave100-audit.py` runs eight stack/no-stack and peep/nopeep
+runtime controls, retains exact selection for the baseline, and proves named
+spilled fallback for a volatile-count near match. It rejects 22/22 targeted
+MIR mutations and independently reproduces every fallback with forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output. The clean selected hash
+remains `a855a26c` and assembly SHA-256 is
+`dc95b353f36d0e1245a68d34b22f3ed7fafdff6bdba02a991fbd1fecb22cbfbb`.
+The standalone audit, all Python script tests, and both strict 506-app release
+modes pass. Regenerate the immutable aggregate ledger before claiming new
+overall branch totals.
+
+Wave 150 closes the historical `mir_match_float_atan2_schedule` proof gap and
+fixes a genuine exact-schedule false-acceptance class. The existing matcher
+proved its 66-opcode fingerprint, ten-block count, selected constants, partial
+value flow, parameter offsets, and common unary helper identity. It did not
+prove the exact CFG label relationships, comparison and float result types,
+all branch and return operands, ratio-local identity and width, parameter-load
+identity, or direct-call ABI. Twenty-four meaningful diagnostic mutations of
+those fields retained the unchanged hard-coded schedule before the fix. Those
+structural, type, storage, dataflow, and call invariants are now explicit.
+
+New `tests/mir-clobber/fatan2.c` isolates the schedule and checks nine
+independently tabulated results covering zero, both vertical axes, all four
+quadrants, and asymmetric coordinates. New
+`float-atan2-wave150-audit.py` runs 20 stack/no-stack and peep/nopeep runtime
+controls, retains exact selection for the baseline, and proves named spilled
+fallback for variadic-helper, volatile-parameter, volatile-ratio, and
+different-helper near matches. It rejects 34/34 targeted MIR mutations and
+independently reproduces each fallback through
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot`, with zero meaningful survivors.
+The clean selected hash remains `77d2fef8` and assembly SHA-256 is
+`98d3715cb1c1fcca5d9801b075cf97fda73eb079bbb35a0e8bbf37d24ab22213`.
+The standalone audit, all Python script tests, and both strict 506-app release
+modes pass. Regenerate the immutable aggregate ledger before claiming new
+overall branch totals.
+
+Wave 140 closes the historical
+`mir_match_matrix_product_schedule_kind` proof gap for both its transposed and
+outer variants and fixes a genuine exact-schedule false-acceptance class. The
+existing matcher proves the 101- and 90-instruction opcode fingerprints,
+seven-block loop structure, parameter layout, pointer and counter dataflow,
+direct conversion and clamp calls, and output stores. Fresh diagnostic
+mutations showed that named-memory widths, pointer/count/word/long result
+types, binary operand types, and indexed/indirect access types were not fully
+proved, allowing 73 of 85 representative type and width mutations to retain
+the unchanged hard-coded schedule. Those invariants are now explicit for both
+kinds, and the transposed clear call also validates its complete call and
+argument metadata.
+
+New `tests/mir-clobber/matkind.c` exercises both exact source shapes and checks
+their results against independently calculated fixed-point matrix oracles.
+New `matrix-product-kind-wave140-audit.py` runs 12 stack/no-stack and
+peep/nopeep runtime controls, retains both clean exact schedules, isolates a
+source near match for each kind, and rejects 95/95 targeted MIR mutations (49
+transposed and 46 outer). Forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-store-address` output independently confirms
+every generic fallback with zero meaningful survivors. The clean selected
+hashes remain `88cdd4b5` and `eca25a44`; combined fixture assembly SHA-256 is
+`b3d565637021d445de314147095b9e7aba6fcd7a5de036f89e130d952a263452`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 170 closes the historical `mir_match_aggregate_field_sum` proof gap and
+fixes genuine exact-schedule false acceptances. The matcher already constrained
+the one-block opcode counts, three-leaf addition tree, nonvolatile scalar
+loads, common aggregate parameter location, field offsets, widening
+conversions, and wide return. Fresh diagnostic mutations showed that aggregate
+parameter types, aggregate-address and member-pointer types, member widths,
+and load widths were not consistently proved. Those gaps let 24 of 34
+representative mutations retain the exact schedule, including cases where the
+emitter changed the number of bytes read from a field.
+
+The matcher now validates the aggregate parameter and its three addresses,
+requires scalar member-pointer and load types to agree, bounds every field
+inside the aggregate, matches member/load widths, and proves the wide addition
+result and operand types. New `tests/mir-clobber/aggfsum.c` isolates the
+16-instruction schedule with signed-byte, signed-long, and unsigned-word
+fields and checks two asymmetric results against fixed independent values.
+New `aggregate-field-sum-wave170-audit.py` runs 24 stack/no-stack and
+peep/nopeep runtime controls, retains exact selection for baseline, renamed,
+and padded-layout forms, and proves generic fallback for volatile, pointer,
+and four-field near matches. It rejects 34/34 targeted MIR mutations and
+independently reproduces every fallback with forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output. The clean selected hash
+remains `bcb40981` and assembly SHA-256 is
+`3e00c6e0a6c77e7df08684782db10084f71c228e2b1ec29cff820914bd86d7e3`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 200 closes the historical `mir_match_bcd_byte_math_schedule` proof gap
+and fixes a genuine exact-schedule false-acceptance class. The old
+240-instruction matcher checked the opcode/CFG outline, byte parameters, three
+state members, and selected decimal constants, but 26/29 representative
+mutations of unproved types, operand definitions, operators, local identities,
+PHIs, and memory widths still retained the hard-coded emitter. The matcher now
+proves every instruction type, 152 operand relationships, all 66 arithmetic
+and conversion operators, all 32 constants, 36 memory accesses, 33 distinct
+labels, six PHI predecessor pairs, and all nine distinct parameter/local
+locations while retaining the existing source-independent state-member
+binding.
+
+The dedicated `bcd-byte-math-wave200-audit.py` campaign extends the existing
+`bmw9.c` 2,048-case independent arithmetic oracle. It runs eight
+stack/no-stack and peep/nopeep runtime controls, proves named
+`spilled-boolean-phi-branch` fallback for a volatile-result source near match,
+and rejects 29/29 targeted MIR mutations with forced-candidate output equality
+and zero meaningful survivors. The exact selected hash remains `14ace686` and
+assembly SHA-256 remains
+`4c1cc708a5bba78f085bd74af9e9ac13293e3d22b6e00587a2666a8cc202cafb`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. This fixes production matching but does not replace the
+immutable aggregate coverage ledger or complete the broader objective.
+
+Wave 220 closes the historical `mir_match_indexed_word_sum` proof gap and
+fixes genuine exact-schedule false acceptances. The matcher already constrained
+the single-block opcode counts, common pointer parameter, positive constant
+indices, bounded address offsets, two nonvolatile word loads, addition, and
+return flow. Fresh diagnostic mutations showed that parameter/index type
+agreement, index stride metadata, member-pointer and load types, member widths,
+and addition/result types were not consistently proved. Those gaps let 24 of
+47 representative mutations retain the exact schedule.
+
+The matcher now validates the scalar parameter's declared memory type, matches
+each index address to that parameter and its element stride, requires word
+index constants, matches member-pointer/load types and widths, and proves the
+addition operand, result, and return types. New
+`tests/mir-clobber/idxwsum.c` isolates the 14-instruction schedule and checks
+two asymmetric signed results against fixed independent values. New
+`indexed-word-sum-wave220-audit.py` runs 32 stack/no-stack and peep/nopeep
+runtime controls, retains exact selection for the baseline, and proves generic
+fallback for volatile, bitfield, long-result, extra-parameter, VLA,
+local-state, and CFG near matches. It rejects 47/47 targeted MIR mutations and
+independently reproduces every mutation fallback with forced
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot` output. The clean selected hash
+remains `e3d216d0` and assembly SHA-256 is
+`a68e9c6e4b124bc3e24adf826e8b8717693927d84185d82546251c3d60c623ce`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 230 closes the historical `mir_match_float_asin_schedule` proof gap and
+fixes a genuine false-acceptance class. The old matcher proved the
+95-instruction opcode fingerprint, selected constants, partial call identity,
+and the Horner tree, but 52 of the campaign's 60 representative mutations
+still retained the unchanged hard-coded schedule. Missing proof included float
+and comparison result types, branch and return operands, local widths and
+identities, transform and recursive-result flow, and direct unary-call form
+and ABI. The matcher now proves those invariants together with the four-block
+label graph and every polynomial relationship.
+
+New `tests/mir-clobber/fasin.c` isolates the exact source shape and checks
+twelve independently tabulated results across signs, polynomial and transformed
+domains, endpoints, and historical out-of-domain behavior. New
+`float-asin-wave230-audit.py` runs 20 stack/no-stack and peep/nopeep runtime
+controls, retains exact selection for the baseline, and proves named spilled
+fallback for variadic-square-root, volatile-parameter, volatile-sign, and
+different-recursion near matches. It rejects 60/60 targeted MIR mutations and
+independently reproduces each fallback through
+`DCC_MIR_SELECT_CANDIDATE=spilled-phi-slot`, with zero meaningful survivors.
+The clean selected hash is `32a12ad4` and assembly SHA-256 is
+`d2b59eea697c24e27009b21cebe118b508ccd97bb667d702002f8fa1640dce89`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 240 closes the historical `mir_match_allocator_bridge_schedule` proof gap
+and fixes genuine ABI false acceptances. The old matcher checked selected
+allocator/free/fill identities, constants, and the final merged-pointer
+relationship, but not the complete instruction types, memory contracts,
+dataflow, label graph, PHI predecessors, local identities, or call ABI.
+Fastcall replacements for allocate, free, failure, and fill could consequently
+retain the stack-call exact schedule despite incompatible calling conventions.
+
+New `tests/mir-clobber/albridge.c` isolates the allocator coalescing shape and
+checks the 3,006-byte merged allocation plus byte fill. New
+`allocator-bridge-wave240-audit.py` runs 44 stack/no-stack and peep/nopeep
+runtime controls across 11 source variants, preserves exact selection for the
+baseline and renamed function, proves generic fallback for volatile, extra-CFG,
+and fastcall near matches, and rejects all 178 targeted MIR mutations with an
+independently forced spilled fallback. The clean selected hash is `9064348e`
+and assembly SHA-256 is
+`1677aef387a62b148a677d09db0f89d3934f701ea45319424f45b1f6d5cff7fb`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 260 closes the historical `mir_match_indexed_member_write` proof gap and
+fixes genuine exact-schedule false acceptances. The old matcher checked the
+single-block opcode counts, destination outline, common state root, positive
+stride, bounded pointer adjustment, and parameter stack offset, but did not
+prove the complete parameter/local memory contract, state and element field
+declarations, pointer/index/arithmetic types, or stored value identity.
+Forty-three of 68 representative mutations retained the exact schedule before
+the fix. The matcher now binds both state accesses to the same typed root and
+declared fields, proves qualifiers, widths, offsets, stride and arithmetic
+types, verifies the local address round trip, and matches the destination
+field and stored parameter exactly.
+
+New `tests/mir-clobber/idxmwrit.c` isolates the indexed structure-member store
+and checks the target, adjacent guards, neighboring elements, and enclosing
+state. New `indexed-member-write-wave260-audit.py` runs 68 stack/no-stack and
+peep/nopeep runtime controls across 17 source variants, retains exact selection
+for baseline, renamed, adjusted, and reversed-add forms, and proves generic
+fallback for volatile, narrow, wide, bitfield, extra-parameter, CFG, and
+non-void near matches. It rejects all 68 targeted MIR mutations with
+independently forced `spilled-store-address` fallback and zero meaningful
+survivors. The clean selected hash remains `c37f081a` and assembly SHA-256 is
+`32f652d93d598292d2dbef07f11cc0493d27c3f8be9d68f61fe73c2708a4a9d1`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 340 closes the historical `mir_match_wraparound_bool_step` proof gap and
+fixes genuine exact-schedule false acceptances. The old matcher checked the
+94-instruction opcode shape, parameter locations, loop/branch relationships,
+wraparound index dataflow, XOR operands, local identities, and memory widths,
+but did not prove the exact types carried through those operations. Thirty-six
+of 132 representative type, width, operator, dataflow, identity, and index
+mutations retained the hard-coded schedule before the fix. The matcher now
+requires exact signed word/long, boolean, and boolean-pointer types, consistent
+binary operand types, nonvolatile indexed accesses, and canonical increment
+metadata.
+
+New `tests/mir-clobber/wrapbool.c` isolates the five-block Rule 90 step and
+checks one-, two-, and five-cell results plus zero and negative counts. New
+`wraparound-bool-step-wave340-audit.py` runs 52 stack/no-stack and peep/nopeep
+runtime controls across 13 source variants, preserves exact selection for the
+baseline and commuted-XOR forms, proves generic fallback for unsigned,
+alternate-width, volatile, and extra-CFG near matches, and rejects all 132
+targeted MIR mutations with independently forced `spilled-phi-slot` fallback.
+The clean selected hash is `f741fcea` and assembly SHA-256 is
+`6bf3bb37f7281a406177fccf9c8d67cd069a947a730a280ef0a621159cad78f1`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 520 closes the historical `mir_match_modular_product_schedule` proof gap
+and fixes genuine exact-schedule false acceptances. The old matcher proved the
+13-instruction opcode outline, one-block CFG, selected dataflow, 32-bit widths,
+and parameter stack locations, but not unsigned parameter/arithmetic types,
+cast identities, or unused width metadata. Twenty of 33 representative type,
+width, operator, dataflow, and parameter-identity mutations retained the
+hard-coded unsigned `__m1mu` schedule before the fix. A signed-input source
+near match also retained it and returned `2,43,31` instead of `3,89,31`.
+The matcher now requires the exact unsigned-word parameter and unsigned-long
+arithmetic contract, zero-width non-memory metadata, canonical conversions,
+complete multiply/modulo/return flow, and an empty fixed frame.
+
+New `tests/mir-clobber/modprod.c` isolates the fused modular product and checks
+three independently tabulated results, including large operands. New
+`modular-product-wave520-audit.py` runs 36 stack/no-stack and peep/nopeep
+runtime controls across nine source variants, retains exact selection for the
+baseline and renamed function, and proves generic fallback for signed, narrow,
+volatile, alternate-return/arithmetic, extra-CFG, and local-state near matches.
+It rejects all 33 targeted MIR mutations with independently forced
+`spilled-wide-binary-lhs` fallback and zero meaningful survivors. The clean
+selected hash remains `8e867beb` and assembly SHA-256 is
+`329398a141cf6aa1b045f256eb26e2f15b4c0725794d733fc7f2f20adc524d4e`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 1000 closes the historical `mir_match_byte_record_copy_schedule` proof gap
+and fixes genuine exact-schedule false acceptances. The old matcher proved the
+51-instruction single-block opcode fingerprint, pointer parameter ABI, eight
+byte offsets and widths, nonvolatile accesses, and the source-to-destination
+SSA flow, but did not bind member-pointer types to their loaded byte type or
+the stored type to that load. Fifty-six of 156 representative parameter, type,
+offset, width, and operand mutations retained the hard-coded `ldir` schedule
+before the fix. The matcher now requires matching member-pointer types, scalar
+byte loads, matching store types, and plain zero-flag memory operations for all
+eight fields.
+
+New `tests/mir-clobber/brecopy.c` isolates the exact eight-byte record copy and
+checks two asymmetric records against fixed values. New
+`byte-record-copy-wave1000-audit.py` runs 108 stack/no-stack and peep/nopeep
+runtime controls across 27 source variants, preserves exact selection for the
+baseline and renamed function, proves generic fallback for volatile
+parameters and fields, distinct record types, reversed and extra parameters,
+bitfields, local/VLA state, extra fields, and non-void variants, and rejects
+all 156 targeted MIR mutations with independently forced `spilled-phi-slot`
+fallback. The clean selected hash remains `53bdf7fb` and assembly SHA-256 is
+`e9d0990b8b4f72d1ba4962d98b8f6cd91cf8d602eba4b60b0031b8e0cd302114`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 1100 closes the historical `mir_match_board_matrix_print_schedule` proof
+gap and fixes genuine exact-schedule false acceptances. The old matcher proved
+the 59-instruction, seven-block loop and call outline, 8-by-8 global board
+layout, selected row/column flow, and variadic print identities, but did not
+bind all scalar load/store widths and types, the column-increment reload to the
+column local, pointer-index types, increment metadata, or argument/call ABI
+types and flags. Thirty-three of 103 representative type, width, index,
+operand-identity, call, and dataflow mutations retained the hard-coded board
+walk before the fix. The matcher now requires exact signed-word loop state,
+canonical increment metadata, the column reload and updates to use one
+nonvolatile local, bool-pointer index chains, clean memory metadata, and exact
+variadic call metadata.
+
+New `tests/mir-clobber/boardmx.c` isolates the schedule and checks an asymmetric
+3-by-3 board plus a failure oracle. New
+`board-matrix-print-wave1100-audit.py` runs 44 stack/no-stack and peep/nopeep
+runtime controls across 11 source variants, preserves exact selection for the
+baseline, renamed, and variadic-wrapper forms, proves generic fallback for
+volatile/alternate-layout boards, alternate parameter types, split
+nonvariadic print functions, extra CFG, and non-void near matches, and rejects
+all 103 targeted MIR mutations with independently forced `spilled-phi-slot`
+fallback and zero meaningful survivors. The clean selected hash remains
+`7d561397` and assembly SHA-256 is
+`e5027db9c92b8eade0582fa0e215731461e61ccabe8881a3ba018ef07e9b9460`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 1200 closes the historical `mir_match_qsort_edge_schedule` proof gap and
+fixes genuine exact-schedule false acceptances. The old matcher checked the
+344-instruction/40-block envelope, only the first global-array identity, seven
+sort and failure call identities, seven string-address opcodes, and 22
+constants. It accepted 523 of 561 targeted MIR mutations: 177/177 types,
+48/48 widths, 114/114 first operands, 59/59 second operands, 83/105
+immediates/strides, and 42/58 symbol or local identities. Alternate-comparator
+and second-array source variants also selected the exact schedule and each
+failed its runtime oracle.
+
+The matcher now requires the exact numeric MIR semantic payload, complete CFG
+and SSA relationships, every memory flag and width, all 25 array aliases, all
+seven comparator aliases, and the sort/failure/comparator ABI. String IDs are
+normalized because the emitted failure calls retain the source strings. New
+`tests/mir-clobber/qsedge.c` isolates the seven qsort edge workloads and makes
+the two alias defects observable. New `qsort-edge-wave1200-audit.py` runs 48
+stack/no-stack and peep/nopeep runtime controls across 12 source variants and
+rejects all 561 type, width, stride/immediate, operand, and identity mutations
+with independently forced `spilled-phi-slot` fallback and zero survivors. The
+clean selected hash is `7564150d` and assembly SHA-256 is
+`a55e6f4cb97df1564115bc1f3fc1b1790141469b4dbff8f706dd5127f6ef4113`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 1300 revisits the already-hardened
+`mir_match_fixed_softmax_schedule` proof with a dedicated modern fixture and
+forced-fallback audit. The earlier Wave 22 campaign had already reduced its
+broad 2,479-mutation census to zero meaningful survivors, but retained benign
+mutations of inactive MIR metadata and did not independently force a named
+generic candidate for every semantic rejection. New
+`tests/mir-clobber/fixsmx.c` isolates the 154-instruction, 13-block schedule and
+checks four asymmetric input vectors, guard words, and an independent
+fixed-point oracle.
+
+New `fixed-softmax-wave1300-audit.py` runs 72 stack/no-stack and peep/nopeep
+runtime controls across 18 source variants. It preserves exact selection for
+baseline, renamed-function, renamed-clamp, prefix-increment, and oversized
+table forms; proves generic fallback for volatile vector/table/local state,
+alternate count/weight types, indirect or variadic clamp calls, changed scale
+and clamp limits, non-void return, undersized table, subtraction, and extra
+CFG; and rejects all 278 matcher-relevant type, width, constant/index,
+operand-dataflow, and storage-identity mutations with independently forced
+`spilled-phi-slot` fallback and zero meaningful survivors. Current production
+code rejected every control, so this found proof gaps only and no genuine
+false acceptance. The clean selected hash remains `cf58a4d7` and assembly
+SHA-256 is
+`c9c86c97091c14451080c8a64ff0a0fcec70fe664049cd7a6dc0fc058568b954`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
+Wave 1600 closes the historical `mir_match_board_search_schedule` proof gap
+and fixes genuine exact-schedule false acceptances. The previous matcher
+validated the 215-instruction/25-block opcode and selected-edge outline, four
+signed-word parameter offsets, helper names and argument counts, four global
+identities, selected strides, and three constants, but not the complete SSA
+payload, types, widths, memory flags, local identities, operators, PHIs,
+branch conditions, call ABI, or global layouts. It accepted 311 of 359
+targeted MIR mutations: 84/88 type, 22/24 width, 78/78 first-operand, 30/30
+second-operand, 41/61 constant/operator/index, and 56/78 storage/call identity
+changes. Signed-index and unsigned-check source near matches also retained the
+hard-coded schedule.
+
+The matcher now fingerprints every numeric MIR payload and CFG field,
+validates the complete search/helper ABI and observable identities, and proves
+the exact `movecnt`, `moves`, `side`, and `best_root` layouts and volatility
+properties. New
+`tests/mir-clobber/bsearch.c` isolates the recursive alpha-beta search and
+checks terminal, no-move, recursive, best-root, side-restoration, and score
+results. `board-search-wave1600-audit.py` runs 64 stack/no-stack and
+peep/nopeep runtime controls across 16 source variants and rejects all 359
+targeted type, width, operand, constant/operator/index, and storage/call
+identity mutations. The volatile global/local source controls cover
+memory-flag rejection, and every direct MIR mutation independently selects
+forced `spilled-phi-slot` fallback. Zero meaningful survivors remain. The
+clean selected hash is `93b87cc0` and assembly SHA-256 is
+`42754918a399eb67099c355ace0d6c3f12fffa609d93741ab46c61fe943a3627`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
+Wave 1700 closes the remaining focused proof gap for
+`mir_match_scope_block_runner` without changing production code. The earlier
+`test-mir-scope-block-mutations.ps1` diagnostic covered four controls and 27
+selected mutations against `tforblk`, but did not isolate the schedule, run a
+runtime matrix, force a named generic candidate, or exhaustively mutate the
+fields consumed by the matcher. New `tests/mir-clobber/scopblk.c` isolates the
+698-instruction, 28-block schedule and checks block shadowing, loop scope,
+static-local identity and persistence, helper results, summaries, and return
+status.
+
+New `scope-block-wave1700-audit.py` runs 64 stack/no-stack and peep/nopeep
+runtime controls across 16 source variants. It proves exact selection for the
+clean fixture and generic fallback for volatile global/long state, changed
+local widths and operators, alternate loop CFG, check/parameter/helper ABI and
+identity changes, non-static helpers, duplicate calls, and summary-string
+aliasing. The exhaustive census rejects all 3,810 matcher-relevant mutations:
+698 each of type, memory width, first operand, second operand, and
+immediate/index fields, plus all 320 meaningful storage/call identities. Every
+mutation is independently reproduced with forced `spilled-phi-slot` fallback,
+with zero meaningful survivors. Current production code rejected every
+control, so this found proof gaps only and no genuine false acceptance. The
+clean selected hash is `b3ab4a13` and assembly SHA-256 is
+`47a208a38c9e04f30ca47e8b5ab9c28aabe5d3362e3524c42cdd565d69dccce9`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
+Wave 1800 closes the historical `mir_match_global_array_fma` proof gap and
+fixes genuine exact-schedule false acceptances. The old 24-instruction matcher
+checked every opcode, but only 17 instructions had any payload checks. It did
+not prove the global/index/load arithmetic types, two indexed widths, repeated
+global offsets, promoted operand identities, binary secondary types, or
+memory and bitfield flags. It accepted 20 of 58 representative mutations:
+10/14 type, 2/7 width, 2/7 immediate/offset, and 6/13 storage-identity
+changes; all operand-dataflow mutations were already rejected.
+
+The matcher now binds all three addresses to the same nonvolatile global float
+array, proves every emitted index/load/store/binary type and width, checks the
+complete FMA dataflow, and verifies promoted operand identities plus zero
+memory, qualifier, and bitfield flags. The schedule is a single block with no
+PHIs, so it has no internal CFG edges or PHI predecessors to mutate. New
+`tests/mir-clobber/gafma.c` checks four independently tabulated FMA results,
+the stored array elements, and guards. New
+`global-array-fma-wave1800-audit.py` runs 24 stack/no-stack and peep/nopeep
+runtime controls across six source variants and rejects all 58 targeted type,
+width, operand, operator/offset, and storage-identity mutations. Volatile and
+extra-CFG source controls cover the memory-flag and CFG rejection boundaries,
+and every direct mutation independently selects forced `spilled-phi-slot`
+fallback. Zero meaningful survivors remain. The clean selected hash is
+`68dc3c28` and assembly SHA-256 is
+`5bebfa8ada44767c744c777b6113c6c254ae84a3a8fde6f8bde2c26a963e7dfe`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
+Wave 1900 closes the historical `mir_match_wide_hash33` proof gap and fixes a
+severe exact-schedule false acceptance. The old 32-instruction matcher
+explicitly constrained only 19 instruction positions. It did not prove the
+complete opcode/destination/type stream, CFG successors, PHI predecessors,
+parameter-update identity, pointer qualifiers, memory flags, bitfield state,
+or remaining instruction metadata. Exhaustive mutation showed that 687 of 746
+per-instruction field and storage-identity changes were falsely accepted.
+
+The matcher now fingerprints 23 semantic and structural fields on every
+instruction, including both CFG successors and PHI predecessors, and
+explicitly binds every parameter load and update to the original parameter
+location without depending on source identifier spelling. New
+`tests/mir-clobber/whash33.c` checks five independently tabulated 32-bit
+hashes, including a high-bit-byte input. New
+`wide-hash33-wave1900-audit.py` builds an isolated diagnostic mutation
+compiler, runs 20 stack/no-stack and peep/nopeep runtime controls across five
+source variants, and rejects all 746 mutations over all 32 instructions and
+all 23 fingerprinted fields plus meaningful storage identities. Every
+mutation independently selects forced `spilled-phi-slot` fallback. Zero
+meaningful survivors remain. The clean selected hash is `4fd89752` and
+assembly SHA-256 is
+`bf0ced071ba71d9e4ff2a9f109a80ef9d2fa1d1f925e285ceeaad241f0a11ec0`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
+Wave 2000 closes the historical `mir_match_fortran_grow_schedule` proof gap
+and fixes genuine exact-schedule false acceptances. The previous
+92-instruction, 11-block matcher bound one parameter, two globals, three
+callees, two string IDs, and four positive constants, but did not verify the
+complete opcode, type, width, SSA, operator, memory-flag, CFG, call-identity,
+or string-content payload. It accepted 476 of 489 matcher-relevant diagnostic
+mutations: 92/92 type, 92/92 width, 90/92 first-operand, 92/92 second-operand,
+92/92 immediate/operator, and 18/29 identity changes. A changed fill-byte
+source also selected the exact schedule and produced zero-filled memory rather
+than the requested value.
+
+The matcher now fingerprints every numeric MIR payload, CFG, object,
+declaration, and function property; separately binds all emitted globals and
+callees; and validates both emitted failure strings. New
+`tests/mir-clobber/fortgrow.c` isolates growth and independently checks
+no-growth, small-step, large-step, clamp, preservation, and fill behavior.
+`fortran-grow-wave2000-audit.py` runs 28 stack/no-stack and peep/nopeep runtime
+controls across seven source variants and rejects all 2,145 mutations: all 23
+fingerprinted fields at every instruction plus 29 meaningful storage/call
+identities. Every mutation independently selects forced
+`spilled-phi-slot` fallback, with zero survivors. The clean selected hash is
+`41574932` and assembly SHA-256 is
+`b45cda486ecdd0330ca0784e70fdcadc20edcd5d5418a94751305c325b593e59`.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
+Wave 2300 closes the historical `mir_match_variadic_join_report` proof gap and
+fixes severe exact-schedule false acceptance. The previous 63-instruction,
+five-block matcher touched 41 instruction positions through selected opcode,
+constant, argument, and branch checks, but did not completely verify any
+instruction. It falsely accepted 1,366 of 1,470 exhaustive mutations. The
+survivors included all 63 type, memory-width, memory-flag, pointer-qualifier,
+bitfield, object, successor, and PHI-predecessor changes; only 104 mutations
+were rejected.
+
+The matcher now fingerprints every instruction's 23 numeric semantic and
+structural fields, canonical identifier-equivalence relationships, and the
+complete join/report callee contracts without depending on source spelling.
+New `tests/mir-clobber/varjoin.c` independently computes the expected joined
+length, separator count, and complete string. New
+`variadic-join-report-wave2300-audit.py` runs 24 stack/no-stack and
+peep/nopeep runtime controls across baseline, renamed-function,
+renamed-locals, renamed-helper, volatile-count, and alternate-CFG variants.
+It rejects all 1,470 mutations with generic fallback, independently forces
+`spilled-phi-slot` for every rejection, and leaves zero survivors. The clean
+selected hash is `c6508ce3` and assembly SHA-256 is
+`ff651adf1097397693e62cb00814dd669cd2ee87301952f61204d2812214a1b9`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
+Wave 2400 closes the historical `mir_match_list_reverse_schedule` proof gap
+and fixes severe exact-schedule false acceptance. The old matcher verified all
+39 opcodes but explicitly constrained fields on only 15 instruction positions.
+It omitted most destinations, types, operand identities, immediates, memory
+attributes, CFG successors, PHI predecessors, and auxiliary metadata.
+Exhaustive mutation showed that 814 of 897 per-instruction field changes were
+falsely accepted.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction. It normalizes source-context-specific struct IDs while
+retaining type kind, pointer depth, width flags, and the binary operand type.
+New `tests/mir-clobber/listrev.c` independently checks node identity, six
+reversed values, list termination, and a tabulated rolling checksum. New
+`list-reverse-wave2400-audit.py` runs 20 stack/no-stack and peep/nopeep runtime
+controls across five source variants and rejects all 897 mutations with generic
+fallback; every rejection also selects forced `spilled-phi-slot` fallback.
+Zero meaningful survivors remain. The clean selected hash is `3b227728` and
+assembly SHA-256 is
+`c9140e698d415e08aac3a9a9eae20d149a44dbd7b170fdac455be0c73cfbd508`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall branch totals.
+
+Wave 2600 closes the remaining exact-schedule proof gap for
+`mir_match_recursive_byte_minimax_schedule` and fixes severe false acceptance.
+The previous 253-instruction matcher checked every opcode plus selected
+constants, edges, calls, locations, and dataflow, but did not bind most
+destinations, types, operands, CFG successors, PHI predecessors,
+memory/qualifier/bitfield state, or auxiliary metadata. It accepted 4,899 of
+5,857 exhaustive per-instruction field and storage-identity mutations.
+
+The matcher now fingerprints 23 semantic and structural fields on every
+instruction, including both successors and PHI predecessors, while retaining
+explicit symbol, ABI, layout, constant, and source-name-independent location
+proofs. New `tests/mir-clobber/bminimax.c` compares three recursive alpha-beta
+searches against an independent implementation and checks results, move counts,
+board restoration, and an aggregate signature. New
+`recursive-byte-minimax-wave2600-audit.py` builds an isolated diagnostic
+mutation compiler, runs 40 stack/no-stack and peep/nopeep controls across ten
+source variants, and rejects all 5,857 mutations over all 253 instructions,
+all 23 fingerprinted fields, and 38 meaningful identities. Each rejection
+retains generic MIR emission and independently supports forced
+`spilled-phi-slot` fallback. Zero meaningful survivors remain. The clean
+selected hash is `8b08568e`; assembly SHA-256 is
+`8b677c720df6a1ae17b3236fd665e83bc4e786532262b3fa5e6456be43a43d4f`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall totals.
+
+Wave 2800 closes the historical `mir_match_allocator_stress_schedule` proof
+gap and fixes severe exact-schedule false acceptance. The old 444-instruction,
+32-block matcher directly checked only 51 instruction positions and did not
+verify complete opcode, type, SSA, operator, memory/qualifier, CFG,
+PHI-predecessor, or metadata payloads. It also failed to bind 28 later array
+addresses to the two globals used by the emitted schedule. Exhaustive
+measurement against the old matcher found 10,100 false acceptances among
+10,267 mutations: all 444 type, memory-size, object, qualifier, CFG-successor,
+PHI-predecessor, bitfield, and metadata changes survived, along with 362/444
+opcode and 26/55 storage/call-identity changes. A coherent source near match
+that changed the pattern offset from 11 to 12 selected the old exact schedule
+and failed its independent checksum oracle.
+
+The matcher now fingerprints all 23 numeric MIR fields at every instruction
+and separately binds all 18 slot-array and ten size-array address instructions.
+New `tests/mir-clobber/alstress.c` independently simulates the deterministic
+allocation state and checks helper counts, final RNG state, and a pattern-slot
+checksum. `allocator-stress-wave2800-audit.py` compiles 16 stack/no-stack and
+peep/nopeep controls, executes the eight no-stack controls, and rejects all
+10,267 mutations with generic fallback and zero survivors. Stack-check
+controls are compile-only because this fixture deliberately fills the CP/M
+heap until the stack-collision guard fires. The clean stack-check selected
+hash is `f37f5f2e` and assembly SHA-256 is
+`d804868b0929fc88e2f70faf045ae2143f64249972aaf434b4f625afaf26b276`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass.
+Regenerate the immutable aggregate ledger before claiming new overall branch
+totals.
+
+Wave 3200 closes the historical
+`mir_match_anonymous_initializer_report_schedule` proof gap and fixes broad
+false acceptance. The old 278-instruction matcher checked every opcode, but
+only 117 instructions appeared in its remaining explicit field and
+relationship checks. It accepted 5,796 of 6,459 exhaustive relevant
+per-instruction field and storage-identity mutations.
+
+The matcher now fingerprints all 23 semantic and structural fields on every
+instruction, binds all six initialized local aggregates to every later root
+address, and proves the print, numeric-check, string-check, and failure-global
+ABI/type contracts. New `tests/mir-clobber/anoninit.c` validates the anonymous
+bitfield, union, nested aggregate, string, and final-result behavior against
+independent constants. New
+`anonymous-initializer-report-wave3200-audit.py` builds an isolated diagnostic
+mutation compiler, runs 20 stack/no-stack and peep/nopeep controls across five
+source variants, and rejects all 6,459 mutations over all 278 instructions,
+all 23 fingerprinted fields, and 65 meaningful identities. Each rejection
+retains generic MIR emission and independently supports forced
+`spilled-phi-slot` fallback. Zero meaningful survivors remain. The clean
+selected hash remains `a893ab33`; assembly SHA-256 is
+`9e373331e798ac87fc5d2d6a1de99aec32aa54ab159ac5a6857e06264e552a7d`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall totals.
+
+Wave 4000 closes the historical `mir_match_pi_digit_schedule` proof gap and
+fixes severe false acceptance. The old 76-instruction matcher directly
+referenced only 27 instruction positions and accepted 1,642 of 1,754
+exhaustive per-instruction field and call-identity mutations (93.6%). Missing
+checks covered opcode, type, SSA identity, memory and qualifier metadata, CFG
+successors, PHI predecessors, and the remaining instruction metadata.
+
+The matcher now fingerprints all 23 semantic and structural fields on every
+instruction and validates the assertion string ID, width, and required
+expression prefix. New `tests/mir-clobber/pidigit.c` computes the first eight
+hexadecimal digits of pi and compares them with the independent `243f6a88`
+oracle. `pi-digit-wave4000-audit.py` builds an isolated diagnostic mutation
+compiler, runs 12 stack/no-stack and peep/nopeep controls across exact,
+renamed, and reordered-bound variants, and rejects all 1,755 mutations with
+generic fallback and zero survivors. The clean stack-check selected hash is
+`050cebd0`; assembly SHA-256 is
+`0481fbb52fa311e135a15dddcaee64cea71940af5999f07dbbe80da26d935a5f`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 4100 closes the historical `mir_match_float_sweep_schedule` proof gap and
+fixes severe false acceptance. The 431-instruction comparison variant directly
+classified only 38 stores and 19 calls, leaving most opcode, type, SSA,
+memory/qualifier, CFG-edge, PHI-predecessor, and metadata fields unproved. The
+old matcher accepted 8,745 of 9,970 exhaustive per-instruction field and
+meaningful identity mutations (87.7%).
+
+The matcher now fingerprints all 23 semantic and structural fields on every
+instruction before retaining either current 431-instruction comparison shape
+or the 434-instruction runtime-library shape. The unproved 440-instruction
+legacy outline now falls back conservatively. New
+`tests/mir-clobber/fltsweep.c` exercises the comparison shape and checks eleven
+library sine results against an independent Taylor-series implementation.
+`float-sweep-wave4100-audit.py` builds an isolated diagnostic mutation compiler,
+runs 16 stack/no-stack and peep/nopeep controls across exact, renamed,
+volatile, and extra-CFG variants, executes all eight no-stack binaries, and
+rejects all 9,970 mutations with generic fallback and zero survivors. The clean
+stack-check selected hash is `2a78fb3a`; assembly SHA-256 is
+`74674d626ad7b36e43e807e1f1f421a3ae5972aacf8acca749a8e1ef38c82827`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+Wave 6000 closes the historical `mir_match_board_attack_schedule` proof gap and
+fixes severe exact-schedule false acceptance. The previous 676-instruction,
+118-block matcher checked every opcode and 98 selected control edges but
+directly referenced only 82 instruction positions in its remaining field,
+symbol, constant, and call checks. It omitted most destinations, types,
+operands, memory/qualifier state, CFG successors, PHI predecessors, object
+identities, bitfields, and auxiliary metadata. It falsely accepted 14,401 of
+15,548 exhaustive per-instruction field mutations (92.62%); 32 accepted
+mutations crashed while the invalid exact schedule was emitted.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields at
+every instruction, together with object, declared-local, alias, and
+whole-function metadata. Existing source-name-independent checks continue to
+bind the board, direction arrays, parameters, constants, slider callee, and
+five call arguments. New `tests/mir-clobber/bdattack.c` checks pawn, knight,
+slider, blocked-ray, king, and empty-board behavior against an independent
+row/column oracle. `board-attack-wave6000-audit.py` builds an isolated
+diagnostic mutation compiler, runs 20 stack/no-stack and peep/nopeep controls
+across five source variants, and rejects all 15,548 mutations with generic
+fallback and zero survivors. The clean selected hash remains `7e3a2471`;
+assembly SHA-256 is
+`fae46f9c6ebbd1d2cc1dc6af6b716c607e85cc1d06b502bb7f61c3a104fde630`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall totals.
+
+Wave 6100 closes the historical
+`mir_match_unnamed_bitfield_report_schedule` proof gap and fixes severe exact-
+schedule false acceptance. The old 99-instruction matcher checked every opcode
+but inspected payload fields at only 61 instruction positions, and it did not
+prove the complete type, SSA, memory/qualifier, CFG-edge, PHI-predecessor, or
+metadata stream. It accepted 1,900 of 2,302 exhaustive meaningful mutations
+(82.5%).
+
+The matcher now fingerprints all 23 semantic and structural fields on every
+instruction before applying its existing bitfield-layout, value, print-call,
+argument, size, and return checks. New `tests/mir-clobber/unbitfld.c` isolates
+the six-report unnamed-padding and zero-width-bitfield schedule and validates
+all field values and aggregate sizes against independent constants.
+`unnamed-bitfield-report-wave6100-audit.py` builds an isolated diagnostic
+mutation compiler, runs 16 stack/no-stack and peep/nopeep controls across
+exact, renamed, volatile-local, and extra-CFG variants, and rejects all 2,302
+mutations with generic fallback and zero survivors. The clean stack-check
+selected hash remains `c6ee54c1`; assembly SHA-256 is
+`d7648ba588d804d0d4de5416727beb020e52e8ccf8fb5293dd6309d967f6c15b`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 7000 closes the historical `mir_match_backward_pass_schedule` proof gap
+and fixes severe exact-schedule false acceptance. The prior matcher checked the
+730-instruction semantic opcode stream plus selected constants, binaries,
+locations, calls, edges, and PHIs, but omitted most destinations, operands,
+types, memory/qualifier state, CFG successors, object identities, bitfields,
+and auxiliary metadata. It falsely accepted 15,393 of 17,520 exhaustive
+per-instruction field and identity mutations (87.86%). Every successor,
+object, qualifier, bitfield, and inline/divmod metadata mutation survived.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields
+plus source/base-name identity on every semantic instruction while retaining
+its explicit constant, location-alias, call-ABI, argument, branch, jump, and
+PHI checks. It admits separately proven fingerprints for the production
+`attnc11` address-chain form and the equivalent direct-global fixture form.
+New `tests/mir-clobber/backpass.c` isolates the six-stage backward pass and
+checks all twelve result arrays using the fixed checksum independently
+reproduced by the audit's Python implementation.
+`backward-pass-wave7000-audit.py` builds an isolated diagnostic mutation
+compiler, runs 16 stack/no-stack and peep/nopeep controls across four source
+variants, and rejects all 17,520 mutations with generic fallback and zero
+survivors. A clean forced control selects `spilled-rhs-forward`. The clean
+selected hash remains `e16e3e51`; assembly SHA-256 is
+`c5f1c953dee335ce0bc389da9fcb803439136d19ea6e21ca6538cac2cd05586c`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. Regenerate the immutable aggregate ledger before claiming
+new overall totals.
+
+Wave 7100 closes the historical `mir_match_arrow_path_schedule` proof gap and
+fixes severe exact-schedule false acceptance. The prior 131-instruction matcher
+checked every opcode and seven selected control edges, but directly referenced
+only 66 instruction positions in its remaining parameter, member, constant,
+global, call, and string checks. It falsely accepted 2,785 of 3,038 exhaustive
+meaningful per-instruction field and identity mutations (91.67%), including
+every CFG-successor, PHI-predecessor, object, pointer-qualifier, bitfield, and
+inline/divmod metadata mutation.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction, hashes string contents independently of source-local string
+IDs, and covers object, declared-local, alias, and whole-function metadata.
+The existing source-name-independent parameter, aggregate-member, global-cave,
+constant, direct-call, argument, and control-flow checks remain in place. New
+`tests/mir-clobber/arrpath.c` checks direct, self-hit, and randomized paths
+against an independent implementation. `arrow-path-wave7100-audit.py` builds
+an isolated diagnostic mutation compiler, runs 16 stack/no-stack and
+peep/nopeep controls across four source variants, and rejects all 3,038
+mutations with generic fallback and zero survivors. A clean forced control
+selects `spilled-phi-slot`. The clean selected hash remains `f6139204`;
+assembly SHA-256 is
+`889228334debb9cb522f4a9d41beaa92a8542470f893637dd271e92427da5f2e`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 8000 closes the historical
+`mir_match_raw_conversion_check_schedule` proof gap and fixes severe false
+acceptance. The old 519-instruction matcher classified every opcode but did
+not prove the complete type, SSA, memory and qualifier, CFG successor, PHI
+predecessor, instruction-metadata, or symbol-identity payload. It accepted
+10,488 of 12,456 exhaustive per-instruction field and identity mutations
+(84.2%), including every mutation in 14 field classes.
+
+The matcher now fingerprints all 23 semantic and structural fields plus both
+symbol-name fields on every instruction. New `tests/mir-clobber/rawconv.c`
+retains the raw predicate and int/long conversion workload and checks its
+result against independently specified IEEE-754 bit patterns.
+`raw-conversion-check-wave8000-audit.py` builds an isolated diagnostic mutation
+compiler, runs eight stack/no-stack and peep/nopeep controls across exact and
+renamed variants, and rejects all 12,456 mutations with generic fallback and
+zero survivors. The clean stack-check selected hash is `e18d2405`;
+assembly SHA-256 is
+`a3a945c6eda11be245173e31a571ff7a6c24d6aac87a618fe3c92cd2f100fe1c`.
+The standalone audit, all 136 Python script tests, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 8100 closes the remaining focused
+`mir_match_directory_enumeration_runner` evidence gap without changing
+production code. Earlier Wave 19 work already validated every opcode and
+hardened the 318-instruction matcher with a complete semantic-payload
+fingerprint. Its direct semantic checks reference 200 instruction positions;
+the fingerprint covers all 318 instructions, all 23 numeric instruction
+fields, source/base-name identity, object/declaration/alias metadata, and
+whole-function state.
+
+New `tests/mir-clobber/direnum.c` isolates the retained Wave 3 directory layout
+and checks the expected entries plus callback counts through a fixed checksum
+independently reproduced by Python.
+`directory-enumeration-runner-wave8100-audit.py` builds an isolated diagnostic
+mutation compiler, runs four stack/no-stack and peep/nopeep runtime controls,
+and rejects all 7,950 per-instruction field and identity mutations with generic
+fallback and zero survivors. A clean forced control selects
+`spilled-rhs-forward`. The clean selected hash remains `96758d14`; assembly
+SHA-256 is
+`e68b136c76d6f291a647889ccc89a1becf718217db8188755dcd3e529bdcb5ea`.
+No genuine matcher defect or separate clobber manifest was found. The
+standalone audit and full Python script-test suite pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 8200 closes the historical `mir_match_nested_for_runner` proof gap and
+fixes severe exact-schedule false acceptance. The old 288-instruction,
+24-block matcher verified every opcode but had payload-specific checks at only
+220 instruction positions. It accepted 5,919 of 6,912 exhaustive
+per-instruction field and identity mutations (85.63%); all CFG-successor,
+pointee-qualifier, bitfield, inline-temp, and div/mod metadata mutations
+survived.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction while retaining its explicit aggregate, global, local,
+call-ABI, string, dataflow, branch, jump, and PHI checks. New
+`tests/mir-clobber/nestfor.c` isolates the exact schedule and exercises the
+sieve, indexed long/float/pointer conditions, global nested indexing, and
+variable-stride loops. `nested-for-runner-wave8200-audit.py` independently
+computes the expected prime count, largest gap, masks, stride sum, and
+countdown, runs all four stack/no-stack and peep/nopeep target controls, and
+rejects all 6,912 mutations with generic fallback and zero survivors. A clean
+forced control selects `spilled-phi-slot`. The clean selected hash remains
+`60341a7a`; assembly SHA-256 is
+`c48be9cfd4c2969eac4b061e3f4f06d80e7b16605164ba98891a8def1fce14b4`.
+The standalone audit, full Python script-test suite, and both strict 506-app
+release modes pass. No separate clobber manifest was added. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 8300 closes the historical `mir_match_matrix_multiply_schedule` proof gap
+and fixes severe false acceptance. The old 89-instruction matcher checked every
+opcode and referenced 75 instruction positions in direct semantic predicates,
+but did not prove the complete type, SSA, memory and qualifier, CFG successor,
+PHI predecessor, instruction-metadata, or symbol-identity payload. It accepted
+1,869 of 2,225 exhaustive per-instruction field and identity mutations (84.0%).
+
+The matcher now fingerprints all 23 numeric semantic and structural fields plus
+both instruction symbol names, object metadata, declarations, aliases, and
+whole-function state. New `tests/mir-clobber/matmul.c` isolates the retained 2x2
+signed-word kernel and checks two products through a fixed runtime oracle.
+`matrix-multiply-wave8300-audit.py` builds an isolated diagnostic mutation
+compiler, runs 20 stack/no-stack and peep/nopeep exact, renamed, qualifier,
+type, and CFG controls, and rejects all 2,225 mutations with generic fallback
+and zero survivors. A clean forced control selects `spilled-phi-slot`. The
+clean stack-check selected hash remains `30f3adf0`; assembly SHA-256 is
+`e7fee9195a4108b30ab88b122399291d859dcac26e9a75c0be8f8654dba56f3a`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 8400 closes the historical
+`mir_match_union_alias_runner_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The old 115-instruction matcher directly
+referenced only 28 fixed instruction positions, plus two dynamically resolved
+string definitions. It did not prove the complete opcode, destination, type,
+SSA operand, immediate, memory/qualifier, CFG-successor, PHI-predecessor,
+object, bitfield, or auxiliary metadata stream. It accepted 2,510 of 2,645
+exhaustive per-instruction field mutations (94.90%).
+
+The matcher now fingerprints all 23 semantic and structural fields on every
+instruction and both direct call targets before retaining its existing layout,
+constant, print-alias, and string-argument checks. New
+`tests/mir-clobber/unionalias.c` preserves the union overlay workload and adds
+renamed-function, volatile-object, extra-CFG, and alternate-value controls.
+`union-alias-runner-wave8400-audit.py` builds an isolated diagnostic mutation
+compiler, runs 20 stack/no-stack and peep/nopeep controls across five source
+variants, and rejects all 2,645 mutations with generic fallback and zero
+survivors. A clean forced control selects `spilled-phi-slot`. The clean
+selected hash remains `47bc9ce9`; assembly SHA-256 is
+`9a47a8a47fe3834fffc8d09e7329b5beb8a1941959afc9276a4fa6b5a5e334e6`.
+No separate clobber manifest was needed. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 8500 closes the historical `mir_match_best_record_schedule` proof gap
+and fixes severe false acceptance. The matcher classified all 77 opcodes but
+directly inspected semantic payload at only 32 instruction positions, leaving
+45 positions without direct evidence. It accepted 1,551 of 1,771 exhaustive
+per-instruction semantic and structural field mutations (87.6%).
+
+The matcher now fingerprints all 23 numeric instruction fields on every
+instruction. New
+`tests/mir-clobber/bestrecord.c` preserves the record-selection workload and
+checks the highest open record, the next result after mutation, and the empty
+result through an independently specified checksum.
+`best-record-wave8500-audit.py` builds an isolated diagnostic mutation
+compiler, runs 28 stack/no-stack and peep/nopeep controls across exact,
+renamed, qualifier, type, predicate, CFG, and comparison variants, verifies a
+clean `spilled-phi-slot` fallback, and rejects all 1,771 mutations with generic
+fallback and zero survivors. The clean selected hash remains `78bade6e`;
+assembly SHA-256 is
+`59e826326054cfb944ba11a09a52e2cb0a740bca755873f2b802a035d43896ae`.
+No separate clobber manifest was added. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
+Wave 8600 closes the historical
+`mir_match_local_initializer_schedule` proof gap and fixes severe
+exact-schedule false acceptance in both retained shapes. The previous matcher
+classified every opcode in the 54- and 276-instruction streams but had no
+fixed-position complete payload proof. It accepted 6,619 of 7,920 exhaustive
+per-instruction field and identity mutations (83.57%): 1,094/1,296 for the
+small shape and 5,525/6,624 for the large shape.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction, using separately proven fingerprints for the production
+and equivalent fixture layouts. Its existing local-byte interpretation,
+initializer recovery, call-ABI, argument-kind, volatility, and single-block
+checks remain active. New `tests/mir-clobber/localinit.c` exercises both
+retained shapes and validates 23 values through an independent count/checksum
+oracle. `local-initializer-wave8600-audit.py` builds an isolated diagnostic
+mutation compiler, runs 20 stack/no-stack and peep/nopeep controls across
+exact, renamed, changed-value, volatile-local, and extra-CFG variants, and
+rejects all 7,920 mutations with generic fallback and zero survivors. Clean
+forced controls select `spilled-phi-slot`. The fixture selected hashes remain
+`180d481e` and `f81f5fe5`; assembly SHA-256 is
+`517061dcfb3c0f22ae5b1527b73801a42ba5dd5d7f3aabf3e2b79b15807c34ca`.
+No separate clobber manifest was needed. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
+Wave 8700 closes the historical `mir_match_for_init_sum_schedule` proof gap
+and fixes severe exact-schedule false acceptance. The old 32-instruction
+matcher checked all opcodes, but direct semantic predicates referenced only 17
+instruction positions; even including its two edge and two PHI helpers, nine
+positions had no payload-specific proof. It accepted 706 of 800 exhaustive
+per-instruction field and identity mutations (88.25%).
+
+The matcher now fingerprints all 23 numeric semantic and structural fields
+plus both symbol-name fields on every instruction, object metadata,
+declarations, aliases, and whole-function state before retaining its existing
+parameter, local-location, constant, CFG, PHI, and SSA checks. New
+`tests/mir-clobber/forinitsum.c` isolates the prefix-initialized sum loop and
+adds renamed-function, parameter-type, volatile-local, wide-local, alternate
+loop, and extra-CFG controls. `for-init-sum-wave8700-audit.py` builds an
+isolated diagnostic mutation compiler, runs 28 stack/no-stack and peep/nopeep
+controls across seven source variants, and rejects all 800 mutations with
+generic fallback and zero survivors. A clean forced control selects
+`spilled-phi-slot`. The clean selected hash remains `adb96508`; assembly
+SHA-256 is
+`ae8836d8a7fc0dfed3adc4337e97492d7f4ddcc5d67ef12c3514a6a178e0ed6c`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 8800 closes the historical
+`mir_match_aggregate_word_sum_schedule` proof gap and fixes severe
+exact-schedule false acceptance. Across the 23-instruction fixture and five
+retained `tstructv` shapes, the old matcher classified opcodes and
+reconstructed returned trees but did not prove complete instruction payloads.
+It accepted 3,177 of 3,864 exhaustive per-instruction semantic and structural
+field mutations (82.22%); the fixture alone accepted 438/529 (82.80%), with
+20/23 instructions reachable through the return tree and three housekeeping
+instructions not tied to it.
+
+The matcher now fingerprints all 23 numeric fields on every instruction in all
+six retained shapes before applying its existing single-block,
+aggregate-address, term-width, signedness, and returned-add-tree checks. New
+`tests/mir-clobber/aggwordsum.c` preserves a mixed byte/word aggregate sum with
+a scalar term and adds renamed-function, volatile, unsigned, extra-CFG, and
+subtraction controls. `aggregate-word-sum-wave8800-audit.py` builds an isolated
+diagnostic mutation compiler, runs 24 stack/no-stack and peep/nopeep controls
+across six source variants, verifies the five release shapes and a clean
+`spilled-phi-slot` fallback, and rejects all 3,864 mutations across 168
+instructions with generic fallback and zero survivors. The clean selected hash
+remains `238db0ac`; assembly SHA-256 is
+`c12414d78dada56849ccdd1526bafde3190c8ea60c1eb6cfc538760cd6812037`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 8900 closes the historical
+`mir_match_post_index_report_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The previous matcher classified all 43
+opcodes but directly inspected payload at only 32 instruction positions,
+leaving 11 positions without direct evidence and most structural fields
+unchecked. It accepted 885 of 1,032 exhaustive per-instruction field and
+identity mutations (85.76%).
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction before applying its existing global/local object,
+post-index, call-ABI, volatility, and single-block checks. New
+`tests/mir-clobber/postindex.c` reproduces the retained `tpostidx` stream and
+validates the reported post-increment values plus an independent global-state
+checksum. `post-index-report-wave8900-audit.py` builds an isolated diagnostic
+mutation compiler, runs 28 stack/no-stack and peep/nopeep controls across
+exact, renamed, changed-value, qualifier, type, index, and CFG variants,
+verifies a clean `spilled-phi-slot` fallback, and rejects all 1,032 mutations
+with generic fallback and zero survivors. The clean selected hash is
+`357dcd2f`; assembly SHA-256 is
+`3d7f6e59dc654d8e26f13bb5083c3df0b276db511026d84af3dc99c7ba285591`.
+No separate clobber manifest was needed. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
+Wave 9000 closes the historical
+`mir_match_global_append_scalar_schedule` proof gap and fixes severe
+exact-schedule false acceptance in both retained forms. The old matcher
+checked all 10 direct-form or 13 binary-form opcodes, but only partially
+checked the remaining instruction payload and accepted 492 of 575 exhaustive
+field mutations (85.57%): 214/250 for direct append and 278/325 for binary
+append.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction and validates every instruction's normalized symbol
+identity, while retaining its global-array, global-counter, parameter,
+volatility, stride, operation, and scalar-width checks. New
+`tests/mir-clobber/globappend.c` exercises direct append and all five supported
+binary operations with renamed-function, volatile-object, parameter-type,
+unsupported-operation, and extra-CFG controls.
+`global-append-scalar-wave9000-audit.py` builds an isolated diagnostic mutation
+compiler, runs 88 function/mode source controls, and rejects all 575 mutations
+with generic fallback and zero survivors. Clean forced controls select
+`spilled-phi-slot`. The clean selected hashes remain `fe541d3e` and
+`ae0dfff1`; assembly SHA-256 is
+`be3b3a116bdc2a6b2986744888c2ba0b062897c4d5e75dd9a9c7c1405cc4dced`.
+No separate clobber manifest was added. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
+Wave 9100 closes the historical
+`mir_match_pointer_cast_diff_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The previous 100-instruction matcher checked
+every opcode, but its direct semantic predicates referenced only 67
+instruction positions, leaving 33 positions without direct payload-specific
+checks. It accepted 2,195 of 2,500 exhaustive per-instruction field and
+identity mutations (87.80%), with survivors at every instruction position,
+and accepted the changed-count near-match in all four runtime modes.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields
+plus both symbol-name fields on every instruction, object metadata,
+declarations, aliases, and whole-function state before retaining its existing
+array-root, constant, local-location, CFG, call-ABI, argument, and SSA
+relationship checks. New `tests/mir-clobber/ptrcastdiff.c` isolates the three
+pointer-cast difference calculations and checks their combined runtime value
+through an independent checksum oracle.
+`pointer-cast-diff-wave9100-audit.py` builds an isolated diagnostic mutation
+compiler, runs 28 stack/no-stack and peep/nopeep controls across exact,
+renamed, changed-count, qualifier, type, failure-call, and extra-CFG variants,
+and rejects all 2,500 mutations with generic fallback and zero survivors. A
+clean forced control selects `spilled-phi-slot`. The clean selected hash
+remains `d4f39cb6`; assembly SHA-256 is
+`7214aadd91a2310b86f8688550e5fc2ee8eb2bdd4b37174ffb357a0fefd06fe8`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 9500 closes the historical
+`mir_match_reloaded_best_record_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The 79-instruction matcher classified every
+opcode but directly inspected semantic payload at only 32 instruction
+positions, leaving 47 positions without direct payload-specific evidence. It
+accepted 1,603 of 1,817 exhaustive per-instruction semantic and structural
+field mutations (88.22%).
+
+The matcher now fingerprints all 23 numeric instruction fields on every
+instruction before retaining its existing parameter, local-location,
+aggregate-layout, CFG, PHI, volatility, and SSA relationship checks. New
+`tests/mir-clobber/reloadbest.c` reproduces the reloaded-parameter form of the
+record search and checks the highest open record, the next result after
+mutation, and the empty result through an independent checksum.
+`reloaded-best-record-wave9500-audit.py` builds an isolated diagnostic
+mutation compiler, runs 28 stack/no-stack and peep/nopeep controls across
+exact, renamed, qualifier, type, predicate, CFG, and comparison variants,
+verifies a clean `spilled-phi-slot` fallback, and rejects all 1,817 mutations
+with generic fallback and zero survivors. The clean selected hash remains
+`78bade6e`; assembly SHA-256 is
+`1384f2136a6af959d2a46e1ba17f29075f86b377fbb6cd8700328007f9c0dac0`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+Wave 9600 closes the historical
+`mir_match_local_declaration_return_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The old nine-instruction matcher checked all
+nine opcodes and referenced eight instruction positions in direct semantic
+predicates, but it did not prove the complete destination, operand, type,
+immediate, memory/qualifier, CFG-successor, object, bitfield, auxiliary
+metadata, or normalized symbol-identity payload. It accepted 195 of 225
+exhaustive per-instruction field and identity mutations (86.67%), including
+all 18 CFG-successor mutations, and accepted the changed-return near-match in
+all four runtime modes.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction and validates normalized instruction symbol identities
+before retaining its existing function-symbol, local-location, volatility,
+layout, SSA, single-block, and return checks. New
+`tests/mir-clobber/localdeclret.c` isolates the retained local
+function-pointer-array declaration and checks its result plus helper behavior
+through an independent checksum oracle.
+`local-declaration-return-wave9600-audit.py` builds an isolated diagnostic
+mutation compiler, runs 28 stack/no-stack and peep/nopeep controls across
+exact, renamed-function, renamed-symbol, changed-return, qualifier, array-size,
+and extra-CFG variants, verifies a clean `spilled-phi-slot` fallback, and
+rejects all 225 mutations with generic fallback and zero survivors. The clean
+selected hash remains `0c83fd27`; assembly SHA-256 is
+`1e2d5f8f1f80459eeefb037c11fc9ef1780c4c6689b06701b2a8243f79306ad3`.
+No separate clobber manifest was added. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
+Wave 9700 closes the historical
+`mir_match_direct_byte_sum_loop_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The previous 45-instruction matcher checked
+every opcode, but its payload predicates referenced only 35 instruction
+positions, leaving 10 positions without direct field checks. It accepted 976
+of 1,125 exhaustive per-instruction field and identity mutations (86.76%).
+The matcher now fingerprints all 23 scalar MIR fields plus both symbol-name
+fields on every instruction before retaining the existing parameter,
+local-state, CFG, PHI, byte-load, zero-test, accumulation, and return checks.
+New `tests/mir-clobber/dbytesum.c` compares the scheduled result against an
+independent reference implementation.
+`direct-byte-sum-loop-wave9700-audit.py` builds an isolated diagnostic mutation
+compiler, runs 28 stack/no-stack and peep/nopeep controls across exact,
+renamed, signedness, volatility, condition, accumulation, and extra-CFG
+variants, and rejects all 1,125 mutations with generic fallback and zero
+survivors. A clean forced control selects `spilled-phi-slot`. The clean
+selected hash remains `8aa7f1fe`; assembly SHA-256 is
+`65d00157b1c7f3e58f3b5e82174387ec7ef10c4e7e276c345d5b1fe15b06ba18`.
+No separate clobber manifest was added. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
+Wave 9800 closes the historical
+`mir_match_for_init_pointer_walk_schedule` proof gap and fixes genuine
+exact-schedule false acceptance. The 34-instruction matcher classified every
+opcode, but only 30 instruction positions had any payload or CFG relationship
+check; the four `MIR_NOP` positions were opcode-only, and no instruction had a
+complete semantic-field proof. It accepted 729 of 850 exhaustive
+per-instruction semantic and structural field mutations (85.76%).
+
+The matcher now fingerprints all 23 numeric instruction fields plus both
+symbol-name fields on every instruction, object metadata, declarations,
+aliases, and whole-function state before retaining its parameter,
+local-location, CFG, PHI, type, volatility, constant, and SSA checks. New
+`tests/mir-clobber/forinitptr.c` isolates prefix and postfix pointer
+for-initializers and verifies multiple lengths through an independent
+checksum. `for-init-pointer-walk-wave9800-audit.py` builds an isolated
+diagnostic mutation compiler, runs 40 stack/no-stack and peep/nopeep controls
+across ten source variants, verifies a clean `spilled-phi-slot` fallback, and
+rejects all 850 mutations with generic fallback and zero survivors. The clean
+selected hash remains `ad66cb79`; assembly SHA-256 is
+`7dee6b9ff0ec8842ee29f2e82955f1f45d06999445e8dffda7181a9c5f81b0a3`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 9900 closes the historical `mir_match_matrix_bitops_schedule` proof gap
+and fixes severe exact-schedule false acceptance. The previous 89-instruction
+matcher checked every opcode, but its position-specific semantic predicates
+referenced only 69 instructions, leaving 20 without direct payload evidence.
+It accepted 1,683 of 2,047 exhaustive per-instruction field mutations
+(82.22%), with survivors at every instruction position.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields
+on every instruction before retaining its existing matrix parameter,
+nested-loop, member/index, constant, operation, memory, and update checks. New
+`tests/mir-clobber/matbitops.c` isolates the five compound matrix updates and
+checks all four results through an independent weighted checksum.
+`matrix-bitops-wave9900-audit.py` builds an isolated diagnostic mutation
+compiler, runs 24 stack/no-stack and peep/nopeep controls across exact, renamed,
+changed-constant, qualifier, element-type, and extra-CFG variants, and rejects
+all 2,047 mutations with generic fallback and zero survivors. A clean forced
+control selects `spilled-phi-slot`. The clean selected hash remains `6eaf1744`;
+assembly SHA-256 is
+`ece644935f884b1ef8d9a940dab5597734ba53ff19b046aa1e7fadfc26ce1982`.
+No separate clobber manifest was added. The standalone audit, all 136 Python
+script tests, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
+Wave 10000 closes the historical
+`mir_match_initializer_check_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The 59-instruction fixture stream was
+visited instruction-by-instruction, but zero positions had a complete
+field-level proof; the matcher admitted broad opcode classes and recovered
+only the values needed to emit calls. It accepted 1,214 of 1,416 exhaustive
+per-instruction semantic, structural, and identity mutations (85.73%).
+
+The matcher now fingerprints all 23 numeric instruction fields on every
+instruction for both fixture forms and all three retained production streams
+before retaining its existing local-store, global-load, call-ABI, volatility,
+single-block, and value-recovery checks. New
+`tests/mir-clobber/initcheck.c` isolates the six-call schedule and validates
+every call plus an independent checksum.
+`initializer-check-wave10000-audit.py` builds an isolated diagnostic mutation
+compiler, runs 20 stack/no-stack and peep/nopeep controls across exact,
+renamed, changed-value, volatile-local, and extra-CFG variants, verifies a
+clean `spilled-phi-slot` fallback, and rejects all 1,416 mutations with
+generic fallback and zero survivors. The clean selected hash remains
+`6e73ca19`; assembly SHA-256 is
+`cba82f0539d903e7f0420fece4b1cfba195aead5de622cd44f9f63306025d059`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

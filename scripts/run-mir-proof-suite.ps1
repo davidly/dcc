@@ -31,11 +31,21 @@ Artifact root. By default, a unique directory is created under build/.
 .PARAMETER List
 Print the ordered gate list without running commands.
 
+.PARAMETER RequireComplete
+Require exact AST/MIR coverage completion during the final coverage phase.
+
+.PARAMETER All
+Explicitly request the full proof suite. Accepted for discoverability; the
+default run already executes every gate.
+
 .EXAMPLE
 pwsh ./scripts/run-mir-proof-suite.ps1
 
 .EXAMPLE
-pwsh ./scripts/run-mir-proof-suite.ps1 -Jobs 24 -MutationJobs 6 -MutationBuildJobs 4
+pwsh ./scripts/run-mir-proof-suite.ps1 -All
+
+.EXAMPLE
+pwsh ./scripts/run-mir-proof-suite.ps1 -Jobs 24 -MutationJobs 6 -MutationBuildJobs 4 -RequireComplete
 #>
 
 [CmdletBinding()]
@@ -49,7 +59,9 @@ param(
     [ValidateRange(1, 3600)]
     [int]$RunTimeout = 30,
     [string]$OutputDirectory = "",
-    [switch]$List
+    [switch]$List,
+    [switch]$RequireComplete,
+    [switch]$All
 )
 
 $ErrorActionPreference = "Stop"
@@ -189,6 +201,57 @@ function Get-LlvmMajor {
     return [int]$Matches[1]
 }
 
+function Get-CommandVersionLine {
+    param([Parameter(Mandatory)][string]$Command)
+
+    $resolved = Get-Command $Command -ErrorAction SilentlyContinue
+    if (-not $resolved) {
+        return ""
+    }
+    $output = @(& $resolved.Source "--version" 2>&1)
+    if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
+        return ""
+    }
+    return "$($output | Select-Object -First 1)".Trim()
+}
+
+function Format-CoverageToolStatus {
+    param(
+        [Parameter(Mandatory)][string]$Label,
+        [string]$Command,
+        [Parameter(Mandatory)][string]$Expected
+    )
+
+    if (-not $Command) {
+        return "  ${Label}: expected $Expected; found not resolved"
+    }
+    $resolved = Get-Command $Command -ErrorAction SilentlyContinue
+    if (-not $resolved) {
+        return "  ${Label}: expected $Expected; found $Command (not found)"
+    }
+    $versionLine = Get-CommandVersionLine $resolved.Source
+    if ($versionLine) {
+        return "  ${Label}: expected $Expected; found $($resolved.Source) [$versionLine]"
+    }
+    return "  ${Label}: expected $Expected; found $($resolved.Source) [version unavailable]"
+}
+
+function Throw-CoverageToolPreflight {
+    param(
+        [Parameter(Mandatory)][string]$Summary,
+        [Parameter(Mandatory)][string[]]$StatusLines
+    )
+
+    throw ((@(
+        $Summary,
+        "Expected versus found:"
+    ) + $StatusLines + @(
+        "",
+        "Set matching LLVM tools explicitly, for example:",
+        "  export CC=/path/to/clang-18 LLVM_COV=/path/to/llvm-cov-18 LLVM_PROFDATA=/path/to/llvm-profdata-18"
+    )) -join "`n")
+}
+
 foreach ($command in @(
     $python, $pwsh, $cmake, $ctest, $sh, "ntvcm"
 )) {
@@ -200,38 +263,74 @@ $coverageCompiler = if ($env:CC) {
     Resolve-AvailableClang
 }
 if (-not $coverageCompiler) {
-    throw "Required command not found: clang"
+    Throw-CoverageToolPreflight `
+        "Could not resolve a Clang compiler for the coverage phase." `
+        @(
+            (Format-CoverageToolStatus `
+                "CC" $env:CC `
+                "clang or clang-<major> on PATH, or CC=/path/to/clang-<major>")
+        )
 }
 Assert-CommandAvailable $coverageCompiler
 $coverageCompiler = (Get-Command $coverageCompiler -ErrorAction Stop).Source
+$clangMajor = Get-LlvmMajor $coverageCompiler
 $llvmCov = ""
 if ($env:LLVM_COV) {
-    Assert-CommandAvailable $env:LLVM_COV
-    $llvmCov = (Get-Command $env:LLVM_COV -ErrorAction Stop).Source
+    $resolvedLlvmCov = Get-Command $env:LLVM_COV -ErrorAction SilentlyContinue
+    if (-not $resolvedLlvmCov) {
+        Throw-CoverageToolPreflight `
+            "Could not resolve llvm-cov from LLVM_COV." `
+            @(
+                (Format-CoverageToolStatus `
+                    "CC" $coverageCompiler "clang LLVM $clangMajor"),
+                (Format-CoverageToolStatus `
+                    "LLVM_COV" $env:LLVM_COV "llvm-cov LLVM $clangMajor")
+            )
+    }
+    $llvmCov = $resolvedLlvmCov.Source
 } else {
     $llvmCov = Resolve-LlvmPeer $coverageCompiler "llvm-cov"
 }
 $llvmProfdata = ""
 if ($env:LLVM_PROFDATA) {
-    Assert-CommandAvailable $env:LLVM_PROFDATA
-    $llvmProfdata = (Get-Command $env:LLVM_PROFDATA -ErrorAction Stop).Source
+    $resolvedLlvmProfdata = Get-Command $env:LLVM_PROFDATA -ErrorAction SilentlyContinue
+    if (-not $resolvedLlvmProfdata) {
+        Throw-CoverageToolPreflight `
+            "Could not resolve llvm-profdata from LLVM_PROFDATA." `
+            @(
+                (Format-CoverageToolStatus `
+                    "CC" $coverageCompiler "clang LLVM $clangMajor"),
+                (Format-CoverageToolStatus `
+                    "LLVM_PROFDATA" $env:LLVM_PROFDATA "llvm-profdata LLVM $clangMajor")
+            )
+    }
+    $llvmProfdata = $resolvedLlvmProfdata.Source
 } else {
     $llvmProfdata = Resolve-LlvmPeer $coverageCompiler "llvm-profdata"
 }
 if (-not $llvmCov -or -not $llvmProfdata) {
     if (-not (Get-Command xcrun -ErrorAction SilentlyContinue)) {
-        throw "Required commands not found: llvm-cov and llvm-profdata"
+        Throw-CoverageToolPreflight `
+            "Could not resolve the LLVM coverage companions required for the final phase." `
+            @(
+                (Format-CoverageToolStatus "CC" $coverageCompiler "clang LLVM $clangMajor"),
+                (Format-CoverageToolStatus "LLVM_COV" $llvmCov "llvm-cov LLVM $clangMajor"),
+                (Format-CoverageToolStatus "LLVM_PROFDATA" $llvmProfdata "llvm-profdata LLVM $clangMajor")
+            )
     }
 } else {
     Assert-CommandAvailable $llvmCov
     Assert-CommandAvailable $llvmProfdata
-    $clangMajor = Get-LlvmMajor $coverageCompiler
     $covMajor = Get-LlvmMajor $llvmCov
     $profdataMajor = Get-LlvmMajor $llvmProfdata
     if ($clangMajor -ne $covMajor -or $clangMajor -ne $profdataMajor) {
-        throw (
-            "Coverage tools must match Clang ${clangMajor}: " +
-            "llvm-cov=$covMajor, llvm-profdata=$profdataMajor")
+        Throw-CoverageToolPreflight `
+            "Coverage tools must all match Clang LLVM $clangMajor." `
+            @(
+                (Format-CoverageToolStatus "CC" $coverageCompiler "clang LLVM $clangMajor"),
+                (Format-CoverageToolStatus "LLVM_COV" $llvmCov "llvm-cov LLVM $clangMajor"),
+                (Format-CoverageToolStatus "LLVM_PROFDATA" $llvmProfdata "llvm-profdata LLVM $clangMajor")
+            )
     }
 }
 Clear-AmbientProofControls
@@ -258,11 +357,59 @@ if ($OutputDirectory) {
 }
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 
+$suiteStartedAt = Get-Date
+$script:phaseRecords = for ($index = 0; $index -lt $phaseNames.Count; ++$index) {
+    [pscustomobject]@{
+        Phase = $index + 1
+        Name = $phaseNames[$index]
+        StartedAt = $null
+        CompletedAt = $null
+    }
+}
+
 $script:phase = 0
+function Get-ProofPhaseRecord {
+    param([Parameter(Mandatory)][int]$Phase)
+
+    return $script:phaseRecords[$Phase - 1]
+}
+
+function Start-ProofPhaseRecord {
+    param(
+        [Parameter(Mandatory)][int]$Phase,
+        [datetime]$StartedAt = (Get-Date)
+    )
+
+    $record = Get-ProofPhaseRecord $Phase
+    if (-not $record.StartedAt) {
+        $record.StartedAt = $StartedAt
+    }
+}
+
+function Complete-ProofPhaseRecord {
+    param(
+        [Parameter(Mandatory)][int]$Phase,
+        [datetime]$CompletedAt = (Get-Date),
+        [switch]$Overwrite
+    )
+
+    $record = Get-ProofPhaseRecord $Phase
+    if (-not $record.StartedAt) {
+        $record.StartedAt = $CompletedAt
+    }
+    if (-not $record.CompletedAt -or $Overwrite) {
+        $record.CompletedAt = $CompletedAt
+    }
+}
+
 function Start-ProofPhase {
     param([Parameter(Mandatory)][string]$Name)
 
+    if ($script:phase -gt 0) {
+        Complete-ProofPhaseRecord $script:phase
+    }
     ++$script:phase
+    Start-ProofPhaseRecord $script:phase
     Write-Host (
         "`n[{0}/{1}] {2}" -f
         $script:phase, $phaseNames.Count, $Name) -ForegroundColor Cyan
@@ -361,6 +508,7 @@ function Invoke-ProofTaskGroup {
             $task = $Tasks[$nextTask++]
             $safeName = $task.Name -replace "[^A-Za-z0-9_.-]", "-"
             $logPath = Join-Path $logRoot "$safeName.log"
+            Start-ProofPhaseRecord $task.Phase
             Write-Host (
                 "  -> start [{0}/{1}] {2}" -f
                 $task.Phase, $phaseNames.Count, $task.Name)
@@ -402,6 +550,7 @@ function Invoke-ProofTaskGroup {
             }
             $failed += $item.Task.Name
         } else {
+            Complete-ProofPhaseRecord $item.Task.Phase -Overwrite
             Write-Host (
                 "  <- pass [{0}/{1}] {2}" -f
                 $item.Task.Phase, $phaseNames.Count,
@@ -424,6 +573,7 @@ Start-ProofPhase $phaseNames[0]
 Invoke-ProofCommand "build canonical tools" $pwsh @(
     "-NoLogo", "-NoProfile", "-File", "scripts/build-dcc.ps1"
 )
+Complete-ProofPhaseRecord 1
 
 $preparationBuildJobs = [Math]::Max(
     1, [Math]::Floor($Jobs / [Math]::Min(4, $Jobs)))
@@ -440,6 +590,18 @@ Invoke-ProofTaskGroup @(
             Arguments = @(
                 "-m", "unittest", "discover", "-s", "scripts/tests",
                 "-p", "test_*.py")
+            Environment = @{}
+        })
+    },
+    [pscustomobject]@{
+        Phase = 2
+        Name = "MIR fuzz generator proof"
+        Commands = @([pscustomobject]@{
+            Name = "MIR fuzz generator proof"
+            Command = $pwsh
+            Arguments = @(
+                "-NoLogo", "-NoProfile", "-File",
+                "scripts/test-mir-fuzz-source.ps1")
             Environment = @{}
         })
     },
@@ -608,6 +770,7 @@ Invoke-ProofCommand "run isolated compiler mutants" $pwsh @(
     "-BuildJobs", "$MutationBuildJobs",
     "-OutputDirectory", $mutationOutput
 )
+Complete-ProofPhaseRecord 7
 
 $strictMir = @{
     DCC_MIR_REQUIRE_COMPLETE = "1"
@@ -672,9 +835,49 @@ if ($llvmCov) {
 if ($llvmProfdata) {
     $coverageEnvironment.LLVM_PROFDATA = Convert-ToShellPath $llvmProfdata
 }
+if ($RequireComplete) {
+    $coverageEnvironment.DCC_COVERAGE_REQUIRE_COMPLETE = "1"
+}
 Invoke-ProofCommand "run instrumented coverage workflow" $sh @(
     "scripts/compiler-coverage.sh"
 ) $coverageEnvironment
+Complete-ProofPhaseRecord 11
+
+$suiteCompletedAt = Get-Date
+$receiptPath = Join-Path $outputRoot "receipt.json"
+$receipt = [ordered]@{
+    startedAt = $suiteStartedAt.ToString("o")
+    completedAt = $suiteCompletedAt.ToString("o")
+    elapsedSeconds = [Math]::Round(
+        ($suiteCompletedAt - $suiteStartedAt).TotalSeconds, 3)
+    parameters = [ordered]@{
+        Jobs = $Jobs
+        MutationJobs = $MutationJobs
+        MutationBuildJobs = $MutationBuildJobs
+        RequireComplete = [bool]$RequireComplete
+        All = [bool]$All
+    }
+    phases = @(
+        foreach ($record in $script:phaseRecords) {
+            [ordered]@{
+                phase = $record.Phase
+                name = $record.Name
+                startedAt = if ($record.StartedAt) {
+                    $record.StartedAt.ToString("o")
+                } else {
+                    $null
+                }
+                completedAt = if ($record.CompletedAt) {
+                    $record.CompletedAt.ToString("o")
+                } else {
+                    $null
+                }
+            }
+        }
+    )
+}
+$receipt | ConvertTo-Json -Depth 6 |
+    Set-Content -LiteralPath $receiptPath -Encoding utf8
 
 Write-Host (
     "`nAll AST/MIR proof gates passed. Artifacts: $outputRoot"

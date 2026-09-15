@@ -8986,9 +8986,19 @@ static void mir_ensure_use_cache(void)
         if (mir_use_cache_count == NULL || mir_use_cache_def_index == NULL)
             fatal("out of memory building MIR use cache");
     }
-    for (i = 0; i < mir.next_call_id; ++i)
+    /* mir_call_uses_value/mir_value_use_count/mir_definition bounds-check
+     * against these *_capacity high-water marks (so a stale answer for an
+     * index beyond this function's own next_call_id/next_value is never
+     * treated as out of range), so every reset here must clear the full
+     * allocated capacity, not just this function's smaller count - a
+     * function with fewer calls/values than an earlier one would otherwise
+     * leave high indices holding a previous, unrelated function's cached
+     * answers. This was found and reproduced via DCC_MIR_CACHE_VERIFY=1 on
+     * a trivial zero-value helper compiled immediately after a
+     * larger function. */
+    for (i = 0; i < mir_use_cache_arg_head_capacity; ++i)
         mir_use_cache_arg_head[i] = -1;
-    for (i = 0; i < mir.next_value; ++i) {
+    for (i = 0; i < mir_use_cache_count_capacity; ++i) {
         mir_use_cache_count[i] = 0;
         mir_use_cache_def_index[i] = -1;
     }

@@ -1,0 +1,188 @@
+[
+  {
+    "Name": "cmp45ok",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "cmp45vfail",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": ["CMPW45_VOLATILE_FAILURES"],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "cmp45cfg",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": ["CMPW45_CFG_GUARD"],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "cmp45vla",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": ["CMPW45_VLA_GUARD"],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "cmp45print",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": ["CMPW45_FIXED_SUCCESS_PRINT"],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "cmp45helper",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": ["CMPW45_EXTRA_HELPER_CALL"],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg"
+  },
+  {
+    "Name": "cmp45checkid",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg",
+    "MachineMutation": "17:identity:120",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp45idxsrc",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg",
+    "MachineMutation": "513:src1:321",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp45membertype",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg",
+    "MachineMutation": "685:type:17",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cmp45storeind",
+    "Group": "compound-wave45",
+    "Sources": ["tests/mir-clobber/cmpw15.c"],
+    "Defines": [],
+    "Expected": [
+      "ORACLE calls=102 hash=61396",
+      "compound wave4 completed"
+    ],
+    "Exit": 0,
+    "StackBytes": 512,
+    "StackModes": [true, false],
+    "ExactTemplate": "compound-check-runner",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "hybrid-homed-scalar-cfg",
+    "MachineMutation": "945:src2:621",
+    "MachineMutationFunction": "main"
+  }
+]

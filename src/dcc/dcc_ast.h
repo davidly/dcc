@@ -238,11 +238,6 @@ int ast_expr_yields_bool01(const struct AstNode *n);
  * see dcc_ast_gen_support.c for the full rationale): `arr[E] | (arr[E+1]
  * << 8)` for a read, `arr[E] = lo; arr[E+1] = hi;` for a write, where E is
  * a non-trivial shared index expression currently recomputed twice. */
-int ast_index_exprs_structurally_equal(const struct AstNode *a, const struct AstNode *b);
-int ast_index_expr_is_plus_one(const struct AstNode *base_expr, const struct AstNode *plus_one);
-const struct AstNode *ast_byte_pair_word_read_match(const struct AstNode *n);
-int ast_byte_pair_word_write_match(const struct AstNode *s1, const struct AstNode *s2,
-                                   const struct AstNode **out_lo, const struct AstNode **out_s2_assign);
 
 /* Recursive, side-effect-free static type inference for an expression node -
  * originally written for sizeof, general-purpose enough to reuse anywhere a
@@ -351,13 +346,14 @@ const char *ast_kind_name(int kind);
 void ast_dump(const struct AstNode *n, int depth);
 
 /* ------------------------------------------------------------------------- *
- * AST-driven code generation.
+ * AST support/classification queries.
  *
- * AST codegen is the compiler's only codegen path.  Set DCC_AST_REPORT to log
- * per-statement emit/unsupported diagnostics to stderr.
+ * Production function bodies come only from selected, verified MIR. These
+ * queries classify supported source shapes and gate diagnostics; they do not
+ * emit code. Set DCC_AST_REPORT to log per-statement classification
+ * diagnostics to stderr.
  * ------------------------------------------------------------------------- */
 int ast_gen_supported(const struct AstNode *n);
-void ast_gen_expr(const struct AstNode *n);   /* emit; sets g_expr_type        */
 int ast_stmt_supported(const struct AstNode *n);
 int ast_stmt_has_reentry_label(const struct AstNode *n);
 int ast_stmt_exits(const struct AstNode *n);

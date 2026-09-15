@@ -1,0 +1,328 @@
+[
+  {
+    "Name": "cat60ok",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireExact": true
+  },
+  {
+    "Name": "cat60zero",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_ZERO_WRAPPER_4096"],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "cat60iszero",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_IS_ZERO_WRAPPER_4096"],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "cat60term",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_ADD_TERM_WRAPPER_4096"],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "cat60div",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_DIV_SMALL_WRAPPER_4096"],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "cat60print",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_FIXED_PRINT_WRAPPER"],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "cat60putchar",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": ["CATALAN_PUTCHAR_WRAPPER"],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg"
+  },
+  {
+    "Name": "cat60initwidth",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "15:memory_size:2",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60initvalue",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "14:immediate:2",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60not",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "36:immediate:0",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60div16",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "158:immediate:15",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60scale",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "186:immediate:7",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60div4096",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "305:immediate:2048",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60report",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "322:src1:213",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60limit",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "358:immediate:99",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60pdiv",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "372:immediate:8",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60digit",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "404:immediate:11",
+    "MachineMutationFunction": "main"
+  },
+  {
+    "Name": "cat60newline",
+    "Group": "catalan-wave60",
+    "Sources": ["tests/mir-clobber/catw23.c"],
+    "Defines": [],
+    "Expected": [
+      "0.9159655941772190150546035149323841107741493742816721342664981196217630197762547694793565129261151062"
+    ],
+    "Exit": 0,
+    "StackBytes": 768,
+    "StackModes": [true, false],
+    "ExactTemplate": "catalan-driver-schedule",
+    "ExactFunction": "main",
+    "RequireRejected": true,
+    "RequiredSelectorFunction": "main",
+    "RequiredSelector": "spilled-scalar-cfg",
+    "MachineMutation": "432:immediate:13",
+    "MachineMutationFunction": "main"
+  }
+]

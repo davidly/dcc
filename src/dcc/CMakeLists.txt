@@ -56,8 +56,8 @@ set(DCC_SOURCES
     dcc_ast_metadata.c  # non-emitting function-body metadata replay
     dcc_ast_gen.c           # AST classifiers / type & lvalue resolvers
     dcc_ast_gen_support.c   # AST support dispatch, calls/structs/folds
-    dcc_ast_gen_expr.c      # AST expression emitters
-    dcc_ast_gen_cond.c      # AST condition and branch emitters
+    dcc_ast_gen_expr.c      # AST initializer capture and inline metadata
+    dcc_ast_gen_cond.c      # AST statement/condition classification gates
     dcc_ast_stmt_meta.c     # AST statement parsing/sizing metadata
     dcc_mir.c               # analysis-only virtual-register MIR prototype
     dcc_mir_verify.c

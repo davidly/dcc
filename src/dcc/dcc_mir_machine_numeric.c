@@ -9995,10 +9995,13 @@ static int mir_match_board_search_schedule(
     const struct MirInsn *ply = &mir.insns[2];
     const struct MirInsn *alpha = &mir.insns[3];
     const struct MirInsn *beta = &mir.insns[4];
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     int instruction;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 215 || mir_cfg_block_count() != 25 ||
+    if (mir.count != 215 || mir.next_value != 137 ||
+        mir_cfg_block_count() != 25 ||
         mir.has_vla || mir.local_bytes != 11 ||
         mir.aggregate_temp_bytes != 0 ||
         !mir_has_cfg_backedge() ||
@@ -10012,6 +10015,53 @@ static int mir_match_board_search_schedule(
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "board-search-schedule", "opcodes");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[20];
+        size_t value;
+
+        values[0] = (unsigned int)insn->opcode;
+        values[1] = (unsigned int)insn->dst;
+        values[2] = (unsigned int)insn->src1;
+        values[3] = (unsigned int)insn->src2;
+        if (insn->type == mir.insns[67].type)
+            values[4] = TYPE_STRUCT | TYPE_PTR;
+        else
+            values[4] = (unsigned int)insn->type;
+        values[5] = (unsigned int)insn->immediate;
+        values[6] = (unsigned int)insn->label;
+        values[7] = (unsigned int)insn->phi_pred1;
+        values[8] = (unsigned int)insn->phi_pred2;
+        values[9] = (unsigned int)insn->successors[0];
+        values[10] = (unsigned int)insn->successors[1];
+        values[11] = (unsigned int)insn->successor_count;
+        values[12] = (unsigned int)insn->object;
+        values[13] = (unsigned int)insn->memory_size;
+        values[14] = (unsigned int)insn->memory_flags;
+        values[15] = (unsigned int)insn->bit_width;
+        values[16] = (unsigned int)insn->bit_shift;
+        values[17] = (unsigned int)insn->bit_mask;
+        values[18] = (unsigned int)insn->secondary_offset;
+        values[19] = (unsigned int)insn->inline_temp_id;
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0xddea0edd9a06c68aULL ||
+        second != 0xc5fdacfee2f0a9bcULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=board-search-schedule "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     if (!mir_board_search_control_edges_match(
             control_edges,
             (int)(sizeof(control_edges) / sizeof(control_edges[0]))))
@@ -10054,9 +10104,20 @@ static int mir_match_board_search_schedule(
         mir_board_search_function(112, 1, 2);
     plan->copy_function =
         mir_board_search_function(183, 2, 0);
-    if (plan->self == NULL || !plan->self->is_defined ||
-        !plan->self->has_proto || plan->self->proto_nargs != 4 ||
+    if (plan->self == NULL ||
+        plan->self->storage != SC_FUNC ||
+        !plan->self->is_defined ||
+        plan->self->is_funcptr ||
+        plan->self->is_noreturn ||
+        plan->self->is_fastcall ||
+        !plan->self->has_proto ||
+        plan->self->proto_nargs != 4 ||
         plan->self->proto_variadic ||
+        plan->self->type != TYPE_INT ||
+        plan->self->proto_types[0] != TYPE_INT ||
+        plan->self->proto_types[1] != TYPE_INT ||
+        plan->self->proto_types[2] != TYPE_INT ||
+        plan->self->proto_types[3] != TYPE_INT ||
         find_global(mir.insns[88].name) != plan->self ||
         plan->evaluate_function == NULL ||
         plan->generate_function == NULL ||
@@ -10067,6 +10128,36 @@ static int mir_match_board_search_schedule(
         plan->copy_function == NULL)
         return mir_machine_reject(
             "board-search-schedule", "calls");
+    if (plan->evaluate_function->type != TYPE_INT ||
+        plan->evaluate_function->is_fastcall ||
+        plan->evaluate_function->is_noreturn ||
+        plan->generate_function->type != TYPE_VOID ||
+        plan->generate_function->is_fastcall ||
+        plan->generate_function->is_noreturn ||
+        plan->generate_function->proto_types[0] != TYPE_INT ||
+        plan->check_function->type != TYPE_INT ||
+        plan->check_function->is_fastcall ||
+        plan->check_function->is_noreturn ||
+        plan->check_function->proto_types[0] != TYPE_INT ||
+        plan->apply_function->type != TYPE_VOID ||
+        plan->apply_function->is_fastcall ||
+        plan->apply_function->is_noreturn ||
+        plan->undo_function->type != TYPE_VOID ||
+        plan->undo_function->is_fastcall ||
+        plan->undo_function->is_noreturn ||
+        plan->order_function->type != TYPE_INT ||
+        plan->order_function->is_fastcall ||
+        plan->order_function->is_noreturn ||
+        plan->copy_function->type != TYPE_VOID ||
+        plan->copy_function->is_fastcall ||
+        plan->copy_function->is_noreturn ||
+        plan->apply_function->proto_types[0] != mir.insns[71].type ||
+        plan->undo_function->proto_types[0] != mir.insns[71].type ||
+        plan->order_function->proto_types[0] != mir.insns[71].type ||
+        plan->copy_function->proto_types[0] != mir.insns[174].type ||
+        plan->copy_function->proto_types[1] != mir.insns[181].type)
+        return mir_machine_reject(
+            "board-search-schedule", "call-types");
 
     plan->move_counts = find_global(mir.insns[15].name);
     plan->moves = find_global(mir.insns[67].name);
@@ -10079,17 +10170,38 @@ static int mir_match_board_search_schedule(
         plan->moves->storage != SC_GLOBAL ||
         plan->side->storage != SC_GLOBAL ||
         plan->best_root->storage != SC_GLOBAL ||
+        plan->move_counts->type != TYPE_INT ||
+        plan->side->type != TYPE_INT ||
+        plan->moves->type != plan->best_root->type ||
+        (plan->moves->type & TYPE_STRUCT) == 0 ||
         !plan->move_counts->is_array ||
         !plan->moves->is_array ||
+        plan->move_counts->is_vla ||
+        plan->moves->is_vla ||
         plan->move_counts->is_volatile ||
         plan->moves->is_volatile ||
         plan->move_counts->pointee_is_volatile ||
         plan->moves->pointee_is_volatile ||
+        plan->move_counts->size != 12 ||
+        plan->move_counts->array_len != 6 ||
         plan->move_counts->elem_size != 2 ||
+        plan->move_counts->dim_count != 1 ||
+        plan->move_counts->dims[0] != 6 ||
+        plan->moves->size != 6144 ||
+        plan->moves->array_len != 6 ||
         plan->moves->elem_size != 1024 ||
-        plan->side->is_array || plan->side->is_volatile ||
+        plan->moves->dim_count != 2 ||
+        plan->moves->dims[0] != 6 ||
+        plan->moves->dims[1] != 128 ||
+        plan->side->is_array || plan->side->is_vla ||
+        plan->side->is_volatile ||
+        plan->side->pointee_is_volatile ||
+        plan->side->size != 2 ||
         plan->best_root->is_array ||
+        plan->best_root->is_vla ||
         plan->best_root->is_volatile ||
+        plan->best_root->pointee_is_volatile ||
+        plan->best_root->size != 8 ||
         strcmp(mir.insns[15].name, mir.insns[60].name) != 0 ||
         strcmp(mir.insns[67].name, mir.insns[92].name) != 0 ||
         strcmp(mir.insns[67].name, mir.insns[106].name) != 0 ||
@@ -10219,6 +10331,8 @@ static int mir_match_recursive_byte_minimax_schedule(
     int moves_type;
     int moves_storage;
     int moves_offset;
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     int instruction;
     int edge;
     int argument;
@@ -10235,6 +10349,53 @@ static int mir_match_recursive_byte_minimax_schedule(
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "recursive-byte-minimax-schedule", "opcodes");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[23];
+        size_t value;
+
+        values[0] = (unsigned int)insn->opcode;
+        values[1] = (unsigned int)insn->dst;
+        values[2] = (unsigned int)insn->src1;
+        values[3] = (unsigned int)insn->src2;
+        values[4] = (unsigned int)insn->type;
+        values[5] = (unsigned int)insn->immediate;
+        values[6] = (unsigned int)insn->label;
+        values[7] = (unsigned int)insn->phi_pred1;
+        values[8] = (unsigned int)insn->phi_pred2;
+        values[9] = (unsigned int)insn->successors[0];
+        values[10] = (unsigned int)insn->successors[1];
+        values[11] = (unsigned int)insn->successor_count;
+        values[12] = (unsigned int)insn->object;
+        values[13] = (unsigned int)insn->memory_size;
+        values[14] = (unsigned int)insn->memory_flags;
+        values[15] = insn->pointee_volatile_mask;
+        values[16] = (unsigned int)insn->has_pointer_qualifiers;
+        values[17] = (unsigned int)insn->bit_width;
+        values[18] = (unsigned int)insn->bit_shift;
+        values[19] = (unsigned int)insn->bit_mask;
+        values[20] = (unsigned int)insn->secondary_offset;
+        values[21] = (unsigned int)insn->inline_temp_id;
+        values[22] = (unsigned int)insn->divmod_cast_types;
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0x13f98b7a0d139762ULL ||
+        second != 0x5b426763e4f9b566ULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=recursive-byte-minimax-schedule "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     for (edge = 0;
          edge < (int)(sizeof(control_edges) /
                       sizeof(control_edges[0]));

@@ -7074,6 +7074,14 @@ static int mir_gnarly_string_type(int type)
            type_size(type) == 2;
 }
 
+static int mir_gnarly_word_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
 static int mir_gnarly_value_from(int value, int instruction)
 {
     return value >= 0 &&
@@ -7089,6 +7097,19 @@ static int mir_gnarly_binary(
            mir_gnarly_value_from(binary->src1, left) &&
            mir_gnarly_value_from(binary->src2, right) &&
            binary->immediate == operation;
+}
+
+static int mir_gnarly_runner_binary(
+    int instruction, int left, int right, int operation,
+    int pointer_result)
+{
+    return mir_gnarly_binary(
+               instruction, left, right, operation) &&
+           (pointer_result ?
+            mir_gnarly_word_pointer_type(
+                mir.insns[instruction].type) :
+            mir_gnarly_word_type(
+                mir.insns[instruction].type, 0));
 }
 
 static int mir_gnarly_branch(
@@ -7110,6 +7131,17 @@ static int mir_gnarly_phi(
            mir_gnarly_value_from(phi->src2, right) &&
            phi->phi_pred1 == mir.insns[left_label].label &&
            phi->phi_pred2 == mir.insns[right_label].label;
+}
+
+static int mir_gnarly_runner_phi(
+    int instruction, int left, int right,
+    int left_label, int right_label)
+{
+    return mir_gnarly_phi(
+               instruction, left, right,
+               left_label, right_label) &&
+           mir_gnarly_word_type(
+               mir.insns[instruction].type, 0);
 }
 
 static struct Sym *mir_gnarly_direct_function(
@@ -7229,6 +7261,10 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
         '<', '+', '+', '<', '+', '+', '+', '-', '-', '-', '&', '|',
         '^', '*', '+', '+', '+', '<', '+', '+', '+', '-', '>', '<'
     };
+    static const unsigned char binary_pointer_results[24] = {
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    };
     static const int string_instructions[35] = {
         342, 363, 382, 62, 76, 84, 96, 115, 120, 125, 131, 174,
         177, 199, 214, 229, 247, 272, 287, 289, 295, 303, 312,
@@ -7278,6 +7314,9 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
         137, 142, 147, 152, 157, 162,
         239, 255, 266, 277, 386
     };
+    static const unsigned char arr_index_types[11] = {
+        18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 16
+    };
     int call_count = 0;
     int instruction;
     int item;
@@ -7310,21 +7349,22 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
             return mir_machine_reject(
                 "gnarly-call-runner", "constants");
     for (item = 0; item < 24; ++item)
-        if (!mir_gnarly_binary(
+        if (!mir_gnarly_runner_binary(
                 binary_instructions[item],
                 binary_lefts[item], binary_rights[item],
-                binary_operations[item]))
+                binary_operations[item],
+                binary_pointer_results[item]))
             return mir_machine_reject(
                 "gnarly-call-runner", "operations");
 
-    if (!mir_gnarly_phi(13, 7, 28, 0, 25) ||
-        !mir_gnarly_phi(38, 32, 51, 31, 48) ||
-        !mir_gnarly_phi(374, 367, 371, 368, 372) ||
-        !mir_gnarly_phi(455, 445, 475, 373, 472) ||
-        !mir_gnarly_phi(456, 448, 479, 373, 472) ||
-        !mir_gnarly_phi(457, 442, 469, 373, 472) ||
-        !mir_gnarly_phi(518, 511, 515, 512, 516) ||
-        !mir_gnarly_phi(521, 502, 518, 503, 519) ||
+    if (!mir_gnarly_runner_phi(13, 7, 28, 0, 25) ||
+        !mir_gnarly_runner_phi(38, 32, 51, 31, 48) ||
+        !mir_gnarly_runner_phi(374, 367, 371, 368, 372) ||
+        !mir_gnarly_runner_phi(455, 445, 475, 373, 472) ||
+        !mir_gnarly_runner_phi(456, 448, 479, 373, 472) ||
+        !mir_gnarly_runner_phi(457, 442, 469, 373, 472) ||
+        !mir_gnarly_runner_phi(518, 511, 515, 512, 516) ||
+        !mir_gnarly_runner_phi(521, 502, 518, 503, 519) ||
         !mir_gnarly_branch(17, 16, 31) ||
         !mir_gnarly_branch(42, 41, 54) ||
         !mir_gnarly_branch(366, 365, 370) ||
@@ -7452,6 +7492,12 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
 
     if (!mir_machine_same_location(
             &mir.insns[18], &mir.insns[57]) ||
+        !mir_gnarly_word_pointer_type(mir.insns[18].type) ||
+        !mir_gnarly_word_pointer_type(mir.insns[43].type) ||
+        !mir_gnarly_word_pointer_type(mir.insns[55].type) ||
+        !mir_gnarly_word_pointer_type(mir.insns[57].type) ||
+        !mir_gnarly_word_pointer_type(mir.insns[64].type) ||
+        !mir_gnarly_word_pointer_type(mir.insns[69].type) ||
         !mir_machine_same_location(
             &mir.insns[43], &mir.insns[55]) ||
         !mir_machine_same_location(
@@ -7463,12 +7509,16 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
         return mir_machine_reject(
             "gnarly-call-runner", "duff-arrays");
     for (item = 1; item < 12; ++item)
-        if (!mir_machine_same_location(
+        if (!mir_gnarly_word_pointer_type(
+                mir.insns[arr_addresses[item]].type) ||
+            !mir_machine_same_location(
                 &mir.insns[arr_addresses[0]],
                 &mir.insns[arr_addresses[item]]))
             return mir_machine_reject(
                 "gnarly-call-runner", "main-array");
-    if (mir_machine_same_location(
+    if (!mir_gnarly_word_pointer_type(
+            mir.insns[arr_addresses[0]].type) ||
+        mir_machine_same_location(
             &mir.insns[arr_addresses[0]], &mir.insns[18]))
         return mir_machine_reject(
             "gnarly-call-runner", "distinct-arrays");
@@ -7476,7 +7526,8 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
         const struct MirInsn *index =
             &mir.insns[arr_indices[item]];
 
-        if (index->memory_size != 2 ||
+        if (index->type != arr_index_types[item] ||
+            index->memory_size != 2 ||
             index->immediate != 2 ||
             !mir_gnarly_value_from(
                 index->src2, arr_index_values[item]))
@@ -7490,15 +7541,19 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
         mir_machine_same_location(
             &mir.insns[331], &mir.insns[340]) ||
         mir.insns[332].src1 != mir.insns[331].dst ||
+        !mir_gnarly_word_pointer_type(mir.insns[332].type) ||
         mir.insns[332].immediate != 0 ||
         mir.insns[332].memory_size != 2 ||
         mir.insns[336].src1 != mir.insns[335].dst ||
+        !mir_gnarly_string_type(mir.insns[336].type) ||
         mir.insns[336].immediate != 2 ||
         mir.insns[336].memory_size != 1 ||
         mir.insns[341].src1 != mir.insns[339].dst ||
         mir.insns[345].src1 != mir.insns[344].dst ||
+        !mir_gnarly_word_pointer_type(mir.insns[345].type) ||
         mir.insns[345].immediate != 0 ||
         mir.insns[349].src1 != mir.insns[348].dst ||
+        !mir_gnarly_string_type(mir.insns[349].type) ||
         mir.insns[349].immediate != 2)
         return mir_machine_reject(
             "gnarly-call-runner", "structure-copy");
@@ -8157,6 +8212,8 @@ static int mir_match_nested_for_runner(
         {279, 281, -1}
     };
     struct Sym *direct_functions[10];
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     int s_offset;
     int b_offset;
     int call_count = 0;
@@ -8453,6 +8510,53 @@ static int mir_match_nested_for_runner(
         if (direct_functions[item] == plan->print_function)
             return mir_machine_reject(
                 "nested-for-call-runner", "print-alias");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[23];
+        size_t value;
+
+        values[0] = (unsigned int)insn->opcode;
+        values[1] = (unsigned int)insn->dst;
+        values[2] = (unsigned int)insn->src1;
+        values[3] = (unsigned int)insn->src2;
+        values[4] = (unsigned int)insn->type;
+        values[5] = (unsigned int)insn->immediate;
+        values[6] = (unsigned int)insn->label;
+        values[7] = (unsigned int)insn->phi_pred1;
+        values[8] = (unsigned int)insn->phi_pred2;
+        values[9] = (unsigned int)insn->successors[0];
+        values[10] = (unsigned int)insn->successors[1];
+        values[11] = (unsigned int)insn->successor_count;
+        values[12] = (unsigned int)insn->object;
+        values[13] = (unsigned int)insn->memory_size;
+        values[14] = (unsigned int)insn->memory_flags;
+        values[15] = (unsigned int)insn->pointee_volatile_mask;
+        values[16] = (unsigned int)insn->has_pointer_qualifiers;
+        values[17] = (unsigned int)insn->bit_width;
+        values[18] = (unsigned int)insn->bit_shift;
+        values[19] = (unsigned int)insn->bit_mask;
+        values[20] = (unsigned int)insn->secondary_offset;
+        values[21] = (unsigned int)insn->inline_temp_id;
+        values[22] = (unsigned int)insn->divmod_cast_types;
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0x4e44e8e283fcd393ULL ||
+        second != 0x40d82a64b805875fULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=nested-for-call-runner "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     return 1;
 }
 

@@ -5,6 +5,19 @@
 #include "dcc_ast_gen_internal.h"
 #include "dcc_mir_machine_internal.h"
 #include <limits.h>
+#ifdef _WIN32
+#include <io.h>
+#define mir_verify_dup _dup
+#define mir_verify_dup2 _dup2
+#define mir_verify_close _close
+#define mir_verify_fileno _fileno
+#else
+#include <unistd.h>
+#define mir_verify_dup dup
+#define mir_verify_dup2 dup2
+#define mir_verify_close close
+#define mir_verify_fileno fileno
+#endif
 
 static int failures;
 
@@ -36,6 +49,25 @@ static void clear_liveness(void)
     free(mir.live_out);
     mir.live_in = NULL;
     mir.live_out = NULL;
+}
+
+static void scan_global_write_info_for_source(const char *text)
+{
+    char *saved_src = src;
+    long saved_src_len = src_len;
+    size_t len = strlen(text);
+
+    src = (char *)xmalloc(len + 1);
+    memcpy(src, text, len + 1);
+    src_len = (long)len;
+    g_src_generation++;
+    reset_preproc_scan_state();
+    scan_global_write_info();
+    free(src);
+    src = saved_src;
+    src_len = saved_src_len;
+    g_src_generation++;
+    reset_preproc_scan_state();
 }
 
 static void setup(int count, int values, int labels)
@@ -362,6 +394,7 @@ static void verify_ast_assignment_support(void)
     struct AstNode address;
     struct AstNode member;
     struct AstNode owner;
+    struct AstNode owner_pointer;
     struct AstNode pointer_rhs;
     struct Sym *symbol;
     int saved_dead = expr_result_dead;
@@ -380,6 +413,7 @@ static void verify_ast_assignment_support(void)
     memset(&address, 0, sizeof(address));
     memset(&member, 0, sizeof(member));
     memset(&owner, 0, sizeof(owner));
+    memset(&owner_pointer, 0, sizeof(owner_pointer));
     memset(&pointer_rhs, 0, sizeof(pointer_rhs));
     lhs.kind = AST_IDENT;
     integer.kind = AST_INT_LIT;
@@ -704,33 +738,97 @@ static void verify_ast_assignment_support(void)
          ast_assignment_probe(
              &assign, &index, &real, TOK_MULEQ);
 
-    if (nfield_defs < MAX_FIELDS) {
-        struct FieldDef *field;
+    if (nfield_defs + 2 < MAX_FIELDS) {
+        struct FieldDef *pointer_field;
+        struct FieldDef *bitfield;
+        struct FieldDef *bool_field;
         int sid = add_struct_def("verify_assignment_record");
 
-        field = &field_defs[nfield_defs++];
-        memset(field, 0, sizeof(*field));
-        strcpy(field->name, "pointer");
-        field->parent_struct_id = sid;
-        field->type = type_add_ptr(TYPE_INT);
+        pointer_field = &field_defs[nfield_defs++];
+        memset(pointer_field, 0, sizeof(*pointer_field));
+        strcpy(pointer_field->name, "pointer");
+        pointer_field->parent_struct_id = sid;
+        pointer_field->type = type_add_ptr(TYPE_INT);
         symbol = add_global(
             "verify_assignment_record_value", make_struct_type(sid), SC_GLOBAL);
         owner.kind = AST_IDENT;
         owner.type = symbol->type;
         owner.sval = symbol->name;
         owner.sym = symbol;
+        symbol = add_global(
+            "verify_assignment_record_pointer",
+            type_add_ptr(make_struct_type(sid)), SC_GLOBAL);
+        owner_pointer.kind = AST_IDENT;
+        owner_pointer.type = symbol->type;
+        owner_pointer.sval = symbol->name;
+        owner_pointer.sym = symbol;
         member.kind = AST_MEMBER;
         member.op = '.';
         member.a = &owner;
-        member.sval = field->name;
-        member.type = field->type;
+        member.sval = pointer_field->name;
+        member.type = pointer_field->type;
+        /* Direct struct-member pointer compounds (`box.pointer += 1`,
+         * `boxp->pointer -= 1`) are classified independently of the
+         * member-array indexing cases below. */
+        integer.ival = 1;
+        ok = expect_ast_assignment_support(
+            "member pointer +=", &assign, &member, &integer,
+            TOK_ADDEQ, 1) && ok;
+        member.op = TOK_ARROW;
+        member.a = &owner_pointer;
+        ok = expect_ast_assignment_support(
+            "arrow member pointer -=", &assign, &member, &integer,
+            TOK_SUBEQ, 1) && ok;
+        integer.ival = 0;
+        ok = expect_ast_assignment_support(
+            "arrow member pointer invalid rhs", &assign, &member, &pointer_rhs,
+            TOK_ADDEQ, 0) && ok;
+        member.op = '.';
+        member.a = &owner;
         index.a = &member;
         index.type = TYPE_INT;
         ok = ok && ast_assignment_probe(
             &assign, &index, &integer, '=');
-        field->type = type_add_ptr(field->type);
-        member.type = field->type;
-        index.type = type_decay_ptr(field->type);
+
+        bitfield = &field_defs[nfield_defs++];
+        memset(bitfield, 0, sizeof(*bitfield));
+        strcpy(bitfield->name, "flags");
+        bitfield->parent_struct_id = sid;
+        bitfield->type = TYPE_INT | TYPE_UNSIGNED;
+        bitfield->bit_width = 5;
+        bitfield->bit_mask = 0x1f;
+        member.sval = bitfield->name;
+        member.type = bitfield->type;
+        /* Bitfield stores accept numeric `=` conversion and plain-int
+         * compound updates through the masked store tail. */
+        ok = expect_ast_assignment_support(
+            "bitfield float assignment", &assign, &member, &real,
+            '=', 1) && ok;
+        integer.ival = 1;
+        ok = expect_ast_assignment_support(
+            "bitfield shift assignment", &assign, &member, &integer,
+            TOK_SHLEQ, 1) && ok;
+
+        bool_field = &field_defs[nfield_defs++];
+        memset(bool_field, 0, sizeof(*bool_field));
+        strcpy(bool_field->name, "ready");
+        bool_field->parent_struct_id = sid;
+        bool_field->type = TYPE_BOOL;
+        member.sval = bool_field->name;
+        member.type = bool_field->type;
+        /* `_Bool` members accept plain `=` conversions but reject compound
+         * operators entirely. */
+        ok = expect_ast_assignment_support(
+            "bool member float assignment", &assign, &member, &real,
+            '=', 1) && ok;
+        ok = expect_ast_assignment_support(
+            "bool member compound rejection", &assign, &member, &integer,
+            TOK_ADDEQ, 0) && ok;
+
+        member.sval = pointer_field->name;
+        pointer_field->type = type_add_ptr(pointer_field->type);
+        member.type = pointer_field->type;
+        index.type = type_decay_ptr(pointer_field->type);
         integer.ival = 0;
         ok = ok && ast_assignment_probe(
             &assign, &index, &integer, '=');
@@ -747,6 +845,53 @@ static void verify_ast_assignment_support(void)
     } else {
         ok = 0;
     }
+
+    symbol = add_global(
+        "verify_assignment_pointer_ident_compound",
+        type_add_ptr(TYPE_INT), SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    /* Pointer identifiers allow dead-result `+=`/`-=` through the general
+     * compound tail, but not when the assignment's result is live. */
+    integer.ival = 1;
+    ok = expect_ast_assignment_support(
+        "pointer ident +=", &assign, &lhs, &integer, TOK_ADDEQ, 1) && ok;
+    expr_result_dead = 0;
+    ok = expect_ast_assignment_support(
+        "pointer ident live result", &assign, &lhs, &integer, TOK_ADDEQ, 0)
+         && ok;
+    expr_result_dead = 1;
+
+    symbol = add_global(
+        "verify_assignment_long_pointer_value",
+        type_add_ptr(TYPE_LONG), SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    dereference.a = &lhs;
+    dereference.type = TYPE_LONG;
+    /* Dereferenced long lvalues accept the wide shift compound path. */
+    ok = expect_ast_assignment_support(
+        "dereferenced long shift assignment", &assign, &dereference, &integer,
+        TOK_SHREQ, 1) && ok;
+
+    symbol = add_global(
+        "verify_assignment_float_pointer_value",
+        type_add_ptr(TYPE_FLOAT), SC_GLOBAL);
+    lhs.type = symbol->type;
+    lhs.sval = symbol->name;
+    lhs.sym = symbol;
+    dereference.a = &lhs;
+    dereference.type = TYPE_FLOAT;
+    /* Dereferenced float lvalues admit arithmetic compounds but still reject
+     * unsupported operators like `%=`. */
+    ok = expect_ast_assignment_support(
+        "dereferenced float compound", &assign, &dereference, &wide,
+        TOK_ADDEQ, 1) && ok;
+    ok = expect_ast_assignment_support(
+        "dereferenced float modulus rejection", &assign, &dereference, &real,
+        TOK_MODEQ, 0) && ok;
 
     expr_result_dead = saved_dead;
     if (!ok) {
@@ -1798,6 +1943,8 @@ static void verify_member_metadata_and_address(void)
     struct AstNode member;
     struct FieldDef *field;
     struct Sym *global;
+    struct Sym *unsafe_global;
+    struct Sym *callee;
     struct MirResolvedNamedAddress resolved;
     int sid = add_struct_def("verify_record_type");
     int ok = 1;
@@ -1892,6 +2039,113 @@ static void verify_member_metadata_and_address(void)
         ++failures;
     } else if (!mir_verify_and_dump()) {
         fprintf(stderr, "FAIL isolated global field value numbering\n");
+        ++failures;
+    }
+    clear_liveness();
+
+    callee = add_global("verify_field_barrier_call", TYPE_VOID, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 0;
+    setup(10, 6, 1);
+    mir.next_call_id = 1;
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].type = type_add_ptr(global->type);
+    strcpy(mir.insns[1].name, global->name);
+    mir.insns[2].opcode = MIR_MEMBER_ADDRESS;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    mir.insns[2].immediate = field->offset;
+    strcpy(mir.insns[2].name, field->name);
+    mir.insns[3].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 1;
+    mir.insns[3].memory_size = 2;
+    mir.insns[4].opcode = MIR_CALL;
+    mir.insns[4].dst = -1;
+    mir.insns[4].type = TYPE_VOID;
+    mir.insns[4].secondary_offset = 0;
+    strcpy(mir.insns[4].name, callee->name);
+    mir.insns[5].opcode = MIR_CONST;
+    mir.insns[5].dst = 3;
+    mir.insns[5].immediate = 7;
+    mir.insns[6].opcode = MIR_STORE_INDIRECT;
+    mir.insns[6].src1 = 1;
+    mir.insns[6].src2 = 3;
+    mir.insns[6].memory_size = 2;
+    mir.insns[7].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[7].dst = 4;
+    mir.insns[7].src1 = 1;
+    mir.insns[7].memory_size = 2;
+    mir.insns[8].opcode = MIR_BINARY;
+    mir.insns[8].dst = 5;
+    mir.insns[8].src1 = 2;
+    mir.insns[8].src2 = 4;
+    mir.insns[8].immediate = '+';
+    mir.insns[8].secondary_offset = TYPE_INT;
+    mir.insns[9].src1 = 5;
+    if (!mir_verify_and_dump() ||
+        mir_value_number_global_field_loads() != 0 ||
+        mir_global_field_value_numbering_count() != 0 ||
+        mir.insns[7].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[8].src1 != 2 || mir.insns[8].src2 != 4 ||
+        !mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL isolated global field store barrier\n");
+        ++failures;
+    }
+    clear_liveness();
+
+    unsafe_global = add_global(
+        "verify_record_call_unsafe", make_struct_type(sid), SC_GLOBAL);
+    unsafe_global->is_static = 1;
+    scan_global_write_info_for_source(
+        "int verify_scan_left(void) {\n"
+        "    verify_record_call_unsafe.value = 1;\n"
+        "    return 0;\n"
+        "}\n"
+        "int verify_scan_right(void) {\n"
+        "    verify_record_call_unsafe.value = 2;\n"
+        "    return 0;\n"
+        "}\n");
+    setup(8, 5, 1);
+    mir.next_call_id = 1;
+    mir.insns[1].opcode = MIR_ADDRESS;
+    mir.insns[1].type = type_add_ptr(unsafe_global->type);
+    strcpy(mir.insns[1].name, unsafe_global->name);
+    mir.insns[2].opcode = MIR_MEMBER_ADDRESS;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    mir.insns[2].immediate = field->offset;
+    strcpy(mir.insns[2].name, field->name);
+    mir.insns[3].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[3].dst = 2;
+    mir.insns[3].src1 = 1;
+    mir.insns[3].memory_size = 2;
+    mir.insns[4].opcode = MIR_CALL;
+    mir.insns[4].dst = -1;
+    mir.insns[4].type = TYPE_VOID;
+    mir.insns[4].secondary_offset = 0;
+    strcpy(mir.insns[4].name, callee->name);
+    mir.insns[5].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[5].dst = 3;
+    mir.insns[5].src1 = 1;
+    mir.insns[5].memory_size = 2;
+    mir.insns[6].opcode = MIR_BINARY;
+    mir.insns[6].dst = 4;
+    mir.insns[6].src1 = 2;
+    mir.insns[6].src2 = 3;
+    mir.insns[6].immediate = '+';
+    mir.insns[6].secondary_offset = TYPE_INT;
+    mir.insns[7].src1 = 4;
+    if (global_text_field_write_count(unsafe_global->name, field->name) != 2 ||
+        !mir_verify_and_dump() ||
+        mir_value_number_global_field_loads() != 0 ||
+        mir_global_field_value_numbering_count() != 0 ||
+        mir.insns[5].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[6].src1 != 2 || mir.insns[6].src2 != 3 ||
+        !mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL isolated global field unsafe-call barrier\n");
         ++failures;
     }
     clear_liveness();
@@ -2645,8 +2899,219 @@ static void verify_deferred_metadata_alias_bounds(void)
     mir_resolve_deferred_metadata();
     ok = ok && !strcmp(mir.insns[1].name, "outer");
     ok = ok && !strcmp(mir.insns[3].name, "outer");
+
+    setup(8, 2, 2);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "outer#b1#0");
+    mir.objects[0].type = TYPE_INT;
+    mir.insns[1].opcode = MIR_LOAD;
+    mir.insns[1].dst = 0;
+    strcpy(mir.insns[1].name, "outer");
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_LOAD;
+    mir.insns[3].dst = 1;
+    strcpy(mir.insns[3].name, "outer");
+    mir.insns[4].opcode = MIR_MEMBER_ADDRESS;
+    strcpy(mir.insns[4].name, "field");
+    strcpy(mir.insns[4].base_name, "outer");
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 1;
+    mir.insns[6].opcode = MIR_LOAD;
+    strcpy(mir.insns[6].name, "outer");
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 7;
+    mir.declaration_scope_labels[0] = 1;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "outer");
+    strcpy(mir.alias_internal_names[0], "outer#b1#0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[1].name, "outer");
+    ok = ok && !strcmp(mir.insns[3].name, "outer#b1#0");
+    ok = ok && mir.insns[3].object == 0;
+    ok = ok && !strcmp(mir.insns[4].name, "field");
+    ok = ok && !strcmp(mir.insns[4].base_name, "outer#b1#0");
+    ok = ok && !strcmp(mir.insns[6].name, "outer");
+
+    setup(7, 2, 2);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "outer#b1#0");
+    mir.objects[0].type = TYPE_INT;
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_LOAD;
+    mir.insns[3].dst = 1;
+    strcpy(mir.insns[3].name, "outer");
+    mir.insns[4].opcode = MIR_LOAD;
+    strcpy(mir.insns[4].name, "outer");
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 6;
+    mir.declaration_scope_labels[0] = 0;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "outer");
+    strcpy(mir.alias_internal_names[0], "outer#b1#0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[3].name, "outer");
+    ok = ok && !strcmp(mir.insns[4].name, "outer");
     if (!ok) {
         fprintf(stderr, "FAIL deferred metadata alias bounds\n");
+        ++failures;
+    }
+}
+
+static void verify_deferred_for_init_alias_window(void)
+{
+    int ok = 1;
+
+    setup(10, 4, 3);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "counter#1#0");
+    mir.objects[0].type = TYPE_INT;
+    mir.insns[1].opcode = MIR_LABEL;
+    mir.insns[1].label = 1;
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_BRANCH_FALSE;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].label = 1;
+    mir.insns[4].opcode = MIR_LOAD;
+    mir.insns[4].dst = 1;
+    strcpy(mir.insns[4].name, "counter");
+    mir.insns[5].opcode = MIR_BRANCH_FALSE;
+    mir.insns[5].src1 = 0;
+    mir.insns[5].label = 2;
+    mir.insns[6].opcode = MIR_LOAD;
+    mir.insns[6].dst = 2;
+    strcpy(mir.insns[6].name, "counter");
+    mir.insns[7].opcode = MIR_LABEL;
+    mir.insns[7].label = 2;
+    mir.insns[8].opcode = MIR_LOAD;
+    mir.insns[8].dst = 3;
+    strcpy(mir.insns[8].name, "counter");
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 9;
+    mir.declaration_scope_labels[0] = -1;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "counter");
+    strcpy(mir.alias_internal_names[0], "counter#1#0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[4].name, "counter#1#0");
+    ok = ok && mir.insns[4].object == 0;
+    ok = ok && !strcmp(mir.insns[6].name, "counter#1#0");
+    ok = ok && mir.insns[6].object == 0;
+    ok = ok && !strcmp(mir.insns[8].name, "counter");
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred for-init alias window\n");
+        ++failures;
+    }
+}
+
+static void verify_deferred_metadata_merge_demotion(void)
+{
+    struct Sym array;
+    int ok = 1;
+
+    setup(4, 3, 1);
+    memset(&array, 0, sizeof(array));
+    strcpy(array.name, "shadow_array");
+    array.type = TYPE_INT;
+    array.storage = SC_LOCAL;
+    array.offset = -4;
+    array.size = 4;
+    array.is_array = 1;
+    array.array_len = 2;
+    array.dim_count = 1;
+    array.dims[0] = 2;
+    array.elem_size = 2;
+    mir_note_declared_symbol(&array);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "live_shadow");
+    mir.objects[0].type = TYPE_LONG;
+    mir.objects[0].storage = SC_LOCAL;
+    mir.objects[0].offset = -8;
+    mir.insns[1].opcode = MIR_OBJECT_MERGE;
+    mir.insns[1].dst = 1;
+    mir.insns[1].type = TYPE_INT;
+    strcpy(mir.insns[1].name, array.name);
+    mir.insns[2].opcode = MIR_OBJECT_MERGE;
+    mir.insns[2].dst = 2;
+    mir.insns[2].type = TYPE_INT;
+    mir.insns[2].object = 0;
+    strcpy(mir.insns[2].name, "live_shadow");
+    mir.insns[3].src1 = 1;
+    mir_resolve_deferred_metadata();
+    ok = ok && mir.insns[1].opcode == MIR_ADDRESS;
+    ok = ok && mir.insns[1].type == type_add_ptr(TYPE_INT);
+    ok = ok && mir.insns[1].object == -1;
+    ok = ok && !strcmp(mir.insns[1].name, array.name);
+    ok = ok && mir.insns[2].opcode == MIR_OBJECT_MERGE;
+    ok = ok && mir.insns[2].type == TYPE_LONG;
+    ok = ok && mir.insns[2].object == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred metadata merge demotion\n");
+        ++failures;
+    }
+}
+
+static void verify_deferred_scoped_type_repair(void)
+{
+    struct Sym local;
+    int ok = 1;
+
+    setup(8, 5, 1);
+    memset(&local, 0, sizeof(local));
+    strcpy(local.name, "shadow");
+    local.type = TYPE_LONG;
+    local.storage = SC_LOCAL;
+    local.offset = -4;
+    local.size = 4;
+    mir_note_declared_symbol(&local);
+    mir.object_count = 1;
+    strcpy(mir.objects[0].name, "shadow#b1#0");
+    mir.objects[0].type = TYPE_LONG;
+    mir.objects[0].storage = SC_LOCAL;
+    mir.objects[0].offset = -4;
+    mir.insns[2].opcode = MIR_DECL_PLACEHOLDER;
+    mir.insns[3].opcode = MIR_LOAD;
+    mir.insns[3].dst = 1;
+    mir.insns[3].type = TYPE_INT;
+    strcpy(mir.insns[3].name, "shadow");
+    mir.insns[4].opcode = MIR_UNARY;
+    mir.insns[4].dst = 2;
+    mir.insns[4].src1 = 1;
+    mir.insns[4].type = TYPE_INT;
+    mir.insns[4].immediate = '+';
+    mir.insns[5].opcode = MIR_PHI;
+    mir.insns[5].dst = 3;
+    mir.insns[5].src1 = 1;
+    mir.insns[5].src2 = 1;
+    mir.insns[5].type = TYPE_INT;
+    mir.insns[6].opcode = MIR_UNARY;
+    mir.insns[6].dst = 4;
+    mir.insns[6].src1 = 1;
+    mir.insns[6].type = TYPE_INT;
+    mir.insns[6].immediate = '!';
+    mir.insns[7].src1 = 4;
+    mir.declaration_count = 1;
+    mir.declaration_placeholders[0] = 2;
+    mir.declaration_scope_ends[0] = 7;
+    mir.declaration_scope_labels[0] = -1;
+    mir.alias_count = 1;
+    strcpy(mir.alias_source_names[0], "shadow");
+    strcpy(mir.alias_internal_names[0], "shadow#b1#0");
+    mir.alias_declaration_indices[0] = 0;
+    mir_resolve_deferred_metadata();
+    ok = ok && !strcmp(mir.insns[3].name, "shadow#b1#0");
+    ok = ok && mir.insns[3].object == 0;
+    ok = ok && mir.insns[3].type == TYPE_LONG;
+    ok = ok && mir.insns[4].type == TYPE_LONG;
+    ok = ok && mir.insns[5].type == TYPE_LONG;
+    ok = ok && mir.insns[6].type == TYPE_INT;
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred scoped type repair\n");
         ++failures;
     }
 }
@@ -2836,6 +3301,118 @@ static void expect_spilled_candidate_transaction_rejection(
     clear_liveness();
 }
 
+static int try_spilled_scalar_cfg_with_report(
+    MirStream *stream,
+    char *report,
+    size_t report_size)
+{
+    FILE *capture;
+    int saved_stderr;
+    int result;
+    size_t bytes;
+
+    if (report == NULL || report_size < 2)
+        fatal("invalid spilled report capture buffer");
+    report[0] = '\0';
+    capture = tmpfile();
+    if (capture == NULL)
+        fatal("cannot allocate spilled report capture");
+    saved_stderr = mir_verify_dup(mir_verify_fileno(stderr));
+    if (saved_stderr < 0) {
+        fclose(capture);
+        fatal("cannot duplicate stderr for spilled report capture");
+    }
+    fflush(stderr);
+    if (mir_verify_dup2(mir_verify_fileno(capture),
+                        mir_verify_fileno(stderr)) < 0) {
+        mir_verify_close(saved_stderr);
+        fclose(capture);
+        fatal("cannot redirect stderr for spilled report capture");
+    }
+    set_test_environment("DCC_MIR_SELECT_REPORT", "1");
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(stream);
+    clear_test_environment("DCC_MIR_SELECT_REPORT");
+    fflush(stderr);
+    if (mir_verify_dup2(saved_stderr, mir_verify_fileno(stderr)) < 0)
+        fatal("cannot restore stderr after spilled report capture");
+    mir_verify_close(saved_stderr);
+    if (fseek(capture, 0, SEEK_SET) != 0) {
+        fclose(capture);
+        fatal("cannot rewind spilled report capture");
+    }
+    bytes = fread(report, 1, report_size - 1, capture);
+    report[bytes] = '\0';
+    fclose(capture);
+    return result;
+}
+
+static int spilled_report_mentions_reason(
+    const char *report,
+    const char *reason)
+{
+    char expected[128];
+
+    snprintf(expected, sizeof(expected), "reason=%s", reason);
+    return strstr(report, expected) != NULL;
+}
+
+static int try_homed_scalar_cfg_with_report(
+    MirStream *stream,
+    char *report,
+    size_t report_size)
+{
+    FILE *capture;
+    int saved_stderr;
+    int result;
+    size_t bytes;
+
+    if (report == NULL || report_size < 2)
+        fatal("invalid homed report capture buffer");
+    report[0] = '\0';
+    capture = tmpfile();
+    if (capture == NULL)
+        fatal("cannot allocate homed report capture");
+    saved_stderr = mir_verify_dup(mir_verify_fileno(stderr));
+    if (saved_stderr < 0) {
+        fclose(capture);
+        fatal("cannot duplicate stderr for homed report capture");
+    }
+    fflush(stderr);
+    if (mir_verify_dup2(mir_verify_fileno(capture),
+                        mir_verify_fileno(stderr)) < 0) {
+        mir_verify_close(saved_stderr);
+        fclose(capture);
+        fatal("cannot redirect stderr for homed report capture");
+    }
+    set_test_environment("DCC_MIR_HOMED_REPORT", "1");
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(stream);
+    clear_test_environment("DCC_MIR_HOMED_REPORT");
+    fflush(stderr);
+    if (mir_verify_dup2(saved_stderr, mir_verify_fileno(stderr)) < 0)
+        fatal("cannot restore stderr after homed report capture");
+    mir_verify_close(saved_stderr);
+    if (fseek(capture, 0, SEEK_SET) != 0) {
+        fclose(capture);
+        fatal("cannot rewind homed report capture");
+    }
+    bytes = fread(report, 1, report_size - 1, capture);
+    report[bytes] = '\0';
+    fclose(capture);
+    return result;
+}
+
+static int homed_report_mentions_reason(
+    const char *report,
+    const char *reason)
+{
+    char expected[128];
+
+    snprintf(expected, sizeof(expected), "reject=%s", reason);
+    return strstr(report, expected) != NULL;
+}
+
 static void verify_homed_parameter_preflight_transaction(void)
 {
     MirStream *control;
@@ -2941,6 +3518,149 @@ static void verify_homed_parameter_preflight_transaction(void)
     }
     if (!ok) {
         fprintf(stderr, "FAIL homed parameter preflight transaction\n");
+        ++failures;
+    }
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_parameter_exact_rejections(void)
+{
+    struct ParameterMutation {
+        const char *name;
+        const char *reason;
+        int storage;
+        int type;
+    };
+    static const struct ParameterMutation mutations[] = {
+        { "object storage", "parameter-object", SC_LOCAL, TYPE_INT },
+        { "void object type", "parameter-type", SC_PARAM, TYPE_VOID }
+    };
+    struct MirInsn control_insns[5];
+    struct MirObject control_object;
+    MirStream *control;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int saved_color;
+    int saved_spill;
+    int saved_spill_count;
+    size_t mutation;
+    int result;
+    int ok = 1;
+
+    setup(5, 1, 2);
+    mir.return_type = TYPE_INT;
+    mir.object_count = 1;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    mir.objects[0].storage = SC_PARAM;
+    mir.objects[0].type = TYPE_INT;
+    mir.objects[0].offset = 4;
+    strcpy(mir.objects[0].name, "verify_homed_parameter_exact");
+    mir.insns[1].opcode = MIR_PARAM;
+    mir.insns[1].object = 0;
+    strcpy(mir.insns[1].name, mir.objects[0].name);
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].dst = -1;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].dst = -1;
+    mir.insns[3].label = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed parameter exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    if (control == NULL) {
+        fprintf(stderr, "FAIL homed parameter exact stream allocation\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    saved_color = mir.allocation_colors[0];
+    saved_spill = mir.allocation_spills[0];
+    saved_spill_count = mir.allocation_spill_count;
+    memcpy(control_insns, mir.insns, sizeof(control_insns));
+    control_object = mir.objects[0];
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    for (mutation = 0;
+         mutation < sizeof(mutations) / sizeof(mutations[0]);
+         ++mutation) {
+        MirStream *retry = mir_stream_open();
+        long prefix_end;
+        int mutation_ok = 1;
+
+        if (retry == NULL) {
+            ok = 0;
+            break;
+        }
+        mir_stream_puts("; preserved prefix\n", retry);
+        prefix_end = mir_stream_tell(retry);
+        label_id = first_label;
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        mir.objects[0] = control_object;
+        mir.allocation_colors[0] = saved_color;
+        mir.allocation_spills[0] = saved_spill;
+        mir.allocation_spill_count = saved_spill_count;
+        mir.objects[0].storage = mutations[mutation].storage;
+        mir.objects[0].type = mutations[mutation].type;
+        mir_invalidate_use_cache();
+        result = try_homed_scalar_cfg_with_report(
+            retry, report, sizeof(report));
+        mutation_ok = mutation_ok && result == 0;
+        mutation_ok = mutation_ok &&
+            mir_stream_tell(retry) == prefix_end &&
+            mir_stream_size(retry) == prefix_end;
+        mutation_ok = mutation_ok && label_id == first_label;
+        mutation_ok =
+            mutation_ok && mir.allocation_colors[0] == saved_color;
+        mutation_ok =
+            mutation_ok && mir.allocation_spills[0] == saved_spill;
+        mutation_ok =
+            mutation_ok && mir.allocation_spill_count == saved_spill_count;
+        mutation_ok = mutation_ok &&
+            homed_report_mentions_reason(
+                report, mutations[mutation].reason);
+
+        memcpy(mir.insns, control_insns, sizeof(control_insns));
+        mir.objects[0] = control_object;
+        mir.allocation_colors[0] = saved_color;
+        mir.allocation_spills[0] = saved_spill;
+        mir.allocation_spill_count = saved_spill_count;
+        mir_invalidate_use_cache();
+        mir_extrn_begin_attempt();
+        result = mir_try_emit_homed_scalar_cfg(retry);
+        mutation_ok = mutation_ok && result == 1;
+        mutation_ok = mutation_ok &&
+            mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+        retry_bytes = mir_stream_read(
+            retry_text, 1, sizeof(retry_text), retry);
+        mutation_ok = mutation_ok && retry_bytes < sizeof(retry_text);
+        mutation_ok = mutation_ok && control_bytes == retry_bytes;
+        mutation_ok = mutation_ok &&
+            memcmp(control_text, retry_text, control_bytes) == 0;
+        if (!mutation_ok)
+            fprintf(stderr,
+                    "FAIL homed parameter exact %s rejection\n",
+                    mutations[mutation].name);
+        ok = ok && mutation_ok;
+        mir_stream_close(retry);
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL homed parameter exact rejections\n");
         ++failures;
     }
     mir_stream_close(control);
@@ -3754,6 +4474,168 @@ static void verify_homed_memory_preflight_transaction(void)
     clear_liveness();
 }
 
+static void verify_homed_indirect_load_exact_rejection(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    int ok = 1;
+
+    setup(4, 2, 1);
+    mir.insns[1].type = TYPE_VOID | TYPE_PTR;
+    mir.insns[1].immediate = 4096;
+    mir.insns[2].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT;
+    mir.insns[2].memory_size = 2;
+    mir.insns[3].src1 = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed indirect load exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL homed indirect load exact stream allocation\n");
+        ++failures;
+        mir_stream_close(retry);
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir_stream_puts("; preserved prefix\n", retry);
+    mir.insns[2].memory_size = 3;
+    mir_invalidate_use_cache();
+    label_id = first_label;
+    result = try_homed_scalar_cfg_with_report(retry, report, sizeof(report));
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == (long)strlen("; preserved prefix\n");
+    ok = ok && mir_stream_size(retry) == (long)strlen("; preserved prefix\n");
+    ok = ok && label_id == first_label;
+    ok = ok && homed_report_mentions_reason(report, "indirect-load-type");
+
+    mir.insns[2].memory_size = 2;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(retry);
+    ok = ok && result == 1;
+    ok = ok && mir_stream_seek(
+        retry, (long)strlen("; preserved prefix\n"), SEEK_SET) == 0;
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL homed indirect load exact rejection\n");
+        ++failures;
+    }
+    mir_stream_close(retry);
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_homed_aggregate_copy_exact_rejection(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    int ok = 1;
+
+    setup(5, 2, 1);
+    mir.return_type = TYPE_VOID | TYPE_PTR;
+    mir.insns[1].type = TYPE_VOID | TYPE_PTR;
+    mir.insns[1].immediate = 4096;
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[2].type = TYPE_VOID | TYPE_PTR;
+    mir.insns[2].immediate = 8192;
+    mir.insns[3].opcode = MIR_COPY_AGGREGATE;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].src2 = 1;
+    mir.insns[3].memory_size = 4;
+    mir.insns[4].src1 = 0;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL homed aggregate copy exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL homed aggregate copy exact stream allocation\n");
+        ++failures;
+        mir_stream_close(retry);
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0;
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir_stream_puts("; preserved prefix\n", retry);
+    mir.insns[3].memory_size = 0;
+    mir_invalidate_use_cache();
+    label_id = first_label;
+    result = try_homed_scalar_cfg_with_report(retry, report, sizeof(report));
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == (long)strlen("; preserved prefix\n");
+    ok = ok && mir_stream_size(retry) == (long)strlen("; preserved prefix\n");
+    ok = ok && label_id == first_label;
+    ok = ok && homed_report_mentions_reason(report, "aggregate-copy-size");
+
+    mir.insns[3].memory_size = 4;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_homed_scalar_cfg(retry);
+    ok = ok && result == 1;
+    ok = ok && mir_stream_seek(
+        retry, (long)strlen("; preserved prefix\n"), SEEK_SET) == 0;
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL homed aggregate copy exact rejection\n");
+        ++failures;
+    }
+    mir_stream_close(retry);
+    mir_stream_close(control);
+    clear_liveness();
+}
+
 static void verify_homed_phi_preflight_transaction(void)
 {
     static const char *mutations[] = {
@@ -4384,6 +5266,258 @@ static void verify_spilled_preflight_rejection(void)
     mir.insns[1].opcode = MIR_VA_ARG;
     mir.insns[1].secondary_offset = 3;
     expect_spilled_candidate("va_arg width rejection", 0);
+}
+
+static void verify_spilled_indirect_width_exact_rejection(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    long prefix_end;
+    int ok = 1;
+
+    setup(4, 2, 1);
+    mir.insns[1].type = TYPE_VOID | TYPE_PTR;
+    mir.insns[1].immediate = 4096;
+    mir.insns[2].opcode = MIR_LOAD_INDIRECT;
+    mir.insns[2].dst = 1;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = TYPE_INT;
+    mir.insns[2].memory_size = 2;
+    mir.insns[3].src1 = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr,
+                "FAIL spilled indirect width exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL spilled indirect width exact stream allocation\n");
+        ++failures;
+        mir_stream_close(retry);
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0 &&
+         !mir_spilled_cfg_uses_exact_semantic_kernel();
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir_stream_puts("; preserved prefix\n", retry);
+    prefix_end = mir_stream_tell(retry);
+    mir.insns[2].memory_size = 3;
+    mir_invalidate_use_cache();
+    label_id = first_label;
+    result = try_spilled_scalar_cfg_with_report(retry, report, sizeof(report));
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == prefix_end;
+    ok = ok && mir_stream_size(retry) == prefix_end;
+    ok = ok && label_id == first_label;
+    ok = ok && mir_spilled_cfg_emitted_frame_bytes() == 0;
+    ok = ok && spilled_report_mentions_reason(report, "indirect-width");
+
+    mir.insns[2].memory_size = 2;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 1;
+    ok = ok && mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL spilled indirect width exact rejection\n");
+        ++failures;
+    }
+    mir_stream_close(retry);
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_spilled_call_abi_exact_rejection(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    long prefix_end;
+    int ok = 1;
+
+    setup(3, 0, 1);
+    mir.return_type = TYPE_VOID;
+    mir.next_call_id = 1;
+    mir.insns[1].opcode = MIR_CALL;
+    mir.insns[1].dst = -1;
+    mir.insns[1].type = TYPE_VOID;
+    mir.insns[1].secondary_offset = 0;
+    strcpy(mir.insns[1].name, "verify_spilled_call_abi");
+    mir.insns[2].src1 = -1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL spilled call ABI exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL spilled call ABI exact stream allocation\n");
+        ++failures;
+        mir_stream_close(retry);
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0 &&
+         !mir_spilled_cfg_uses_exact_semantic_kernel();
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir_stream_puts("; preserved prefix\n", retry);
+    prefix_end = mir_stream_tell(retry);
+    mir.insns[1].name[0] = '\0';
+    mir_invalidate_use_cache();
+    label_id = first_label;
+    result = try_spilled_scalar_cfg_with_report(retry, report, sizeof(report));
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == prefix_end;
+    ok = ok && mir_stream_size(retry) == prefix_end;
+    ok = ok && label_id == first_label;
+    ok = ok && mir_spilled_cfg_emitted_frame_bytes() == 0;
+    ok = ok && spilled_report_mentions_reason(report, "call-abi");
+
+    strcpy(mir.insns[1].name, "verify_spilled_call_abi");
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 1;
+    ok = ok && mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL spilled call ABI exact rejection\n");
+        ++failures;
+    }
+    mir_stream_close(retry);
+    mir_stream_close(control);
+    clear_liveness();
+}
+
+static void verify_spilled_aggregate_call_abi_exact_rejection(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    int sid;
+    long prefix_end;
+    int ok = 1;
+
+    sid = add_struct_def("verify_spilled_aggregate_result_abi");
+    struct_defs[sid - 1].size = 2;
+    setup(3, 1, 1);
+    mir.local_bytes = 2;
+    mir.next_call_id = 1;
+    mir.insns[1].opcode = MIR_CALL_AGGREGATE;
+    mir.insns[1].type = type_add_ptr(make_struct_type(sid));
+    mir.insns[1].immediate = -2;
+    mir.insns[1].memory_size = 2;
+    mir.insns[1].secondary_offset = 0;
+    strcpy(mir.insns[1].name, "verify_spilled_aggregate_call_abi");
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr,
+                "FAIL spilled aggregate call ABI exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr,
+                "FAIL spilled aggregate call ABI exact stream allocation\n");
+        ++failures;
+        mir_stream_close(retry);
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0 &&
+         !mir_spilled_cfg_uses_exact_semantic_kernel();
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir_stream_puts("; preserved prefix\n", retry);
+    prefix_end = mir_stream_tell(retry);
+    mir.insns[1].memory_size = 0;
+    mir_invalidate_use_cache();
+    label_id = first_label;
+    result = try_spilled_scalar_cfg_with_report(retry, report, sizeof(report));
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == prefix_end;
+    ok = ok && mir_stream_size(retry) == prefix_end;
+    ok = ok && label_id == first_label;
+    ok = ok && mir_spilled_cfg_emitted_frame_bytes() == 0;
+    ok = ok && spilled_report_mentions_reason(report, "aggregate-call-abi");
+
+    mir.insns[1].memory_size = 2;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 1;
+    ok = ok && mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL spilled aggregate call ABI exact rejection\n");
+        ++failures;
+    }
+    mir_stream_close(retry);
+    mir_stream_close(control);
+    clear_liveness();
 }
 
 static void verify_spilled_value_operand_preflight_transaction(void)
@@ -5803,6 +6937,85 @@ static void verify_spilled_vla_size_preflight_transaction(void)
     clear_liveness();
 }
 
+static void verify_spilled_frame_offset_exact_rejection(void)
+{
+    MirStream *control;
+    MirStream *retry;
+    char control_text[2048];
+    char retry_text[2048];
+    char report[256];
+    size_t control_bytes;
+    size_t retry_bytes;
+    int first_label;
+    int result;
+    long prefix_end;
+    int ok = 1;
+
+    setup(4, 2, 1);
+    mir.local_bytes = 2;
+    mir.insns[2].opcode = MIR_VLA_SIZE;
+    mir.insns[2].dst = 1;
+    mir.insns[2].immediate = -2;
+    mir.insns[3].src1 = 1;
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL spilled frame-offset exact verification control\n");
+        ++failures;
+        clear_liveness();
+        return;
+    }
+    control = mir_stream_open();
+    retry = mir_stream_open();
+    if (control == NULL || retry == NULL) {
+        fprintf(stderr, "FAIL spilled frame-offset exact stream allocation\n");
+        ++failures;
+        mir_stream_close(retry);
+        mir_stream_close(control);
+        clear_liveness();
+        return;
+    }
+    first_label = label_id;
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(control);
+    ok = ok && result == 1 && mir_stream_size(control) > 0 &&
+         !mir_spilled_cfg_uses_exact_semantic_kernel();
+    mir_stream_rewind(control);
+    control_bytes = mir_stream_read(
+        control_text, 1, sizeof(control_text), control);
+    ok = ok && control_bytes < sizeof(control_text);
+
+    mir_stream_puts("; preserved prefix\n", retry);
+    prefix_end = mir_stream_tell(retry);
+    mir.insns[2].immediate = 127;
+    mir_invalidate_use_cache();
+    label_id = first_label;
+    result = try_spilled_scalar_cfg_with_report(retry, report, sizeof(report));
+    ok = ok && result == 0;
+    ok = ok && mir_stream_tell(retry) == prefix_end;
+    ok = ok && mir_stream_size(retry) == prefix_end;
+    ok = ok && label_id == first_label;
+    ok = ok && mir_spilled_cfg_emitted_frame_bytes() == 0;
+    ok = ok && spilled_report_mentions_reason(report, "frame-offset");
+
+    mir.insns[2].immediate = -2;
+    mir_invalidate_use_cache();
+    mir_extrn_begin_attempt();
+    result = mir_try_emit_spilled_scalar_cfg(retry);
+    ok = ok && result == 1;
+    ok = ok && mir_stream_seek(retry, prefix_end, SEEK_SET) == 0;
+    retry_bytes = mir_stream_read(
+        retry_text, 1, sizeof(retry_text), retry);
+    ok = ok && retry_bytes < sizeof(retry_text);
+    ok = ok && control_bytes == retry_bytes;
+    ok = ok && memcmp(control_text, retry_text, control_bytes) == 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL spilled frame-offset exact rejection\n");
+        ++failures;
+    }
+    mir_stream_close(retry);
+    mir_stream_close(control);
+    clear_liveness();
+}
+
 static void verify_immediate_phi_return_forwarding(void)
 {
     setup(11, 4, 4);
@@ -6174,6 +7387,67 @@ static void verify_diamond_mutations(void)
     printf("MIR diamond mutations=%d\n", mutation_count);
 }
 
+/* Reproduces a real fatal DCC_MIR_CACHE_VERIFY=1 divergence found compiling
+ * a genuinely empty void helper (tests/mir-clobber/cmpw4.c's
+ * cmpw45_extra_helper) immediately after a normal-sized function.
+ * mir_use_cache_count_capacity/mir_use_cache_arg_head_capacity are
+ * high-water marks that never shrink between functions, and
+ * mir_definition/mir_value_use_count/mir_call_uses_value all bounds-check
+ * against those capacities rather than the current function's own
+ * next_value/next_call_id. The reset loop in mir_ensure_use_cache used to
+ * clear only up to the CURRENT function's smaller next_value/next_call_id,
+ * leaving high indices holding a previous, unrelated function's cached
+ * def-index/arg-head answers. A later trivial function with next_value==0
+ * (or fewer calls than its predecessor) could then read stale, wrong data
+ * for an index it never legitimately used. The fix clears the full
+ * allocated capacity every time. This control proves the fix directly: a
+ * normal function establishes cache capacity with value 0 defined at
+ * instruction 1, then an immediately-following zero-value function must not
+ * see that stale definition when queried for its own (nonexistent) value 0. */
+static void verify_use_cache_capacity_reset_across_functions(void)
+{
+    int large_ok;
+    int trivial_ok;
+
+    /* A normal function: setup()'s own fixed shape defines value 0 at
+     * instruction 1 (a MIR_CONST), establishing cache capacity >= 2. */
+    setup(3, 2, 1);
+    large_ok = mir_verify_and_dump();
+    large_ok = large_ok && mir_definition(0) == &mir.insns[1];
+
+    /* An immediately-following, genuinely empty function: one label, zero
+     * values, matching cmpw45_extra_helper's real reported MIR shape
+     * ("insns=1 values=0"). Built directly rather than through setup(),
+     * which assumes at least a MIR_CONST/MIR_RETURN pair. */
+    mir_begin_function("verify_test", "_verify_test", EMIT_SINK_FINAL, 0, 0, 0);
+    mir.count = 1;
+    mir.next_value = 0;
+    mir.next_label = 1;
+    memset(&mir.insns[0], 0, sizeof(mir.insns[0]));
+    mir.insns[0].opcode = MIR_LABEL;
+    mir.insns[0].label = 0;
+    mir.insns[0].src1 = -1;
+    mir.insns[0].src2 = -1;
+    mir.insns[0].dst = -1;
+    mir.insns[0].object = -1;
+    mir.insns[0].phi_pred1 = -1;
+    mir.insns[0].phi_pred2 = -1;
+    mir.insns[0].type = TYPE_INT;
+    trivial_ok = mir_verify_and_dump();
+    /* Value 0 does not exist in this function at all (next_value == 0);
+     * the fixed cache must report no definition, not the previous
+     * function's stale instruction-1 pointer. */
+    trivial_ok = trivial_ok && mir_definition(0) == NULL;
+    trivial_ok = trivial_ok && mir_value_use_count(0) == 0;
+
+    if (!large_ok || !trivial_ok) {
+        fprintf(stderr,
+                "FAIL use-cache capacity reset across shrinking functions\n");
+        ++failures;
+    }
+    clear_liveness();
+}
+
 static void verify_conditional_callable_prototypes(void)
 {
     struct Sym left;
@@ -6460,6 +7734,7 @@ int main(void)
     }
     verify_diamond_mutations();
     verify_ast_binary_folds();
+    verify_use_cache_capacity_reset_across_functions();
     verify_conditional_callable_prototypes();
     verify_ast_assignment_support();
     verify_call_lowering_preflight();
@@ -6480,21 +7755,30 @@ int main(void)
     verify_deferred_binary_conversion();
     verify_deferred_metadata_coordinates();
     verify_deferred_metadata_alias_bounds();
+    verify_deferred_for_init_alias_window();
+    verify_deferred_metadata_merge_demotion();
+    verify_deferred_scoped_type_repair();
     verify_deferred_metadata_call_ordering();
     verify_five_call_arguments();
     verify_spilled_feature_defaults();
     verify_homed_parameter_preflight_transaction();
+    verify_homed_parameter_exact_rejections();
     verify_homed_value_operand_preflight_transaction();
     verify_homed_branch_target_preflight_transaction();
     verify_homed_dimension_preflight_transaction();
     verify_homed_noncall_preflight_transaction();
     verify_homed_noncall_dominance_transaction();
     verify_homed_memory_preflight_transaction();
+    verify_homed_indirect_load_exact_rejection();
+    verify_homed_aggregate_copy_exact_rejection();
     verify_homed_phi_preflight_transaction();
     verify_homed_call_preflight_transaction();
     verify_homed_call_dominance_preflight_transaction();
     verify_homed_unused_value_operands();
     verify_spilled_preflight_rejection();
+    verify_spilled_indirect_width_exact_rejection();
+    verify_spilled_call_abi_exact_rejection();
+    verify_spilled_aggregate_call_abi_exact_rejection();
     verify_spilled_value_operand_preflight_transaction();
     verify_spilled_unused_value_operands();
     verify_va_arg_offset_preflight();
@@ -6508,6 +7792,7 @@ int main(void)
     verify_spilled_widened_call_argument_preflight();
     verify_spilled_aggregate_call_preflight();
     verify_spilled_vla_size_preflight_transaction();
+    verify_spilled_frame_offset_exact_rejection();
     verify_immediate_phi_return_forwarding();
     verify_common_expression_elimination();
     verify_scalar_dag_emission();

@@ -1,6 +1,22 @@
 #include <stdio.h>
 
-int fails = 0;
+#ifdef CMPW45_VOLATILE_FAILURES
+#define CMPW45_FAILURE_QUAL volatile
+#else
+#define CMPW45_FAILURE_QUAL
+#endif
+
+#ifdef CMPW45_FIXED_SUCCESS_PRINT
+static int cmpw45_print_success(const char *text)
+{
+    return printf("%s", text);
+}
+#define CMPW45_PRINT_SUCCESS(text) cmpw45_print_success(text)
+#else
+#define CMPW45_PRINT_SUCCESS(text) printf(text)
+#endif
+
+CMPW45_FAILURE_QUAL int fails = 0;
 
 static unsigned int oracle_hash = 21613U;
 static int oracle_calls;
@@ -71,6 +87,12 @@ static int apply_global_compound_param(int rhs)
     global_lhs += rhs;
     return global_lhs;
 }
+
+#ifdef CMPW45_EXTRA_HELPER_CALL
+static void cmpw45_extra_helper(void)
+{
+}
+#endif
 
 static int apply_local_compound_repeated_param(int rhs)
 {
@@ -246,6 +268,30 @@ int main(void)
 
     check_global_compound_assign();
 
+#ifdef CMPW45_EXTRA_HELPER_CALL
+    cmpw45_extra_helper();
+#endif
+
+#ifdef CMPW45_CFG_GUARD
+    {
+        volatile int guard = 0;
+
+        if (guard)
+            ++fails;
+    }
+#endif
+
+#ifdef CMPW45_VLA_GUARD
+    {
+        int width = oracle_calls == 0 ? 1 : 1;
+        int guard[width];
+
+        guard[0] = 0;
+        if (guard[0])
+            ++fails;
+    }
+#endif
+
     carr[0] = 7; chk("carr0", (int)carr[0], 7);
 
     a = b = 9; chk("a=b=9 a", a, 9); chk("a=b=9 b", b, 9);
@@ -257,6 +303,6 @@ int main(void)
     b = 0; p = &b; a = (*p = 3) + 4;   chk("(*p=3)+4", a, 7);     chk("(*p=3) b", b, 3);
 
     if (fails) return 1;
-    printf("compound wave4 completed\n");
+    CMPW45_PRINT_SUCCESS("compound wave4 completed\n");
     return 0;
 }

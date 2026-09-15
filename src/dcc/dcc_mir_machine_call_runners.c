@@ -6932,10 +6932,68 @@ static int mir_match_allocator_coalesce_common(
 static int mir_match_allocator_bridge_schedule(
     struct MirAllocatorCoalesceSchedule *plan)
 {
+    static const int expected_types[104] = {
+        0, 34, 34, 19, 49, 49, 49, 34, 34, 19, 49, 49,
+        49, 34, 34, 19, 49, 49, 49, 49, 2, 2, 0, 0,
+        0, 0, 0, 49, 2, 2, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 49,
+        2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 17, 17, 3, 0, 49, 19, 19, 3, 49,
+        19, 19, 3, 49, 19, 19, 3, 34, 34, 19, 49, 49,
+        49, 49, 49, 2, 0, 17, 17, 3, 0, 49, 49, 34,
+        34, 2, 2, 3, 49, 19, 19, 3
+    };
+    static const int typed_instructions[] = {
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        16, 17, 18, 19, 20, 21, 24, 27, 28, 29, 32, 35, 37,
+        41, 44, 47, 48, 49, 52, 55, 57, 61, 63, 64, 65, 67,
+        68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80,
+        81, 82, 83, 84, 85, 86, 87, 89, 90, 91, 93, 94, 95,
+        96, 97, 98, 99, 100, 101, 102, 103
+    };
+    static const int memory_contracts[][3] = {
+        {5, 0, 512}, {6, 2, 0}, {11, 0, 512}, {12, 2, 0},
+        {17, 0, 512}, {18, 2, 0}, {19, 0, 0}, {27, 0, 0},
+        {47, 0, 0}, {67, 0, 0}, {71, 0, 0}, {75, 0, 0},
+        {83, 0, 512}, {84, 2, 0}, {85, 0, 0}, {86, 0, 0},
+        {93, 0, 0}, {100, 0, 0}
+    };
+    static const int value_relations[][3] = {
+        {2, 1, 1}, {5, 1, 3}, {6, 1, 5}, {8, 1, 7},
+        {11, 1, 9}, {12, 1, 11}, {14, 1, 13}, {17, 1, 15},
+        {18, 1, 17}, {21, 1, 19}, {21, 2, 20}, {22, 1, 21},
+        {29, 1, 27}, {29, 2, 28}, {30, 1, 29}, {37, 1, 32},
+        {37, 2, 35}, {41, 1, 24}, {41, 2, 37}, {42, 1, 41},
+        {49, 1, 47}, {49, 2, 48}, {50, 1, 49}, {57, 1, 52},
+        {57, 2, 55}, {61, 1, 44}, {61, 2, 57}, {62, 1, 61},
+        {64, 1, 63}, {69, 1, 67}, {73, 1, 71}, {77, 1, 75},
+        {80, 1, 79}, {83, 1, 81}, {84, 1, 83}, {87, 1, 85},
+        {87, 2, 86}, {88, 1, 87}, {90, 1, 89}, {94, 1, 93},
+        {96, 1, 95}, {98, 1, 97}, {102, 1, 100}
+    };
+    static const int operators[][2] = {
+        {5, 0}, {11, 0}, {17, 0}, {21, TOK_EQ},
+        {29, TOK_EQ}, {49, TOK_EQ}, {83, 0}, {87, TOK_NE}
+    };
+    static const int label_instructions[] = {
+        0, 23, 26, 31, 34, 36, 38, 40, 43,
+        46, 51, 54, 56, 58, 60, 66, 92
+    };
+    static const int edges[][2] = {
+        {22, 26}, {25, 40}, {30, 34}, {33, 36},
+        {39, 40}, {42, 46}, {45, 60}, {50, 54},
+        {53, 56}, {59, 60}, {62, 66}, {88, 92}
+    };
+    static const int phi_predecessors[][3] = {
+        {37, 31, 34}, {41, 23, 38},
+        {57, 51, 54}, {61, 43, 58}
+    };
     static const int free_calls[4] = {70, 74, 78, 103};
     static const int free_values[4] = {67, 71, 75, 100};
     int arguments[3];
     int argument;
+    int instruction;
+    int other;
     long value;
     long merged_value;
     long fill_value;
@@ -6944,6 +7002,121 @@ static int mir_match_allocator_bridge_schedule(
     if (!mir_match_allocator_coalesce_common(
             plan, MIR_ALLOCATOR_BRIDGE))
         return 0;
+    if (mir.aggregate_temp_bytes != 0 ||
+        mir.has_runtime_stride_param || mir.is_variadic_function ||
+        mir.object_count != 0)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "bridge-shape");
+    for (item = 0;
+         item < (int)(sizeof(typed_instructions) /
+                      sizeof(typed_instructions[0]));
+         ++item) {
+        instruction = typed_instructions[item];
+        if (mir.insns[instruction].type !=
+                expected_types[instruction])
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "bridge-types");
+    }
+    for (item = 0;
+         item < (int)(sizeof(memory_contracts) /
+                      sizeof(memory_contracts[0]));
+         ++item) {
+        const struct MirInsn *insn =
+            &mir.insns[memory_contracts[item][0]];
+
+        if (insn->memory_size != memory_contracts[item][1] ||
+            insn->memory_flags != memory_contracts[item][2] ||
+            insn->bit_width != 0 || insn->bit_shift != 0 ||
+            insn->bit_mask != 0)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "bridge-memory");
+    }
+    for (item = 0;
+         item < (int)(sizeof(value_relations) /
+                      sizeof(value_relations[0]));
+         ++item) {
+        const struct MirInsn *insn =
+            &mir.insns[value_relations[item][0]];
+        int actual = value_relations[item][1] == 1
+            ? insn->src1 : insn->src2;
+
+        if (actual != mir.insns[value_relations[item][2]].dst)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "bridge-values");
+    }
+    for (item = 0;
+         item < (int)(sizeof(operators) / sizeof(operators[0]));
+         ++item)
+        if (mir.insns[operators[item][0]].immediate !=
+                operators[item][1])
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "bridge-operators");
+    for (item = 0;
+         item < (int)(sizeof(label_instructions) /
+                      sizeof(label_instructions[0]));
+         ++item) {
+        int label = mir.insns[label_instructions[item]].label;
+
+        if (label < 0)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule",
+                "bridge-control-flow");
+        for (other = item + 1;
+             other < (int)(sizeof(label_instructions) /
+                           sizeof(label_instructions[0]));
+             ++other)
+            if (label ==
+                    mir.insns[label_instructions[other]].label)
+                return mir_machine_reject(
+                    "allocator-coalesce-schedule",
+                    "bridge-control-flow");
+    }
+    for (item = 0;
+         item < (int)(sizeof(edges) / sizeof(edges[0]));
+         ++item)
+        if (mir.insns[edges[item][0]].label !=
+                mir.insns[edges[item][1]].label)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule",
+                "bridge-control-flow");
+    for (item = 0;
+         item < (int)(sizeof(phi_predecessors) /
+                      sizeof(phi_predecessors[0]));
+         ++item) {
+        const struct MirInsn *phi =
+            &mir.insns[phi_predecessors[item][0]];
+
+        if (phi->phi_pred1 !=
+                mir.insns[phi_predecessors[item][1]].label ||
+            phi->phi_pred2 !=
+                mir.insns[phi_predecessors[item][2]].label)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule",
+                "bridge-control-flow");
+    }
+    if (!mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[12]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[18]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[84]) ||
+        !strcmp(mir.insns[6].name, mir.insns[12].name) ||
+        !strcmp(mir.insns[6].name, mir.insns[18].name) ||
+        !strcmp(mir.insns[6].name, mir.insns[84].name) ||
+        !strcmp(mir.insns[12].name, mir.insns[18].name) ||
+        !strcmp(mir.insns[12].name, mir.insns[84].name) ||
+        !strcmp(mir.insns[18].name, mir.insns[84].name))
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "bridge-locals");
+    if (plan->allocate_function->is_fastcall ||
+        plan->failure_function->is_fastcall ||
+        plan->allocate_function->type !=
+            (TYPE_VOID | TYPE_PTR) ||
+        plan->allocate_function->proto_types[0] !=
+            (TYPE_INT | TYPE_UNSIGNED) ||
+        plan->failure_function->type != TYPE_VOID ||
+        plan->failure_function->proto_types[0] !=
+            (TYPE_CHAR | TYPE_PTR))
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "bridge-abi");
     for (item = 0; item < 4; ++item) {
         struct Sym *function = mir_memory_runner_call_function(
             free_calls[item], 0, 1);
@@ -7013,6 +7186,19 @@ static int mir_match_allocator_bridge_schedule(
         fill_value < -32768 || fill_value > 65535)
         return mir_machine_reject(
             "allocator-coalesce-schedule", "bridge-fill");
+    if (plan->free_function->is_fastcall ||
+        plan->fill_function->is_fastcall ||
+        plan->free_function->type != TYPE_VOID ||
+        plan->free_function->proto_types[0] !=
+            (TYPE_VOID | TYPE_PTR) ||
+        plan->fill_function->type != TYPE_VOID ||
+        plan->fill_function->proto_types[0] !=
+            (TYPE_CHAR | TYPE_UNSIGNED | TYPE_PTR) ||
+        plan->fill_function->proto_types[1] !=
+            (TYPE_INT | TYPE_UNSIGNED) ||
+        plan->fill_function->proto_types[2] != TYPE_INT)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "bridge-abi");
     plan->merged_size = (int)merged_value;
     plan->fill_value = (int)fill_value;
     if (!mir_machine_evaluate_constant(
@@ -9261,6 +9447,10 @@ static int mir_match_list_reverse_schedule(
         MIR_STORE, MIR_NOP, MIR_LABEL, MIR_JUMP,
         MIR_LABEL, MIR_LOAD, MIR_RETURN
     };
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int instruction;
+    int item;
 
     memset(plan, 0, sizeof(*plan));
     if (!mir_call_recovery_opcode_sequence(
@@ -9285,6 +9475,60 @@ static int mir_match_list_reverse_schedule(
         mir.insns[35].label != mir.insns[12].label ||
         mir.insns[38].src1 != mir.insns[37].dst)
         return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)
+                (insn->type & ((1 << STRUCT_SHIFT) - 1)),
+            (unsigned long long)(unsigned int)insn->immediate,
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            (unsigned long long)(unsigned int)insn->object,
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)
+                (insn->opcode == MIR_BINARY
+                    ? insn->secondary_offset &
+                        ((1 << STRUCT_SHIFT) - 1)
+                    : insn->secondary_offset),
+            (unsigned long long)(unsigned int)insn->inline_temp_id,
+            (unsigned long long)(unsigned int)insn->divmod_cast_types
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item) {
+            first ^= values[item];
+            first *= 1099511628211ULL;
+            second ^= values[item] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0x6894f0fa86f8bc5cULL ||
+        second != 0xf51a9dffa9415129ULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=list-reverse-schedule "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     plan->next_offset = (int)mir.insns[20].immediate;
     return plan->next_offset >= 0 &&
            plan->next_offset <= 126 &&
@@ -12232,9 +12476,13 @@ static int mir_match_arrow_path_schedule(
     struct Sym *print_function = NULL;
     struct Sym *flush_function = NULL;
     long cave_offset;
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     int edge;
     int instruction;
     int item;
+    int object;
+    int declared;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 131 || mir_cfg_block_count() != 10 ||
@@ -12244,6 +12492,207 @@ static int mir_match_arrow_path_schedule(
         (mir.return_type & 15) != TYPE_INT ||
         type_size(mir.return_type) != 2)
         return 0;
+#define MIR_ARROW_HASH_VALUE(value) do { \
+    unsigned long long hash_value = (value); \
+    first ^= hash_value; \
+    first *= 1099511628211ULL; \
+    second ^= hash_value + 0x9e3779b97f4a7c15ULL + \
+        (second << 6) + (second >> 2); \
+} while (0)
+    if (mir.object_count < 0 ||
+        mir.object_count >
+            (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        mir.declared_count < 0 || mir.declared_count > MAX_LOCALS ||
+        mir.alias_count < 0 || mir.alias_count > MAX_LOCALS)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)insn->type,
+            (unsigned long long)(unsigned int)
+                (insn->opcode == MIR_STRING_ADDRESS
+                    ? 0 : insn->immediate),
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            (unsigned long long)(unsigned int)insn->object,
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)
+                insn->secondary_offset,
+            (unsigned long long)(unsigned int)insn->inline_temp_id,
+            (unsigned long long)(unsigned int)
+                insn->divmod_cast_types
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            MIR_ARROW_HASH_VALUE(values[item]);
+        if (insn->opcode == MIR_STRING_ADDRESS) {
+            const char *text;
+
+            if (insn->immediate < 0 ||
+                insn->immediate >= nstrings ||
+                strings[insn->immediate] == NULL)
+                return mir_machine_reject(
+                    "arrow-path-schedule", "strings");
+            text = strings[insn->immediate];
+            do {
+                MIR_ARROW_HASH_VALUE((unsigned char)*text);
+            } while (*text++);
+        }
+    }
+    for (object = 0; object < mir.object_count; ++object) {
+        const struct MirObject *entry = &mir.objects[object];
+
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->storage);
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->type);
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->offset);
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->entry_value);
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)entry->is_register);
+    }
+    for (declared = 0; declared < mir.declared_count; ++declared) {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)
+                mir.declared_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_type_unstable[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_storage[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dim_counts[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_elem_sizes[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_vla_size_offsets[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_vla[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_array[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_volatile[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_pointee_is_volatile[declared],
+            (unsigned long long)
+                mir.declared_pointee_volatile_masks[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_dynamic_strides[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_const[declared],
+            (unsigned long long)
+                mir.declared_const_values[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_is_funcptr[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_funcptr_return_types[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_has_proto[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_nargs[declared],
+            (unsigned long long)(unsigned int)
+                mir.declared_proto_variadic[declared]
+        };
+
+        if (mir.declared_dim_counts[declared] < 0 ||
+            mir.declared_dim_counts[declared] > MAX_ARRAY_DIMS ||
+            mir.declared_proto_nargs[declared] < 0 ||
+            mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
+            return 0;
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            MIR_ARROW_HASH_VALUE(values[item]);
+        for (item = 0;
+             item < mir.declared_dim_counts[declared]; ++item)
+            MIR_ARROW_HASH_VALUE(
+                (unsigned long long)(unsigned int)
+                    mir.declared_dims[declared][item]);
+        for (item = 0;
+             item < mir.declared_proto_nargs[declared]; ++item)
+            MIR_ARROW_HASH_VALUE(
+                (unsigned long long)(unsigned int)
+                    mir.declared_proto_types[declared][item]);
+    }
+    for (item = 0; item < mir.alias_count; ++item)
+        MIR_ARROW_HASH_VALUE(
+            (unsigned long long)(unsigned int)
+                mir.alias_declaration_indices[item]);
+    {
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)mir.count,
+            (unsigned long long)(unsigned int)mir.next_value,
+            (unsigned long long)(unsigned int)mir.next_label,
+            (unsigned long long)(unsigned int)mir.next_call_id,
+            (unsigned long long)(unsigned int)
+                mir.has_indirect_incdec,
+            (unsigned long long)(unsigned int)
+                mir.has_pointer_difference,
+            (unsigned long long)(unsigned int)
+                mir.has_narrowed_for_counter,
+            (unsigned long long)(unsigned int)
+                mir.has_compound_literal,
+            (unsigned long long)(unsigned int)mir.has_vla,
+            (unsigned long long)(unsigned int)
+                mir.implicit_zero_return,
+            (unsigned long long)(unsigned int)
+                mir.has_runtime_stride_param,
+            (unsigned long long)(unsigned int)
+                mir.is_variadic_function,
+            (unsigned long long)(unsigned int)mir.return_type,
+            (unsigned long long)(unsigned int)mir.local_bytes,
+            (unsigned long long)(unsigned int)
+                mir.dead_local_suffix_bytes,
+            (unsigned long long)(unsigned int)
+                mir.aggregate_temp_bytes,
+            (unsigned long long)(unsigned int)mir.opaque_count,
+            (unsigned long long)(unsigned int)mir.object_count,
+            (unsigned long long)(unsigned int)
+                mir.has_declared_register_object,
+            (unsigned long long)(unsigned int)mir.declared_count,
+            (unsigned long long)(unsigned int)mir.alias_count,
+            (unsigned long long)(unsigned int)mir.sink_purpose
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item)
+            MIR_ARROW_HASH_VALUE(values[item]);
+    }
+#undef MIR_ARROW_HASH_VALUE
+    if (first != 0x74e74883d3e237a9ULL ||
+        second != 0xf8502b6f9395e890ULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=arrow-path-schedule "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 

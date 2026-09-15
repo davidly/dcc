@@ -10368,8 +10368,19 @@ static int mir_match_qsort_edge_schedule(
     const int failure_strings[7] = {
         24, 51, 106, 161, 213, 274, 333
     };
+    const int array_addresses[25] = {
+        1, 6, 17, 28, 33, 44, 55, 60, 65, 76,
+        87, 110, 115, 120, 131, 142, 174, 186, 206, 233,
+        247, 267, 294, 306, 326
+    };
+    const int compare_addresses[7] = {
+        14, 41, 73, 128, 194, 255, 314
+    };
     char assembly_name[64];
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     int array_offset;
+    int instruction;
     int item;
 
     memset(plan, 0, sizeof(*plan));
@@ -10390,6 +10401,7 @@ static int mir_match_qsort_edge_schedule(
     if (plan->sort_function == NULL ||
         plan->failure_function == NULL ||
         plan->compare_function == NULL ||
+        plan->compare_function->storage != SC_FUNC ||
         mir.insns[14].opcode != MIR_ADDRESS)
         return mir_machine_reject(
             "qsort-edge", "functions");
@@ -10398,11 +10410,57 @@ static int mir_match_qsort_edge_schedule(
             assembly_name, sizeof(assembly_name),
             &array_offset) ||
         plan->array == NULL || array_offset != 0 ||
-        !plan->array->is_array ||
+        !plan->array->is_defined ||
+        plan->array->storage != SC_GLOBAL ||
+        !plan->array->is_array || plan->array->is_vla ||
+        plan->array->is_volatile ||
+        plan->array->pointee_is_volatile ||
+        plan->array->type != TYPE_INT ||
+        plan->array->size != 128 ||
         plan->array->array_len != 64 ||
-        plan->array->elem_size != 2)
+        plan->array->elem_size != 2 ||
+        plan->array->dim_count != 1 ||
+        plan->array->dims[0] != 64)
         return mir_machine_reject(
             "qsort-edge", "array");
+    if (plan->sort_function->type != TYPE_VOID ||
+        plan->sort_function->is_fastcall ||
+        plan->sort_function->is_noreturn ||
+        plan->sort_function->proto_variadic ||
+        plan->sort_function->proto_nargs != 4 ||
+        plan->failure_function->type != TYPE_VOID ||
+        plan->failure_function->is_fastcall ||
+        plan->failure_function->is_noreturn ||
+        plan->failure_function->proto_variadic ||
+        plan->failure_function->proto_nargs != 1 ||
+        plan->compare_function->type != TYPE_INT ||
+        plan->compare_function->is_funcptr ||
+        plan->compare_function->is_fastcall ||
+        plan->compare_function->is_noreturn ||
+        !plan->compare_function->has_proto ||
+        plan->compare_function->proto_variadic ||
+        plan->compare_function->proto_nargs != 2 ||
+        type_ptr_depth(plan->compare_function->proto_types[0]) != 1 ||
+        type_ptr_depth(plan->compare_function->proto_types[1]) != 1)
+        return mir_machine_reject(
+            "qsort-edge", "function-types");
+    for (item = 0; item < 25; ++item) {
+        struct Sym *array;
+
+        if (!mir_recovery_global_address(
+                mir.insns[array_addresses[item]].dst, &array,
+                assembly_name, sizeof(assembly_name),
+                &array_offset) ||
+            array != plan->array || array_offset != 0)
+            return mir_machine_reject(
+                "qsort-edge", "array-alias");
+    }
+    for (item = 0; item < 7; ++item)
+        if (mir.insns[compare_addresses[item]].opcode != MIR_ADDRESS ||
+            find_global(mir.insns[compare_addresses[item]].name) !=
+                plan->compare_function)
+            return mir_machine_reject(
+                "qsort-edge", "compare-alias");
     for (item = 0; item < 7; ++item) {
         if (mir_recovery_direct_call(
                 sort_calls[item], 4, 0,
@@ -10421,29 +10479,51 @@ static int mir_match_qsort_edge_schedule(
         plan->failure_strings[item] =
             (int)mir.insns[failure_strings[item]].immediate;
     }
-    return
-        mir_machine_constant_equals(mir.insns[2].dst, 0) &&
-        mir_machine_constant_equals(mir.insns[4].dst, 85) &&
-        mir_machine_constant_equals(mir.insns[9].dst, 0) &&
-        mir_machine_constant_equals(mir.insns[11].dst, 2) &&
-        mir_machine_constant_equals(mir.insns[31].dst, 42) &&
-        mir_machine_constant_equals(mir.insns[36].dst, 1) &&
-        mir_machine_constant_equals(mir.insns[38].dst, 2) &&
-        mir_machine_constant_equals(mir.insns[58].dst, 9) &&
-        mir_machine_constant_equals(mir.insns[63].dst, 4) &&
-        mir_machine_constant_equals(mir.insns[68].dst, 2) &&
-        mir_machine_constant_equals(mir.insns[113].dst, 1) &&
-        mir_machine_constant_equals(mir.insns[118].dst, 7) &&
-        mir_machine_constant_equals(mir.insns[123].dst, 2) &&
-        mir_machine_constant_equals(mir.insns[171].dst, 20) &&
-        mir_machine_constant_equals(mir.insns[189].dst, 20) &&
-        mir_machine_constant_equals(mir.insns[203].dst, 20) &&
-        mir_machine_constant_equals(mir.insns[230].dst, 20) &&
-        mir_machine_constant_equals(mir.insns[236].dst, 19) &&
-        mir_machine_constant_equals(mir.insns[250].dst, 20) &&
-        mir_machine_constant_equals(mir.insns[291].dst, 20) &&
-        mir_machine_constant_equals(mir.insns[297].dst, 7) &&
-        mir_machine_constant_equals(mir.insns[309].dst, 20);
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[20];
+        size_t value;
+
+        values[0] = (unsigned int)insn->opcode;
+        values[1] = (unsigned int)insn->dst;
+        values[2] = (unsigned int)insn->src1;
+        values[3] = (unsigned int)insn->src2;
+        values[4] = (unsigned int)insn->type;
+        values[5] = insn->opcode == MIR_STRING_ADDRESS
+            ? 0 : (unsigned int)insn->immediate;
+        values[6] = (unsigned int)insn->label;
+        values[7] = (unsigned int)insn->phi_pred1;
+        values[8] = (unsigned int)insn->phi_pred2;
+        values[9] = (unsigned int)insn->successors[0];
+        values[10] = (unsigned int)insn->successors[1];
+        values[11] = (unsigned int)insn->successor_count;
+        values[12] = (unsigned int)insn->object;
+        values[13] = (unsigned int)insn->memory_size;
+        values[14] = (unsigned int)insn->memory_flags;
+        values[15] = (unsigned int)insn->bit_width;
+        values[16] = (unsigned int)insn->bit_shift;
+        values[17] = (unsigned int)insn->bit_mask;
+        values[18] = (unsigned int)insn->secondary_offset;
+        values[19] = (unsigned int)insn->inline_temp_id;
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0x45490e74e162e6ceULL ||
+        second != 0xcab52c2902f3db8dULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s template=qsort-edge "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
+    return 1;
 }
 
 static void mir_qsort_edge_call(
@@ -11236,7 +11316,17 @@ static int mir_match_allocator_stress_schedule(
     const int string_instructions[10] = {
         70, 113, 139, 221, 229, 245, 321, 383, 420, 437
     };
+    const int slots_addresses[18] = {
+        13, 48, 56, 97, 142, 152, 170, 177, 251,
+        261, 300, 307, 324, 331, 362, 369, 386, 393
+    };
+    const int sizes_addresses[10] = {
+        19, 61, 84, 147, 157, 183, 256, 266, 312, 374
+    };
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
     char assembly_name[64];
+    int instruction;
     int offset;
     int item;
 
@@ -11247,6 +11337,56 @@ static int mir_match_allocator_stress_schedule(
         !mir_has_cfg_backedge() ||
         (mir.return_type & 15) != TYPE_VOID)
         return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned int)insn->opcode,
+            (unsigned int)insn->dst,
+            (unsigned int)insn->src1,
+            (unsigned int)insn->src2,
+            (unsigned int)insn->type,
+            (unsigned int)(
+                insn->opcode == MIR_STRING_ADDRESS ?
+                insn->immediate - mir.insns[70].immediate :
+                insn->immediate),
+            (unsigned int)insn->label,
+            (unsigned int)insn->phi_pred1,
+            (unsigned int)insn->phi_pred2,
+            (unsigned int)insn->successors[0],
+            (unsigned int)insn->successors[1],
+            (unsigned int)insn->successor_count,
+            (unsigned int)insn->object,
+            (unsigned int)insn->memory_size,
+            (unsigned int)insn->memory_flags,
+            (unsigned int)insn->pointee_volatile_mask,
+            (unsigned int)insn->has_pointer_qualifiers,
+            (unsigned int)insn->bit_width,
+            (unsigned int)insn->bit_shift,
+            (unsigned int)insn->bit_mask,
+            (unsigned int)insn->secondary_offset,
+            (unsigned int)insn->inline_temp_id,
+            (unsigned int)insn->divmod_cast_types
+        };
+        size_t value;
+
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            first ^= values[value];
+            first *= 1099511628211ULL;
+            second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0xd6d408849e1a4819ULL ||
+        second != 0x01ee09d2d1ac2b78ULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s template=allocator-stress "
+                    "reject=semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     plan->random_function = mir_recovery_direct_call(
         42, 0, 0, plan->random_name, sizeof(plan->random_name));
     plan->check_function = mir_recovery_direct_call(
@@ -11331,6 +11471,16 @@ static int mir_match_allocator_stress_schedule(
         plan->slots == plan->sizes)
         return mir_machine_reject(
             "allocator-stress", "globals");
+    for (item = 0; item < 18; ++item)
+        if (find_global(mir.insns[slots_addresses[item]].name) !=
+            plan->slots)
+            return mir_machine_reject(
+                "allocator-stress", "slots-alias");
+    for (item = 0; item < 10; ++item)
+        if (find_global(mir.insns[sizes_addresses[item]].name) !=
+            plan->sizes)
+            return mir_machine_reject(
+                "allocator-stress", "sizes-alias");
     for (item = 0; item < 10; ++item) {
         if (mir.insns[string_instructions[item]].opcode !=
             MIR_STRING_ADDRESS)

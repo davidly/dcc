@@ -2250,16 +2250,37 @@ static void mir_emit_local_byte_fill_sum_print(
 static int mir_match_indexed_member_write(
     struct MirIndexedMemberWrite *plan)
 {
+    const struct MirInsn *parameter = NULL;
+    const struct MirInsn *local_store = NULL;
     const struct MirInsn *store_indirect = NULL;
     const struct MirInsn *member;
     const struct MirInsn *local_load;
     const struct MirInsn *address;
     const struct MirInsn *addition;
     const struct MirInsn *scaled;
+    const struct MirInsn *stride_constant;
+    const struct MirInsn *adjustment;
     const struct MirInsn *pointer_load;
     const struct MirInsn *index_load;
+    const struct MirInsn *pointer_member_insn;
+    const struct MirInsn *index_member_insn;
+    const struct MirInsn *pointer_root_load;
+    const struct MirInsn *index_root_load;
+    struct FieldDef *pointer_field;
+    struct FieldDef *index_field;
+    struct FieldDef *element_field;
     struct MirStateMember pointer_member;
     struct MirStateMember index_member;
+    int parameter_type;
+    int parameter_storage;
+    int parameter_offset;
+    int local_type;
+    int local_storage;
+    int local_offset;
+    int state_type;
+    int element_type;
+    int state_struct_id;
+    int element_struct_id;
     long adjust = 0;
     long stride;
     int parameter_count = 0;
@@ -2285,23 +2306,46 @@ static int mir_match_indexed_member_write(
         case MIR_CONST:
             break;
         case MIR_PARAM:
+            if (insn->memory_size != 0 ||
+                insn->memory_flags != 0 ||
+                insn->bit_width != 0 ||
+                insn->bit_shift != 0 ||
+                insn->bit_mask != 0)
+                return mir_machine_reject(
+                    "indexed-member-write", "parameter");
             ++parameter_count;
+            parameter = insn;
             break;
         case MIR_LOAD:
-            if (!mir_machine_named_nonvolatile(insn))
+            if (!mir_machine_named_nonvolatile(insn) ||
+                insn->memory_size != 0 ||
+                insn->memory_flags != 0 ||
+                insn->bit_width != 0 ||
+                insn->bit_shift != 0 ||
+                insn->bit_mask != 0)
                 return mir_machine_reject(
                     "indexed-member-write", "load");
             ++load_count;
             break;
         case MIR_STORE:
-            if (!mir_machine_unobservable_local_store(insn))
+            if (!mir_machine_unobservable_local_store(insn) ||
+                insn->memory_size != 2 ||
+                insn->memory_flags != 0 ||
+                insn->bit_width != 0 ||
+                insn->bit_shift != 0 ||
+                insn->bit_mask != 0)
                 return mir_machine_reject(
                     "indexed-member-write", "store");
             ++store_count;
+            local_store = insn;
             break;
         case MIR_MEMBER_ADDRESS:
             if (insn->bit_width != 0 ||
-                (insn->memory_flags & (1 | 8)) != 0)
+                insn->bit_shift != 0 ||
+                insn->bit_mask != 0 ||
+                insn->memory_flags != 0 ||
+                insn->pointee_volatile_mask != 0 ||
+                insn->has_pointer_qualifiers)
                 return mir_machine_reject(
                     "indexed-member-write", "member");
             ++member_count;
@@ -2309,7 +2353,11 @@ static int mir_match_indexed_member_write(
         case MIR_LOAD_INDIRECT:
             if (insn->memory_size != 2 ||
                 insn->bit_width != 0 ||
-                (insn->memory_flags & (1 | 8)) != 0)
+                insn->bit_shift != 0 ||
+                insn->bit_mask != 0 ||
+                insn->memory_flags != 0 ||
+                insn->pointee_volatile_mask != 0 ||
+                insn->has_pointer_qualifiers)
                 return mir_machine_reject(
                     "indexed-member-write", "load-indirect");
             ++load_indirect_count;
@@ -2320,7 +2368,11 @@ static int mir_match_indexed_member_write(
         case MIR_STORE_INDIRECT:
             if (insn->memory_size != 2 ||
                 insn->bit_width != 0 ||
-                (insn->memory_flags & (1 | 8)) != 0)
+                insn->bit_shift != 0 ||
+                insn->bit_mask != 0 ||
+                insn->memory_flags != 0 ||
+                insn->pointee_volatile_mask != 0 ||
+                insn->has_pointer_qualifiers)
                 return mir_machine_reject(
                     "indexed-member-write", "store-indirect");
             ++store_indirect_count;
@@ -2331,8 +2383,9 @@ static int mir_match_indexed_member_write(
                 "indexed-member-write", "opcode");
         }
     }
-    if (parameter_count != 1 || load_count != 3 ||
-        store_count != 1 || member_count != 3 ||
+    if (parameter_count != 1 || parameter == NULL ||
+        load_count != 3 || store_count != 1 ||
+        local_store == NULL || member_count != 3 ||
         load_indirect_count != 2 ||
         (binary_count != 2 && binary_count != 4) ||
         store_indirect_count != 1 || store_indirect == NULL)
@@ -2351,15 +2404,18 @@ static int mir_match_indexed_member_write(
     if (address->opcode == MIR_BINARY &&
         address->immediate == '-') {
         if (binary_count != 4)
-            return 0;
+            return mir_machine_reject(
+                "indexed-member-write", "adjustment");
         if (!mir_machine_constant_value(
                 address->src2, &adjust, 0) ||
             adjust < 0 || adjust > 32767)
-            return 0;
+            return mir_machine_reject(
+                "indexed-member-write", "adjustment");
         addition = mir_definition(address->src1);
     } else {
         if (binary_count != 2)
-            return 0;
+            return mir_machine_reject(
+                "indexed-member-write", "adjustment");
         addition = address;
     }
     if (addition == NULL || addition->opcode != MIR_BINARY ||
@@ -2381,18 +2437,22 @@ static int mir_match_indexed_member_write(
         scaled->immediate != '*' ||
         !mir_machine_constant_value(
             scaled->src2, &stride, 0)) {
-        const struct MirInsn *constant =
+        stride_constant =
             scaled != NULL ? mir_definition(scaled->src1) : NULL;
-        if (constant == NULL || constant->opcode != MIR_CONST ||
+        if (stride_constant == NULL ||
+            stride_constant->opcode != MIR_CONST ||
             !mir_machine_constant_value(
                 scaled->src1, &stride, 0))
             return mir_machine_reject(
                 "indexed-member-write", "scale");
         index_load = mir_definition(scaled->src2);
     } else {
+        stride_constant = mir_definition(scaled->src2);
         index_load = mir_definition(scaled->src1);
     }
     if (stride <= 0 || stride > 32767 ||
+        stride_constant == NULL ||
+        stride_constant->opcode != MIR_CONST ||
         index_load == NULL ||
         index_load->opcode != MIR_LOAD_INDIRECT ||
         !mir_machine_state_member_address(
@@ -2407,6 +2467,179 @@ static int mir_match_indexed_member_write(
             &plan->value_stack_offset))
         return mir_machine_reject(
             "indexed-member-write", "components");
+    pointer_member_insn = mir_definition(pointer_load->src1);
+    index_member_insn = mir_definition(index_load->src1);
+    pointer_root_load = pointer_member_insn != NULL
+        ? mir_definition(pointer_member_insn->src1) : NULL;
+    index_root_load = index_member_insn != NULL
+        ? mir_definition(index_member_insn->src1) : NULL;
+    if (pointer_member_insn == NULL ||
+        pointer_member_insn->opcode != MIR_MEMBER_ADDRESS ||
+        index_member_insn == NULL ||
+        index_member_insn->opcode != MIR_MEMBER_ADDRESS ||
+        pointer_root_load == NULL ||
+        pointer_root_load->opcode != MIR_LOAD ||
+        index_root_load == NULL ||
+        index_root_load->opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            pointer_root_load, index_root_load) ||
+        pointer_root_load->type != index_root_load->type ||
+        type_ptr_depth(pointer_root_load->type) != 1 ||
+        type_size(pointer_root_load->type) != 2)
+        return mir_machine_reject(
+            "indexed-member-write", "state");
+    state_type = type_decay_ptr(pointer_root_load->type);
+    if (!type_is_struct_object(state_type))
+        return mir_machine_reject(
+            "indexed-member-write", "state");
+    state_struct_id = base_struct_id_from_type(state_type);
+    pointer_field = state_struct_id > 0
+        ? find_field_def(
+            state_struct_id, pointer_member_insn->name) : NULL;
+    index_field = state_struct_id > 0
+        ? find_field_def(
+            state_struct_id, index_member_insn->name) : NULL;
+    if (pointer_field == NULL || index_field == NULL ||
+        pointer_field == index_field ||
+        pointer_field->type != pointer_load->type ||
+        type_decay_ptr(pointer_member_insn->type) !=
+            pointer_field->type ||
+        pointer_field->offset !=
+            pointer_member_insn->immediate ||
+        pointer_field->size != 2 ||
+        pointer_member_insn->memory_size !=
+            pointer_field->size ||
+        pointer_field->is_volatile ||
+        pointer_field->pointee_volatile_mask != 0 ||
+        pointer_field->is_array ||
+        pointer_field->is_anonymous ||
+        pointer_field->is_promoted ||
+        pointer_field->bit_width != 0 ||
+        strcmp(pointer_load->name,
+               pointer_member_insn->name) ||
+        type_ptr_depth(pointer_load->type) != 1 ||
+        type_is_struct_object(pointer_load->type) ||
+        !type_is_struct_object(
+            type_decay_ptr(pointer_load->type)) ||
+        type_size(pointer_load->type) != 2 ||
+        pointer_load->memory_size != pointer_field->size)
+        return mir_machine_reject(
+            "indexed-member-write", "pointer-field");
+    if (index_field->type != index_load->type ||
+        type_decay_ptr(index_member_insn->type) !=
+            index_field->type ||
+        index_field->offset != index_member_insn->immediate ||
+        index_field->size != 2 ||
+        index_member_insn->memory_size != index_field->size ||
+        index_field->is_volatile ||
+        index_field->pointee_volatile_mask != 0 ||
+        index_field->is_array ||
+        index_field->is_anonymous ||
+        index_field->is_promoted ||
+        index_field->bit_width != 0 ||
+        strcmp(index_load->name, index_member_insn->name) ||
+        type_ptr_depth(index_load->type) != 0 ||
+        type_is_float(index_load->type) ||
+        type_is_struct_object(index_load->type) ||
+        (index_load->type & 15) == TYPE_BOOL ||
+        type_size(index_load->type) != 2 ||
+        index_load->memory_size != index_field->size)
+        return mir_machine_reject(
+            "indexed-member-write", "index-field");
+    element_type = type_decay_ptr(pointer_load->type);
+    if (stride != type_size(element_type) ||
+        addition->type != pointer_load->type ||
+        addition->secondary_offset != scaled->type ||
+        scaled->type != index_load->type ||
+        scaled->secondary_offset != stride_constant->type ||
+        stride_constant->type != index_load->type ||
+        type_ptr_depth(scaled->type) != 0 ||
+        type_is_float(scaled->type) ||
+        type_is_struct_object(scaled->type) ||
+        (scaled->type & 15) == TYPE_BOOL ||
+        type_size(scaled->type) != 2)
+        return mir_machine_reject(
+            "indexed-member-write", "arithmetic");
+    if (address != addition) {
+        const struct MirInsn *adjustment_left;
+        const struct MirInsn *adjustment_right;
+        long adjustment_left_value;
+        long adjustment_right_value;
+
+        adjustment = mir_definition(address->src2);
+        adjustment_left = adjustment != NULL
+            ? mir_definition(adjustment->src1) : NULL;
+        adjustment_right = adjustment != NULL
+            ? mir_definition(adjustment->src2) : NULL;
+        if (address->type != addition->type ||
+            address->secondary_offset != scaled->type ||
+            adjustment == NULL ||
+            adjustment->opcode != MIR_BINARY ||
+            adjustment == scaled ||
+            adjustment->immediate != '*' ||
+            adjustment->type != scaled->type ||
+            adjustment->secondary_offset != scaled->type ||
+            adjustment_left == NULL ||
+            adjustment_left->opcode != MIR_CONST ||
+            adjustment_left->type != adjustment->type ||
+            adjustment_right == NULL ||
+            adjustment_right->opcode != MIR_CONST ||
+            adjustment_right->type != adjustment->secondary_offset ||
+            !mir_machine_constant_value(
+                adjustment_left->dst, &adjustment_left_value, 0) ||
+            !mir_machine_constant_value(
+                adjustment_right->dst, &adjustment_right_value, 0) ||
+            (adjustment_left_value != stride &&
+             adjustment_right_value != stride))
+            return mir_machine_reject(
+                "indexed-member-write", "adjustment");
+    }
+    if (!mir_machine_same_location(local_store, local_load) ||
+        local_store->src1 != address->dst ||
+        !mir_scalar_memory_location(
+            local_load, &local_type, &local_storage, &local_offset) ||
+        local_storage != SC_LOCAL ||
+        local_type != local_load->type ||
+        local_load->type != address->type ||
+        type_ptr_depth(local_load->type) != 1 ||
+        type_size(local_load->type) != 2)
+        return mir_machine_reject(
+            "indexed-member-write", "local");
+    element_struct_id = base_struct_id_from_type(element_type);
+    element_field = element_struct_id > 0
+        ? find_field_def(element_struct_id, member->name) : NULL;
+    if (element_field == NULL ||
+        element_field->type != type_decay_ptr(member->type) ||
+        element_field->type != store_indirect->type ||
+        element_field->offset != member->immediate ||
+        element_field->size != 2 ||
+        member->memory_size != element_field->size ||
+        store_indirect->memory_size != element_field->size ||
+        element_field->is_volatile ||
+        element_field->pointee_volatile_mask != 0 ||
+        element_field->is_array ||
+        element_field->is_anonymous ||
+        element_field->is_promoted ||
+        element_field->bit_width != 0 ||
+        strcmp(store_indirect->name, member->name) ||
+        type_ptr_depth(element_field->type) != 0 ||
+        type_is_float(element_field->type) ||
+        type_is_struct_object(element_field->type) ||
+        (element_field->type & 15) == TYPE_BOOL ||
+        type_size(element_field->type) != 2)
+        return mir_machine_reject(
+            "indexed-member-write", "element-field");
+    if (store_indirect->src2 != parameter->dst ||
+        parameter->type != element_field->type ||
+        !mir_machine_named_nonvolatile(parameter) ||
+        !mir_scalar_memory_location(
+            parameter, &parameter_type,
+            &parameter_storage, &parameter_offset) ||
+        parameter_type != parameter->type ||
+        parameter_storage != SC_PARAM ||
+        parameter_offset < 2)
+        return mir_machine_reject(
+            "indexed-member-write", "value");
     plan->root = pointer_member.root;
     plan->root_offset =
         pointer_member.root_offset;
@@ -2456,8 +2689,19 @@ static int mir_match_indexed_word_sum(struct MirIndexedWordSum *plan)
 {
     const struct MirInsn *return_insn = NULL;
     const struct MirInsn *add;
+    const struct MirInsn *left_load;
+    const struct MirInsn *left_member;
+    const struct MirInsn *left_index;
+    const struct MirInsn *left_constant;
     const struct MirInsn *left_parameter;
+    const struct MirInsn *right_load;
+    const struct MirInsn *right_member;
+    const struct MirInsn *right_index;
+    const struct MirInsn *right_constant;
     const struct MirInsn *right_parameter;
+    int parameter_memory_type;
+    int parameter_memory_storage;
+    int parameter_memory_offset;
     int parameter_count = 0;
     int load_count = 0;
     int binary_count = 0;
@@ -2470,7 +2714,8 @@ static int mir_match_indexed_word_sum(struct MirIndexedWordSum *plan)
         type_ptr_depth(mir.return_type) != 0 ||
         type_size(mir.return_type) != 2 ||
         type_is_float(mir.return_type))
-        return 0;
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "preflight");
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
@@ -2495,17 +2740,21 @@ static int mir_match_indexed_word_sum(struct MirIndexedWordSum *plan)
             return_insn = insn;
             break;
         default:
-            return 0;
+            return mir_machine_reject(
+                "indexed-word-sum-schedule", "opcode");
         }
     }
     if (parameter_count != 1 || load_count != 2 ||
         binary_count != 1 || return_count != 1 ||
         return_insn == NULL || return_insn->src1 < 0)
-        return 0;
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "counts");
     add = mir_definition(return_insn->src1);
     if (add == NULL || add->opcode != MIR_BINARY ||
-        add->immediate != '+' || type_size(add->type) != 2 ||
+        add->immediate != '+' || add->type != mir.return_type ||
+        type_ptr_depth(add->secondary_offset) != 0 ||
         type_size(add->secondary_offset) != 2 ||
+        type_is_float(add->secondary_offset) ||
         !mir_machine_indexed_word_load(
             add->src1, &left_parameter, &plan->left_offset) ||
         !mir_machine_indexed_word_load(
@@ -2513,7 +2762,55 @@ static int mir_match_indexed_word_sum(struct MirIndexedWordSum *plan)
         left_parameter != right_parameter ||
         !mir_machine_scalar_pointer_parameter(
             left_parameter, &plan->parameter_stack_offset))
-        return 0;
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "result");
+    left_load = mir_definition(add->src1);
+    left_member = mir_definition(left_load->src1);
+    left_index = mir_definition(left_member->src1);
+    left_constant = mir_definition(left_index->src2);
+    right_load = mir_definition(add->src2);
+    right_member = mir_definition(right_load->src1);
+    right_index = mir_definition(right_member->src1);
+    right_constant = mir_definition(right_index->src2);
+    if (left_load->type != add->secondary_offset ||
+        right_load->type != add->secondary_offset ||
+        type_ptr_depth(left_load->type) != 0 ||
+        type_size(left_load->type) != 2 ||
+        type_is_float(left_load->type) ||
+        left_member->type != type_add_ptr(left_load->type) ||
+        right_member->type != type_add_ptr(right_load->type) ||
+        left_member->memory_size != left_load->memory_size ||
+        right_member->memory_size != right_load->memory_size ||
+        left_member->bit_width != 0 || right_member->bit_width != 0)
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "word-types");
+    if (left_index->type != left_parameter->type ||
+        right_index->type != right_parameter->type ||
+        left_index->type != right_index->type ||
+        left_index->memory_size != left_index->immediate ||
+        right_index->memory_size != right_index->immediate ||
+        left_index->bit_width != 0 || right_index->bit_width != 0 ||
+        (left_index->memory_flags & (1 | 8)) != 0 ||
+        (right_index->memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "index-types");
+    if (type_ptr_depth(left_constant->type) != 0 ||
+        type_size(left_constant->type) != 2 ||
+        type_is_float(left_constant->type) ||
+        type_ptr_depth(right_constant->type) != 0 ||
+        type_size(right_constant->type) != 2 ||
+        type_is_float(right_constant->type))
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "index-constants");
+    if (!mir_scalar_memory_location(
+            left_parameter, &parameter_memory_type,
+            &parameter_memory_storage, &parameter_memory_offset) ||
+        parameter_memory_type != left_parameter->type ||
+        parameter_memory_storage != SC_PARAM ||
+        parameter_memory_offset - 2 != plan->parameter_stack_offset)
+        return mir_machine_reject(
+            "indexed-word-sum-schedule", "parameter-type");
+    mir_machine_accept("indexed-word-sum-schedule");
     return 1;
 }
 

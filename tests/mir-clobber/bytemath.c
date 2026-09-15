@@ -1,6 +1,10 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#if defined(MIR_CLOBBER_BYTE_MATH_COMPARE_VARIADIC) || \
+    defined(MIR_CLOBBER_BYTE_MATH_DECIMAL_VARIADIC)
+#include <stdarg.h>
+#endif
 
 struct CpuState {
     uint8_t a, x, y, sp;
@@ -12,15 +16,49 @@ static struct CpuState cpu;
 
 #define set_nz(x) cpu.fNegative = ((x) & 0x80), cpu.fZero = !(x)
 
+#ifdef MIR_CLOBBER_BYTE_MATH_COMPARE_VARIADIC
+static inline void op_cmp(uint8_t lhs, ...)
+{
+    va_list args;
+    uint8_t rhs;
+
+    va_start(args, lhs);
+    rhs = (uint8_t)va_arg(args, int);
+    va_end(args);
+    set_nz((uint8_t)((uint16_t)lhs - (uint16_t)rhs));
+    cpu.fCarry = (lhs >= rhs);
+}
+#elif defined(MIR_CLOBBER_BYTE_MATH_ANSI_HELPERS)
+static inline void op_cmp(uint8_t lhs, uint8_t rhs)
+{
+    set_nz((uint8_t)((uint16_t)lhs - (uint16_t)rhs));
+    cpu.fCarry = (lhs >= rhs);
+}
+#else
 static inline void op_cmp(lhs, rhs) uint8_t lhs; uint8_t rhs;
 {
     set_nz((uint8_t)((uint16_t)lhs - (uint16_t)rhs));
     cpu.fCarry = (lhs >= rhs);
 }
+#endif
 
+#ifdef MIR_CLOBBER_BYTE_MATH_DECIMAL_VARIADIC
+static void op_bcd_math(uint8_t math, ...)
+#elif defined(MIR_CLOBBER_BYTE_MATH_ANSI_HELPERS)
+static void op_bcd_math(uint8_t math, uint8_t rhs)
+#else
 static void op_bcd_math(math, rhs) uint8_t math; uint8_t rhs;
+#endif
 {
     uint8_t alo, ahi, rlo, rhi, ad, rd, result;
+#ifdef MIR_CLOBBER_BYTE_MATH_DECIMAL_VARIADIC
+    va_list args;
+    uint8_t rhs;
+
+    va_start(args, math);
+    rhs = (uint8_t)va_arg(args, int);
+    va_end(args);
+#endif
 
     alo = cpu.a & 0xf;
     ahi = cpu.a >> 4;
@@ -52,10 +90,42 @@ static void op_bcd_math(math, rhs) uint8_t math; uint8_t rhs;
     cpu.a = ((result / 10) << 4) + (result % 10);
 }
 
-static void op_math(op, rhs) uint8_t op; uint8_t rhs;
+#ifdef MIR_CLOBBER_BYTE_MATH_RETURN_INT
+#define BYTE_MATH_RETURN_TYPE int
+#define BYTE_MATH_RETURN(value) return (value)
+#define BYTE_MATH_FINISH(value) return (value)
+#else
+#define BYTE_MATH_RETURN_TYPE void
+#define BYTE_MATH_RETURN(value) return
+#define BYTE_MATH_FINISH(value)
+#endif
+
+#ifdef MIR_CLOBBER_BYTE_MATH_COMPARE_INDIRECT
+static void (*byte_math_compare)(uint8_t lhs, uint8_t rhs) = op_cmp;
+#endif
+
+#ifdef MIR_CLOBBER_BYTE_MATH_DECIMAL_INDIRECT
+static void (*byte_math_decimal)(uint8_t math, uint8_t rhs) = op_bcd_math;
+#endif
+
+static BYTE_MATH_RETURN_TYPE op_math(op, rhs) uint8_t op; uint8_t rhs;
 {
     uint16_t res16;
     uint8_t result;
+#ifdef MIR_CLOBBER_BYTE_MATH_VLA
+    int byte_math_vla_extent = 2 + (op == 0xff && rhs == 0xff);
+    uint8_t byte_math_vla_scratch[byte_math_vla_extent];
+    int byte_math_vla_index;
+#endif
+
+#ifdef MIR_CLOBBER_BYTE_MATH_VLA
+    for (byte_math_vla_index = 0;
+         byte_math_vla_index < byte_math_vla_extent;
+         ++byte_math_vla_index)
+        byte_math_vla_scratch[byte_math_vla_index] = 0;
+    if (byte_math_vla_scratch[byte_math_vla_extent - 1])
+        cpu.a ^= byte_math_vla_scratch[0];
+#endif
 
 #ifdef MIR_CLOBBER_BYTE_MATH_MASK
     op &= 0xf0;
@@ -69,14 +139,20 @@ static void op_math(op, rhs) uint8_t op; uint8_t rhs;
 #endif
 #ifdef MIR_CLOBBER_BYTE_MATH_SWAP
         op_cmp(rhs, cpu.a);
+#elif defined(MIR_CLOBBER_BYTE_MATH_COMPARE_INDIRECT)
+        byte_math_compare(cpu.a, rhs);
 #else
         op_cmp(cpu.a, rhs);
 #endif
-        return;
+        BYTE_MATH_RETURN(0);
     }
     if (cpu.fDecimal && (0xe0 == op || 0x60 == op)) {
+#ifdef MIR_CLOBBER_BYTE_MATH_DECIMAL_INDIRECT
+        byte_math_decimal(op, rhs);
+#else
         op_bcd_math(op, rhs);
-        return;
+#endif
+        BYTE_MATH_RETURN(0);
     }
     if (0xe0 == op) {
 #ifdef MIR_CLOBBER_BYTE_MATH_COMPLEMENT
@@ -118,6 +194,7 @@ static void op_math(op, rhs) uint8_t op; uint8_t rhs;
     else
         cpu.a ^= rhs;
     set_nz(cpu.a);
+    BYTE_MATH_FINISH(0);
 }
 
 static int check(

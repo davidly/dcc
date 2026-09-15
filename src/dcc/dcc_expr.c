@@ -1448,41 +1448,6 @@ void emit_extract_bitfield(void)
     g_expr.type = out_type;
 }
 
-void emit_store_bitfield_from_hl(void)
-{
-    int i;
-    unsigned int clear_mask;
-    unsigned int mask;
-
-    mask = current_field_bit_mask & 0xffffU;
-    clear_mask = (~mask) & 0xffffU;
-
-    /* Stack top is the field storage-unit address, value is in HL. */
-    emit("\tex de,hl\n");       /* DE = new field value */
-    emit("\tpop hl\n");        /* HL = storage-unit address */
-    emit("\tpush hl\n");       /* keep address for final store */
-    emit("\tpush de\n");       /* keep raw field value */
-    emit_load_from_hl(TYPE_INT); /* HL = old storage-unit word */
-
-    fprintf(g_emit_sink.stream, "\tld de,%u\n", clear_mask);
-    emit("\tld a,l\n\tand e\n\tld l,a\n");
-    emit("\tld a,h\n\tand d\n\tld h,a\n");
-
-    emit("\tpop de\n");        /* DE = raw field value */
-    for (i = 0; i < current_field_bit_shift; ++i)
-        emit("\tsla e\n\trl d\n");
-
-    fprintf(g_emit_sink.stream, "\tld bc,%u\n", mask);
-    emit("\tld a,e\n\tand c\n\tld e,a\n");
-    emit("\tld a,d\n\tand b\n\tld d,a\n");
-    emit("\tld a,l\n\tor e\n\tld l,a\n");
-    emit("\tld a,h\n\tor d\n\tld h,a\n");
-
-    emit("\tex de,hl\n");       /* DE = merged storage-unit word */
-    emit("\tpop hl\n");        /* HL = address */
-    emit_store_de_to_addr_hl(TYPE_INT);
-}
-
 void emit_store_bitfield_de_to_addr_hl(int keep_result)
 {
     int i;

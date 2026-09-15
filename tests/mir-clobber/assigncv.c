@@ -10,6 +10,8 @@ struct Box {
     int words[2];
     char bytes[2];
     int *pointers[2];
+    int *cursor;
+    unsigned flags : 5;
 };
 
 static long wide_values[10];
@@ -35,6 +37,7 @@ int main(void)
 {
     int failures = 0;
     int *word_pointer = words;
+    int *compound_pointer = words;
     int (*matrix_pointer)[3] = pointer_matrix_storage;
     long (*wide_pointer)[2] = wide_rows;
     float (*real_pointer)[2] = real_rows;
@@ -63,6 +66,8 @@ int main(void)
     real_values[3] -= 1L;
     real_values[3] *= 2.0f;
     real_values[3] /= 3;
+    compound_pointer += 2;
+    compound_pointer -= 1;
 
     matrix[1][2] = 7;
     matrix[1][2] += 3;
@@ -85,6 +90,11 @@ int main(void)
     box.words[1] += 17;
     box.bytes[1] = 18;
     box.pointers[1] = &matrix[1][2];
+    box_pointer->cursor = words;
+    box_pointer->cursor += 2;
+    box_pointer->cursor -= 1;
+    box.flags = 7L;
+    box.flags <<= 1;
     box_pointer->wide -= 4;
     box_pointer->real *= 2;
 
@@ -102,6 +112,8 @@ int main(void)
           "pointer to array assignments", &failures);
     check(words[1] == 11 && pointers[0] == &words[1],
           "pointer assignments", &failures);
+    check(compound_pointer == &words[1],
+          "pointer compound assignments", &failures);
     check(pointer_rows[0][1] == &words[1],
           "multidimensional pointer assignment", &failures);
     check(box.wide == 24 && (long)box.real == 7,
@@ -112,8 +124,10 @@ int main(void)
           "member arrays", &failures);
     check(box.words[1] == 17 && box.bytes[1] == 18,
           "member array compounds", &failures);
-    check(box.pointers[1] == &matrix[1][2],
+    check(box.pointers[1] == &matrix[1][2] && box.cursor == &words[1],
           "member pointer array", &failures);
+    check(box.flags == 14,
+          "bitfield compound assignments", &failures);
 
     printf("assignment coverage failures=%d\n", failures);
     return failures != 0;

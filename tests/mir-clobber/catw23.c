@@ -28,6 +28,17 @@ static void zero(CATALAN_VOLATILE long a[])
     for (i = 0; i < NBLOCKS; ++i) a[i] = 0;
 }
 
+#ifdef CATALAN_ZERO_WRAPPER_4096
+static void catalan_zero_4096(CATALAN_VOLATILE long a[])
+{
+    zero(a);
+}
+
+#define CATALAN_ZERO_4096 catalan_zero_4096
+#else
+#define CATALAN_ZERO_4096 zero
+#endif
+
 static int is_zero(const CATALAN_VOLATILE long a[])
 {
     int i;
@@ -35,6 +46,17 @@ static int is_zero(const CATALAN_VOLATILE long a[])
         if (a[i] != 0) return 0;
     return 1;
 }
+
+#ifdef CATALAN_IS_ZERO_WRAPPER_4096
+static int catalan_is_zero_4096(const CATALAN_VOLATILE long a[])
+{
+    return is_zero(a);
+}
+
+#define CATALAN_IS_ZERO_4096 catalan_is_zero_4096
+#else
+#define CATALAN_IS_ZERO_4096 is_zero
+#endif
 
 static void copy(CATALAN_VOLATILE long d[],
                  const CATALAN_VOLATILE long s[])
@@ -110,6 +132,55 @@ static void add_term(CATALAN_VOLATILE long sum[],
         add_signed(sum, t, sign);
 }
 
+#ifdef CATALAN_ADD_TERM_WRAPPER_4096
+static void catalan_add_term_4096(CATALAN_VOLATILE long sum[],
+                                  const CATALAN_VOLATILE long scale[],
+                                  int sign, long numer, long pow2, long m)
+{
+    add_term(sum, scale, sign, numer, pow2, m);
+}
+
+#define CATALAN_ADD_TERM_4096 catalan_add_term_4096
+#else
+#define CATALAN_ADD_TERM_4096 add_term
+#endif
+
+#ifdef CATALAN_DIV_SMALL_WRAPPER_4096
+static void catalan_div_small_4096(CATALAN_VOLATILE long a[], long d)
+{
+    div_small(a, d);
+}
+
+#define CATALAN_DIV_SMALL_4096 catalan_div_small_4096
+#else
+#define CATALAN_DIV_SMALL_4096 div_small
+#endif
+
+#ifdef CATALAN_FIXED_PRINT_WRAPPER
+static int catalan_print_prefix(const char *format, long value)
+{
+    (void)format;
+    return printf("%ld.", value);
+}
+
+#define CATALAN_PRINT_PREFIX(value) catalan_print_prefix("%ld.", value)
+#elif defined(CATALAN_ALT_FORMAT)
+#define CATALAN_PRINT_PREFIX(value) printf("Catalan=%ld.", value)
+#else
+#define CATALAN_PRINT_PREFIX(value) printf("%ld.", value)
+#endif
+
+#ifdef CATALAN_PUTCHAR_WRAPPER
+static int catalan_putchar(int value)
+{
+    return putchar(value);
+}
+
+#define CATALAN_PUTCHAR(value) catalan_putchar(value)
+#else
+#define CATALAN_PUTCHAR(value) putchar(value)
+#endif
+
 int main(void)
 {
     CATALAN_VOLATILE long sum[NBLOCKS], s16[NBLOCKS], s4096[NBLOCKS];
@@ -121,7 +192,7 @@ int main(void)
 
     zero(sum);
     zero(s16);
-    zero(s4096);
+    CATALAN_ZERO_4096(s4096);
 
     s16[0] = 1;
     s4096[0] = 1;
@@ -139,24 +210,20 @@ int main(void)
         div_small(s16, 16);
     }
 
-    for (n = 0; !is_zero(s4096); ++n) {
+    for (n = 0; !CATALAN_IS_ZERO_4096(s4096); ++n) {
         long a = 8L * n;
 
-        add_term(sum, s4096, -1, 1,    4, a + 1);
-        add_term(sum, s4096, -1, 1,    8, a + 2);
-        add_term(sum, s4096, -1, 1,   32, a + 3);
-        add_term(sum, s4096,  1, 1,  256, a + 5);
-        add_term(sum, s4096,  1, 1,  512, a + 6);
-        add_term(sum, s4096,  1, 1, 2048, a + 7);
+        CATALAN_ADD_TERM_4096(sum, s4096, -1, 1,    4, a + 1);
+        CATALAN_ADD_TERM_4096(sum, s4096, -1, 1,    8, a + 2);
+        CATALAN_ADD_TERM_4096(sum, s4096, -1, 1,   32, a + 3);
+        CATALAN_ADD_TERM_4096(sum, s4096,  1, 1,  256, a + 5);
+        CATALAN_ADD_TERM_4096(sum, s4096,  1, 1,  512, a + 6);
+        CATALAN_ADD_TERM_4096(sum, s4096,  1, 1, 2048, a + 7);
 
-        div_small(s4096, 4096);
+        CATALAN_DIV_SMALL_4096(s4096, 4096);
     }
 
-#ifdef CATALAN_ALT_FORMAT
-    printf("Catalan=%ld.", sum[0]);
-#else
-    printf("%ld.", sum[0]);
-#endif
+    CATALAN_PRINT_PREFIX(sum[0]);
 
     {
         int printed = 0;
@@ -164,13 +231,13 @@ int main(void)
         for (i = 1; i < NBLOCKS && printed < NDIG; ++i) {
             long p = BASE / 10;
             while (p > 0 && printed < NDIG) {
-                putchar('0' + (int)((sum[i] / p) % 10));
+                CATALAN_PUTCHAR('0' + (int)((sum[i] / p) % 10));
                 p /= 10;
                 ++printed;
             }
         }
     }
 
-    putchar('\n');
+    CATALAN_PUTCHAR('\n');
     return 0;
 }
