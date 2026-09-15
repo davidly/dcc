@@ -3099,6 +3099,56 @@ contracts, and remaining skips/survivors.
 - Preserve unrelated user changes. No destructive resets, force-pushes,
   performance-baseline manipulation, or coverage exclusions to hide failures.
 
+## Fleet-Mode Session Checkpoint (September 15, ~14:00)
+
+A long fleet-mode session on `test/ast-mir-proof-next` used up to 4 concurrent
+background agents (model `gpt-5.6-sol`), each hardening one exact-schedule
+matcher's mutation-proof coverage, with every completed wave independently
+re-verified by the orchestrator in an isolated `git worktree` before being
+trusted (never on self-report alone). This segment alone verified **47
+genuine matcher false-acceptance defects** (production-code fixes, all
+additive/tightening — confirmed by manual diff review before accepting each
+fix), spanning nearly every `dcc_mir_machine_*.c` family. Several exceeded
+90% false-acceptance rates on exhaustive per-instruction-field mutation
+(qsort-edge-schedule 93%, fortran-grow-schedule 97.3%, allocator-stress-schedule
+98.4%, board-attack-schedule 92.6% — including 32 mutations that crashed the
+compiler during exact emission rather than silently miscompiling — and
+several others in the 80–95% range). The dominant root cause pattern:
+matchers that checked opcode sequences or a handful of spot constants/call
+targets but never verified operand types, identities, CFG/PHI structure, or
+memory-flag purity for most instructions in the schedule. The fix pattern
+that emerged and proved effective for long/complex schedules is a
+comprehensive dual 64-bit fingerprint (FNV-1a + golden-ratio rolling hash)
+over every relevant field of every instruction (and, for the most
+severe cases, also object-table/declared-local-metadata/alias/global-mir-state
+hashing) — inserted as a new required condition, never replacing existing
+checks.
+
+Every verified wave followed the same validation bar: standalone audit script
+rerun in a clean isolated worktree (zero ASan symbols confirmed), full
+136-test Python suite, and — for every production-code fix — both strict
+`runall.ps1` release gates (stack and no-stack) at 482/506 passing with zero
+failures. Two isolated timing-only test flakes were investigated and
+confirmed as CPU-contention artifacts from concurrent agent builds (not
+regressions) before being disregarded. The full 11-phase
+`run-mir-proof-suite.ps1` checkpoint collection remains deliberately deferred
+per explicit user instruction to minimize end-to-end testing time this
+session; only the lean per-wave validation bar above was used.
+
+At session end: all 42 dispatched agents were idle (fleet naturally drained,
+no new unclaimed matcher targets were quickly found in the most commonly
+hardened files), the local checkout was fast-forwarded to match `origin` with
+zero divergence, roughly 275 stray leftover `git worktree` registrations
+(mostly under `build/`, debris from many historical sessions) were pruned,
+and a final clean rebuild plus full Python suite pass confirmed a healthy
+baseline. Coverage remains open-ended: roughly 60 of 636 total `mir_match_*`
+functions across all machine files now have dedicated exhaustive mutation
+audits (~9%), and the ~80% observed defect rate among audited matchers
+strongly implies further undiscovered defects remain in the ~576 still
+unaudited. No aggregate line/branch/region coverage recollection has run
+since before this segment; that number should be treated as stale until a
+fresh `run-mir-proof-suite.ps1` pass is explicitly requested and completed.
+
 ## Suggested First CLI Request
 
 > Read docs/ast-mir-cli-handoff.md and its linked toolchain/MIR skills. Inspect
