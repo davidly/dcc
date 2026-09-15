@@ -1864,6 +1864,30 @@ with generic fallback and zero survivors. The clean selected hash is
 No separate clobber manifest was needed. Regenerate the immutable aggregate
 ledger before claiming new overall totals.
 
+Wave 9000 closes the historical
+`mir_match_global_append_scalar_schedule` proof gap and fixes severe
+exact-schedule false acceptance in both retained forms. The old matcher
+checked all 10 direct-form or 13 binary-form opcodes, but only partially
+checked the remaining instruction payload and accepted 492 of 575 exhaustive
+field mutations (85.57%): 214/250 for direct append and 278/325 for binary
+append.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction and validates every instruction's normalized symbol
+identity, while retaining its global-array, global-counter, parameter,
+volatility, stride, operation, and scalar-width checks. New
+`tests/mir-clobber/globappend.c` exercises direct append and all five supported
+binary operations with renamed-function, volatile-object, parameter-type,
+unsupported-operation, and extra-CFG controls.
+`global-append-scalar-wave9000-audit.py` builds an isolated diagnostic mutation
+compiler, runs 88 function/mode source controls, and rejects all 575 mutations
+with generic fallback and zero survivors. Clean forced controls select
+`spilled-phi-slot`. The clean selected hashes remain `fe541d3e` and
+`ae0dfff1`; assembly SHA-256 is
+`be3b3a116bdc2a6b2986744888c2ba0b062897c4d5e75dd9a9c7c1405cc4dced`.
+No separate clobber manifest was added. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

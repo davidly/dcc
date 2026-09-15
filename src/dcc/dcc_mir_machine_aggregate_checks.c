@@ -14767,6 +14767,7 @@ static int mir_match_global_append_scalar_schedule(
     int memory_storage;
     int count_offset;
     int parameter_count;
+    int instruction;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.has_vla || mir_cfg_block_count() != 1 ||
@@ -14847,6 +14848,97 @@ static int mir_match_global_append_scalar_schedule(
              plan->parameter_offsets[0] + 2 ||
          !mir_byte_sum_signed_word_type(mir.insns[2].type)))
         return 0;
+    {
+        unsigned long long first = 1469598103934665603ULL;
+        unsigned long long second = 0x9e3779b97f4a7c15ULL;
+        unsigned long long expected_first;
+        unsigned long long expected_second;
+
+#define MIR_GLOBAL_APPEND_MIX(value) do { \
+        unsigned long long mixed_value = \
+            (unsigned long long)(uint32_t)(value); \
+        first ^= mixed_value; \
+        first *= 1099511628211ULL; \
+        second ^= mixed_value + 0x9e3779b97f4a7c15ULL + \
+            (second << 6) + (second >> 2); \
+    } while (0)
+
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+            const char *expected_name = "";
+
+            if (instruction == 1 ||
+                (parameter_count == 1 && instruction == 8) ||
+                (parameter_count == 2 && instruction == 9))
+                expected_name = mir.insns[1].name;
+            else if (parameter_count == 2 &&
+                     (instruction == 2 || instruction == 10))
+                expected_name = mir.insns[2].name;
+            else if (instruction == parameter_count + 1)
+                expected_name = array->name;
+            else if (instruction == parameter_count + 2 ||
+                     instruction == parameter_count + 5)
+                expected_name = count->name;
+            if (strcmp(insn->name, expected_name) != 0 ||
+                insn->base_name[0] != 0)
+                return mir_machine_reject(
+                    "global-append-scalar-schedule",
+                    "semantic-payload");
+            MIR_GLOBAL_APPEND_MIX(insn->opcode);
+            MIR_GLOBAL_APPEND_MIX(insn->dst);
+            MIR_GLOBAL_APPEND_MIX(insn->src1);
+            MIR_GLOBAL_APPEND_MIX(insn->src2);
+            MIR_GLOBAL_APPEND_MIX(insn->type);
+            MIR_GLOBAL_APPEND_MIX(insn->immediate);
+            MIR_GLOBAL_APPEND_MIX(insn->label);
+            MIR_GLOBAL_APPEND_MIX(insn->phi_pred1);
+            MIR_GLOBAL_APPEND_MIX(insn->phi_pred2);
+            MIR_GLOBAL_APPEND_MIX(insn->successors[0]);
+            MIR_GLOBAL_APPEND_MIX(insn->successors[1]);
+            MIR_GLOBAL_APPEND_MIX(insn->successor_count);
+            MIR_GLOBAL_APPEND_MIX(insn->object);
+            MIR_GLOBAL_APPEND_MIX(insn->memory_size);
+            MIR_GLOBAL_APPEND_MIX(insn->memory_flags);
+            MIR_GLOBAL_APPEND_MIX(insn->pointee_volatile_mask);
+            MIR_GLOBAL_APPEND_MIX(insn->has_pointer_qualifiers);
+            MIR_GLOBAL_APPEND_MIX(insn->bit_width);
+            MIR_GLOBAL_APPEND_MIX(insn->bit_shift);
+            MIR_GLOBAL_APPEND_MIX(insn->bit_mask);
+            MIR_GLOBAL_APPEND_MIX(insn->secondary_offset);
+            MIR_GLOBAL_APPEND_MIX(insn->inline_temp_id);
+            MIR_GLOBAL_APPEND_MIX(insn->divmod_cast_types);
+        }
+#undef MIR_GLOBAL_APPEND_MIX
+        if (parameter_count == 1) {
+            expected_first = 0xd75c196d8f5d233cULL;
+            expected_second = 0xa290050877e3e6e2ULL;
+        } else if (value->immediate == '+') {
+            expected_first = 0x1053f69bf352cd94ULL;
+            expected_second = 0xb91d8f3dc0b2312cULL;
+        } else if (value->immediate == '-') {
+            expected_first = 0x87cdc1d42954fe46ULL;
+            expected_second = 0x8610b5d55a9d3721ULL;
+        } else if (value->immediate == '&') {
+            expected_first = 0x6c956a72fc4fb9c7ULL;
+            expected_second = 0xfce80fe4073325c1ULL;
+        } else if (value->immediate == '|') {
+            expected_first = 0x5a7d6b0388155b85ULL;
+            expected_second = 0x0f8bb57bce115894ULL;
+        } else {
+            expected_first = 0x0a2bab568c88d17fULL;
+            expected_second = 0x19652a292baf518cULL;
+        }
+        if (first != expected_first || second != expected_second) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=global-append-scalar-schedule "
+                        "reject=semantic-payload "
+                        "fingerprint=%016llx:%016llx\n",
+                        mir.name, first, second);
+            return 0;
+        }
+    }
     plan->array = array;
     plan->count = count;
     plan->array_offset = (int)array_offset;

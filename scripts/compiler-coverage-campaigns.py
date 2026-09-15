@@ -276,6 +276,10 @@ CAMPAIGNS = (
              "post-index-report-wave8900-audit.py",
              output_dir="post-index-report-wave8900-audit",
              max_jobs=2),
+    Campaign("global-append-scalar-schedule",
+             "global-append-scalar-wave9000-audit.py",
+             output_dir="global-append-scalar-wave9000-audit",
+             max_jobs=2),
 )
 
 
