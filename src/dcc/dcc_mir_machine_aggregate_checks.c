@@ -14476,6 +14476,7 @@ static int mir_match_union_alias_runner_schedule(
 {
     int failure_argument;
     int success_argument;
+    int instruction;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 115 || mir.next_value != 82 ||
@@ -14502,6 +14503,77 @@ static int mir_match_union_alias_runner_schedule(
         !mir_machine_constant_equals(mir.insns[106].dst, 1) ||
         !mir_machine_constant_equals(mir.insns[113].dst, 0))
         return 0;
+    {
+        unsigned long long first = 1469598103934665603ULL;
+        unsigned long long second = 0x9e3779b97f4a7c15ULL;
+
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+            unsigned long long values[] = {
+                (unsigned long long)(uint32_t)insn->opcode,
+                (unsigned long long)(uint32_t)insn->dst,
+                (unsigned long long)(uint32_t)insn->src1,
+                (unsigned long long)(uint32_t)insn->src2,
+                (unsigned long long)(uint32_t)insn->type,
+                (unsigned long long)(uint32_t)insn->immediate,
+                (unsigned long long)(uint32_t)insn->label,
+                (unsigned long long)(uint32_t)insn->phi_pred1,
+                (unsigned long long)(uint32_t)insn->phi_pred2,
+                (unsigned long long)(uint32_t)insn->successors[0],
+                (unsigned long long)(uint32_t)insn->successors[1],
+                (unsigned long long)(uint32_t)insn->successor_count,
+                (unsigned long long)(uint32_t)insn->object,
+                (unsigned long long)(uint32_t)insn->memory_size,
+                (unsigned long long)(uint32_t)insn->memory_flags,
+                (unsigned long long)insn->pointee_volatile_mask,
+                (unsigned long long)(uint32_t)
+                    insn->has_pointer_qualifiers,
+                (unsigned long long)(uint32_t)insn->bit_width,
+                (unsigned long long)(uint32_t)insn->bit_shift,
+                (unsigned long long)insn->bit_mask,
+                (unsigned long long)(uint32_t)
+                    insn->secondary_offset,
+                (unsigned long long)(uint32_t)insn->inline_temp_id,
+                (unsigned long long)(uint32_t)
+                    insn->divmod_cast_types
+            };
+            size_t value;
+
+            for (value = 0;
+                 value < sizeof(values) / sizeof(values[0]); ++value) {
+                first ^= values[value];
+                first *= 1099511628211ULL;
+                second ^= values[value] + 0x9e3779b97f4a7c15ULL +
+                    (second << 6) + (second >> 2);
+            }
+            if (insn->opcode == MIR_CALL ||
+                insn->opcode == MIR_CALL_AGGREGATE) {
+                const char *text = insn->name;
+
+                do {
+                    unsigned long long character =
+                        (unsigned char)*text;
+
+                    first ^= character;
+                    first *= 1099511628211ULL;
+                    second ^= character +
+                        0x9e3779b97f4a7c15ULL +
+                        (second << 6) + (second >> 2);
+                } while (*text++);
+            }
+        }
+        if (first != 0x4fc6a8c88d9757b9ULL ||
+            second != 0x98034e5e5ab0eda8ULL) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=union-alias-runner-schedule "
+                        "reject=semantic-payload "
+                        "fingerprint=%016llx:%016llx\n",
+                        mir.name, first, second);
+            return 0;
+        }
+    }
     if (mir.insns[11].opcode != MIR_MEMBER_ADDRESS ||
         mir.insns[11].immediate != 0 ||
         mir.insns[17].opcode != MIR_MEMBER_ADDRESS ||

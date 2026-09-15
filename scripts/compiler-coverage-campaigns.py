@@ -252,6 +252,10 @@ CAMPAIGNS = (
              "matrix-multiply-wave8300-audit.py",
              output_dir="matrix-multiply-wave8300-audit",
              max_jobs=2),
+    Campaign("union-alias-runner-schedule",
+             "union-alias-runner-wave8400-audit.py",
+             output_dir="union-alias-runner-wave8400-audit",
+             max_jobs=2),
 )
 
 

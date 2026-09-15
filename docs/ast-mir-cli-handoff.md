@@ -1992,6 +1992,28 @@ locally verified execution inventory.
   No separate clobber manifest was needed. The standalone audit, full Python
   script-test suite, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 8400 closes the historical
+  `mir_match_union_alias_runner_schedule` proof gap and fixes severe
+  exact-schedule false acceptance. The old 115-instruction matcher directly
+  referenced only 28 fixed instruction positions, plus two dynamically
+  resolved string definitions, and left most opcode, destination, type, SSA,
+  immediate, memory/qualifier, CFG-successor, PHI-predecessor, object,
+  bitfield, and auxiliary metadata fields unproved. It accepted 2,510 of 2,645
+  exhaustive per-instruction field mutations (94.90%). The matcher now
+  fingerprints all 23 semantic and structural fields on every instruction and
+  both direct call targets before applying its existing constant, layout,
+  print-alias, and string-argument checks. New
+  `tests/mir-clobber/unionalias.c` isolates the union overlay workload and adds
+  renamed-function, volatile-object, extra-CFG, and alternate-value controls.
+  `union-alias-runner-wave8400-audit.py` builds an isolated diagnostic mutation
+  compiler, runs 20 stack/no-stack and peep/nopeep controls across five source
+  variants, and rejects all 2,645 mutations with generic fallback and zero
+  survivors. A clean forced control selects `spilled-phi-slot`. The clean
+  selected hash remains `47bc9ce9` and assembly SHA-256 is
+  `9a47a8a47fe3834fffc8d09e7329b5beb8a1941959afc9276a4fa6b5a5e334e6`.
+  No separate clobber manifest was needed. The standalone audit, full Python
+  script-test suite, and both strict 506-app release modes pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
