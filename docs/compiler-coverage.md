@@ -1815,6 +1815,32 @@ No separate clobber manifest was added. The standalone audit, full Python
 script-test suite, and both strict 506-app release modes pass. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 8800 closes the historical
+`mir_match_aggregate_word_sum_schedule` proof gap and fixes severe
+exact-schedule false acceptance. Across the 23-instruction fixture and five
+retained `tstructv` shapes, the old matcher classified opcodes and
+reconstructed returned trees but did not prove complete instruction payloads.
+It accepted 3,177 of 3,864 exhaustive per-instruction semantic and structural
+field mutations (82.22%); the fixture alone accepted 438/529 (82.80%), with
+20/23 instructions reachable through the return tree and three housekeeping
+instructions not tied to it.
+
+The matcher now fingerprints all 23 numeric fields on every instruction in all
+six retained shapes before applying its existing single-block,
+aggregate-address, term-width, signedness, and returned-add-tree checks. New
+`tests/mir-clobber/aggwordsum.c` preserves a mixed byte/word aggregate sum with
+a scalar term and adds renamed-function, volatile, unsigned, extra-CFG, and
+subtraction controls. `aggregate-word-sum-wave8800-audit.py` builds an isolated
+diagnostic mutation compiler, runs 24 stack/no-stack and peep/nopeep controls
+across six source variants, verifies the five release shapes and a clean
+`spilled-phi-slot` fallback, and rejects all 3,864 mutations across 168
+instructions with generic fallback and zero survivors. The clean selected hash
+remains `238db0ac`; assembly SHA-256 is
+`c12414d78dada56849ccdd1526bafde3190c8ea60c1eb6cfc538760cd6812037`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

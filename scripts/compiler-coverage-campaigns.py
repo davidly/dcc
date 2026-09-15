@@ -268,6 +268,10 @@ CAMPAIGNS = (
              "for-init-sum-wave8700-audit.py",
              output_dir="for-init-sum-wave8700-audit",
              max_jobs=2),
+    Campaign("aggregate-word-sum-schedule",
+             "aggregate-word-sum-wave8800-audit.py",
+             output_dir="aggregate-word-sum-wave8800-audit",
+             max_jobs=2),
 )
 
 
