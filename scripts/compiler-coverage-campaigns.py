@@ -240,6 +240,10 @@ CAMPAIGNS = (
              "raw-conversion-check-wave8000-audit.py",
              output_dir="raw-conversion-check-wave8000-audit",
              max_jobs=2),
+    Campaign("directory-enumeration-runner-schedule",
+             "directory-enumeration-runner-wave8100-audit.py",
+             output_dir="directory-enumeration-runner-wave8100-audit",
+             max_jobs=2),
 )
 
 

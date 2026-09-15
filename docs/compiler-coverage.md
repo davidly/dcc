@@ -1654,6 +1654,29 @@ The standalone audit, all 136 Python script tests, and both strict 506-app
 release modes pass. No separate clobber manifest was added. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 8100 closes the remaining focused
+`mir_match_directory_enumeration_runner` evidence gap without changing
+production code. Earlier Wave 19 work already validated every opcode and
+hardened the 318-instruction matcher with a complete semantic-payload
+fingerprint. Its direct semantic checks reference 200 instruction positions;
+the fingerprint covers all 318 instructions, all 23 numeric instruction
+fields, source/base-name identity, object/declaration/alias metadata, and
+whole-function state.
+
+New `tests/mir-clobber/direnum.c` isolates the retained Wave 3 directory layout
+and checks the expected entries plus callback counts through a fixed checksum
+independently reproduced by Python.
+`directory-enumeration-runner-wave8100-audit.py` builds an isolated diagnostic
+mutation compiler, runs four stack/no-stack and peep/nopeep runtime controls,
+and rejects all 7,950 per-instruction field and identity mutations with generic
+fallback and zero survivors. A clean forced control selects
+`spilled-rhs-forward`. The clean selected hash remains `96758d14`; assembly
+SHA-256 is
+`e68b136c76d6f291a647889ccc89a1becf718217db8188755dcd3e529bdcb5ea`.
+No genuine matcher defect or separate clobber manifest was found. The
+standalone audit and full Python script-test suite pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

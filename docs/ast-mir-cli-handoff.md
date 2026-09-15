@@ -1927,6 +1927,27 @@ locally verified execution inventory.
   The standalone audit, all 136 Python script tests, and both strict 506-app
   release modes pass. No separate clobber manifest was needed. The broader
   coverage objective remains incomplete.
+- Wave 8100 closes the remaining focused
+  `mir_match_directory_enumeration_runner` evidence gap without changing
+  production code. Earlier Wave 19 work had already hardened the
+  318-instruction matcher with a complete semantic-payload fingerprint, but
+  its opcode-aware campaign did not independently mutate every instruction
+  field. The explicit matcher checks reference 200 instruction positions and
+  the fingerprint covers all 318 instructions, their 23 numeric semantic and
+  structural fields, source/base-name identity, object/declaration/alias
+  metadata, and whole-function state. New `tests/mir-clobber/direnum.c`
+  isolates the retained Wave 3 layout and checks enumeration results and call
+  counts through a fixed checksum independently reproduced by the audit.
+  `directory-enumeration-runner-wave8100-audit.py` builds an isolated
+  diagnostic mutation compiler, runs four stack/no-stack and peep/nopeep
+  controls, and rejects all 7,950 per-instruction field and identity mutations
+  with generic fallback and zero survivors. A clean forced control selects
+  `spilled-rhs-forward`. The clean selected hash remains `96758d14` and
+  assembly SHA-256 is
+  `e68b136c76d6f291a647889ccc89a1becf718217db8188755dcd3e529bdcb5ea`.
+  No genuine false acceptance remains and no separate clobber manifest was
+  needed. The standalone audit and full Python script-test suite pass. The
+  broader coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
