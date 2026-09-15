@@ -2166,6 +2166,27 @@ locally verified execution inventory.
   No separate clobber manifest was needed. The standalone audit, full Python
   script-test suite, and both strict 506-app release modes pass. The broader
   coverage objective remains incomplete.
+- Wave 9500 closes the historical
+  `mir_match_reloaded_best_record_schedule` proof gap and fixes severe
+  exact-schedule false acceptance. The 79-instruction matcher classified every
+  opcode but directly inspected payload at only 32 positions, leaving 47
+  positions without direct payload-specific evidence. It accepted 1,603 of
+  1,817 exhaustive per-instruction semantic and structural field mutations
+  (88.22%).
+  The matcher now fingerprints all 23 numeric instruction fields on every
+  instruction before retaining its parameter, local-location,
+  aggregate-layout, CFG, PHI, volatility, and SSA checks. New
+  `tests/mir-clobber/reloadbest.c` reproduces the reloaded-parameter form and
+  checks three result states through an independent checksum.
+  `reloaded-best-record-wave9500-audit.py` builds an isolated diagnostic
+  mutation compiler, runs 28 stack/no-stack and peep/nopeep controls across
+  seven source variants, verifies a clean `spilled-phi-slot` fallback, and
+  rejects all 1,817 mutations with generic fallback and zero survivors. The
+  clean selected hash remains `78bade6e`; assembly SHA-256 is
+  `1384f2136a6af959d2a46e1ba17f29075f86b377fbb6cd8700328007f9c0dac0`.
+  No separate clobber manifest was needed. The standalone audit, full Python
+  script-test suite, and both strict 506-app release modes pass. The broader
+  coverage objective remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.

@@ -1915,6 +1915,31 @@ No separate clobber manifest was added. The standalone audit, full Python
 script-test suite, and both strict 506-app release modes pass. Regenerate the
 immutable aggregate ledger before claiming new overall totals.
 
+Wave 9500 closes the historical
+`mir_match_reloaded_best_record_schedule` proof gap and fixes severe
+exact-schedule false acceptance. The 79-instruction matcher classified every
+opcode but directly inspected semantic payload at only 32 instruction
+positions, leaving 47 positions without direct payload-specific evidence. It
+accepted 1,603 of 1,817 exhaustive per-instruction semantic and structural
+field mutations (88.22%).
+
+The matcher now fingerprints all 23 numeric instruction fields on every
+instruction before retaining its existing parameter, local-location,
+aggregate-layout, CFG, PHI, volatility, and SSA relationship checks. New
+`tests/mir-clobber/reloadbest.c` reproduces the reloaded-parameter form of the
+record search and checks the highest open record, the next result after
+mutation, and the empty result through an independent checksum.
+`reloaded-best-record-wave9500-audit.py` builds an isolated diagnostic
+mutation compiler, runs 28 stack/no-stack and peep/nopeep controls across
+exact, renamed, qualifier, type, predicate, CFG, and comparison variants,
+verifies a clean `spilled-phi-slot` fallback, and rejects all 1,817 mutations
+with generic fallback and zero survivors. The clean selected hash remains
+`78bade6e`; assembly SHA-256 is
+`1384f2136a6af959d2a46e1ba17f29075f86b377fbb6cd8700328007f9c0dac0`.
+No separate clobber manifest was added. The standalone audit, full Python
+script-test suite, and both strict 506-app release modes pass. Regenerate the
+immutable aggregate ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

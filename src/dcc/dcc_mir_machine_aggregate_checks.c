@@ -13354,6 +13354,12 @@ static int mir_match_reloaded_best_record_schedule(
     int index_offset;
     int tasks_offset;
     int count_offset;
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int object_ids[79];
+    int object_count = 0;
+    int instruction;
+    int item;
 
     memset(plan, 0, sizeof(*plan));
     if (!mir_recovery_opcode_sequence(
@@ -13451,6 +13457,78 @@ static int mir_match_reloaded_best_record_schedule(
         mir.insns[78].src1 != mir.insns[77].dst)
         return mir_machine_reject(
             "best-record-schedule", "reloaded-update");
+    /*
+     * Normalize translation-unit-specific aggregate and object IDs while
+     * preserving every instruction field that can affect this schedule.
+     */
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int object_identity = -1;
+        unsigned long long values[] = {
+            (unsigned long long)(unsigned int)insn->opcode,
+            (unsigned long long)(unsigned int)insn->dst,
+            (unsigned long long)(unsigned int)insn->src1,
+            (unsigned long long)(unsigned int)insn->src2,
+            (unsigned long long)(unsigned int)(
+                insn->type &
+                (TYPE_STRUCT | TYPE_PTR2 | TYPE_UNSIGNED | TYPE_PTR | 15)),
+            (unsigned long long)(unsigned int)insn->immediate,
+            (unsigned long long)(unsigned int)insn->label,
+            (unsigned long long)(unsigned int)insn->phi_pred1,
+            (unsigned long long)(unsigned int)insn->phi_pred2,
+            (unsigned long long)(unsigned int)insn->successors[0],
+            (unsigned long long)(unsigned int)insn->successors[1],
+            (unsigned long long)(unsigned int)insn->successor_count,
+            0,
+            (unsigned long long)(unsigned int)insn->memory_size,
+            (unsigned long long)(unsigned int)insn->memory_flags,
+            (unsigned long long)insn->pointee_volatile_mask,
+            (unsigned long long)(unsigned int)
+                insn->has_pointer_qualifiers,
+            (unsigned long long)(unsigned int)insn->bit_width,
+            (unsigned long long)(unsigned int)insn->bit_shift,
+            (unsigned long long)insn->bit_mask,
+            (unsigned long long)(unsigned int)(
+                instruction == 27
+                    ? insn->secondary_offset &
+                        (TYPE_STRUCT | TYPE_PTR2 |
+                         TYPE_UNSIGNED | TYPE_PTR | 15)
+                    : insn->secondary_offset),
+            (unsigned long long)(unsigned int)insn->inline_temp_id,
+            (unsigned long long)(unsigned int)insn->divmod_cast_types
+        };
+
+        if (insn->object >= 0) {
+            for (object_identity = 0;
+                 object_identity < object_count;
+                 ++object_identity)
+                if (object_ids[object_identity] == insn->object)
+                    break;
+            if (object_identity == object_count)
+                object_ids[object_count++] = insn->object;
+        }
+        values[12] =
+            (unsigned long long)(unsigned int)object_identity;
+        for (item = 0;
+             item < (int)(sizeof(values) / sizeof(values[0]));
+             ++item) {
+            first ^= values[item];
+            first *= 1099511628211ULL;
+            second ^= values[item] + 0x9e3779b97f4a7c15ULL +
+                (second << 6) + (second >> 2);
+        }
+    }
+    if (first != 0x7c6a7fdd78011afbULL ||
+        second != 0x354230e4b1bcd73fULL) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s "
+                    "template=best-record-schedule "
+                    "reject=reloaded-semantic-payload "
+                    "fingerprint=%016llx:%016llx\n",
+                    mir.name, first, second);
+        return 0;
+    }
     plan->tasks_stack_offset = tasks_offset;
     plan->count_stack_offset = count_offset;
     plan->stride = (int)mir.insns[20].immediate;

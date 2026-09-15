@@ -284,6 +284,10 @@ CAMPAIGNS = (
              "pointer-cast-diff-wave9100-audit.py",
              output_dir="pointer-cast-diff-wave9100-audit",
              max_jobs=2),
+    Campaign("reloaded-best-record-schedule",
+             "reloaded-best-record-wave9500-audit.py",
+             output_dir="reloaded-best-record-wave9500-audit",
+             max_jobs=2),
 )
 
 
