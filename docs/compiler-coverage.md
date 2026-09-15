@@ -1767,6 +1767,30 @@ assembly SHA-256 is
 No separate clobber manifest was added. Regenerate the immutable aggregate
 ledger before claiming new overall totals.
 
+Wave 8600 closes the historical
+`mir_match_local_initializer_schedule` proof gap and fixes severe
+exact-schedule false acceptance in both retained shapes. The previous matcher
+classified every opcode in the 54- and 276-instruction streams but had no
+fixed-position complete payload proof. It accepted 6,619 of 7,920 exhaustive
+per-instruction field and identity mutations (83.57%): 1,094/1,296 for the
+small shape and 5,525/6,624 for the large shape.
+
+The matcher now fingerprints all 23 numeric semantic and structural fields on
+every instruction, using separately proven fingerprints for the production
+and equivalent fixture layouts. Its existing local-byte interpretation,
+initializer recovery, call-ABI, argument-kind, volatility, and single-block
+checks remain active. New `tests/mir-clobber/localinit.c` exercises both
+retained shapes and validates 23 values through an independent count/checksum
+oracle. `local-initializer-wave8600-audit.py` builds an isolated diagnostic
+mutation compiler, runs 20 stack/no-stack and peep/nopeep controls across
+exact, renamed, changed-value, volatile-local, and extra-CFG variants, and
+rejects all 7,920 mutations with generic fallback and zero survivors. Clean
+forced controls select `spilled-phi-slot`. The fixture selected hashes remain
+`180d481e` and `f81f5fe5`; assembly SHA-256 is
+`517061dcfb3c0f22ae5b1527b73801a42ba5dd5d7f3aabf3e2b79b15807c34ca`.
+No separate clobber manifest was needed. Regenerate the immutable aggregate
+ledger before claiming new overall totals.
+
 ## Full workload
 
 Run `sh scripts/compiler-coverage.sh` from the repository root to build a

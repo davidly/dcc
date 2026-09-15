@@ -260,6 +260,10 @@ CAMPAIGNS = (
              "best-record-wave8500-audit.py",
              output_dir="best-record-wave8500-audit",
              max_jobs=2),
+    Campaign("local-initializer-schedule",
+             "local-initializer-wave8600-audit.py",
+             output_dir="local-initializer-wave8600-audit",
+             max_jobs=2),
 )
 
 

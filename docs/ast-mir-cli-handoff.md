@@ -2030,6 +2030,28 @@ locally verified execution inventory.
   `59e826326054cfb944ba11a09a52e2cb0a740bca755873f2b802a035d43896ae`.
   No separate clobber manifest was needed. The broader coverage objective
   remains incomplete.
+- Wave 8600 closes the historical
+  `mir_match_local_initializer_schedule` proof gap and fixes severe
+  exact-schedule false acceptance in both retained shapes. The matcher
+  classified all 54/276 opcodes but had no fixed-position full-payload proof;
+  it accepted 6,619 of 7,920 exhaustive per-instruction field and identity
+  mutations (83.57%): 1,094/1,296 for the small form and 5,525/6,624 for the
+  large form.
+  The matcher now fingerprints all 23 numeric semantic and structural fields
+  on every instruction, with separately proven fingerprints for the
+  production and equivalent fixture layouts, while retaining its local-byte
+  interpretation, initializer recovery, call-ABI, argument-kind, volatility,
+  and single-block proofs. New `tests/mir-clobber/localinit.c` exercises both
+  shapes and checks 23 values through an independent count/checksum oracle.
+  `local-initializer-wave8600-audit.py` builds an isolated diagnostic mutation
+  compiler, runs 20 stack/no-stack and peep/nopeep controls across exact,
+  renamed, changed-value, volatile-local, and extra-CFG variants, and rejects
+  all 7,920 mutations with generic fallback and zero survivors. Clean forced
+  controls select `spilled-phi-slot`. The fixture selected hashes remain
+  `180d481e` and `f81f5fe5`; assembly SHA-256 is
+  `517061dcfb3c0f22ae5b1527b73801a42ba5dd5d7f3aabf3e2b79b15807c34ca`.
+  No separate clobber manifest was added. The broader coverage objective
+  remains incomplete.
 - All eight push/PR checks for the PR #193 implementation passed: Linux,
   macOS, Windows, and the no-PowerShell build in both event runs.
 - Successful runs: `34192914081` and `34192909889`.
