@@ -207,13 +207,6 @@ macOS, and gcc on Linux by default. Run it from the cloned `dcc` directory:
     cd dcc
     pwsh ./scripts/build-dcc.ps1
 
-On Linux platforms without a PowerShell package - RISC-V64 boards, Raspberry
-Pi OS on a Pi 4, and similar - use `m-posix.sh` at the repository root
-instead. It needs only `/bin/sh` and a C compiler, and builds the same
-`dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, and `l80c` tools (plus,
-best-effort, `dcc-debug-host` if `cmake` and a C++ compiler are available):
-
-    sh m-posix.sh
 
 ## Build ntvcm
 
@@ -221,7 +214,7 @@ ntvcm is a C++ project. Build it from its own directory. The commands below
 start from the parent directory containing both checkouts; from `dcc`, first
 return to that parent with `cd ..`.
 
-Use the `mr.bat` / `mrmac.sh` / `mr.sh` scripts below, not `m.bat` / `mmac.sh`
+Use the `m.bat` / `mmac.sh` / `m.sh` scripts below, not `m.bat` / `mmac.sh`
 / `m.sh`. The `r` versions build release configurations of the emulator with
 asserts compiled out, so the resulting `ntvcm` runs faster.
 
@@ -233,7 +226,7 @@ asserts compiled out, so the resulting `ntvcm` runs faster.
 
     ```powershell
     cd ntvcm
-    .\mr.bat
+    .\m.bat
     ```
 
     Produces `ntvcm.exe`.
@@ -245,8 +238,8 @@ asserts compiled out, so the resulting `ntvcm` runs faster.
 
     ```bash
     cd ntvcm
-    chmod +x mrmac.sh
-    ./mrmac.sh
+    chmod +x mmac.sh
+    ./mmac.sh
     ```
 
     Produces the `ntvcm` executable.
@@ -258,8 +251,8 @@ asserts compiled out, so the resulting `ntvcm` runs faster.
 
     ```bash
     cd ntvcm
-    chmod +x mr.sh
-    ./mr.sh
+    chmod +x m.sh
+    ./m.sh
     ```
 
     Produces the `ntvcm` executable.
@@ -271,8 +264,8 @@ asserts compiled out, so the resulting `ntvcm` runs faster.
 
     ```bash
     cd ntvcm
-    chmod +x mr.sh
-    ./mr.sh
+    chmod +x m.sh
+    ./m.sh
     ```
 
     Produces the `ntvcm` executable.
@@ -285,7 +278,7 @@ asserts compiled out, so the resulting `ntvcm` runs faster.
 
     ```powershell
     cd ntvcm
-    .\mr.bat
+    .\m.bat
     ```
 
     Produces `ntvcm.exe`.
