@@ -254,17 +254,8 @@ This produces `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, and `l80c` in
 the repository root, together with `dcc-debug-host` and the platform-specific
 example I/O adapter library.
 
-On Linux platforms without a PowerShell package - RISC-V64 boards, Raspberry
-Pi OS on a Pi 4, and similar - use `m-posix.sh` instead. It needs nothing
-beyond `/bin/sh` and a C compiler, and builds the same `dcc`, `dccpeep`,
-`dccrtlstrip`, `dccmake`, `m80c`, and `l80c` tools. It also attempts
-`dcc-debug-host` and its example adapter if `cmake` and a C++ compiler are
-available, skipping that step cleanly (with a clear message) otherwise, since
-the six C tools are what's needed to actually use dcc:
 
-```bash
-sh m-posix.sh
-```
+
 
 ### Building ntvcm
 
