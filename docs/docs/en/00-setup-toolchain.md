@@ -27,10 +27,15 @@ Setup flow:
 Install the native compiler tools for your host platform before cloning and
 building DCC C Compiler or ntvcm.
 
-The full PowerShell build also requires CMake and a C++17 compiler for
-`dcc-debug-host` and its example adapter. Install CMake with
-`winget install Kitware.CMake` on Windows, `brew install cmake` on macOS, or
-`sudo apt install cmake` on Ubuntu. Verify it with `cmake --version`.
+The full PowerShell build requires **PowerShell 7 or later** (`pwsh`), CMake,
+and a C++17 compiler for `dcc-debug-host` and its example adapter. The Visual
+Studio C++ workload below supplies CMake on Windows. Install it separately with
+`brew install cmake` on macOS or `sudo apt install cmake` on Ubuntu.
+
+Install the latest **stable** PowerShell release unless you have a reason to
+test a preview. Keep the package manager or installer that installed it as the
+owner of upgrades; do not combine a system package, a user-local archive, and
+a .NET global-tool installation on the same `PATH`.
 
 === "Windows"
 
@@ -43,15 +48,23 @@ The full PowerShell build also requires CMake and a C++17 compiler for
 
         You can also use the Visual Studio Installer and select **Desktop
         development with C++**. The Windows build uses the Microsoft C/C++
-        compiler tools from that installation.
+        compiler tools and CMake from that installation.
 
-    2. Install PowerShell 7 (`pwsh`) from the
-       [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows),
-       then verify it is available:
+    2. On Windows 11 or a Windows client with WinGet, install the stable
+       PowerShell package. This is Microsoft's recommended client install
+       path:
 
         ```powershell
+        winget install --id Microsoft.PowerShell --source winget
         pwsh --version
         ```
+
+        WinGet currently selects the MSIX package. That is suitable for this
+        build, but it is per-user and does not support PowerShell remoting or
+        all-users profiles. For Windows Server, managed deployments, remoting,
+        or an all-users installation, use the MSI path in the
+        [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/install-powershell-on-windows)
+        instead. Use the architecture-matched package on Windows ARM64.
 
 === "macOS"
 
@@ -64,14 +77,21 @@ The full PowerShell build also requires CMake and a C++17 compiler for
         This provides the clang and C++ compiler tools used by the macOS build
         scripts.
 
-    2. Install PowerShell 7 (`pwsh`) with Homebrew or the
-       [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-macos),
-       then verify it is available:
+    2. Install the architecture-matched, Microsoft-signed PKG from the
+       [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/install-powershell-on-macos).
+       This is Microsoft's preferred path for most macOS users. Choose the
+       `osx-arm64` package for Apple Silicon and `osx-x64` for Intel Macs.
+       Then open a new terminal and verify it:
 
         ```bash
-        brew install --cask powershell
         pwsh --version
         ```
+
+        The PKG installs `pwsh` under `/usr/local/bin`. A Homebrew cask can be
+        appropriate when Homebrew centrally manages your developer tools, but
+        do not install both variants. Use the archive path only when you need
+        side-by-side versions or a custom install location; it requires manual
+        dependency and update management.
 
 === "Ubuntu"
 
@@ -81,81 +101,75 @@ The full PowerShell build also requires CMake and a C++17 compiler for
         sudo apt install build-essential
         ```
 
-    2. Install PowerShell 7 (`pwsh`) using the package instructions for your
-       Ubuntu release in the
-       [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux),
-       then verify it is available:
+    2. On a supported Ubuntu LTS release, install PowerShell from Microsoft's
+       package repository. This is the preferred Ubuntu method and lets APT
+       manage upgrades:
 
-        ```bash
+        ```sh
+        sudo apt-get update
+        sudo apt-get install -y wget apt-transport-https software-properties-common
+        . /etc/os-release
+        wget -q "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"
+        sudo dpkg -i packages-microsoft-prod.deb
+        rm packages-microsoft-prod.deb
+        sudo apt-get update
+        sudo apt-get install -y powershell
         pwsh --version
         ```
+
+        The Microsoft repository also carries some .NET packages. If this host
+        uses Ubuntu's .NET packages, review Microsoft's
+        [package-source guidance](https://learn.microsoft.com/powershell/scripting/install/install-ubuntu#install-powershell-7-from-the-package-repository)
+        before adding it. Microsoft supports Ubuntu LTS releases; use the
+        [manual archive method](https://learn.microsoft.com/powershell/scripting/install/install-ubuntu#manually-download-and-install-powershell-7)
+        for interim or unsupported releases.
 
 === "Ubuntu ARM64"
 
     1. Install gcc, g++, make, and the usual build tools:
 
         ```bash
-        sudo apt install build-essential
+        sudo apt install build-essential curl
         ```
 
-    2. Install an ARM64 build of PowerShell 7 (`pwsh`). If the package flow for
-       your Ubuntu release is available, use the
-       [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux).
-       If not, use the official `linux-arm64` tarball from the PowerShell
-       release page. To find the latest available version, check the
-       [PowerShell releases page](https://github.com/PowerShell/PowerShell/releases)
-       or query the GitHub release metadata:
+    2. Use the Ubuntu repository route above if it publishes a package for your
+       release and architecture. Otherwise, use the official `linux-arm64`
+       archive. This user-local approach avoids changing system package
+       sources. Set `version` to a stable release listed on the
+       [PowerShell releases page](https://github.com/PowerShell/PowerShell/releases),
+       and verify the archive against that release's published SHA-256 file
+       before extracting it:
 
-        ```bash
-        curl -fsSL https://api.github.com/repos/PowerShell/PowerShell/releases/latest \
-            | sed -n 's/.*"tag_name": "v\([^"]*\)".*/\1/p'
-        ```
-
-        For a user-local install, set `version` to that release:
-
-        ```bash
-        version=7.6.3
+        ```sh
+        version=7.6.6
+        asset="powershell-${version}-linux-arm64.tar.gz"
         install_dir="$HOME/.local/share/powershell/$version"
-        archive="/tmp/powershell-${version}-linux-arm64.tar.gz"
+        release_url="https://github.com/PowerShell/PowerShell/releases/download/v${version}"
 
         mkdir -p "$install_dir" "$HOME/.local/bin"
-        curl -fL \
-            "https://github.com/PowerShell/PowerShell/releases/download/v${version}/powershell-${version}-linux-arm64.tar.gz" \
-            -o "$archive"
-        tar -xzf "$archive" -C "$install_dir"
+        curl -fLO "$release_url/$asset"
+        curl -fLO "$release_url/hashes.sha256"
+        grep -F " $asset" hashes.sha256 | sha256sum -c - || exit 1
+        tar -xzf "$asset" -C "$install_dir"
         chmod +x "$install_dir/pwsh"
         ln -sfn "$install_dir/pwsh" "$HOME/.local/bin/pwsh"
+        rm "$asset" hashes.sha256
         ```
 
         Make sure `~/.local/bin` is on your `PATH`, then verify both the
         version and architecture:
 
-        ```bash
+        ```sh
         export PATH="$HOME/.local/bin:$PATH"
         pwsh --version
         file "$(readlink -f "$HOME/.local/bin/pwsh")"
         ```
 
-        The `file` output should report `ARM aarch64`.
+        The `file` output should report `ARM aarch64`. Add `~/.local/bin` to
+        your shell startup file if it is not already present. Re-run the
+        checksum step for each upgrade, extract into a new versioned directory,
+        then move only the `pwsh` symlink.
 
-=== "Linux without PowerShell (RISC-V64, etc.)"
-
-    Some platforms this project targets - RISC-V64 boards, for example - have
-    no PowerShell package and no official release tarball at all, unlike
-    ARM64 above. On any such Linux platform, skip installing PowerShell
-    entirely:
-
-    1. Install gcc, g++, make, and the usual build tools:
-
-        ```bash
-        sudo apt install build-essential
-        ```
-
-    2. Use `m-posix.sh` in place of `pwsh ./scripts/build-dcc.ps1` throughout
-       this guide - see [Build DCC C Compiler](#build-dcc-c-compiler) below.
-       It needs nothing beyond `/bin/sh` (tested under `dash`, what Raspberry
-       Pi OS/Debian actually use) and a C compiler, and builds the same
-       `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, and `l80c` tools.
 
 === "Windows ARM64"
 
@@ -169,7 +183,8 @@ The full PowerShell build also requires CMake and a C++17 compiler for
         You can also use the Visual Studio Installer and select **Desktop
         development with C++**, then add the **MSVC ARM64/ARM64EC build tools**
         component. The DCC C Compiler Windows build scripts use the native ARM64 MSVC
-        environment (`vcvarsarm64.bat`) when they run on Windows ARM64.
+        environment (`vcvarsarm64.bat`) when they run on Windows ARM64. CMake
+        is included with the recommended components.
 
     2. Verify that the ARM64 MSVC tools were installed:
 
@@ -181,13 +196,28 @@ The full PowerShell build also requires CMake and a C++17 compiler for
 
         The final command should print `True`.
 
-    3. Install PowerShell 7 (`pwsh`) from the
-       [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows),
-       then verify it is available:
+    3. Install stable PowerShell 7 with WinGet, which selects the native
+       architecture automatically:
 
         ```powershell
+        winget install --id Microsoft.PowerShell --source winget
         pwsh --version
         ```
+
+        For server, managed, remoting, or all-users installations, choose the
+        ARM64 MSI package from the
+        [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/install-powershell-on-windows)
+        instead of the per-user MSIX package.
+
+## Verify PowerShell
+
+Run this after any platform-specific installation. It confirms that the shell
+on `PATH` is PowerShell 7+, shows the executable being used, and starts without
+loading a profile that might mask a setup problem:
+
+```powershell
+pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion; $PSVersionTable.PSEdition; $PSVersionTable.OS; (Get-Command pwsh).Source'
+```
 
 ## Clone the repositories
 
@@ -286,19 +316,10 @@ asserts compiled out, so the resulting `ntvcm` runs faster.
 ## Set up your environment
 
 Use `dccmake` to build application projects with the source-built tools.
-Optional build and test helpers live in the `scripts` directory:
+Use `scripts/runall.ps1` to build and verify the test suite.
 
-- `scripts/ma.sh` — source-checkout implementation for Linux/macOS without PowerShell
-- `scripts/ma.ps1` — source-checkout implementation for Windows PowerShell 5.1 or PowerShell 7+
-- `scripts/runall.ps1` — builds and verifies the test suite
-
-Run the single-app shell helper directly on Linux/macOS, or run the PowerShell
-scripts from your operating-system terminal or the VS Code terminal by changing
-to the DCC C Compiler checkout, starting `pwsh`, and running `./scripts/ma.ps1` or
-`./scripts/runall.ps1`.
-
-They resolve each tool the same way: they use an environment variable if you set
-one, otherwise they look for the tool on your `PATH`. The relevant tools are:
+The tools use an environment variable if you set one; otherwise they look on
+your `PATH`. The relevant tools are:
 
 - [`dcc`](appendix/03-utilities.md#toolchain-commands) — compiler
 - [`dccmake`](appendix/03-utilities.md#build-pipeline-helper-dccmake) — build pipeline helper
@@ -481,15 +502,15 @@ directory on `PATH` alone does not configure header lookup.
 
 ## Verify the setup
 
-With the tools on your `PATH`, build and run one of the repository's sample
-tests. From your operating-system terminal or the VS Code terminal, change to
-the DCC checkout and use the native build driver:
+With the tools on your `PATH`, run the full extended unit-test suite. From your
+operating-system terminal or the VS Code terminal, first change to your local
+DCC checkout directory:
 
-    cd /path/to/dcc
-    dccmake tests/tstr.c dcc-output=TSTR
-    ntvcm build/TSTR.COM
+```powershell
+cd C:\path\to\dcc
+pwsh ./scripts/runall.ps1 -Mode full -Extended
+```
 
-The DCC C Compiler repo's `tests/` programs are suitable samples for scratch projects, but
-day-to-day work does not need to happen inside the DCC C Compiler repo. The tools build
-CP/M apps from wherever your sources live. Once that works, move on to
-[Building and linking](02-build-and-link.md) for the day-to-day workflow.
+The suite builds and runs the repository's tests with and without the peephole
+optimizer. Once it passes, move on to [Building and linking](02-build-and-link.md)
+for the day-to-day workflow.

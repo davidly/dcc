@@ -39,31 +39,6 @@ outside the checkout, also configure `dcc-include-directory` and
 That reference covers tool overrides, configuration precedence, debug modes,
 and the optional emulated assembler/linker paths.
 
-## The build script
-
-Use `dccmake` for application projects. The source checkout also provides
-optional single-app helper scripts. From the checkout on Linux/macOS, run:
-
-```sh
-./scripts/ma.sh foo --mode fast
-```
-
-On Windows, use the PowerShell driver. It works with the Windows PowerShell 5.1
-already included with Windows, as well as PowerShell 7+:
-
-```pwsh
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 foo -Mode fast    # builds foo.c -> FOO.COM
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 foo -Mode nopeep  # skip the dccpeep optimizer
-```
-
-This runs the compiler, the optional `dccpeep` peephole optimizer,
-`dccrtlstrip`, [`m80c`](appendix/03-utilities.md#native-assembler-m80c), and
-[`l80c`](appendix/03-utilities.md#native-linker-l80c). Whole-program
-application stripping and runtime trimming are both part of the normal build
-path, keeping unreachable app functions/objects and unused library routines out
-of the final `.COM` file. The script resolves each tool from your `PATH` or its
-documented environment-variable override.
-
 The native linker normally uses `/P:100`, CP/M's standard `.COM` load address.
 For fixed-address, overlay, or relocating system programs,
 [`l80c`](appendix/03-utilities.md#native-linker-l80c) also supports LINK-80-style

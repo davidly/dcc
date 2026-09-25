@@ -202,6 +202,29 @@ function Get-MsvcVarsPath {
     return $null
 }
 
+function Get-VisualStudioCmakePath {
+    # The VCTools workload installed by Get-MsvcToolchain's command includes
+    # Visual Studio's CMake component through --includeRecommended. vcvars*.bat
+    # intentionally sets up the compiler environment only, so it does not put
+    # this CMake location on PATH. Resolve it from the same VS instance instead
+    # of requiring a second, standalone Kitware CMake installation.
+    $vcvars = Get-MsvcVarsPath
+    if (-not $vcvars) {
+        return $null
+    }
+
+    $installPath = $vcvars
+    for ($i = 0; $i -lt 4; $i++) {
+        $installPath = Split-Path -Parent $installPath
+    }
+    $cmake = Join-Path $installPath "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+    if (Test-Path $cmake) {
+        return $cmake
+    }
+
+    return $null
+}
+
 function Initialize-Msvc {
     $toolchain = Get-MsvcToolchain
     $vcvars = Get-MsvcVarsPath
@@ -499,13 +522,18 @@ function Build-UnixNative {
 
 function Build-DccDebugHost {
     $cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
-    if (-not $cmakeCommand) {
+    $cmakePath = if ($cmakeCommand) { $cmakeCommand.Source } elseif ($IsWindows) { Get-VisualStudioCmakePath } else { $null }
+    if ($cmakePath) {
+        Write-Host "CMake: $cmakePath"
+    }
+    if (-not $cmakePath) {
         $hint = if ($IsMacOS) {
             "Install it with: brew install cmake"
         } elseif ($IsLinux) {
             "Install it with: sudo apt-get install -y cmake  (or your distro's equivalent, e.g. dnf/yum/pacman)"
         } elseif ($IsWindows) {
-            "Install it with: winget install Kitware.CMake  (or see https://cmake.org/download/)"
+            $toolchain = Get-MsvcToolchain
+            "Install or modify Visual Studio Build Tools with its C++ workload and recommended components: $($toolchain.InstallCommand)"
         } else {
             "See https://cmake.org/download/ for install instructions."
         }
@@ -540,8 +568,8 @@ function Build-DccDebugHost {
     if (-not $IsWindows) {
         $configureArguments += "-DCMAKE_BUILD_TYPE=Release"
     }
-    Invoke-Checked $cmakeCommand.Source $configureArguments "debugger host configuration" -QuietOutput
-    Invoke-Checked $cmakeCommand.Source @(
+    Invoke-Checked $cmakePath $configureArguments "debugger host configuration" -QuietOutput
+    Invoke-Checked $cmakePath @(
         "--build", $buildDir,
         "--config", "Release",
         "--target", "dcc-debug-host", "dcc-debug-io-adapter-example"
