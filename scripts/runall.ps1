@@ -303,6 +303,12 @@ if ($Help) {
 
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
 Set-Location $script:RepoRoot
+# PowerShell's provider location and .NET's process working directory can
+# diverge in a long-lived shell (notably the PowerShell .NET global tool).
+# System.IO APIs resolve relative paths against Environment.CurrentDirectory,
+# while Test-Path/Join-Path use the PowerShell location. Keep them aligned so
+# parallel workers see the same repository-relative files as the parent.
+[Environment]::CurrentDirectory = $script:RepoRoot
 
 # On Linux, default build artifacts to tmpfs for lower I/O latency.
 # If /dev/shm is unavailable or opt-out is requested, keep the normal BuildDir.
