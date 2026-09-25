@@ -3,6 +3,16 @@
 
 static unsigned char global_byte;
 
+static int increment_value(unsigned char i)
+{
+    return ++i;
+}
+
+static int decrement_value(unsigned char i)
+{
+    return --i;
+}
+
 static int truth_return(unsigned char i)
 {
     return ++i ? 1 : 0;
@@ -77,6 +87,9 @@ int main(void)
     local = 255;
     if (!++local != 1)
         failures |= 2048;
+    if (increment_value(255) != 0 || increment_value(0) != 1 ||
+        decrement_value(0) != 255 || decrement_value(1) != 0)
+        failures |= 4096;
     printf("tbytepre failures: %d\n", failures);
     return failures != 0;
 }

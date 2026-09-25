@@ -464,7 +464,10 @@ void mir_emit_scalar_truth_test(MirStream *out, int value)
 {
     const struct MirInsn *definition = mir_definition(value);
 
-    if (definition != NULL && type_size(definition->type) == 1)
+    /* Keep the established word-test pattern for canonical byte values:
+     * the peephole optimizer folds their sign extension and test together. */
+    if (definition != NULL && type_size(definition->type) == 1 &&
+        !mir_value_is_normalized_byte(value, definition->type, 0))
         mir_stream_puts("\tld a,l\n\tor a\n", out);
     else
         mir_stream_puts("\tld a,h\n\tor l\n", out);
@@ -490,6 +493,13 @@ void mir_emit_byte_arithmetic_result(MirStream *out, const struct MirInsn *insn)
             (use->opcode == MIR_STORE && type_size(use->type) == 1) ||
             (use->opcode == MIR_STORE_INDIRECT &&
              use->src1 != insn->dst && type_size(use->type) == 1))
+            continue;
+        /* A real integer conversion establishes the byte representation
+         * itself. Same-type casts may be elided; bool/float conversions
+         * require a canonical input before testing or converting it. */
+        if (use->opcode == MIR_UNARY && use->immediate == 0 &&
+            use->type != 0 && use->type != insn->type &&
+            !type_is_bool(use->type) && !type_is_float(use->type))
             continue;
         mir_emit_cast(out, TYPE_INT, insn->type);
         return;
@@ -2452,6 +2462,10 @@ int mir_emit_homed_unary_instruction(MirStream *out,
         } else if (type_size(insn->type) == 1 &&
                    !mir_value_is_normalized_byte(insn->src1, insn->type, 0)) {
             mir_emit_byte_extension(out, MIR_COLOR_HL, insn->type);
+        } else if (type_size(source_type) == 1 &&
+                   type_size(insn->type) == 2 &&
+                   !mir_value_is_normalized_byte(insn->src1, source_type, 0)) {
+            mir_emit_byte_extension(out, MIR_COLOR_HL, source_type);
         }
     } else if (insn->immediate == '+') {
         /* Unary plus: no-op. */

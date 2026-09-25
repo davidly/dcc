@@ -2458,13 +2458,19 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     int one;
     int new_value;
     int operand_type;
+    int lvalue_type;
     long step = 1;
 
     if (operand == NULL)
         return -1;
     if (operand->kind != AST_IDENT)
         mir.has_indirect_incdec = 1;
-    operand_type = mir_lvalue_type(operand);
+    operand_type = operand->type;
+    /* Recover the stored byte type without changing the established MIR
+     * types and matcher shapes for word and pointer increments. */
+    lvalue_type = mir_lvalue_type(operand);
+    if (type_size(lvalue_type) == 1)
+        operand_type = lvalue_type;
     if (operand->kind == AST_IDENT) {
         struct Sym *symbol = mir_ident_symbol(operand);
         if (symbol != NULL)
