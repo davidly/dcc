@@ -1,0 +1,10 @@
+_byte_unit_update:
+	inc l ; peep: ld_de1_byte_update
+	ld h,0
+	ld (_sink),hl
+	ld de,1
+	inc l
+	ld a,e
+	ld (_sink),a
+	dec l ; peep: ld_de1_byte_update
+	ret

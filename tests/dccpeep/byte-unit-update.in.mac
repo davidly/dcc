@@ -1,0 +1,13 @@
+_byte_unit_update:
+	ld de,1
+	inc l ;@dcc.mir byte-unit-update
+	ld h,0
+	ld (_sink),hl
+	ld de,1
+	inc l
+	ld a,e
+	ld (_sink),a
+	ld de,1
+	dec l ;@dcc.mir byte-unit-update
+	ld h,0
+	ret

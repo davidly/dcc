@@ -473,16 +473,15 @@ void mir_emit_scalar_truth_test(MirStream *out, int value)
         mir_stream_puts("\tld a,h\n\tor l\n", out);
 }
 
-/* Preserve increment/store fusion and avoid extending a byte whose only
- * consumers already discard the high byte. Other uses (including PHIs and
- * register homes) need the canonical value before it is forwarded. */
-void mir_emit_byte_arithmetic_result(MirStream *out, const struct MirInsn *insn)
+static int mir_byte_arithmetic_result_needs_normalization(
+    const struct MirInsn *insn)
 {
     int i;
 
     if (type_size(insn->type) != 1 ||
-        (insn->immediate != '+' && insn->immediate != '-'))
-        return;
+        (insn->immediate != '+' && insn->immediate != '-') ||
+        insn->narrowed_for_counter_update)
+        return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *use = &mir.insns[i];
 
@@ -501,9 +500,39 @@ void mir_emit_byte_arithmetic_result(MirStream *out, const struct MirInsn *insn)
             use->type != 0 && use->type != insn->type &&
             !type_is_bool(use->type) && !type_is_float(use->type))
             continue;
-        mir_emit_cast(out, TYPE_INT, insn->type);
-        return;
+        return 1;
     }
+    return 0;
+}
+
+int mir_binary_is_byte_unit_update(const struct MirInsn *insn)
+{
+    const struct MirInsn *right;
+
+    if (insn == NULL || type_size(insn->type) != 1 ||
+        (insn->immediate != '+' && insn->immediate != '-'))
+        return 0;
+    right = mir_definition(insn->src2);
+    return right != NULL && right->opcode == MIR_CONST &&
+           (right->immediate & 0xffffL) == 1 &&
+           mir_byte_arithmetic_result_needs_normalization(insn);
+}
+
+/* Preserve increment/store fusion and avoid extending a byte whose only
+ * consumers already discard the high byte. Other uses (including PHIs and
+ * register homes) need the canonical value before it is forwarded. A direct
+ * inc/dec of L preserves an already-normalized unsigned high byte, so that
+ * case needs no repair either. */
+void mir_emit_byte_arithmetic_result(MirStream *out,
+                                     const struct MirInsn *insn,
+                                     int high_byte_preserved)
+{
+    if (!mir_byte_arithmetic_result_needs_normalization(insn))
+        return;
+    if (high_byte_preserved && (insn->type & TYPE_UNSIGNED) != 0 &&
+        mir_value_is_normalized_byte(insn->src1, insn->type, 0))
+        return;
+    mir_emit_cast(out, TYPE_INT, insn->type);
 }
 
 void mir_emit_scalar_compare(MirStream *out, int operation, int is_unsigned)
@@ -2512,12 +2541,17 @@ int mir_emit_homed_binary_instruction(MirStream *out,
     const struct MirInsn *right_definition;
     int comparison_unsigned;
     int biased_right_constant;
+    int byte_unit_update = mir_binary_is_byte_unit_update(insn);
 
     if (mir.allocation_colors[right] == MIR_COLOR_HL) {
         int temporary;
         if (!commutative && runtime_helper == NULL)
             return 0;
         if (commutative) {
+            /* The direct byte update is valid only while the original lhs
+             * remains in HL. Swapping a constant RHS into HL requires the
+             * ordinary 16-bit operation. */
+            byte_unit_update = 0;
             temporary = left;
             left = right;
             right = temporary;
@@ -2562,7 +2596,11 @@ int mir_emit_homed_binary_instruction(MirStream *out,
     } else if (!mir_emit_home_to_de(out, right)) {
         return 0;
     }
-    if (runtime_helper != NULL)
+    if (byte_unit_update)
+        mir_stream_puts(insn->immediate == '+'
+            ? "\tinc l ;@dcc.mir byte-unit-update\n"
+            : "\tdec l ;@dcc.mir byte-unit-update\n", out);
+    else if (runtime_helper != NULL)
         mir_emit_runtime_call(out, runtime_helper);
     else if (insn->immediate == '+')
         mir_stream_puts("\tadd hl,de\n", out);
@@ -2604,7 +2642,7 @@ int mir_emit_homed_binary_instruction(MirStream *out,
     } else {
         return 0;
     }
-    mir_emit_byte_arithmetic_result(out, insn);
+    mir_emit_byte_arithmetic_result(out, insn, byte_unit_update);
     if (!mir_emit_hl_to_home(out, insn->dst))
         return 0;
     if (preserve_de)

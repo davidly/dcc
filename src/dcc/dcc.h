@@ -360,6 +360,8 @@ struct Sym {
                       * mir_allocate_registers to bias profitable
                       * register-backed values ahead of otherwise equivalent
                       * candidates - see mir_value_backs_declared_register_object. */
+    int is_narrowed_for_counter; /* source int represented as an unsigned byte
+                                  * after a counting-loop range proof */
     int is_inline;   /* function declared with inline specifier */
     int is_noreturn; /* function declared with _Noreturn: licm_scan_modified
                       * (dcc_licm.c) tolerates a call to it in an otherwise-
