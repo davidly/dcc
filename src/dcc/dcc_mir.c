@@ -2464,7 +2464,7 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
         return -1;
     if (operand->kind != AST_IDENT)
         mir.has_indirect_incdec = 1;
-    operand_type = operand->type;
+    operand_type = mir_lvalue_type(operand);
     if (operand->kind == AST_IDENT) {
         struct Sym *symbol = mir_ident_symbol(operand);
         if (symbol != NULL)

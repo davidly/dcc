@@ -601,6 +601,8 @@ int mir_emit_wide_operation(MirStream *out, const struct MirInsn *insn);
 void mir_emit_scalar_compare(MirStream *out, int operation, int is_unsigned);
 void mir_emit_scalar_compare_biased_right(MirStream *out, int operation);
 void mir_emit_signed_byte_extend(MirStream *out);
+void mir_emit_scalar_truth_test(MirStream *out, int value);
+void mir_emit_byte_arithmetic_result(MirStream *out, const struct MirInsn *insn);
 void mir_emit_hl_and_const(MirStream *out, unsigned int mask);
 void mir_emit_hl_or_const(MirStream *out, unsigned int mask);
 void mir_emit_bitfield_extract(MirStream *out, const struct MirInsn *insn);

@@ -457,6 +457,45 @@ void mir_emit_signed_byte_extend(MirStream *out)
     mir_stream_puts("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
 }
 
+/* Test a scalar already loaded into HL. Byte arithmetic can leave carry or
+ * sign debris in H; a truth test must use the stored byte value without
+ * inserting a conversion into the MIR increment/store pattern. */
+void mir_emit_scalar_truth_test(MirStream *out, int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    if (definition != NULL && type_size(definition->type) == 1)
+        mir_stream_puts("\tld a,l\n\tor a\n", out);
+    else
+        mir_stream_puts("\tld a,h\n\tor l\n", out);
+}
+
+/* Preserve increment/store fusion and avoid extending a byte whose only
+ * consumers already discard the high byte. Other uses (including PHIs and
+ * register homes) need the canonical value before it is forwarded. */
+void mir_emit_byte_arithmetic_result(MirStream *out, const struct MirInsn *insn)
+{
+    int i;
+
+    if (type_size(insn->type) != 1 ||
+        (insn->immediate != '+' && insn->immediate != '-'))
+        return;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *use = &mir.insns[i];
+
+        if (use->src1 != insn->dst && use->src2 != insn->dst &&
+            !mir_call_uses_value(use, insn->dst))
+            continue;
+        if (use->opcode == MIR_BRANCH_FALSE ||
+            (use->opcode == MIR_STORE && type_size(use->type) == 1) ||
+            (use->opcode == MIR_STORE_INDIRECT &&
+             use->src1 != insn->dst && type_size(use->type) == 1))
+            continue;
+        mir_emit_cast(out, TYPE_INT, insn->type);
+        return;
+    }
+}
+
 void mir_emit_scalar_compare(MirStream *out, int operation, int is_unsigned)
 {
     int true_label = new_label();
@@ -2551,6 +2590,7 @@ int mir_emit_homed_binary_instruction(MirStream *out,
     } else {
         return 0;
     }
+    mir_emit_byte_arithmetic_result(out, insn);
     if (!mir_emit_hl_to_home(out, insn->dst))
         return 0;
     if (preserve_de)

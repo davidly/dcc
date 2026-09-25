@@ -35248,6 +35248,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                         mir_stream_puts("\tinc hl\n", out);
                 } else if (!mir_emit_scalar_operation(out, insn))
                     goto done;
+                mir_emit_byte_arithmetic_result(out, insn);
                 mir_emit_virtual_store(out, insn->dst);
             }
             break;
@@ -36010,7 +36011,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                                   out);
                     } else {
                         mir_emit_virtual_load(out, insn->src1);
-                        mir_stream_puts("\tld a,h\n\tor l\n", out);
+                        mir_emit_scalar_truth_test(out, insn->src1);
                     }
                     mir_stream_puts("\tld hl,0\n", out);
                     mir_stream_printf(out,
@@ -36031,10 +36032,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     int true_label = new_label();
 
                     mir_emit_virtual_load(out, suffix.left_value);
-                    mir_stream_puts("\tld a,h\n\tor l\n", out);
+                    mir_emit_scalar_truth_test(out, suffix.left_value);
                     mir_stream_printf(out, "\tjp z, L%d\n", true_label);
                     mir_emit_virtual_load(out, suffix.right_value);
-                    mir_stream_puts("\tld a,h\n\tor l\n", out);
+                    mir_emit_scalar_truth_test(out, suffix.right_value);
                     mir_stream_printf(out,
                             "\tjp nz, L%d\n\tld hl,0\n"
                             "\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
@@ -36069,7 +36070,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                         mir_stream_puts("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
                 } else {
                     mir_emit_virtual_load(out, insn->src1);
-                    mir_stream_puts("\tld a,h\n\tor l\n", out);
+                    mir_emit_scalar_truth_test(out, insn->src1);
                 }
                 if (!mir_emit_conditional_branch_with_phi_copies(
                         out, labels, "nz", i, target, insn->label))
