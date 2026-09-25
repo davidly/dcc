@@ -20,9 +20,9 @@ or the Microsoft `M80`/`L80` originals running under `ntvcm`.
   in-emulator linking workspace well before the target program itself would
   not fit; [`l80c`](03-utilities.md#native-linker-l80c) has no such ceiling.
   They are the default; pass
-  `dcc-use-emulated-m80=true`/`dcc-use-emulated-l80=true` to `dccmake` (or
-  `--emulated-m80`/`--emulated-l80` to `ma.sh`/`ma.ps1`) to use the real
-  `M80.COM`/`L80.COM` under `ntvcm` instead, e.g. to cross-check output.
+  `dcc-use-emulated-m80=true`/`dcc-use-emulated-l80=true` to `dccmake` to use
+  the real `M80.COM`/`L80.COM` under `ntvcm` instead, e.g. to cross-check
+  output.
 
   The compiler implementation is portable C11 host code built by modern Clang,
   GCC, or MSVC. That implementation language is independent of `dcc`'s C89
@@ -60,8 +60,8 @@ flowchart TB
 | Assemble | [`m80c`](03-utilities.md#native-assembler-m80c) | `.MAC` | `.REL` | Object code (relocatable); `dccmake` uses native `m80c` by default |
 | Link | [`l80c`](03-utilities.md#native-linker-l80c) | `.REL` files | `.COM` | Resolve symbols into a CP/M executable; `dccmake` uses native `l80c` by default |
 
-The `dccpeep` stage is optional (`./scripts/ma.ps1 name -Mode nopeep` skips it
-when run from PowerShell in the DCC C Compiler checkout). `dccrtlstrip` first
+The `dccpeep` stage is optional (`dccmake dcc-peep=false` skips it).
+`dccrtlstrip` first
 computes whole-program reachability across all final application assembly
 modules, then uses the reduced application to select runtime blocks.
 

@@ -541,7 +541,7 @@ static int mir_emit_homed_condition_jump(
             mir_stream_puts("\tpush hl\n", out);
         if (!mir_emit_home_to_hl(out, value))
             return 0;
-        mir_stream_puts("\tld a,h\n\tor l\n", out);
+        mir_emit_scalar_truth_test(out, value);
         if (preserve_hl)
             mir_stream_puts("\tpop hl\n", out);
     }

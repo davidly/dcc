@@ -1762,7 +1762,8 @@ void gen_local_decl_after_type(int base)
              * stride even though Sym.type is now correctly narrowed. */
             current_field_array_elem_size = 0;
         } else if (!g_decl.is_extern && !g_decl.is_volatile &&
-                   try_narrow_register_scalar(name, type, g_decl.is_register, arrlen, total_elems)) {
+                   try_narrow_register_scalar(name, type, g_decl.is_register,
+                                              arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
         } else if (!g_decl.is_extern && !g_decl.is_volatile &&
                    try_narrow_for_counter(name, type, arrlen, total_elems)) {
@@ -1790,6 +1791,7 @@ void gen_local_decl_after_type(int base)
             s->pointee_is_volatile = g_decl.pointee_is_volatile;
             s->pointee_volatile_mask = g_decl.pointee_volatile_mask;
             s->is_register = g_decl.is_register;
+            s->is_narrowed_for_counter = narrowed_as_counter;
             freshly_allocated = 1;
             if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;

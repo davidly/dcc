@@ -1121,6 +1121,18 @@ static int try_ix_de_load_reorder_at(int i)
 
 static int try_small_positive_offset_at(int i)
 {
+    /* The MIR marker states that this low-byte operation replaced an update
+     * which materialized 1 in DE only for the generic 16-bit operation. */
+    if (eq(i, "ld de,1") &&
+        (eq(i + 1, "inc l") || eq(i + 1, "dec l")) &&
+        i + 2 < nlines && strncmp(lines[i + 2], "jp ", 3) != 0 &&
+        strstr(lines[i + 1], ";@dcc.mir byte-unit-update") != NULL) {
+        replace1_tagged(i, eq(i + 1, "inc l") ? "inc l" : "dec l",
+                        "ld_de1_byte_update");
+        delete_n(i + 1, 1);
+        return 1;
+    }
+
     /* Small positive address offsets.  16-bit INC HL does not affect flags.
      * Only use where the next instruction is not a conditional branch. */
     if (eq(i, "ld de,1") && eq(i + 1, "add hl,de") &&

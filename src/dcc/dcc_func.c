@@ -2459,6 +2459,7 @@ void scan_local_decl_after_type(int base)
     int parenthesized_array;
     int parenthesized_total;
     int parenthesized_stride;
+    int narrowed_as_counter;
     char name[64];
     char source_name[64];
     struct Sym *s;
@@ -2608,6 +2609,7 @@ void scan_local_decl_after_type(int base)
             }
         }
 
+        narrowed_as_counter = 0;
         if (!g_decl.is_extern && !g_decl.is_volatile &&
             try_narrow_local_int_array(source_name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
@@ -2627,6 +2629,7 @@ void scan_local_decl_after_type(int base)
         } else if (!g_decl.is_extern && !g_decl.is_volatile &&
                    try_narrow_for_counter(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
+            narrowed_as_counter = 1;
         }
 
         bytes = type_size(type);
@@ -2659,6 +2662,7 @@ void scan_local_decl_after_type(int base)
             s->is_volatile = g_decl.is_volatile;
             s->pointee_is_volatile = g_decl.pointee_is_volatile;
             s->pointee_volatile_mask = g_decl.pointee_volatile_mask;
+            s->is_narrowed_for_counter = narrowed_as_counter;
             freshly_allocated = 1;
             if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;

@@ -136,6 +136,8 @@ struct MirInsn {
     unsigned int bit_mask;
     int secondary_offset;
     int inline_temp_id;
+    /* Preserve word-style codegen for an int narrowed by the loop proof. */
+    int narrowed_for_counter_update;
     /* Low/high bytes retain direct left/right 32-bit div/mod cast types. */
     int divmod_cast_types;
     char name[64];
@@ -601,6 +603,11 @@ int mir_emit_wide_operation(MirStream *out, const struct MirInsn *insn);
 void mir_emit_scalar_compare(MirStream *out, int operation, int is_unsigned);
 void mir_emit_scalar_compare_biased_right(MirStream *out, int operation);
 void mir_emit_signed_byte_extend(MirStream *out);
+void mir_emit_scalar_truth_test(MirStream *out, int value);
+int mir_binary_is_byte_unit_update(const struct MirInsn *insn);
+void mir_emit_byte_arithmetic_result(MirStream *out,
+                                     const struct MirInsn *insn,
+                                     int high_byte_preserved);
 void mir_emit_hl_and_const(MirStream *out, unsigned int mask);
 void mir_emit_hl_or_const(MirStream *out, unsigned int mask);
 void mir_emit_bitfield_extract(MirStream *out, const struct MirInsn *insn);

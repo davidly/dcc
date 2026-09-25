@@ -2458,6 +2458,7 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     int one;
     int new_value;
     int operand_type;
+    int lvalue_type;
     long step = 1;
 
     if (operand == NULL)
@@ -2465,6 +2466,11 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     if (operand->kind != AST_IDENT)
         mir.has_indirect_incdec = 1;
     operand_type = operand->type;
+    /* Recover the stored byte type without changing the established MIR
+     * types and matcher shapes for word and pointer increments. */
+    lvalue_type = mir_lvalue_type(operand);
+    if (type_size(lvalue_type) == 1)
+        operand_type = lvalue_type;
     if (operand->kind == AST_IDENT) {
         struct Sym *symbol = mir_ident_symbol(operand);
         if (symbol != NULL)
@@ -2507,6 +2513,11 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     insn->type = operand_type;
     insn->secondary_offset = operand_type;
     insn->immediate = operation == TOK_INC ? '+' : '-';
+    if (operand->kind == AST_IDENT) {
+        struct Sym *symbol = mir_ident_symbol(operand);
+        insn->narrowed_for_counter_update =
+            symbol != NULL && symbol->is_narrowed_for_counter;
+    }
     if (operand->kind == AST_IDENT) {
         mir_emit_ident_store(operand, new_value);
     } else {
@@ -5596,6 +5607,8 @@ static int mir_common_expressions_equal(const struct MirInsn *left,
            left->bit_width == right->bit_width &&
            left->bit_shift == right->bit_shift &&
            left->bit_mask == right->bit_mask &&
+           left->narrowed_for_counter_update ==
+               right->narrowed_for_counter_update &&
            (strcmp(left->name, right->name) == 0 ||
             (left->opcode == MIR_LOAD && left->object >= 0 &&
              left->object == right->object)) &&
@@ -5814,7 +5827,9 @@ static int mir_dominated_load_pure_value_equal(
                left->memory_flags == right->memory_flags &&
                left->bit_width == right->bit_width &&
                left->bit_shift == right->bit_shift &&
-               left->bit_mask == right->bit_mask;
+               left->bit_mask == right->bit_mask &&
+               left->narrowed_for_counter_update ==
+                   right->narrowed_for_counter_update;
     case MIR_MEMBER_ADDRESS:
         return mir_dominated_load_pure_value_equal(
                    left->src1, right->src1, depth + 1) &&

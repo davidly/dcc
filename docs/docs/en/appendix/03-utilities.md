@@ -1,89 +1,14 @@
 # Utilities
 
-Developer scripts for building and testing DCC C Compiler programs.
+Utilities for building and testing DCC C Compiler programs.
 
-Use the source-built [`dccmake`](#build-pipeline-helper-dccmake) tools for
-application projects. Run the optional scripts below from the DCC C Compiler
-checkout. The Linux/macOS single-app shell helper does not require PowerShell.
-
-## Build Driver (`ma.sh` / `ma.ps1`)
-
-The build driver compiles one app, optionally runs `dccpeep`, strips the
-runtime, assembles, and links a `.COM` executable.
-
-Use `scripts/ma.sh` on Linux/macOS, or `scripts/ma.ps1` with Windows PowerShell
-5.1 or PowerShell 7+. These are optional checkout helpers; use `dccmake`
-directly for project builds.
-
-### Build Driver Usage
-
-```pwsh
-./scripts/ma.ps1 <name> [mode] [options]
-```
-
-```sh
-./scripts/ma.sh <name> [mode] [options]
-```
-
-- `<name>` — Test app name (e.g., `triangle`, `sieve`, `ttt`)
-- `[mode]` — Build mode: `full` (both builds), `fast` (optimized), or `nopeep`
-  (without the additional peephole pass). The shell driver defaults to `fast`; the PowerShell driver
-  defaults to `full`.
-
-### Build Driver Examples
-
-```pwsh
-./scripts/ma.ps1 triangle
-./scripts/ma.ps1 sieve nopeep
-./scripts/ma.ps1 cobint -Mode fast -BuildDir mybuild
-```
-
-```sh
-./scripts/ma.sh triangle
-./scripts/ma.sh sieve nopeep
-./scripts/ma.sh cobint --mode fast --build-dir mybuild
-```
-
-### Build Driver Parameters
-
-| Parameter | Default | Purpose |
-| --------- | ------- | ------- |
-| `-Name` / positional name | (required) | App name without `.c` extension |
-| `-Mode` / `--mode` | `fast` (shell), `full` (PowerShell) | Build mode: `full`, `fast`, or `nopeep` |
-| `-SourcePath` / `--source-path` | Search by name | Explicit C source path |
-| `-BuildDir` / `--build-dir` | `build` | Build directory for artifacts |
-| `-Emulator` / `--emulator` | `ntvcm` | Emulator command for CP/M tools |
-| `-UseEmulatedM80` / `--emulated-m80` | off | Assemble with M80.COM under `ntvcm` instead of native [`m80c`](#native-assembler-m80c) |
-| `-UseEmulatedL80` / `--emulated-l80` | off | Link with L80.COM under `ntvcm` instead of native [`l80c`](#native-linker-l80c) |
-
-The wrapper accepts only the parameters above. Use `dccmake` directly for
-project settings such as debug builds, per-format overrides, and multi-module
-input lists.
-
-### Environment Variables
-
-- `DCC_STACK_SIZE` — C stack reserve in bytes; when unset, `dcc` uses its default
-- `DCC_FORCE_STACK_CHECK` — Force `-fstack-check` on all builds
-- `DCC_FLOATIO` — Set to `1` to force `%f` support on every `printf`-family call
-- `DCC_LONGIO` — Set to `1` to force long-format support on every `printf`-family call
-- `DCC_USE_EMULATED_M80`, `DCC_USE_EMULATED_L80` — Set to `1` to select the
-  real CP/M assembler or linker under `ntvcm`
-- `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
-- `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
-- `DCC_HOME` — optional toolchain asset root; used to find `include/`, `lib/`, and CP/M tools
-- `DCC_INCLUDE` — extra include directories, separated by the host path separator
-- `DCC_LIB` — extra runtime/tool asset roots, separated by the host path separator
-- `DCC_RUNTIME` — explicit path to `DCCRTL.MAC`
-- `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `M80C`, `L80`, `L80C` — Tool paths
-
-Run `./scripts/ma.ps1 -Help` on Windows or `./scripts/ma.sh --help` on Linux/macOS for the full option map, including which
-`dcc` options are owned by the helper pipeline.
+Use [`dccmake`](#build-pipeline-helper-dccmake) for application projects.
 
 ## Toolchain Commands
 
 The DCC C Compiler toolchain is a small set of host tools, CP/M tools, and
-runtime assets. The build drivers resolve these commands from explicit settings
-or environment variables first, then from the local checkout or `PATH`.
+runtime assets. `dccmake` resolves these commands from explicit settings or
+environment variables first, then from the local checkout or `PATH`.
 
 | Tool | Role | Notes |
 | ---- | ---- | ----- |

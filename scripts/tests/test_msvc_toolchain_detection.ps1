@@ -46,7 +46,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).ProviderPath
 $buildDccPs1 = Join-Path $repoRoot "scripts/build-dcc.ps1"
 
 # Dot-source build-dcc.ps1 to reach its functions (Get-MsvcToolchain,
-# Get-MsvcVarsPath) without running a real build - see the sentinel comment
+# Get-MsvcVarsPath/Get-VisualStudioCmakePath) without running a real build - see the sentinel comment
 # in build-dcc.ps1 immediately above its main-execution block.
 $env:DCC_BUILD_DCC_SKIP_MAIN = "1"
 try {
@@ -68,24 +68,38 @@ try {
     $fakeProgramFilesX86 = Join-Path $fakeRoot "Program Files (x86)"
     New-Item -ItemType Directory -Path $fakeProgramFilesX86 -Force | Out-Null
 
+    $toolchain = Get-MsvcToolchain
     $previewBuildDir = Join-Path $fakeRoot "Program Files/Microsoft Visual Studio/2022/Preview/VC/Auxiliary/Build"
     New-Item -ItemType Directory -Path $previewBuildDir -Force | Out-Null
-    $fakeVcVars64 = Join-Path $previewBuildDir "vcvars64.bat"
-    Set-Content -Path $fakeVcVars64 -Value "@echo off`r`n" -NoNewline
+    $fakeVcVars = Join-Path $previewBuildDir $toolchain.VcVars
+    Set-Content -Path $fakeVcVars -Value "@echo off`r`n" -NoNewline
 
     $env:ProgramFiles = Join-Path $fakeRoot "Program Files"
     ${env:ProgramFiles(x86)} = $fakeProgramFilesX86
 
     $found = Get-MsvcVarsPath
-    Assert-Equal -Actual $found -Expected $fakeVcVars64 `
-        -Description "finds vcvars64.bat under a Preview-only install"
+    Assert-Equal -Actual $found -Expected $fakeVcVars `
+        -Description "finds the target vcvars script under a Preview-only install"
+
+    Write-Host ""
+    Write-Host "Test: Get-VisualStudioCmakePath finds CMake from the same VS install"
+    $cmakeDir = Join-Path $fakeRoot "Program Files/Microsoft Visual Studio/2022/Preview/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin"
+    New-Item -ItemType Directory -Path $cmakeDir -Force | Out-Null
+    $fakeCmake = Join-Path $cmakeDir "cmake.exe"
+    Set-Content -Path $fakeCmake -Value "fake CMake" -NoNewline
+    $foundCmake = Get-VisualStudioCmakePath
+    Assert-Equal -Actual $foundCmake -Expected $fakeCmake `
+        -Description "finds Visual Studio's bundled CMake without PATH"
 
     Write-Host ""
     Write-Host "Test: Get-MsvcVarsPath returns null when nothing matches (no false positive)"
-    Remove-Item -Path $fakeVcVars64 -Force
+    Remove-Item -Path $fakeVcVars -Force
     $notFound = Get-MsvcVarsPath
     Assert-Equal -Actual "$notFound" -Expected "" `
         -Description "returns nothing once the fake install is removed"
+    $missingCmake = Get-VisualStudioCmakePath
+    Assert-Equal -Actual "$missingCmake" -Expected "" `
+        -Description "does not use CMake after its VS install is unavailable"
 }
 finally {
     if ($null -ne $originalProgramFiles) { $env:ProgramFiles = $originalProgramFiles }
