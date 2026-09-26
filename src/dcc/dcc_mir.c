@@ -5299,7 +5299,7 @@ static int mir_value_use_count_after(int value, int instruction)
     return count;
 }
 
-static int mir_value_live_out_of_instruction(int value, int instruction)
+int mir_value_live_out_of_instruction(int value, int instruction)
 {
     if (instruction >= 0 && instruction < mir.count &&
         value >= 0 && value < mir.next_value &&

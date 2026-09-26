@@ -1007,6 +1007,7 @@ static int ast_other_supported_uncached(const struct AstNode *n)
         if (n->a->kind != AST_CALL && n->a->kind != AST_IDENT &&
             n->a->kind != AST_INDEX && n->a->kind != AST_MEMBER &&
             n->a->kind != AST_BINARY && n->a->kind != AST_UNARY &&
+            n->a->kind != AST_POSTFIX &&
             n->a->kind != AST_COMMA && n->a->kind != AST_COND &&
             n->a->kind != AST_CAST &&
             n->a->kind != AST_LOGAND && n->a->kind != AST_LOGOR &&
