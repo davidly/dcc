@@ -206,8 +206,12 @@ def build(name, source, directory, mode, override, args):
     cmd = [command("dccmake"), f"dcc-input={source}", f"dcc-output={name}",
            f"dcc-build-dir={directory}", f"dcc-peep={'true' if mode == 'peep' else 'false'}",
            f"ntvcm-tool={args.emulator}"]
+    # Keep the established runall.ps1 configuration: both extended printf
+    # families are on unless a test explicitly opts out.  Leaving these
+    # options absent uses dccmake's false defaults and changes linked I/O
+    # routines, invalidating the shared performance baselines.
     for key, flag in (("dcc_floatio", "dcc-floatio"), ("dcc_longio", "dcc-flongio")):
-        if key in override: cmd.append(f"{flag}={bool_text(override[key])}")
+        cmd.append(f"{flag}={bool_text(override.get(key, True))}")
     stack = os.environ.get("STACK_SIZE") or override.get("stack_size")
     if stack: cmd += ["-s", str(stack)]
     if args.emulated_m80: cmd.append("dcc-use-emulated-m80=true")
