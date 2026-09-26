@@ -396,7 +396,11 @@ def main():
     run_style = "(serial)" if args.serial else f"(parallel, throttle = {args.throttle_limit})"
     out(f"Output: failures only (PASS lines suppressed)\n{run_style}\nBuild root: {display_path(runroot)}", "gray")
     out("========================================", "cyan")
-    items = [(app_job, (app, mode, overrides, fixture_sources(), runroot, args)) for app in apps for mode in modes]
+    # The fixture index is immutable for a run.  Building it once avoids
+    # scanning tests/ again for every app/mode dispatch (over 1,000 scans in a
+    # full run).
+    sources = fixture_sources()
+    items = [(app_job, (app, mode, overrides, sources, runroot, args)) for app in apps for mode in modes]
     main_phase = time.monotonic()
     results = execute(items, args.throttle_limit, args.failures_only, args.fail_fast)
     main_elapsed = time.monotonic() - main_phase
@@ -422,7 +426,7 @@ def main():
     if args.narrow_diff:
         section("NARROW-DIFF CHECK (narrowing on vs -fno-narrow)")
         narrow_apps = [app for app in apps if not overrides.get(app, {}).get("narrow_diff_ignore")]
-        narrow_items = [(narrow_job, (app, overrides, fixture_sources(), runroot / "narrow-diff", args)) for app in narrow_apps]
+        narrow_items = [(narrow_job, (app, overrides, sources, runroot / "narrow-diff", args)) for app in narrow_apps]
         narrow_results = execute(narrow_items, args.throttle_limit, args.failures_only, args.fail_fast)
         narrow_ok = all(r.passed for r in narrow_results)
         out(f"  Narrow-diff:  {len(narrow_results) - sum(not r.passed for r in narrow_results)}/{len(narrow_results)} matched", "green" if narrow_ok else "red")
