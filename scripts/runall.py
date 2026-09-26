@@ -46,6 +46,14 @@ def normal(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n")
 
 
+def display_path(path: Path) -> Path:
+    """Show repository-local paths relatively, retaining external absolute paths."""
+    try:
+        return path.relative_to(ROOT)
+    except ValueError:
+        return path
+
+
 def command(name: str) -> str:
     if name == "dccmake" and os.environ.get("DCCMAKE", "").strip():
         return os.environ["DCCMAKE"].strip()
@@ -386,7 +394,7 @@ def main():
     section("STARTING BUILD AND RUN SUITE", close=False)
     out(f"Mode: {'full (fast + nopeep)' if args.mode == 'full' else args.mode}", "cyan")
     run_style = "(serial)" if args.serial else f"(parallel, throttle = {args.throttle_limit})"
-    out(f"Output: failures only (PASS lines suppressed)\n{run_style}\nBuild root: {runroot.relative_to(ROOT)}", "gray")
+    out(f"Output: failures only (PASS lines suppressed)\n{run_style}\nBuild root: {display_path(runroot)}", "gray")
     out("========================================", "cyan")
     items = [(app_job, (app, mode, overrides, fixture_sources(), runroot, args)) for app in apps for mode in modes]
     main_phase = time.monotonic()
