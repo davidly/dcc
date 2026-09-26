@@ -508,9 +508,15 @@ static int mir_byte_arithmetic_result_needs_normalization(
 int mir_binary_is_byte_unit_update(const struct MirInsn *insn)
 {
     const struct MirInsn *right;
+    int instruction;
 
     if (insn == NULL || type_size(insn->type) != 1 ||
         (insn->immediate != '+' && insn->immediate != '-'))
+        return 0;
+    /* The low-byte update is destructive. Keep the generic path when a
+     * postfix expression still needs the original value afterward. */
+    instruction = (int)(insn - mir.insns);
+    if (mir_value_live_out_of_instruction(insn->src1, instruction))
         return 0;
     right = mir_definition(insn->src2);
     return right != NULL && right->opcode == MIR_CONST &&
