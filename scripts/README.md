@@ -2,6 +2,27 @@
 
 Developer utility scripts for the `dcc` (CP/M-80 / Z80) toolchain.
 
+## `runall.py`
+
+Native Python 3 runner for the standard build, emulator, baseline, fixture,
+and extended-corpus path. It is the recommended runner on macOS and Linux:
+Python uses a substantially cheaper process-launch path than PowerShell on
+macOS, which matters because this suite starts thousands of short-lived tools.
+
+```sh
+python3 scripts/runall.py --mode full --extended
+python3 scripts/runall.py --apps cint,cobint --mode full
+```
+
+It supports the normal runner controls, including `--mode`, `--extended`,
+`--apps`, `--serial`, `--fail-fast`, `--throttle-limit`, `--timeout`,
+`--emulator`, `--build-dir`, `--baseline-dir`, `--keep-build`,
+`--no-stack-check`, `--emulated-m80`, `--emulated-l80`, `--narrow-diff`,
+`--report`, `--report-file`, `--report-clock-hz`, `--update-perf-baseline`,
+`--no-perf-check`, `--timing-breakdown`, and `--no-ram-disk`. The matching
+PowerShell-style single-dash spellings (for example `-mode full -extended`)
+are also accepted.
+
 ## `mir-migration-census.py`
 
 Measures generated MIR selection across `tests/*.c` and compares two snapshots
