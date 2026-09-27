@@ -62,24 +62,95 @@ def command(name: str) -> str:
 
 
 def run(argv, cwd: Path, timeout: int, stdin: str = ""):
-    """Run a tool, capturing merged output; kill its POSIX process group on timeout."""
+    """Run a tool, capturing merged output; terminate its process tree on timeout."""
     try:
-        p = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             text=True, start_new_session=True)
+        popen_args = dict(cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True)
+        if os.name == "nt":
+            # taskkill /T below terminates the complete descendant tree.  A
+            # separate process group keeps the runner's control signals out
+            # of that tree while it is being cleaned up.
+            popen_args["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            # Each command owns a session, so a timeout cannot kill the
+            # runner or unrelated children in the caller's process group.
+            popen_args["start_new_session"] = True
+        p = subprocess.Popen(argv, **popen_args)
         try:
             input_text = stdin + ("\n" if stdin and not stdin.endswith("\n") else "")
             out, _ = p.communicate(input_text, timeout=timeout if timeout > 0 else None)
             return p.returncode, False, out
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            if os.name == "nt":
+                # Windows has no killpg equivalent.  taskkill's /T follows
+                # the parent/child tree, which covers dccmake's compiler,
+                # assembler, linker, and emulator descendants.
+                try:
+                    subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=10, check=False)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            else:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if p.poll() is None:
+                try:
+                    p.kill()
+                except ProcessLookupError:
+                    pass
             out, _ = p.communicate()
             return -1, True, out
     except OSError as exc:
         return 1, False, f"ERROR starting {argv[0]}: {exc}"
+
+
+def ensure_extended_suite(repo_root: Path, suite_dir: Path,
+                          submodule_path=Path("tests/extended-tests")) -> bool:
+    """Initialize the default extended-test submodule, with clone fallback."""
+    if suite_dir.is_dir():
+        return True
+
+    submodule_arg = submodule_path.as_posix()
+    if (repo_root / ".git").exists():
+        out(f"Extended test submodule not initialized; running git submodule update --init -- {submodule_arg}", "cyan")
+        code, _, output = run(
+            ["git", "submodule", "update", "--init", "--", submodule_arg],
+            repo_root, 0)
+        if code == 0 and suite_dir.is_dir():
+            return True
+        out("git submodule update failed; falling back to a direct clone of "
+            f"the submodule's own URL.\n{output}", "yellow")
+    else:
+        out(f"{repo_root} is not a git repository (no .git found); cloning "
+            "the extended-tests submodule directly.", "cyan")
+
+    gitmodules = repo_root / ".gitmodules"
+    if not gitmodules.is_file():
+        out(f"Failed to initialize extended test submodule at {submodule_arg}: "
+            f"no .gitmodules found at {gitmodules}.", "red")
+        return False
+
+    code, _, output = run(
+        ["git", "config", "--file", str(gitmodules), "--get",
+         f"submodule.{submodule_arg}.url"], repo_root, 0)
+    submodule_url = output.strip()
+    if code != 0 or not submodule_url:
+        out(f"Failed to initialize extended test submodule at {submodule_arg}: "
+            f"could not read its URL from {gitmodules}.\n{output}", "red")
+        return False
+
+    destination = repo_root / submodule_path
+    out(f"Cloning {submodule_url} into {destination} ...", "cyan")
+    code, _, output = run(
+        ["git", "clone", "--depth", "1", submodule_url, str(destination)],
+        repo_root, 0)
+    if code != 0 or not suite_dir.is_dir():
+        out(f"Failed to initialize extended test submodule at {submodule_arg}.\n{output}", "red")
+        return False
+    return True
 
 
 def bool_text(value) -> str:
@@ -644,9 +715,12 @@ def main():
     if args.extended:
         suite = ROOT / "tests/extended-tests/tests/single-exec"
         ext_overrides = {x["name"].lower(): x for x in json.loads((ROOT / "tests/_extended_test_overrides.json").read_text())["tests"]}
-        cases = [p for p in sorted(suite.glob("*.c")) if not ext_overrides.get(p.stem.lower(), {}).get("ignore")]
         section("STARTING EXTENDED C-TESTSUITE")
-        if not suite.is_dir() or not cases:
+        suite_ready = ensure_extended_suite(ROOT, suite)
+        cases = ([p for p in sorted(suite.glob("*.c"))
+                  if not ext_overrides.get(p.stem.lower(), {}).get("ignore")]
+                 if suite_ready else [])
+        if not suite_ready or not cases:
             out(f"  Extended suite unavailable or contains no runnable tests: {suite}", "red")
             ext_execution = Execution([], ["extended suite"])
             extended_ok = False
