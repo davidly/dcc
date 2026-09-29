@@ -41,6 +41,9 @@ dcc -> dccpeep -> M80 -> dccrtlstrip -> M80 -> L80 pipeline, runs the produced
 .PARAMETER SkipFile
     JSON file listing target-inapplicable extended tests to ignore.
 
+.PARAMETER FailuresOnly
+    Suppress passing per-test lines while retaining failures and the summary.
+
 .PARAMETER KeepBuild
     In parallel mode the suite builds into a per-invocation folder
     (build/extended-tests/run-<pid>) so concurrent runs stay isolated, and
@@ -71,6 +74,7 @@ param(
     [int]$RunTimeout = 60,
     [string]$SkipFile = "tests/_extended_test_overrides.json",
     [switch]$Serial,
+    [switch]$FailuresOnly,
     [int]$ThrottleLimit = [Environment]::ProcessorCount,
     [switch]$KeepBuild,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -217,10 +221,11 @@ function Test-IsNtvcmEmulator {
 }
 
 function Get-DccMakeCommand {
+    param([string]$RepoRoot)
     $override = $env:DCCMAKE -replace '^\s+|\s+$', ''
     if ($override) { return $override }
-    $local = Join-Path (Get-Location).Path ($(if ($IsWindows) { "dccmake.exe" } else { "dccmake" }))
-    if (Test-Path -LiteralPath $local -PathType Leaf) { return $local }
+    $local = Join-Path $RepoRoot ($(if ($IsWindows) { "dccmake.exe" } else { "dccmake" }))
+    if ([System.IO.File]::Exists($local)) { return $local }
     return "dccmake"
 }
 
@@ -337,13 +342,11 @@ function Invoke-ExtendedTest {
 
     $caseBuildDir = if ([System.IO.Path]::IsPathRooted($BuildDir)) { $BuildDir } else { Join-Path $RepoRoot $BuildDir }
 
-    if (-not (Test-Path $caseBuildDir -PathType Container)) {
-        New-Item -ItemType Directory -Path $caseBuildDir -Force | Out-Null
-    }
+    [System.IO.Directory]::CreateDirectory($caseBuildDir) | Out-Null
 
     $expected = ""
-    if (Test-Path -LiteralPath $Case.ExpectedPath -PathType Leaf) {
-        $expected = Get-Content -LiteralPath $Case.ExpectedPath -Raw
+    if ([System.IO.File]::Exists($Case.ExpectedPath)) {
+        $expected = [System.IO.File]::ReadAllText($Case.ExpectedPath)
     }
     else {
         $lines.Add("    ERROR: no expected output at $($Case.ExpectedPath)")
@@ -376,7 +379,7 @@ function Invoke-ExtendedTest {
         if ($Case.DccArgs) {
             $buildArgs += @($Case.DccArgs -split '\s+' | Where-Object { $_ })
         }
-        $buildResult = Invoke-ProcessWithTimeout -FilePath (Get-DccMakeCommand) -Arguments $buildArgs -WorkingDirectory $RepoRoot -TimeoutSeconds $RunTimeout
+        $buildResult = Invoke-ProcessWithTimeout -FilePath (Get-DccMakeCommand -RepoRoot $RepoRoot) -Arguments $buildArgs -WorkingDirectory $RepoRoot -TimeoutSeconds $RunTimeout
 
         if ($buildResult.TimedOut) {
             $lines.Add("  Building $($Case.Name) ($displayMode)... TIMEOUT after ${RunTimeout}s")
@@ -395,7 +398,7 @@ function Invoke-ExtendedTest {
 
         $upper = $Case.Name.ToUpperInvariant()
         $comFile = Join-Path $caseBuildDir "$upper.COM"
-        if (-not (Test-Path -LiteralPath $comFile -PathType Leaf)) {
+        if (-not [System.IO.File]::Exists($comFile)) {
             $lines.Add("    ERROR: $comFile not found")
             $casePassed = $false
             continue
@@ -546,7 +549,7 @@ foreach ($source in @(Get-ChildItem -LiteralPath $SuiteDir -Filter "*.c" -File |
     $allCases.Add([pscustomobject]@{
         Name         = $name
         SourcePath   = $source.FullName
-        ExpectedPath = (Join-Path $SuiteDir "$name.c.expected")
+        ExpectedPath = [System.IO.Path]::GetFullPath((Join-Path $SuiteDir "$name.c.expected"))
         Tags         = ($tags -join ",")
         DccArgs      = if ($buildOverrides.ContainsKey($ignoreKey) -and $buildOverrides[$ignoreKey].ContainsKey('dcc_args')) { $buildOverrides[$ignoreKey]['dcc_args'] } else { "" }
         DccFloatio   = if ($buildOverrides.ContainsKey($ignoreKey) -and $buildOverrides[$ignoreKey].ContainsKey('dcc_floatio')) { $buildOverrides[$ignoreKey]['dcc_floatio'] } else { $true }
@@ -604,10 +607,11 @@ if ($Parallel) {
 }
 
 $suiteStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-$results = @()
+$results = [System.Collections.Generic.List[object]]::new()
 
 function Show-ExtendedResult {
     param($Result, [int]$Index, [int]$Total)
+    if ($FailuresOnly -and $Result.Passed) { return }
     $elapsed = $Result.Elapsed
     $elapsedStr = if ($elapsed.TotalSeconds -ge 60) { "{0:m\m\ s\.f\s}" -f $elapsed } else { "{0:0.00}s" -f $elapsed.TotalSeconds }
     $counter = if ($Total -gt 0) { "[{0,3}/{1}]" -f $Index, $Total } else { "" }
@@ -639,7 +643,6 @@ if ($Parallel) {
     $done = 0
     $allCases | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
         $case = $_
-        Set-Location $using:repoRoot
         if ($using:stackCheckOn) { $env:DCC_FORCE_STACK_CHECK = "1" }
         ${function:Normalize-TestOutput} = $using:normalizeDef
         ${function:Test-MatchesExpected} = $using:matchDef
@@ -652,7 +655,7 @@ if ($Parallel) {
             -Emulator $using:Emulator -UseEmulatedM80:$using:UseEmulatedM80 -UseEmulatedL80:$using:UseEmulatedL80 -EmulatorRunArgs $using:runArgs -RunTimeout $using:RunTimeout
     } | ForEach-Object {
         $result = $_
-        $results += $result
+        $results.Add($result)
         $done++
         Show-ExtendedResult -Result $result -Index $done -Total $totalToRun
     }
@@ -663,7 +666,7 @@ else {
         $done++
         $result = Invoke-ExtendedTest -Case $case -Modes $modes -BuildDir $BuildDir -RepoRoot $repoRoot `
             -Emulator $Emulator -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -EmulatorRunArgs $emulatorRunArgs -RunTimeout $RunTimeout
-        $results += $result
+        $results.Add($result)
         Show-ExtendedResult -Result $result -Index $done -Total $totalToRun
     }
 }
@@ -747,7 +750,7 @@ if ($failed -gt 0) {
     }
 }
 
-if ($skippedCases.Count -gt 0) {
+if ($skippedCases.Count -gt 0 -and (-not $FailuresOnly -or $failed -gt 0)) {
     Write-Host ""
     Write-Host "Skipped target-inapplicable tests:" -ForegroundColor Yellow
     foreach ($case in $skippedCases) {

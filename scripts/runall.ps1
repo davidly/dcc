@@ -13,8 +13,9 @@ stack sizes. After the app suite, also runs the compile-fail diagnostics suite
 via scripts/run-diagnostics.ps1 and fails the run if any diagnostic baseline
 mismatches.
 
-Pass -Extended to also run scripts/runall-extended.ps1 after the main app suite,
-verifying the imported c-testsuite single-exec corpus as part of the same run.
+Pass -Extended to also run scripts/runall-extended.ps1, verifying the imported
+c-testsuite single-exec corpus as part of the same run. In parallel mode it
+overlaps the later diagnostics and fixture checks, then reports its result.
 
 Supports per-test arguments (e.g., ttt with "10" as input) and custom stack
 size overrides (e.g., cobint needs 1536 bytes, triangle needs 768).
@@ -177,8 +178,8 @@ speed:
     diagnosing suite-level slowdowns. Two sections:
       - Top-level phases (main app suite / perf check / diagnostics /
         dccpeep fixtures / narrow-diff / extended suite), each as a % of
-        this run's total time - the same stopwatches already used for
-        "Total time" above, just also reported per phase.
+        this run's total time. With -Extended in parallel mode, the extended
+        suite overlaps later checks, so these percentages can sum above 100%.
       - Build pipeline, aggregated across every app and mode built by the
         main suite: dcc / dccpeep / m80 assembly / dccrtlstrip / L80 link
         (each summed from a per-phase wall-clock timing line dccmake itself
@@ -383,6 +384,16 @@ function Remove-RunBuildDir {
 }
 
 trap {
+    if ($script:ExtendedRunProcess) {
+        try {
+            if (-not $script:ExtendedRunProcess.HasExited) {
+                $script:ExtendedRunProcess.Kill($true)
+                $script:ExtendedRunProcess.WaitForExit()
+            }
+            $script:ExtendedRunProcess.Dispose()
+        }
+        catch { }
+    }
     Restore-TerminalState
     Remove-RunBuildDir
     # Re-throw the original error record so its message/position survive rather
@@ -883,20 +894,6 @@ function Invoke-DccMakeBuild {
     return $false
 }
 
-# Stage the declared CP/M data fixtures into the shared build dir (serial
-# mode) - the union of every app's own Get-AppFixtures list, not every file in
-# tests/: some interpreters read these files from the current working
-# directory, and apps are run from the build dir (below), so the fixtures
-# must live there too.
-function Stage-FixtureInputs {
-    if (-not (Test-Path $BuildDir -PathType Container)) {
-        New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
-    }
-    foreach ($f in $fixtureList) {
-        Copy-FixtureUpper -Fixture $f -DestDir $BuildDir
-    }
-}
-
 # Stage one CP/M data fixture into a run directory.
 #
 # CP/M (and the ntvcm emulator) uppercases every filename a program opens, so a
@@ -944,7 +941,6 @@ function Invoke-ComRunAndCompare {
         [int]$RunTimeout
     )
 
-    Push-Location $BuildDir
     $runSw = [System.Diagnostics.Stopwatch]::StartNew()
     $runFailed = $false
     $runTimedOut = $false
@@ -953,7 +949,7 @@ function Invoke-ComRunAndCompare {
         $nativeArgs = @($EmulatorRunArgs) + @($ComFileName) + $appArgs
         $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $Emulator
-        $startInfo.WorkingDirectory = (Get-Location).Path
+        $startInfo.WorkingDirectory = [System.IO.Path]::GetFullPath($BuildDir)
         $startInfo.UseShellExecute = $false
         $startInfo.RedirectStandardInput = $true
         $startInfo.RedirectStandardOutput = $true
@@ -1015,7 +1011,6 @@ function Invoke-ComRunAndCompare {
     }
     finally {
         $runSw.Stop()
-        Pop-Location
     }
 
     # CP/M output may use CR, while host tools and checked-in baselines may
@@ -1397,16 +1392,6 @@ if ($baselineAvailable) {
     Write-Host "No baseline directory at $BaselineDir; running without verification" -ForegroundColor Yellow
 }
 
-function Get-Baseline {
-    param([string]$app)
-    $path = Join-Path $BaselineDir "$app.txt"
-    if (Test-Path $path -PathType Leaf) {
-        # Return raw expected output, normalized to LF.
-        return (((Get-Content -Path $path -Raw) -replace "`r`n", "`n") -replace "`r", "`n")
-    }
-    return $null
-}
-
 # Global placeholder definitions for volatile output. A baseline file may embed
 # any of these tokens; at compare time the baseline is turned into a regex
 # template and matched against the actual output. This keeps ALL expected
@@ -1568,15 +1553,6 @@ foreach ($app in $testFiles) {
         BaselineData = Get-NormalizedBaseline (Join-Path $BaselineDir "$app.txt")
     })
 }
-
-# Union of every app's declared runtime fixtures, including each app's extra
-# scenarios - used only by the serial shared build dir (Stage-FixtureInputs);
-# parallel mode stages each app's own subset individually (see $item.Fixtures
-# / $item.ExtraScenarios at each Invoke-AppTest call below), so most apps'
-# build dirs get nothing copied at all instead of every fixture in tests/.
-$fixtureList = @($workItems | ForEach-Object {
-    @($_.Fixtures) + @($_.ExtraScenarios | ForEach-Object { $_.fixtures })
-} | Select-Object -Unique)
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -1761,18 +1737,22 @@ function Test-PerfRegressions {
         [string[]]$ModesRun,
         [string]$BaselineFile,
         [string[]]$IgnoreApps = @(),
+        [System.Collections.IDictionary]$ExistingBaselines,
         [switch]$UpdateBaseline
     )
-    $ignoreSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$IgnoreApps)
+    $ignoreSet = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($ignoredApp in $IgnoreApps) { [void]$ignoreSet.Add($ignoredApp) }
 
-    $existing = Get-PerfBaselines -Path $BaselineFile
+    $existing = if ($null -ne $ExistingBaselines) { $ExistingBaselines } else { Get-PerfBaselines -Path $BaselineFile }
     $updated = @{}
-    foreach ($app in $existing.Keys) {
-        $updated[$app] = @{
-            peep_cycles   = $existing[$app].peep_cycles
-            nopeep_cycles = $existing[$app].nopeep_cycles
-            peep_size     = $existing[$app].peep_size
-            nopeep_size   = $existing[$app].nopeep_size
+    if ($UpdateBaseline) {
+        foreach ($app in $existing.Keys) {
+            $updated[$app] = @{
+                peep_cycles   = $existing[$app].peep_cycles
+                nopeep_cycles = $existing[$app].nopeep_cycles
+                peep_size     = $existing[$app].peep_size
+                nopeep_size   = $existing[$app].nopeep_size
+            }
         }
     }
 
@@ -1833,7 +1813,7 @@ function Test-PerfRegressions {
     }
 }
 
-function Invoke-ExtendedSuite {
+function Get-ExtendedSuiteArgs {
     param(
         [string]$Mode,
         [string]$Emulator,
@@ -1863,6 +1843,59 @@ function Invoke-ExtendedSuite {
     if ($Serial) { $extendedArgs += "-Serial" }
     if ($UseEmulatedM80) { $extendedArgs += "-UseEmulatedM80" }
     if ($UseEmulatedL80) { $extendedArgs += "-UseEmulatedL80" }
+    if ($FailuresOnly) { $extendedArgs += "-FailuresOnly" }
+
+    return $extendedArgs
+}
+
+function Start-ExtendedSuite {
+    param([string[]]$Arguments)
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $pwshExecutable = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    if ([System.IO.Path]::GetFileNameWithoutExtension($pwshExecutable) -ne "pwsh") {
+        # The .NET global tool can run pwsh through the dotnet host.
+        $pwshExecutable = (Get-Command pwsh -CommandType Application -ErrorAction Stop).Source
+    }
+    $startInfo.FileName = $pwshExecutable
+    $startInfo.WorkingDirectory = $script:RepoRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add($argument) }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        $startedAt = [datetime]::Now
+        if (-not $process.Start()) { throw "failed to start extended suite" }
+        return [pscustomobject]@{
+            Process = $process
+            StartedAt = $startedAt
+            Stdout = $process.StandardOutput.ReadToEndAsync()
+            Stderr = $process.StandardError.ReadToEndAsync()
+        }
+    }
+    catch {
+        $process.Dispose()
+        throw
+    }
+}
+
+function Show-ExtendedSuiteResult {
+    param([int]$ExitCode, [string]$Output, [bool]$FailuresOnly)
+
+    $script:ExtendedSuiteExitCode = $ExitCode
+    if (-not $FailuresOnly -or $ExitCode -ne 0) {
+        if ($Output) { Write-Host $Output.TrimEnd("`r", "`n") }
+    }
+    else {
+        Write-Host "  Extended suite passed (output suppressed by -FailuresOnly)" -ForegroundColor DarkGray
+    }
+}
+
+function Invoke-ExtendedSuite {
+    param([string[]]$Arguments, [bool]$FailuresOnly)
 
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
@@ -1870,17 +1903,11 @@ function Invoke-ExtendedSuite {
     Write-Host "========================================" -ForegroundColor Cyan
 
     if ($FailuresOnly) {
-        $extendedOutput = & pwsh @extendedArgs 2>&1
-        $script:ExtendedSuiteExitCode = $LASTEXITCODE
-        if ($script:ExtendedSuiteExitCode -ne 0) {
-            foreach ($line in @($extendedOutput)) { Write-Host $line }
-        }
-        else {
-            Write-Host "  Extended suite passed (output suppressed by -FailuresOnly)" -ForegroundColor DarkGray
-        }
+        $extendedOutput = & pwsh @Arguments 2>&1
+        Show-ExtendedSuiteResult -ExitCode $LASTEXITCODE -Output ($extendedOutput -join "`n") -FailuresOnly $true
     }
     else {
-        & pwsh @extendedArgs
+        & pwsh @Arguments
         $script:ExtendedSuiteExitCode = $LASTEXITCODE
     }
 }
@@ -1953,15 +1980,29 @@ function Merge-AppModeResults {
     })
 }
 
-$results = @()
+$extendedRun = $null
+$extendedStartError = $null
+$extendedArgs = @()
+if ($Extended) {
+    $extendedArgs = @(Get-ExtendedSuiteArgs -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
+        -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit `
+        -UseEmulatedM80 $UseEmulatedM80 -UseEmulatedL80 $UseEmulatedL80 -FailuresOnly $FailuresOnly)
+}
+
+$results = [System.Collections.Generic.List[object]]::new()
 $totalToRun = $workItems.Count
 $mainSuiteSw = [System.Diagnostics.Stopwatch]::StartNew()
 
 # Precomputed once, up front, so -FailFast can run the identical per-app perf
 # comparison (Test-PerfRegressions, unchanged) as each result streams in,
 # rather than duplicating its regression formula.
-$failFastPerfIgnoreApps = @($testFiles | Where-Object { Get-PerfIgnoreApp $_ })
 $failFastPerfCheckActive = (Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck) -and (-not $UpdatePerfBaseline)
+$failFastPerfIgnoreApps = if ($FailFast -and $failFastPerfCheckActive) {
+    @($testFiles | Where-Object { Get-PerfIgnoreApp $_ })
+} else { @() }
+$failFastPerfBaselines = if ($FailFast -and $failFastPerfCheckActive) {
+    Get-PerfBaselines -Path $PerfBaselineFile
+} else { $null }
 
 if ($Parallel) {
     # Each worker runs in its own runspace with its own filesystem location, so
@@ -1977,6 +2018,17 @@ if ($Parallel) {
     $sptDef       = ${function:Stop-ProcessTree}.ToString()
     $ipwtDef      = ${function:Invoke-ProcessWithTimeout}.ToString()
     $idmbDef      = ${function:Invoke-DccMakeBuild}.ToString()
+    $workerFunctions = @{
+        'Test-MatchesBaseline' = $tmbDef
+        'Copy-FixtureUpper' = $cfuDef
+        'ConvertTo-BooleanSetting' = $ctbsDef
+        'Get-DccMakeCommand' = $gdmDef
+        'Stop-ProcessTree' = $sptDef
+        'Invoke-ProcessWithTimeout' = $ipwtDef
+        'Invoke-DccMakeBuild' = $idmbDef
+        'Invoke-ComRunAndCompare' = $icrcDef
+        'Invoke-AppTest' = $iatDef
+    }
     $stackCheckOn = [bool]$StackCheck
     $runArgs      = @($emulatorRunArgs)
     $multiMode    = $modes.Count -gt 1
@@ -2043,18 +2095,20 @@ if ($Parallel) {
                 Elapsed = [TimeSpan]::Zero; Lines = @(); Metrics = $null; Timing = $null
             }
         }
-        Set-Location $using:repoRoot
         if ($using:stackCheckOn) { $env:DCC_FORCE_STACK_CHECK = "1" }
-        # Bring the needed functions into this runspace.
-        ${function:Test-MatchesBaseline} = $using:tmbDef
-        ${function:Copy-FixtureUpper}    = $using:cfuDef
-        ${function:ConvertTo-BooleanSetting} = $using:ctbsDef
-        ${function:Get-DccMakeCommand}   = $using:gdmDef
-        ${function:Stop-ProcessTree}     = $using:sptDef
-        ${function:Invoke-ProcessWithTimeout} = $using:ipwtDef
-        ${function:Invoke-DccMakeBuild}  = $using:idmbDef
-        ${function:Invoke-ComRunAndCompare} = $using:icrcDef
-        ${function:Invoke-AppTest}       = $using:iatDef
+        # ForEach-Object reuses runspaces but clears per-item variables and
+        # functions. An imported module survives, so parse the helpers once
+        # per worker rather than once for every app/mode dispatch.
+        if (-not (Get-Module DccRunallWorker)) {
+            Set-Location $using:repoRoot
+            New-Module -Name DccRunallWorker -ScriptBlock {
+                param($definitions)
+                foreach ($entry in $definitions.GetEnumerator()) {
+                    Set-Item -Path "Function:$($entry.Key)" -Value $entry.Value
+                }
+                Export-ModuleMember -Function @($definitions.Keys)
+            } -ArgumentList $using:workerFunctions | Import-Module -Global
+        }
 
         # Each mode of the same app gets its own build subdirectory only when
         # modes were actually split (multi-mode): two concurrent builds of
@@ -2080,7 +2134,7 @@ if ($Parallel) {
         Add-Member -InputObject $r -NotePropertyName DispatchMode -NotePropertyValue $item.Mode -PassThru
     } | ForEach-Object {
         $result = $_
-        $results += $result
+        $results.Add($result)
         $done++
         $elapsed = $result.Elapsed
         $elapsedStr = if ($elapsed.TotalSeconds -ge 60) { "{0:m\m\ s\.f\s}" -f $elapsed } else { "{0:0.00}s" -f $elapsed.TotalSeconds }
@@ -2135,7 +2189,7 @@ if ($Parallel) {
                 # end-of-run perf check, just evaluated per-app instead of
                 # only after every app has finished.
                 $singlePerfCheck = Test-PerfRegressions -Results @($result) -ModesRun $modes `
-                    -BaselineFile $PerfBaselineFile -IgnoreApps $failFastPerfIgnoreApps
+                    -BaselineFile $PerfBaselineFile -IgnoreApps $failFastPerfIgnoreApps -ExistingBaselines $failFastPerfBaselines
                 if ($singlePerfCheck.Regressions.Count -gt 0) {
                     $failFastState.Triggered = $true
                     Write-Host ("  FAIL-FAST: performance regression in {0} - no new apps will be started" -f $result.App) -ForegroundColor Yellow
@@ -2165,7 +2219,7 @@ else {
         if ((-not $FailuresOnly) -or (-not $result.Passed)) {
             Show-AppResult $result
         }
-        $results += $result
+        $results.Add($result)
         if ($FailFast) {
             $stop = $false
             if (-not $result.Passed) {
@@ -2173,7 +2227,7 @@ else {
                 $stop = $true
             } elseif ($failFastPerfCheckActive) {
                 $singlePerfCheck = Test-PerfRegressions -Results @($result) -ModesRun $modes `
-                    -BaselineFile $PerfBaselineFile -IgnoreApps $failFastPerfIgnoreApps
+                    -BaselineFile $PerfBaselineFile -IgnoreApps $failFastPerfIgnoreApps -ExistingBaselines $failFastPerfBaselines
                 if ($singlePerfCheck.Regressions.Count -gt 0) {
                     Write-Host ("  FAIL-FAST: performance regression in {0} - stopping" -f $result.App) -ForegroundColor Yellow
                     foreach ($r in $singlePerfCheck.Regressions) {
@@ -2188,13 +2242,22 @@ else {
     }
 }
 $mainSuiteSw.Stop()
+if ($Extended -and $Parallel) {
+    # The extended suite has its own build tree and process. Run it while
+    # the main suite's result checks, diagnostics, and fixtures complete.
+    try {
+        $extendedRun = Start-ExtendedSuite -Arguments $extendedArgs
+        $script:ExtendedRunProcess = $extendedRun.Process
+    }
+    catch { $extendedStartError = $_.ToString() }
+}
 
 # Full-mode parallel dispatch (see $dispatchItems above) may have produced
 # up to two result objects per app; fold them back into one per app before
 # the tally/-FailFast/report logic below, all of which expect exactly one
 # result per app. A no-op reshape for single-mode runs and the serial path,
 # which never produce more than one result per app to begin with.
-$results = Merge-AppModeResults -Results $results
+$results = Merge-AppModeResults -Results $results.ToArray()
 
 if ($FailFast) {
     $failFastSkippedApps = @($workItems.App | Where-Object { $_ -notin @($results.App) })
@@ -2237,7 +2300,7 @@ $perfCheckSw = [System.Diagnostics.Stopwatch]::StartNew()
 if ((Test-IsNtvcmEmulator $Emulator) -and $StackCheck -and (-not $NoPerfCheck -or $UpdatePerfBaseline)) {
     $perfIgnoreApps = @($testFiles | Where-Object { Get-PerfIgnoreApp $_ })
     $perfCheck = Test-PerfRegressions -Results $results -ModesRun $modes `
-        -BaselineFile $PerfBaselineFile -IgnoreApps $perfIgnoreApps -UpdateBaseline:$UpdatePerfBaseline
+        -BaselineFile $PerfBaselineFile -IgnoreApps $perfIgnoreApps -ExistingBaselines $failFastPerfBaselines -UpdateBaseline:$UpdatePerfBaseline
 
     Write-Host ""
     Write-Host "========================================" -ForegroundColor Cyan
@@ -2289,7 +2352,7 @@ if (-not $Apps) {
         $diagnosticsOutput = & pwsh `
             (Join-Path $PSScriptRoot "run-diagnostics.ps1") `
             -Dcc $diagnosticDcc `
-            -BuildDir (Join-Path $BuildDir "diagnostics") 2>&1
+            -BuildDir (Join-Path $BuildDir "diagnostics") -ThrottleLimit $ThrottleLimit -FailuresOnly 2>&1
         $diagnosticsExitCode = $LASTEXITCODE
         if ($diagnosticsExitCode -ne 0) {
             foreach ($line in @($diagnosticsOutput)) { Write-Host $line }
@@ -2301,7 +2364,7 @@ if (-not $Apps) {
     else {
         & pwsh (Join-Path $PSScriptRoot "run-diagnostics.ps1") `
             -Dcc $diagnosticDcc `
-            -BuildDir (Join-Path $BuildDir "diagnostics")
+            -BuildDir (Join-Path $BuildDir "diagnostics") -ThrottleLimit $ThrottleLimit
         $diagnosticsExitCode = $LASTEXITCODE
     }
     $diagnosticsPassed = ($diagnosticsExitCode -eq 0)
@@ -2320,7 +2383,7 @@ if (-not $Apps) {
     Write-Host "========================================" -ForegroundColor Cyan
     if ($FailuresOnly) {
         $dccpeepOutput = & pwsh (Join-Path $PSScriptRoot "run-dccpeep-tests.ps1") `
-            -DccPeep (Join-Path $script:RepoRoot "dccpeep") 2>&1
+            -DccPeep (Join-Path $script:RepoRoot "dccpeep") -ThrottleLimit $ThrottleLimit -FailuresOnly 2>&1
         $dccpeepExitCode = $LASTEXITCODE
         if ($dccpeepExitCode -ne 0) {
             foreach ($line in @($dccpeepOutput)) { Write-Host $line }
@@ -2332,7 +2395,7 @@ if (-not $Apps) {
     }
     else {
         & pwsh (Join-Path $PSScriptRoot "run-dccpeep-tests.ps1") `
-            -DccPeep (Join-Path $script:RepoRoot "dccpeep")
+            -DccPeep (Join-Path $script:RepoRoot "dccpeep") -ThrottleLimit $ThrottleLimit
         $dccpeepTestsPassed = ($LASTEXITCODE -eq 0)
     }
 }
@@ -2445,10 +2508,34 @@ $narrowDiffSw.Stop()
 
 $extendedPassed = $null
 $extendedSw = [System.Diagnostics.Stopwatch]::StartNew()
+$extendedPhaseMs = 0.0
 if ($Extended) {
-    Invoke-ExtendedSuite -Mode $Mode -Emulator $Emulator -RunTimeout $RunTimeout `
-        -BuildDir $BuildDir -StackCheck $StackCheck -Serial (-not $Parallel) -ThrottleLimit $ThrottleLimit `
-        -UseEmulatedM80 $UseEmulatedM80 -UseEmulatedL80 $UseEmulatedL80 -FailuresOnly $FailuresOnly
+    if ($Parallel) {
+        Write-Host ""
+        Write-Host "========================================" -ForegroundColor Cyan
+        Write-Host "STARTING EXTENDED C-TESTSUITE" -ForegroundColor Cyan
+        Write-Host "========================================" -ForegroundColor Cyan
+        if ($extendedStartError) {
+            Show-ExtendedSuiteResult -ExitCode 1 -Output "Failed to start extended suite: $extendedStartError" -FailuresOnly $FailuresOnly
+        }
+        else {
+            try {
+                $extendedRun.Process.WaitForExit()
+                $output = $extendedRun.Stdout.GetAwaiter().GetResult()
+                $errorOutput = $extendedRun.Stderr.GetAwaiter().GetResult()
+                if ($errorOutput) { $output += $errorOutput }
+                $extendedPhaseMs = ($extendedRun.Process.ExitTime - $extendedRun.StartedAt).TotalMilliseconds
+                Show-ExtendedSuiteResult -ExitCode $extendedRun.Process.ExitCode -Output $output -FailuresOnly $FailuresOnly
+            }
+            finally {
+                $extendedRun.Process.Dispose()
+                $script:ExtendedRunProcess = $null
+            }
+        }
+    }
+    else {
+        Invoke-ExtendedSuite -Arguments $extendedArgs -FailuresOnly $FailuresOnly
+    }
     $extendedExitCode = $script:ExtendedSuiteExitCode
     $extendedPassed = ($extendedExitCode -eq 0)
     if (-not $extendedPassed) {
@@ -2456,6 +2543,7 @@ if ($Extended) {
     }
 }
 $extendedSw.Stop()
+if ($Extended -and -not $Parallel) { $extendedPhaseMs = $extendedSw.Elapsed.TotalMilliseconds }
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -2507,7 +2595,10 @@ if ($TimingBreakdown) {
     Write-TimingRow "Diagnostics" $diagnosticsSw.Elapsed.TotalMilliseconds $totalMs
     Write-TimingRow "Dccpeep fixtures" $dccpeepFixturesSw.Elapsed.TotalMilliseconds $totalMs
     if ($NarrowDiff) { Write-TimingRow "Narrow-diff" $narrowDiffSw.Elapsed.TotalMilliseconds $totalMs }
-    if ($Extended)   { Write-TimingRow "Extended suite" $extendedSw.Elapsed.TotalMilliseconds $totalMs }
+    if ($Extended)   {
+        Write-TimingRow "Extended suite" $extendedPhaseMs $totalMs
+        if ($Parallel) { Write-Host "  (extended suite overlaps later checks; phase percentages may exceed 100%)" -ForegroundColor DarkGray }
+    }
 
     # Aggregate every app's build-pipeline timing (from dccmake's own
     # per-phase wall-clock report - see now_ms()/run_build in
