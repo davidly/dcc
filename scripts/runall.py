@@ -26,6 +26,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 COLOUR = False
 ANSI = {"cyan": "\033[36m", "green": "\033[32m", "red": "\033[31m", "yellow": "\033[33m", "gray": "\033[90m", "reset": "\033[0m"}
+PERF_BLOCK = re.compile(r"\n\s*elapsed milliseconds:.*\Z", re.S)
+CYCLE_COUNT = re.compile(r"(?m)^\s*Z80\s+cycles:\s*([\d,]+)")
+COMMANDS: dict[str, str] = {}
 
 
 def out(text="", colour=None):
@@ -55,10 +58,14 @@ def display_path(path: Path) -> Path:
 
 
 def command(name: str) -> str:
+    if name in COMMANDS:
+        return COMMANDS[name]
     if name == "dccmake" and os.environ.get("DCCMAKE", "").strip():
-        return os.environ["DCCMAKE"].strip()
+        COMMANDS[name] = os.environ["DCCMAKE"].strip()
+        return COMMANDS[name]
     local = ROOT / name
-    return str(local) if local.is_file() else name
+    COMMANDS[name] = str(local) if local.is_file() else name
+    return COMMANDS[name]
 
 
 def run(argv, cwd: Path, timeout: int, stdin: str = ""):
@@ -202,7 +209,7 @@ def stage(fixtures, destination: Path, sources):
 
 
 def strip_perf(text: str) -> str:
-    return re.sub(r"\n\s*elapsed milliseconds:.*\Z", "", text, flags=re.S)
+    return PERF_BLOCK.sub("", text)
 
 
 def diff(expected: str, actual: str, prefix="    ", limit=40):
@@ -291,7 +298,8 @@ def build(name, source, directory, mode, override, args):
     return run(cmd, ROOT, 0 if args.timeout == 0 else max(args.timeout, 60))
 
 
-def check_run(name, directory, baseline, run_args, stdin, args, perf=True, expected_code=None):
+def check_run(name, directory, baseline, run_args, stdin, args, perf=True,
+              expected_code=None, collect_metrics=True):
     if baseline.expected is None:
         return False, [f"    ERROR: no baseline at {baseline.path}"], None
     com = name.upper() + ".COM"
@@ -308,7 +316,9 @@ def check_run(name, directory, baseline, run_args, stdin, args, perf=True, expec
     if not baseline_matches(baseline.expected, actual):
         lines.append(f"    OUTPUT MISMATCH (vs {display_path(baseline.path)})")
         lines += diff(baseline.expected, actual)
-    cycles = re.search(r"(?m)^\s*Z80\s+cycles:\s*([\d,]+)", output)
+    if not collect_metrics:
+        return not lines, lines, None
+    cycles = CYCLE_COUNT.search(output)
     return not lines, lines, {"cycles": int(cycles.group(1).replace(",", "")) if cycles else None,
                                "size": (directory / com).stat().st_size if (directory / com).is_file() else None}
 
@@ -342,7 +352,8 @@ def app_job(name, mode, overrides, sources, baselines, root, args):
     ok, report, metrics = check_run(name, directory, required[0], override.get("args", ""), override.get("stdin", ""), args)
     lines += report
     for scenario, baseline in zip(scenarios, required[1:]):
-        good, report, _ = check_run(name, directory, baseline, scenario.get("args", ""), scenario.get("stdin", ""), args)
+        good, report, _ = check_run(name, directory, baseline, scenario.get("args", ""), scenario.get("stdin", ""), args,
+                                    collect_metrics=False)
         ok &= good; lines += report
     return Result(f"{name}:{shown}", ok, time.monotonic()-began, lines, metrics)
 
@@ -361,7 +372,7 @@ def extended_job(case, mode, overrides, baseline, root, args):
         return Result(f"extended/{name}:{shown}", False, time.monotonic()-began,
                       [f"  Building {name} ({shown})... FAILED", *["    BUILD> "+x for x in output.splitlines()[:20]]])
     ok, report, _ = check_run(name, directory, baseline, "", "", args, perf=False,
-                           expected_code=override.get("expected_exit_code", 0))
+                              expected_code=override.get("expected_exit_code", 0), collect_metrics=False)
     return Result(f"extended/{name}:{shown}", ok, time.monotonic()-began, report)
 
 
@@ -491,6 +502,23 @@ def dccpeep_fixtures(workers: int):
         return len(lines) == 2 and len(lines[0]) == 702
 
 
+def prepare_extended_suite(args, runroot: Path, modes: list[str]):
+    """Create extended-test work items after the suite has been bootstrapped."""
+    suite = ROOT / "tests/extended-tests/tests/single-exec"
+    overrides_path = ROOT / "tests/_extended_test_overrides.json"
+    ext_overrides = {x["name"].lower(): x for x in json.loads(overrides_path.read_text())["tests"]}
+    cases = [p for p in sorted(suite.glob("*.c"))
+             if not ext_overrides.get(p.stem.lower(), {}).get("ignore")]
+    if not cases:
+        return None, f"Extended suite unavailable or contains no runnable tests: {suite}"
+    baselines = {case: load_baseline(case.with_suffix(".c.expected")) for case in cases}
+    items = [WorkItem(extended_job,
+                      (case, mode, ext_overrides, baselines[case], runroot / "extended-tests", args),
+                      f"extended/{case.stem}:{'fast' if mode == 'peep' else mode}")
+             for case in cases for mode in modes]
+    return items, None
+
+
 def load_perf_baselines(path: Path):
     if not path.is_file():
         return {}
@@ -616,6 +644,13 @@ def main():
         parser.error("--update-perf-baseline requires a stack-checked ntvcm run without --report")
     if not args.no_stack_check: os.environ["DCC_FORCE_STACK_CHECK"] = "1"
     else: os.environ.pop("DCC_FORCE_STACK_CHECK", None)
+    if args.extended:
+        # Bootstrap before discovering or dispatching the main corpus.  A
+        # missing extended checkout must be resolved (or reported) before we
+        # spend time compiling the regular tests.
+        extended_suite_dir = ROOT / "tests/extended-tests/tests/single-exec"
+        if not ensure_extended_suite(ROOT, extended_suite_dir):
+            return 1
     overrides = {x["name"].lower(): x for x in json.loads((ROOT / "tests/_test_overrides.json").read_text())["apps"]}
     apps = sorted(p.stem for p in (ROOT / "tests").glob("*.c"))
     if not apps:
@@ -657,13 +692,27 @@ def main():
             baseline_paths.append(args.baseline_dir / f"{app}_{scenario['suffix']}.txt")
     sources = fixture_sources(fixture_specs)
     baselines = {path: load_baseline(path) for path in set(baseline_paths)}
-    items = [WorkItem(app_job, (app, mode, overrides, sources, baselines, runroot, args),
-                      f"{app}:{'fast' if mode == 'peep' else mode}")
-             for app in apps for mode in modes]
+    main_items = [WorkItem(app_job, (app, mode, overrides, sources, baselines, runroot, args),
+                           f"{app}:{'fast' if mode == 'peep' else mode}")
+                  for app in apps for mode in modes]
+    extended_items = []
+    if args.extended:
+        extended_items, extended_error = prepare_extended_suite(args, runroot, modes)
+        if extended_error:
+            out(f"  {extended_error}", "red")
+            return 1
+        out(f"Found {len(extended_items) // len(modes)} runnable extended test applications", "cyan")
+    # Use one bounded queue for both corpora.  Main jobs are queued first so
+    # the extended compiler workload does not contend during the main suite's
+    # high-throughput phase; extended jobs then fill slots as its long tail
+    # drains.  This retains one global throttle and fail-fast boundary.
+    items = main_items + extended_items
     perf_active = is_ntvcm(args.emulator) and not args.no_stack_check and not args.report and not args.no_perf_check
     perf_baseline = load_perf_baselines(args.perf_baseline_file) if perf_active else {}
     fail_fast_regressions = []
     def fail_fast_perf(result):
+        if result.name.startswith("extended/"):
+            return None
         found = perf_regressions([result], overrides, perf_baseline)
         fail_fast_regressions.extend(found)
         return f"performance regression in {result.name}" if found else None
@@ -671,19 +720,21 @@ def main():
     main_execution = execute(items, args.throttle_limit, args.failures_only, args.fail_fast,
                              fail_fast_perf if perf_active and not args.update_perf_baseline else None)
     results = main_execution.results
+    main_results = [result for result in results if not result.name.startswith("extended/")]
+    extended_results = [result for result in results if result.name.startswith("extended/")]
     main_elapsed = time.monotonic() - main_phase
     completed_modes = {}
-    for result in results:
+    for result in main_results:
         completed_modes.setdefault(result.name.rsplit(":", 1)[0], 0)
         completed_modes[result.name.rsplit(":", 1)[0]] += 1
     incomplete_apps = {app for app in apps if completed_modes.get(app, 0) < len(modes)}
-    regressions = perf_regressions(results, overrides, perf_baseline, incomplete_apps) if perf_active else []
+    regressions = perf_regressions(main_results, overrides, perf_baseline, incomplete_apps) if perf_active else []
     for regression in fail_fast_regressions:
         if regression not in regressions:
             regressions.append(regression)
     if args.update_perf_baseline:
-        update_perf_baseline(results, args.perf_baseline_file, incomplete_apps); regressions = []
-    if args.report: write_report(results, args.report_file, args.report_clock_hz, incomplete_apps)
+        update_perf_baseline(main_results, args.perf_baseline_file, incomplete_apps); regressions = []
+    if args.report: write_report(main_results, args.report_file, args.report_clock_hz, incomplete_apps)
     if perf_active or args.update_perf_baseline:
         section("PERFORMANCE (CYCLE COUNT & .COM SIZE) CHECK")
         if args.update_perf_baseline:
@@ -711,31 +762,12 @@ def main():
                      and all(r.passed for r in narrow_results))
         matched = sum(r.passed for r in narrow_results)
         out(f"  Narrow-diff:  {matched}/{len(narrow_items)} matched", "green" if narrow_ok else "red")
-    extended_ok = None
-    if args.extended:
-        suite = ROOT / "tests/extended-tests/tests/single-exec"
-        ext_overrides = {x["name"].lower(): x for x in json.loads((ROOT / "tests/_extended_test_overrides.json").read_text())["tests"]}
-        section("STARTING EXTENDED C-TESTSUITE")
-        suite_ready = ensure_extended_suite(ROOT, suite)
-        cases = ([p for p in sorted(suite.glob("*.c"))
-                  if not ext_overrides.get(p.stem.lower(), {}).get("ignore")]
-                 if suite_ready else [])
-        if not suite_ready or not cases:
-            out(f"  Extended suite unavailable or contains no runnable tests: {suite}", "red")
-            ext_execution = Execution([], ["extended suite"])
-            extended_ok = False
-        else:
-            ext_baselines = {case: load_baseline(case.with_suffix(".c.expected")) for case in cases}
-            ext_items = [WorkItem(extended_job,
-                                  (case, mode, ext_overrides, ext_baselines[case], runroot / "extended-tests", args),
-                                  f"extended/{case.stem}:{'fast' if mode == 'peep' else mode}")
-                         for case in cases for mode in modes]
-            ext_execution = execute(ext_items, args.throttle_limit, args.failures_only, args.fail_fast)
-            ext_results = ext_execution.results
-            extended_ok = (not ext_execution.not_started and len(ext_results) == len(ext_items)
-                           and all(r.passed for r in ext_results))
-        if extended_ok: out("  Extended suite passed (output suppressed by -FailuresOnly)", "gray")
-    app_failed = {r.name.rsplit(":", 1)[0] for r in results if not r.passed}
+    extended_ok = (not args.extended or
+                   (not main_execution.not_started and len(extended_results) == len(extended_items)
+                    and all(result.passed for result in extended_results)))
+    if args.extended and extended_ok:
+        out("  Extended suite passed (output suppressed by -FailuresOnly)", "gray")
+    app_failed = {r.name.rsplit(":", 1)[0] for r in main_results if not r.passed}
     passed_apps = sum(app not in app_failed and app not in incomplete_apps for app in apps)
     skipped += len(incomplete_apps - app_failed)
     failed_total = len(app_failed) + len(regressions) + (diag_ok is False) + (peep_ok is False) + (extended_ok is False) + (narrow_ok is False)
@@ -759,7 +791,8 @@ def main():
     if args.timing_breakdown:
         section("TIMING BREAKDOWN")
         total = time.monotonic() - began
-        out(f"  Main app suite {main_elapsed:7.2f}s ({main_elapsed / total * 100:5.1f}%)")
+        corpus_label = "Main + extended corpus" if args.extended else "Main app suite"
+        out(f"  {corpus_label:22} {main_elapsed:7.2f}s ({main_elapsed / total * 100:5.1f}%)")
         out("  Detailed per-stage accounting is available from runall.ps1 -TimingBreakdown.", "gray")
     out("\n>>> SUCCESS: All tests passed <<<" if not failed_total else "\n>>> FAILURE: tests failed <<<", "green" if not failed_total else "red")
     if not args.keep_build: shutil.rmtree(runroot, ignore_errors=True)
