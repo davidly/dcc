@@ -4,7 +4,79 @@ Snapshot: 2026-09-14. This handoff requires no prior chat history, VS Code
 session, local memory, or existing build artifacts. GitHub and the current
 checkout are authoritative if the snapshot becomes stale.
 
-## Current Continuation
+## Cross-machine next-phase handoff
+
+The user has authorized planning and merge of this completed checkpoint so
+implementation can resume on another computer. Read
+[the detailed next-phase plan and handoff](ast-mir-next-phase-handoff.md)
+completely, then its linked skills. It supersedes older resumption requests and
+the previous bounded-phase stop instruction for the next authorized session.
+It specifies **GPT-6.1 Sol (`gpt-6.1-sol`) with medium reasoning effort** for
+implementation, fresh machine-local tools/evidence, Python runner integration,
+coverage-backed priorities, isolated four-worker ownership, exact local gates,
+and a bounded commit/push stop point. No next-phase implementation is included
+in this planning-only update.
+Use the new `python3 scripts/runall.py` for compiler application/unit regression
+testing; use `python3 -m unittest` separately for Python proof-tool unit tests.
+This handoff publication uses PR #207 on `test/ast-mir-proof-next`; #195 is the
+older merged PR and #206 belongs to an unrelated branch.
+
+## October 1 continuation
+
+Updated `origin/main` was fast-forwarded into `test/ast-mir-proof-next` at
+`1dc57abd`, including the Python regression runner and upstream byte-update
+changes. The four interrupted workers were cancelled and restarted using
+`gpt-6.1-sol` in isolated worktrees. The bounded phase is status-pack,
+recursive-wide-product, recursive-frame-fill, and byte-rotate-flags correctness;
+finish this phase, verify locally, commit/push, then stop. Do not wait for
+GitHub Actions or automatically expand into another matcher fleet.
+
+Use `python3 scripts/runall.py` for local regression gates. Its supported
+options include `--mode full --extended --timeout 60 --failures-only` and
+`--no-stack-check`; retain both strict MIR environment variables. Historical
+PowerShell runner examples below do not override this current instruction.
+
+The final integrated compiler checkpoint is `548964f9`: status-pack
+`e4571346`, recursive wide product `67420f68` plus K&R preservation
+`3273b215`, recursive frame fill `e8df60f1`, byte rotate flags `c16eafa7`,
+and the generic-fallback correction below. Four registered campaigns cover
+6,938 representative field mutations and 220 target controls. Inactive and
+equivalent survivors are retained and classified, not called miscompilations.
+
+The recovered rotate-overwrite control exposed a real, defined-C generic
+miscompilation on both merged main and the intermediate proof tree: casting a
+promoted boolean forwarded HL but omitted its named byte home, which a later
+branch read. The old target produced 24/144 failures and checksum 2137218272
+instead of the independent masked target/Python oracle's 1692113144.
+`548964f9` retains the home when the boolean has uses beyond the store and
+forwarded cast, preserving the cast-only fast path. The failing near-match is
+now a permanent normal/forced-generic, renamed, stack/no-stack, peep/nopeep
+control; it was not dropped or accepted as a pre-existing failure.
+
+Final strict stack/no-stack Python full+extended gates pass: 483 passed,
+24 documented skips, zero failures, and zero checked stack-mode performance
+regressions. Both 3,063-function parent/output censuses match merged main.
+Normal and ASan/UBSan host suites pass 5/5 each; debugger-host tests pass 10/10.
+Artifacts are under `build/october-phase-published*` and the parent
+reproduction directories listed in `docs/compiler-coverage.md`.
+
+This bounded implementation phase is complete; publication follows local
+verification and the user-requested commit/push stop point. The broader
+correctness-coverage objective remains open. Next authorized phase: collect
+fresh exact-tree aggregate coverage, review remaining meaningful gaps, and
+extend generic-fallback/target-aware compiler mutation proofs. Do not restart
+an unbounded fleet automatically.
+
+The September checkpoint's `47` defect and `~9%` matcher-audit figures below
+are historical claims, not a verified correctness-completion percentage.
+An opcode-inactive field mutation can legitimately survive. These new audits
+classify inactive/equivalent survivors separately, and distinguish diagnostic
+MIR defects from naturally source-reachable miscompilations. Representative
+single-field mutation campaigns are not exhaustive semantic proofs. No fresh
+aggregate line/branch/region collection has been claimed; 100% generated-MIR
+selection is not 100% correctness coverage.
+
+## Historical continuation
 
 PR #194 was merged into main as
 `d49e3d7f50abc0432b25114719cd3c0252c546d6`. Its merge message records the
@@ -3151,11 +3223,7 @@ fresh `run-mir-proof-suite.ps1` pass is explicitly requested and completed.
 
 ## Suggested First CLI Request
 
-> Read docs/ast-mir-cli-handoff.md and its linked toolchain/MIR skills. Inspect
-> current PR #193 and repository state. Finish authorized publication only with
-> green checks for the exact current head; if merged, start from current main.
-> Then continue the documented AST/MIR correctness and coverage work in small,
-> assertion-backed increments, preserving honest denominators and all release,
-> debug, and performance contracts. Do not claim the broad objective complete
-> from the existing checkpoint. No old chat or local build artifacts are
-> available on this machine.
+Use the copy/paste resumption request in
+[the cross-machine handoff](ast-mir-next-phase-handoff.md#11-copypaste-resumption-request).
+Do not resume the old PR #193/#195 workflow or depend on this machine's session
+history and uncommitted artifacts.

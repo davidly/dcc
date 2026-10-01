@@ -1,5 +1,66 @@
 # Compiler source coverage
 
+## October 1 bounded structural-proof checkpoint
+
+Merged-main base: `1dc57abd`; final integrated compiler: `548964f9`.
+The local regression runner is now `python3 scripts/runall.py`. Four new
+campaigns are registered in `compiler-coverage-campaigns.py`, raising its
+unique audit inventory from 103 to 107 without altering coverage denominators.
+
+| Matcher | Representative mutations | Rejected | Inactive/equivalent survivors | Target controls |
+| --- | ---: | ---: | ---: | ---: |
+| Status pack, Wave 10100 | 1,897 | 594 | 1,303 | 42 |
+| Recursive wide product, Wave 10200 | 462 | 107 | 355 | 88 |
+| Recursive frame fill, Wave 10300 | 1,222 | 599 | 623 | 42 |
+| Byte rotate flags, Wave 10400 | 3,357 | 1,914 | 1,443 | 48 |
+
+These opcode-aware structural/type/value/CFG checks do not introduce raw
+fingerprints as legality gates. Accepted inactive/equivalent mutations retain
+the valid schedule; they are not counted as defects or hidden by changing the
+mutation inventory. No active semantic survivor remained in these sampled
+campaigns. K&R and renamed positive controls preserve valid existing output.
+
+Independent parent reproductions are retained under
+`build/october-phase-{status,product,frame,rotate}-parent`:
+status-pack conversion `10:type:6` produced 32/64 failures versus zero in a
+same-MIR generic oracle; product comparison width `5:secondary_offset:2`
+incorrectly retained the wide schedule (its oracle is a narrow source form,
+not same-MIR generic execution); frame-fill STORE 35 displacement `+2`
+incorrectly retained a sink `+0` write; rotate dead-local STORE 42/95
+displacement `+7` ignored observable parameter writes. The latter persistent
+same-MIR witness changes from exact `(0,144,3592415270)` to generic and corrected
+fallback `(24,144,4253289564)`. Its nonzero fixture failures deliberately witness
+the mutated program's changed semantics, not a failing release control.
+These are active-MIR proof defects; natural-C reachability is not asserted.
+The signed-char/128 frame-fill experiment eventually accesses out of bounds
+and is not used as a defined-behavior correctness oracle.
+
+The restored rotate-overwrite near-match independently reproduced a defined-C
+generic-emitter defect on merged main and the pre-fix proof tree: 24/144
+failures, checksum 2137218272 rather than the masked target/Python oracle's
+1692113144. Forwarding the promoted boolean at MIR99 into cast101 skipped
+writing its named home; branch118 subsequently read the unwritten byte.
+`548964f9` materializes that home when additional uses exist while preserving
+HL forwarding and unchanged cast-only output. The permanent control tests
+normal and forced generic selection, renamed source, both stack modes, and
+peep/nopeep execution. It now passes; no failing control was discarded.
+Evidence is retained under `build/october-phase-fallback-parent/` and
+`build/october-phase-published/byte-rotate-flags-wave10400-audit/`.
+
+On the final compiler tree both strict Python full+extended release modes passed:
+483/507 apps, 24 documented skips, diagnostics/peephole/extended checks clean,
+zero checked stack-mode performance regressions. Both 3,063-function censuses
+match merged main without changed selections/output. Normal and ASan/UBSan
+host tests pass 5/5 each; debugger-host tests pass 10/10. The 136 Python tests
+and six registry tests pass. Final registered campaign artifacts are under
+`build/october-phase-published/`; raw faulty-compiler profiles are not coverage.
+
+The four-matcher phase, including its discovered generic-fallback regression,
+is complete. Aggregate line/branch/region metrics remain stale. This checkpoint
+claims no percentage gain, no exhaustive proof over mutation combinations, and
+no completion of the broader 100% goal. Fresh aggregate coverage and ranked
+gap review belong to a later authorized phase.
+
 ## Batched, parallel execution
 
 Run focused new cases during development; collect the full corpus once for an

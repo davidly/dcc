@@ -308,6 +308,22 @@ CAMPAIGNS = (
              "initializer-check-wave10000-audit.py",
              output_dir="initializer-check-wave10000-audit",
              max_jobs=2),
+    Campaign("status-pack-schedule",
+             "status-pack-wave10100-audit.py",
+             output_dir="status-pack-wave10100-audit",
+             max_jobs=2),
+    Campaign("recursive-wide-product-schedule",
+             "recursive-wide-product-wave10200-audit.py",
+             output_dir="recursive-wide-product-wave10200-audit",
+             max_jobs=2),
+    Campaign("recursive-frame-fill-schedule",
+             "recursive-frame-fill-wave10300-audit.py",
+             output_dir="recursive-frame-fill-wave10300-audit",
+             max_jobs=2),
+    Campaign("byte-rotate-flags-schedule",
+             "byte-rotate-flags-wave10400-audit.py",
+             output_dir="byte-rotate-flags-wave10400-audit",
+             max_jobs=2),
 )
 
 

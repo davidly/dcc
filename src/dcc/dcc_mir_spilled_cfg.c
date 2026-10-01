@@ -33818,12 +33818,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 mir_stream_printf(
                     out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
                     normalized, normalized);
+                /* Forwarding to the cast does not supply the named home
+                 * read by any other use of this promoted boolean. */
+                if (!forward_to_unary ||
+                    mir_value_use_count(insn->src1) != 2)
+                    mir_stream_printf(
+                        out, "\tld (ix%+d),l\n", bool_offset);
                 if (forward_to_unary) {
                     mir_forwarded_hl_value = insn->src1;
                     mir_forwarded_hl_instruction = next - 1;
-                } else
-                    mir_stream_printf(
-                        out, "\tld (ix%+d),l\n", bool_offset);
+                }
                 break;
             }
             }
