@@ -62,6 +62,9 @@ static uint8_t byte_rotate_flags_fixture(
         value <<= SHIFT_COUNT;
     } else if (0x20 == operation) {
         old_carry = state.carry;
+#ifdef BYTE_ROTATE_FLAGS_OVERWRITE_VALUE
+        value = (uint8_t)old_carry;
+#endif
         state.carry = (0x80 & value);
         value <<= SHIFT_COUNT;
         if (old_carry)
@@ -71,9 +74,17 @@ static uint8_t byte_rotate_flags_fixture(
         value >>= SHIFT_COUNT;
     } else {
         old_carry = state.carry;
+#ifdef BYTE_ROTATE_FLAGS_OVERWRITE_VALUE
+        value = (uint8_t)old_carry;
+#endif
         state.carry = (value & 1);
         value >>= SHIFT_COUNT;
+#if defined(BYTE_ROTATE_FLAGS_OVERWRITE_VALUE) && \
+    defined(BYTE_ROTATE_FLAGS_CAST_ONLY_CARRY)
+        if (state.carry)
+#else
         if (old_carry)
+#endif
             value |= 0x80;
     }
     state.negative = (value & 0x80), state.zero = !(value);
@@ -84,6 +95,24 @@ static uint8_t reference_rotate(
     uint8_t operation, uint8_t value, unsigned int carry,
     unsigned int *new_carry)
 {
+#ifdef BYTE_ROTATE_FLAGS_OVERWRITE_VALUE
+    unsigned int masked = (unsigned int)operation & OPERATION_MASK;
+    unsigned int input;
+
+#ifdef BYTE_ROTATE_FLAGS_EXTRA_CFG
+    if (operation == 0xff)
+        masked = 0;
+#endif
+    input = (masked == 0 || masked == 0x40) ? value : carry;
+    if (masked == 0 || masked == 0x20) {
+        *new_carry = (unsigned int)(flag_t)(input & 0x80);
+        return (uint8_t)((input << SHIFT_COUNT) |
+                        (masked == 0x20 ? carry : 0));
+    }
+    *new_carry = input & 1;
+    return (uint8_t)((input >> SHIFT_COUNT) |
+                    (masked == 0x40 || !carry ? 0 : 0x80));
+#else
 #ifdef BYTE_ROTATE_FLAGS_EXTRA_CFG
     if (operation == 0xff)
         operation = 0;
@@ -103,6 +132,7 @@ static uint8_t reference_rotate(
     }
     *new_carry = value & 1;
     return (uint8_t)((value >> SHIFT_COUNT) | (carry ? 0x80 : 0));
+#endif
 }
 
 int main(void)

@@ -6,6 +6,9 @@ witness changes both dead carry stores to the value parameter's address before
 candidate selection, unlike the normal machine-only hook (which restores MIR).
 --reproduce-base 1dc57abd demonstrates that the former matcher ignored those
 observable writes. Inactive-field survivors are classified, not called bugs.
+The overwrite near-match also tests a defined-C generic-emitter regression:
+forwarding a promoted bool to a cast must not omit its later-read named home.
+Its target oracle uses masked word arithmetic, independently checked in Python.
 """
 
 from __future__ import annotations
@@ -59,6 +62,11 @@ CONTROLS = (
     ("mask", ("BYTE_ROTATE_FLAGS_CHANGED_MASK",), False),
     ("cfg", ("BYTE_ROTATE_FLAGS_EXTRA_CFG",), False),
     ("shift", ("BYTE_ROTATE_FLAGS_CHANGED_SHIFT",), False),
+    ("overwrite", ("BYTE_ROTATE_FLAGS_OVERWRITE_VALUE",), False),
+    ("overwrite-forced", ("BYTE_ROTATE_FLAGS_OVERWRITE_VALUE",), False),
+    ("overwrite-cast-only", (
+        "BYTE_ROTATE_FLAGS_OVERWRITE_VALUE", "BYTE_ROTATE_FLAGS_CAST_ONLY_CARRY",
+    ), False),
     ("forced", (), False),
 )
 
@@ -105,14 +113,17 @@ def compile_command(compiler, output, defines=()):
 
 
 def prepare_compiler(output, reference=None):
-    source = output / "src"
+    source = output / ("src/dcc" if reference else "src")
     binary = output / "bin"
-    shutil.copytree(ROOT / "src/dcc", source)
     if reference:
-        (source / "dcc_mir_machine_float_recursion.c").write_text(
-            run(["git", "show", f"{reference}:src/dcc/dcc_mir_machine_float_recursion.c"]),
-            encoding="utf-8",
-        )
+        output.mkdir(parents=True)
+        archive = output / "source.tar"
+        run(["git", "archive", f"--output={archive}", reference, "src/dcc"],
+            timeout=60)
+        run(["tar", "-xf", str(archive), "-C", str(output)], timeout=60)
+        archive.unlink()
+    else:
+        shutil.copytree(ROOT / "src/dcc", source)
     for filename, needle, replacement in (
         ("dcc_mir_machine_emit.c", COMMON.MUTATION_HOOK_NEEDLE,
          COMMON.MUTATION_HOOK_REPLACEMENT),
@@ -147,6 +158,8 @@ def checksum(defines):
         for original in (0, 1, 2, 0x40, 0x7f, 0x80, 0x81, 0xff):
             for carry in (0, 1):
                 value = original
+                if "BYTE_ROTATE_FLAGS_OVERWRITE_VALUE" in defines and operation not in (0, 0x40):
+                    value = carry
                 new_carry = (value & 0x80) if operation in (0, 0x20) else (value & 1)
                 if not flags_raw:
                     new_carry = int(new_carry != 0)
@@ -318,7 +331,7 @@ def main():
         raise RuntimeError("MIR instruction shape changed")
     rows = [
         runtime(compiler, output / "runtime", source, name, defines, stack, peep,
-                forced=name == "forced", expect_exact=exact)
+                forced=name in ("forced", "overwrite-forced"), expect_exact=exact)
         for name, defines, exact in CONTROLS
         for stack in (True, False) for peep in (True, False)
     ]
@@ -339,6 +352,28 @@ def main():
         if generic[4:] != forced[4:] or accepted[4:] == generic[4:]:
             raise RuntimeError("pre-fix semantic false acceptance not reproduced")
         print(f"pre-fix exact={accepted[4:]} persistent generic={generic[4:]}")
+        for force_overwrite in (False, True):
+            overwrite = runtime(
+                reference, output / "witness", source,
+                f"old-overwrite-{'forced' if force_overwrite else 'normal'}",
+                ("BYTE_ROTATE_FLAGS_OVERWRITE_VALUE",), False, False,
+                forced=force_overwrite, allow_failure=True,
+            )
+            if overwrite[4:] != (24, 144, 2137218272):
+                raise RuntimeError("merged-main overwrite miscompile not reproduced")
+            print(f"merged-main overwrite forced={force_overwrite}: "
+                  f"{overwrite[4:]}; oracle checksum=1692113144")
+        cast_defines = (
+            "BYTE_ROTATE_FLAGS_OVERWRITE_VALUE",
+            "BYTE_ROTATE_FLAGS_CAST_ONLY_CARRY",
+        )
+        runtime(reference, output / "witness", source, "old-cast-only",
+                cast_defines, False, False)
+        cast_paths = (output / "old-cast-only.MAC", output / "cast-only.MAC")
+        for tool, path in zip((reference, compiler), cast_paths):
+            run(compile_command(tool, path, cast_defines), environment())
+        if cast_paths[0].read_bytes() != cast_paths[1].read_bytes():
+            raise RuntimeError("single-cast forwarding assembly regressed")
     work = output / "mutations"
     work.mkdir()
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
