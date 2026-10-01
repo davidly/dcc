@@ -70,10 +70,11 @@ EQUIVALENT_CONSTANT_SOURCES = {
     (114, "src2"),
     (128, "src2"),
 }
-EXPECTED_OUTCOMES = {"rejected": 15255, "accepted": 18800}
+# The overlap proof rejects 40 more dead-carry-store mutations.
+EXPECTED_OUTCOMES = {"rejected": 15295, "accepted": 18760}
 EXPECTED_CLASSES = {
     "baseline-no-op": 461,
-    "dead-local-store": 42,
+    "dead-local-store": 2,
     "equivalent-constant-source": 65,
     "unused-field": 18220,
     "valid-state-layout": 12,
