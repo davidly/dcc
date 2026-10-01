@@ -40,7 +40,8 @@ default run already executes every gate.
 
 .PARAMETER LlvmDirectory
 LLVM binary directory to search when CC is unset. Otherwise search PATH, then
-build/llvm/bin in the repository. Explicit LLVM environment overrides win.
+build/llvm/bin and Ubuntu's /usr/lib/llvm-*/bin installations. Explicit LLVM
+environment overrides win.
 
 .PARAMETER PreflightOnly
 Resolve and validate the LLVM coverage tools, set CC/LLVM_COV/LLVM_PROFDATA for
@@ -199,33 +200,52 @@ function Resolve-AvailableClang {
     if ($versioned.Count -gt 0) {
         return $versioned[0].Source
     }
-    return Resolve-ClangInDirectory (Join-Path $repoRoot "build/llvm/bin")
+    $directories = @((Join-Path $repoRoot "build/llvm/bin"))
+    if ($IsLinux) {
+        $directories += @(Get-UbuntuLlvmDirectories)
+    }
+    foreach ($directory in $directories) {
+        $compiler = Resolve-ClangInDirectory $directory
+        if ($compiler) {
+            return $compiler
+        }
+    }
+    return ""
+}
+
+function Get-UbuntuLlvmDirectories {
+    param([string]$LibraryDirectory = "/usr/lib")
+
+    if (Test-Path -LiteralPath $LibraryDirectory -PathType Container) {
+        Get-ChildItem -LiteralPath $LibraryDirectory -Directory |
+            Where-Object { $_.Name -match "^llvm-\d+$" } |
+            Sort-Object { [int]($_.Name -replace "^llvm-", "") } -Descending |
+            ForEach-Object { Join-Path $_.FullName "bin" }
+    }
 }
 
 function Resolve-LlvmPeer {
     param(
         [Parameter(Mandatory)][string]$Compiler,
-        [Parameter(Mandatory)][string]$Tool
+        [Parameter(Mandatory)][string]$Tool,
+        [Parameter(Mandatory)][int]$Major
     )
 
     $compilerPath = (Get-Command $Compiler -ErrorAction Stop).Source
-    $compilerName = [System.IO.Path]::GetFileNameWithoutExtension($compilerPath)
-    $suffix = if ($compilerName -match "^clang(?:-cl)?-(\d+)$") {
-        "-$($Matches[1])"
-    } else {
-        ""
-    }
     $extension = [System.IO.Path]::GetExtension($compilerPath)
     $directory = Split-Path -Parent $compilerPath
-    foreach ($name in @("$Tool$suffix", $Tool)) {
-        foreach ($candidate in @(
-            (Join-Path $directory "$name$extension"),
-            $name
-        )) {
-            $resolved = Get-Command $candidate -ErrorAction SilentlyContinue
-            if ($resolved) {
-                return $resolved.Source
-            }
+    $names = @("$Tool-$Major", $Tool)
+    foreach ($name in $names) {
+        $resolved = Get-Command (Join-Path $directory "$name$extension") `
+            -ErrorAction SilentlyContinue
+        if ($resolved) {
+            return $resolved.Source
+        }
+    }
+    foreach ($name in $names) {
+        $resolved = Get-Command $name -ErrorAction SilentlyContinue
+        if ($resolved) {
+            return $resolved.Source
         }
     }
     return ""
@@ -290,7 +310,9 @@ function Throw-CoverageToolPreflight {
     ) + $StatusLines + @(
         "",
         "Or pass -LlvmDirectory /path/to/llvm/bin (or use build/llvm/bin).",
-        "Set matching LLVM tools explicitly, for example:",
+        "Set matching LLVM tools explicitly in PowerShell:",
+        "  `$env:CC = '/path/to/clang-18'; `$env:LLVM_COV = '/path/to/llvm-cov-18'; `$env:LLVM_PROFDATA = '/path/to/llvm-profdata-18'",
+        "Or in a POSIX shell:",
         "  export CC=/path/to/clang-18 LLVM_COV=/path/to/llvm-cov-18 LLVM_PROFDATA=/path/to/llvm-profdata-18"
     )) -join "`n")
 }
@@ -313,7 +335,7 @@ if (-not $coverageCompiler) {
         @(
             (Format-CoverageToolStatus `
                 "CC" $env:CC `
-                "clang on PATH, in -LlvmDirectory/build/llvm/bin, or explicit CC")
+                "clang on PATH, in -LlvmDirectory/build/llvm/bin, Ubuntu /usr/lib/llvm-*/bin, or explicit CC")
         )
 }
 Assert-CommandAvailable $coverageCompiler
@@ -334,7 +356,7 @@ if ($env:LLVM_COV) {
     }
     $llvmCov = $resolvedLlvmCov.Source
 } else {
-    $llvmCov = Resolve-LlvmPeer $coverageCompiler "llvm-cov"
+    $llvmCov = Resolve-LlvmPeer $coverageCompiler "llvm-cov" $clangMajor
 }
 $llvmProfdata = ""
 if ($env:LLVM_PROFDATA) {
@@ -351,7 +373,7 @@ if ($env:LLVM_PROFDATA) {
     }
     $llvmProfdata = $resolvedLlvmProfdata.Source
 } else {
-    $llvmProfdata = Resolve-LlvmPeer $coverageCompiler "llvm-profdata"
+    $llvmProfdata = Resolve-LlvmPeer $coverageCompiler "llvm-profdata" $clangMajor
 }
 if (-not $llvmCov -or -not $llvmProfdata) {
     if (Get-Command xcrun -ErrorAction SilentlyContinue) {

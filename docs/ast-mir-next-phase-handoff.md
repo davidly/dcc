@@ -201,11 +201,26 @@ If LLVM executables are versioned, export the installed matching paths through
 `CC`, `LLVM_COV`, and `LLVM_PROFDATA`. Confirm their versions before collection.
 The aggregate runner can instead resolve and set those variables itself:
 use `-LlvmDirectory /path/to/llvm/bin`, or a local toolchain at `build/llvm/bin`.
+On Ubuntu/Linux, automatic discovery also searches installed
+`/usr/lib/llvm-<major>/bin` directories in descending major order after `PATH`
+and the repository-local toolchain. Compiler-local companions precede `PATH`
+companions; an unversioned compiler can find peers using its reported major.
+For Ubuntu 24.04, the relevant packages are `clang-18`, `llvm-18`, and
+`libclang-rt-18-dev` (in addition to the build prerequisites above). Use a
+matching major available from the configured repositories on older releases.
 Check it without starting proofs with
 `pwsh ./scripts/run-mir-proof-suite.ps1 -PreflightOnly`.
 Explicit environment overrides still win and must match; no machine-specific
 session path is committed. If no local toolchain is present, install/restore
-the matching tools rather than assuming they are bundled.
+the matching tools rather than assuming they are bundled. This preflight
+checks the LLVM trio only, not the sanitizer runtime or all proof prerequisites.
+The current runner follow-up is Ubuntu-focused; native macOS and Windows
+end-to-end validation remains outstanding.
+Local runner evidence: all 147 Python tool tests passed, including five new
+Ubuntu discovery/peer-selection tests. The discovered LLVM 18 trio also built
+and ran both branches of a small ASan/UBSan-instrumented coverage control, then
+merged and exported its profiles successfully. This is toolchain smoke
+evidence, not a new eleven-phase proof collection or compiler-coverage gain.
 PowerShell remains necessary for specialized proof harnesses even though
 ordinary regressions now use Python.
 

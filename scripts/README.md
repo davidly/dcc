@@ -18,7 +18,12 @@ Specialized campaigns retain their measured/enforced worker caps.
 The runner resolves a matching Clang, `llvm-cov`, and `llvm-profdata`, then sets
 `CC`, `LLVM_COV`, and `LLVM_PROFDATA` for child processes. Explicit environment
 overrides take precedence. Without `CC`, it searches `PATH`, then the
-repository-local `build/llvm/bin`; alternatively pass an LLVM binary directory:
+repository-local `build/llvm/bin`, then (on Linux) Ubuntu's
+`/usr/lib/llvm-<major>/bin` directories, newest major first. Missing compiler
+executables in those directories are skipped. Companions beside the selected
+compiler take precedence over tools on `PATH`; versioned companions can also
+be resolved from the compiler's reported major version. Alternatively pass an
+LLVM binary directory:
 
 ```sh
 pwsh ./scripts/run-mir-proof-suite.ps1 -PreflightOnly -LlvmDirectory /path/to/llvm/bin
@@ -30,6 +35,24 @@ pwsh ./scripts/run-mir-proof-suite.ps1 -All -LlvmDirectory /path/to/llvm/bin
 mismatched major versions fail explicitly; the runner does not install LLVM
 or silently replace a supplied override. The aggregate regression commands
 still use PowerShell internally; the Python bridge remains next-phase work.
+
+For **Ubuntu**, install a complete matching LLVM toolchain, including the
+sanitizer runtime. For example, on Ubuntu 24.04:
+
+```sh
+sudo apt-get install build-essential cmake python3 clang-18 llvm-18 libclang-rt-18-dev
+pwsh ./scripts/run-mir-proof-suite.ps1 -PreflightOnly
+pwsh ./scripts/run-mir-proof-suite.ps1 -All -MutationJobs 2 -MutationBuildJobs 2 -RunTimeout 60
+```
+
+PowerShell 7 and `ntvcm` must also be installed and on `PATH`; see the
+[toolchain setup guide](../docs/docs/en/00-setup-toolchain.md).
+On other Ubuntu releases, use a matching LLVM major available from your
+configured repositories. No exports are needed unless overriding discovery;
+an existing `CC`, `LLVM_COV`, or `LLVM_PROFDATA` remains authoritative, including
+an invalid one. `-PreflightOnly` validates the LLVM trio, not the full build or
+sanitizer runtime. The complete suite still requires its normal dependencies
+and all eleven gates; no gate is skipped by automatic tool discovery.
 
 ## `runall.py`
 

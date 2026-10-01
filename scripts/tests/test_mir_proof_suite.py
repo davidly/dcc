@@ -1,9 +1,11 @@
 """Verify the aggregate AST/MIR proof runner's public gate inventory."""
 
 from pathlib import Path
+import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -278,6 +280,159 @@ class MirProofSuiteTests(unittest.TestCase):
             result = self.llvm_preflight(directory, environment)
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertIn("must all match Clang LLVM 18", result.stdout)
+
+    @unittest.skipIf(os.name == "nt", "POSIX fake tool fixtures")
+    def test_sibling_unversioned_peers_win_over_versioned_path_tools(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = root / "LLVM tools"
+            directory.mkdir()
+            tools = tuple(directory / name for name in
+                          ("clang-18", "llvm-cov", "llvm-profdata"))
+            for tool in tools:
+                self.write_tool(tool, "Ubuntu LLVM version 18.0.0")
+            ambient = root / "ambient"
+            ambient.mkdir()
+            for name in ("llvm-cov-18", "llvm-profdata-18"):
+                self.write_tool(ambient / name, "Ubuntu LLVM version 19.0.0")
+            environment = self.clean_llvm_environment()
+            environment["PATH"] = str(ambient)
+            result = self.llvm_preflight(directory, environment)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            for tool in tools:
+                self.assertIn(str(tool), result.stdout)
+
+    @unittest.skipIf(os.name == "nt", "POSIX fake tool fixtures")
+    def test_unversioned_clang_finds_matching_versioned_path_peers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = root / "compiler"
+            directory.mkdir()
+            compiler = directory / "clang"
+            self.write_tool(compiler, "Ubuntu LLVM version 18.0.0")
+            peers = root / "peers"
+            peers.mkdir()
+            tools = tuple(peers / name for name in
+                          ("llvm-cov-18", "llvm-profdata-18"))
+            for tool in tools:
+                self.write_tool(tool, "Ubuntu LLVM version 18.0.0")
+            environment = self.clean_llvm_environment()
+            environment["PATH"] = str(peers)
+            result = self.llvm_preflight(directory, environment)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            for tool in (compiler, *tools):
+                self.assertIn(str(tool), result.stdout)
+
+    @unittest.skipIf(os.name == "nt", "POSIX fake tool fixtures")
+    def test_reported_major_peers_win_for_unversioned_clang(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            compiler = directory / "clang"
+            self.write_tool(compiler, "Ubuntu LLVM version 18.0.0")
+            tools = tuple(directory / name for name in
+                          ("llvm-cov-18", "llvm-profdata-18"))
+            for tool in tools:
+                self.write_tool(tool, "Ubuntu LLVM version 18.0.0")
+            for name in ("llvm-cov", "llvm-profdata"):
+                self.write_tool(directory / name, "Ubuntu LLVM version 19.0.0")
+            result = self.llvm_preflight(
+                directory, self.clean_llvm_environment()
+            )
+            self.assertEqual(result.returncode, 0, result.stdout)
+            for tool in (compiler, *tools):
+                self.assertIn(str(tool), result.stdout)
+
+    def test_ubuntu_installations_sort_numerically_and_ignore_other_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ("llvm-9", "llvm-18", "llvm-20", "llvm-current",
+                         "llvm-18-old", "other"):
+                (root / name / "bin").mkdir(parents=True)
+            self.assertEqual(
+                self.ubuntu_llvm_directories(root),
+                [str(root / name / "bin") for name in
+                 ("llvm-20", "llvm-18", "llvm-9")],
+            )
+            self.assertEqual(
+                self.ubuntu_llvm_directories(root / "not-installed"), [],
+            )
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Ubuntu discovery")
+    def test_ubuntu_discovery_preserves_path_and_repository_precedence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            library = root / "lib"
+            ubuntu = library / "llvm-18/bin"
+            ubuntu.mkdir(parents=True)
+            (library / "llvm-20/bin").mkdir(parents=True)
+            compiler = self.make_llvm_tools(ubuntu)[0]
+            environment = self.clean_llvm_environment()
+            environment.update({
+                "PATH": str(root),
+                "TEST_REPO_ROOT": str(root),
+                "TEST_LIBRARY_DIRECTORY": str(library),
+                "TEST_PROOF_RUNNER": str(
+                    ROOT / "scripts/run-mir-proof-suite.ps1"
+                ),
+            })
+            command = (
+                "$ast = [System.Management.Automation.Language.Parser]::ParseFile("
+                "$env:TEST_PROOF_RUNNER, [ref]$null, [ref]$null); "
+                "$definitions = @{}; "
+                "$ast.FindAll({ param($node) $node -is "
+                "[System.Management.Automation.Language.FunctionDefinitionAst] }, "
+                "$true) | ForEach-Object { $definitions[$_.Name] = $_.Body }; "
+                "function Get-UbuntuLlvmDirectories { "
+                "& ($definitions['Get-UbuntuLlvmDirectories'].GetScriptBlock()) "
+                "-LibraryDirectory $env:TEST_LIBRARY_DIRECTORY }; "
+                "function Resolve-ClangInDirectory { param($Directory) "
+                "& ($definitions['Resolve-ClangInDirectory'].GetScriptBlock()) "
+                "-Directory $Directory }; "
+                "$repoRoot = $env:TEST_REPO_ROOT; $LlvmDirectory = ''; "
+                "& ($definitions['Resolve-AvailableClang'].GetScriptBlock())"
+            )
+
+            def resolve():
+                result = subprocess.run(
+                    [PWSH, "-NoLogo", "-NoProfile", "-Command", command],
+                    cwd=ROOT, env=environment, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout)
+                return result.stdout.strip()
+
+            self.assertEqual(resolve(), str(compiler))
+            local = root / "build/llvm/bin"
+            local.mkdir(parents=True)
+            compiler = self.make_llvm_tools(local)[0]
+            self.assertEqual(resolve(), str(compiler))
+            compiler = root / "clang"
+            self.write_tool(compiler, "Ubuntu LLVM version 18.0.0")
+            self.assertEqual(resolve(), str(compiler))
+
+    def ubuntu_llvm_directories(self, directory):
+        environment = self.clean_llvm_environment()
+        environment["TEST_LIBRARY_DIRECTORY"] = str(directory)
+        environment["TEST_PROOF_RUNNER"] = str(
+            ROOT / "scripts/run-mir-proof-suite.ps1"
+        )
+        command = (
+            "$ast = [System.Management.Automation.Language.Parser]::ParseFile("
+            "$env:TEST_PROOF_RUNNER, [ref]$null, [ref]$null); "
+            "$function = $ast.Find({ param($node) "
+            "$node -is [System.Management.Automation.Language.FunctionDefinitionAst] "
+            "-and $node.Name -eq 'Get-UbuntuLlvmDirectories' }, $true); "
+            "$directories = @(& ($function.Body.GetScriptBlock()) "
+            "-LibraryDirectory $env:TEST_LIBRARY_DIRECTORY); "
+            "ConvertTo-Json -InputObject $directories -Compress"
+        )
+        result = subprocess.run(
+            [PWSH, "-NoLogo", "-NoProfile", "-Command", command],
+            cwd=ROOT, env=environment, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        return json.loads(result.stdout)
 
     @staticmethod
     def clean_llvm_environment():
