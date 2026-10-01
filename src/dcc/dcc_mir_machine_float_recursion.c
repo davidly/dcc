@@ -6107,6 +6107,17 @@ static int mir_machine_byte_rotate_instruction_metadata(void)
             insn->bit_width != 0 || insn->bit_shift != 0 ||
             insn->bit_mask != 0 || insn->divmod_cast_types != 0)
             return 0;
+        if (insn->opcode == MIR_PARAM ||
+            insn->opcode == MIR_CONST ||
+            insn->opcode == MIR_UNARY ||
+            insn->opcode == MIR_BINARY ||
+            insn->opcode == MIR_ADDRESS ||
+            insn->opcode == MIR_MEMBER_ADDRESS ||
+            insn->opcode == MIR_LOAD ||
+            insn->opcode == MIR_LOAD_INDIRECT)
+            if (insn->dst < 0 || insn->dst >= mir.next_value ||
+                mir_definition(insn->dst) != insn)
+                return 0;
     }
     for (binary = 0; binary < 15; ++binary)
         if (mir.insns[binary_instructions[binary]].secondary_offset !=
@@ -6167,11 +6178,36 @@ static int mir_machine_byte_rotate_state_member(
 static int mir_machine_byte_rotate_local_store(int instruction)
 {
     const struct MirInsn *store = &mir.insns[instruction];
+    int type, storage, offset;
+    int declared_type, declared_storage, declared_offset;
 
     return mir_machine_named_nonvolatile(store) &&
         store->memory_size == 1 &&
         store->memory_flags == 0 &&
-        store->bit_width == 0;
+        store->bit_width == 0 &&
+        store->immediate >= -32768 && store->immediate <= 32767 &&
+        mir_scalar_memory_location(store, &type, &storage, &offset) &&
+        mir_declared_location(store->name, &declared_type,
+                              &declared_storage, &declared_offset) &&
+        type == store->type && type == declared_type &&
+        storage == declared_storage && offset == declared_offset &&
+        (storage == SC_PARAM ||
+         (storage == SC_LOCAL && offset < 0 &&
+          offset >= -mir.local_bytes));
+}
+
+static int mir_machine_byte_rotate_dead_store(int instruction)
+{
+    const struct MirInsn *store = &mir.insns[instruction];
+    int type, storage, offset;
+
+    /* An unaddressed local is not dead if a displaced store aliases a
+     * parameter or another object. Prove its actual declared byte first. */
+    return mir_machine_byte_rotate_local_store(instruction) &&
+        store->type == TYPE_BOOL &&
+        mir_machine_unobservable_local_store(store) &&
+        mir_scalar_memory_location(store, &type, &storage, &offset) &&
+        storage == SC_LOCAL;
 }
 
 static int mir_match_byte_rotate_flags(
@@ -6348,7 +6384,7 @@ static int mir_match_byte_rotate_flags(
         return mir_machine_reject(
             "byte-rotate-flags", "asl-dataflow");
     if (mir.insns[40].src1 != mir.insns[39].dst ||
-        !mir_machine_unobservable_local_store(&mir.insns[42]) ||
+        !mir_machine_byte_rotate_dead_store(42) ||
         mir.insns[42].src1 != mir.insns[40].dst ||
         !mir_machine_constant_equals(mir.insns[48].src1, 128) ||
         mir.insns[48].immediate != '&' ||
@@ -6394,7 +6430,7 @@ static int mir_match_byte_rotate_flags(
         return mir_machine_reject(
             "byte-rotate-flags", "lsr-dataflow");
     if (mir.insns[93].src1 != mir.insns[92].dst ||
-        !mir_machine_unobservable_local_store(&mir.insns[95]) ||
+        !mir_machine_byte_rotate_dead_store(95) ||
         mir.insns[95].src1 != mir.insns[93].dst ||
         mir.insns[101].immediate != '&' ||
         mir.insns[101].src1 != mir.insns[100].dst ||
