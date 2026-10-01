@@ -6532,6 +6532,33 @@ static void mir_emit_status_unpack(
     mir_stream_puts("\tret\n", out);
 }
 
+static int mir_status_pack_byte_type(int type)
+{
+    return type == (TYPE_CHAR | TYPE_UNSIGNED);
+}
+
+static int mir_status_pack_word_type(int type)
+{
+    /* A boolean conversion would discard the initial 0x30 status bits. */
+    return type == TYPE_INT || type == (TYPE_INT | TYPE_UNSIGNED);
+}
+
+static int mir_status_pack_local(
+    const struct MirInsn *initial, const struct MirInsn *access)
+{
+    int type, storage, offset;
+
+    return mir_machine_same_location(initial, access) &&
+           mir_machine_named_nonvolatile(access) &&
+           mir_scalar_memory_location(access, &type, &storage, &offset) &&
+           storage == SC_LOCAL && mir_status_pack_byte_type(type) &&
+           mir_status_pack_byte_type(access->type) &&
+           access->memory_size ==
+               (access->opcode == MIR_LOAD ? 0 : 1) &&
+           access->bit_width == 0 &&
+           access->inline_temp_id == 0;
+}
+
 static int mir_match_status_pack(struct MirStatusPack *plan)
 {
     static const int expected_opcodes[79] = {
@@ -6569,20 +6596,56 @@ static int mir_match_status_pack(struct MirStatusPack *plan)
 
     memset(plan, 0, sizeof(*plan));
     if (mir_cfg_block_count() != 7 || mir.count != 79 ||
-        (mir.return_type & 15) != TYPE_VOID)
+        mir.return_type != TYPE_VOID || mir.has_vla ||
+        mir.is_variadic_function || mir.aggregate_temp_bytes != 0)
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction)
-        if (mir.insns[instruction].opcode !=
-            expected_opcodes[instruction])
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int branch = instruction >= 7 &&
+                     (instruction - 7) % 12 == 0;
+        int other;
+
+        if (insn->opcode != expected_opcodes[instruction] ||
+            insn->successor_count !=
+                (instruction == 78 ? 0 : branch ? 2 : 1) ||
+            (instruction < 78 &&
+             insn->successors[branch ? 1 : 0] != instruction + 1) ||
+            (branch && insn->successors[0] != instruction + 8))
             return 0;
+        if (insn->opcode == MIR_LABEL) {
+            if (insn->label < 0 || insn->label >= mir.next_label)
+                return 0;
+            for (other = 0; other < instruction; ++other)
+                if (mir.insns[other].opcode == MIR_LABEL &&
+                    mir.insns[other].label == insn->label)
+                    return 0;
+        }
+        if (insn->opcode == MIR_CONST ||
+            insn->opcode == MIR_ADDRESS ||
+            insn->opcode == MIR_MEMBER_ADDRESS ||
+            insn->opcode == MIR_LOAD_INDIRECT ||
+            insn->opcode == MIR_LOAD ||
+            insn->opcode == MIR_UNARY ||
+            insn->opcode == MIR_BINARY ||
+            insn->opcode == MIR_CALL) {
+            if (insn->dst < 0 || insn->dst >= mir.next_value)
+                return 0;
+            for (other = 0; other < instruction; ++other)
+                if (mir.insns[other].opcode != MIR_NOP &&
+                    mir.insns[other].dst == insn->dst)
+                    return 0;
+        }
+    }
     if (initial_value->immediate != 48 ||
-        (initial_value->type & TYPE_UNSIGNED) == 0 ||
+        !mir_status_pack_byte_type(initial_value->type) ||
+        !mir_status_pack_local(initial_store, initial_store) ||
         !mir_machine_unobservable_local_store(initial_store) ||
         initial_store->src1 != initial_value->dst)
         return 0;
     packed_value = initial_value->dst;
     for (flag = 0; flag < 6; ++flag) {
         int base = 4 + flag * 12;
+        const struct MirInsn *root = &mir.insns[base];
         const struct MirInsn *member = &mir.insns[base + 1];
         const struct MirInsn *load = &mir.insns[base + 2];
         const struct MirInsn *branch = &mir.insns[base + 3];
@@ -6594,34 +6657,50 @@ static int mir_match_status_pack(struct MirStatusPack *plan)
         const struct MirInsn *store = &mir.insns[base + 10];
         const struct MirInsn *label = &mir.insns[base + 11];
         struct Sym *member_state;
+        struct Sym *root_state = find_global(root->name);
         int member_offset;
         int packed_source = packed_value;
 
-        if (!mir_machine_global_byte_member(
+        if (root_state == NULL || type_size(root_state->type) <= 0 ||
+            root->type != type_add_ptr(root_state->type) ||
+            root->immediate < 0 ||
+            root->immediate >= type_size(root_state->type) ||
+            member->immediate < 0 ||
+            member->immediate >=
+                type_size(root_state->type) - root->immediate ||
+            !mir_machine_global_byte_member(
                 base, base + 1,
                 &member_state, &member_offset) ||
             (state != NULL && member_state != state) ||
-            (member->type & 15) != TYPE_BOOL ||
+            type_ptr_depth(root->type) != 1 ||
+            (root->memory_flags & (1 | 8)) != 0 ||
+            root->pointee_volatile_mask != 0 ||
+            member->type != (TYPE_BOOL | TYPE_PTR) ||
+            (member->memory_flags & (1 | 8)) != 0 ||
+            member->pointee_volatile_mask != 0 ||
+            member->bit_width != 0 ||
             load->src1 != member->dst ||
-            (load->type & 15) != TYPE_BOOL ||
+            load->type != TYPE_BOOL ||
             load->memory_size != 1 ||
+            load->bit_width != 0 ||
             (load->memory_flags & (1 | 8)) != 0 ||
             branch->src1 != load->dst ||
             branch->label != label->label ||
             (flag == 0 ?
                  packed_load->opcode != MIR_NOP :
-                 (!mir_machine_same_location(
-                      initial_store, packed_load) ||
-                  !mir_machine_named_nonvolatile(packed_load))) ||
+                 !mir_status_pack_local(initial_store, packed_load)) ||
             constant->immediate != expected_masks[flag] ||
+            !mir_status_pack_word_type(constant->type) ||
             source->immediate != 0 ||
+            !mir_status_pack_word_type(source->type) ||
             combined->immediate != '|' ||
+            !mir_status_pack_word_type(combined->type) ||
+            combined->secondary_offset != source->type ||
             combined->src2 != constant->dst ||
             converted->immediate != 0 ||
             converted->src1 != combined->dst ||
-            (converted->type & TYPE_UNSIGNED) == 0 ||
-            !mir_machine_same_location(initial_store, store) ||
-            !mir_machine_named_nonvolatile(store) ||
+            !mir_status_pack_byte_type(converted->type) ||
+            !mir_status_pack_local(initial_store, store) ||
             store->src1 != converted->dst)
             return 0;
         if (flag != 0)
@@ -6636,24 +6715,21 @@ static int mir_match_status_pack(struct MirStatusPack *plan)
     }
     plan->state = state;
     plan->function = find_global(call->name);
-    if (!mir_machine_same_location(initial_store, final_load) ||
-        !mir_machine_named_nonvolatile(final_load) ||
-        (final_load->type & TYPE_UNSIGNED) == 0 ||
-        type_size(final_load->type) != 1 ||
+    if (!mir_status_pack_local(initial_store, final_load) ||
         final_load->dst != argument->src1 ||
         argument->immediate != 0 ||
         argument->secondary_offset != call->secondary_offset ||
-        (argument->type & TYPE_UNSIGNED) == 0 ||
-        type_size(argument->type) != 1 ||
-        type_ptr_depth(argument->type) != 0 ||
+        !mir_status_pack_byte_type(argument->type) ||
         plan->function == NULL || !plan->function->is_defined ||
         plan->function->storage != SC_FUNC ||
         plan->function->is_funcptr ||
         plan->function->is_noreturn ||
+        plan->function->is_fastcall ||
         !plan->function->has_proto ||
         plan->function->proto_nargs != 1 ||
         plan->function->proto_variadic ||
         plan->function->proto_types[0] != argument->type ||
+        call->type != plan->function->type ||
         (call->memory_flags &
          (MIR_CALL_FLAG_VARIADIC |
           MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
