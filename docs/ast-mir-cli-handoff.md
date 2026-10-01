@@ -4,6 +4,23 @@ Snapshot: 2026-09-14. This handoff requires no prior chat history, VS Code
 session, local memory, or existing build artifacts. GitHub and the current
 checkout are authoritative if the snapshot becomes stale.
 
+## Cross-machine next-phase handoff
+
+The user has authorized planning and merge of this completed checkpoint so
+implementation can resume on another computer. Read
+[the detailed next-phase plan and handoff](ast-mir-next-phase-handoff.md)
+completely, then its linked skills. It supersedes older resumption requests and
+the previous bounded-phase stop instruction for the next authorized session.
+It specifies **GPT-6.1 Sol (`gpt-6.1-sol`) with medium reasoning effort** for
+implementation, fresh machine-local tools/evidence, Python runner integration,
+coverage-backed priorities, isolated four-worker ownership, exact local gates,
+and a bounded commit/push stop point. No next-phase implementation is included
+in this planning-only update.
+Use the new `python3 scripts/runall.py` for compiler application/unit regression
+testing; use `python3 -m unittest` separately for Python proof-tool unit tests.
+This handoff publication uses PR #207 on `test/ast-mir-proof-next`; #195 is the
+older merged PR and #206 belongs to an unrelated branch.
+
 ## October 1 continuation
 
 Updated `origin/main` was fast-forwarded into `test/ast-mir-proof-next` at
@@ -3206,11 +3223,7 @@ fresh `run-mir-proof-suite.ps1` pass is explicitly requested and completed.
 
 ## Suggested First CLI Request
 
-> Read docs/ast-mir-cli-handoff.md and its linked toolchain/MIR skills. Inspect
-> current PR #193 and repository state. Finish authorized publication only with
-> green checks for the exact current head; if merged, start from current main.
-> Then continue the documented AST/MIR correctness and coverage work in small,
-> assertion-backed increments, preserving honest denominators and all release,
-> debug, and performance contracts. Do not claim the broad objective complete
-> from the existing checkpoint. No old chat or local build artifacts are
-> available on this machine.
+Use the copy/paste resumption request in
+[the cross-machine handoff](ast-mir-next-phase-handoff.md#11-copypaste-resumption-request).
+Do not resume the old PR #193/#195 workflow or depend on this machine's session
+history and uncommitted artifacts.
