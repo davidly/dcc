@@ -5167,6 +5167,114 @@ static void mir_emit_float_tangent_rational(
     mir_stream_printf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
 }
 
+static int mir_machine_byte_rotate_cfg_valid(void);
+
+static int mir_recursive_frame_fill_instruction_metadata(void)
+{
+    int counter_type = mir.insns[7].type;
+    int instruction;
+
+    if ((counter_type != TYPE_CHAR &&
+         counter_type != (TYPE_CHAR | TYPE_UNSIGNED)) ||
+        (counter_type == TYPE_CHAR && mir.insns[9].immediate > 127))
+        return 0;
+    for (instruction = 0; instruction < 47; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected_type = TYPE_INT;
+        int defines_value = 1;
+        int other;
+
+        /* Erased loads retain diagnostic metadata, not executable semantics. */
+        if (insn->opcode == MIR_NOP)
+            continue;
+        if (insn->pointee_volatile_mask != 0 ||
+            insn->has_pointer_qualifiers ||
+            insn->bit_width != 0 || insn->bit_shift != 0 ||
+            insn->bit_mask != 0 || insn->inline_temp_id != 0 ||
+            insn->divmod_cast_types != 0)
+            return 0;
+        switch (insn->opcode) {
+        case MIR_LABEL:
+        case MIR_BRANCH_FALSE:
+        case MIR_JUMP:
+        case MIR_RETURN:
+            defines_value = 0;
+            expected_type = 0;
+            break;
+        case MIR_ARG:
+            defines_value = 0;
+            if (insn->secondary_offset != mir.insns[40].secondary_offset)
+                return 0;
+            break;
+        case MIR_STORE:
+            defines_value = 0;
+            if (instruction != 35)
+                expected_type = counter_type;
+            if (insn->memory_size != type_size(expected_type) ||
+                insn->immediate != 0 ||
+                (instruction == 35 && insn->object != -1) ||
+                !mir_machine_named_nonvolatile(insn))
+                return 0;
+            break;
+        case MIR_STORE_INDIRECT:
+            defines_value = 0;
+            if (insn->memory_size != 2)
+                return 0;
+            break;
+        case MIR_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+            expected_type = TYPE_INT | TYPE_PTR;
+            if (insn->opcode == MIR_INDEX_ADDRESS &&
+                insn->memory_size != 2)
+                return 0;
+            if (insn->opcode == MIR_ADDRESS &&
+                (insn->immediate != 0 || insn->object != -1 ||
+                 !mir_machine_named_nonvolatile(insn)))
+                return 0;
+            break;
+        case MIR_CONST:
+        case MIR_PHI:
+            if (instruction == 3 || instruction == 7 || instruction == 23)
+                expected_type = counter_type;
+            break;
+        case MIR_BINARY:
+            if (instruction == 24)
+                expected_type = counter_type;
+            if (insn->secondary_offset != expected_type)
+                return 0;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if (insn->memory_size != 2)
+                return 0;
+            break;
+        }
+        if (insn->type != expected_type ||
+            (insn->memory_flags != 0 &&
+             !(instruction == 3 && insn->memory_flags == 512)))
+            return 0;
+        if (!defines_value)
+            continue;
+        if (insn->dst < 0 || insn->dst >= mir.next_value)
+            return 0;
+        for (other = 0; other < 47; ++other)
+            if (other != instruction &&
+                mir.insns[other].opcode != MIR_NOP &&
+                mir.insns[other].dst == insn->dst)
+                return 0;
+    }
+    return mir_machine_same_location(&mir.insns[4], &mir.insns[25]) &&
+        !strcmp(mir.insns[4].name, mir.insns[7].name) &&
+        mir.insns[4].object == mir.insns[7].object &&
+        mir.insns[4].object == mir.insns[25].object &&
+        mir.insns[4].object >= 0 &&
+        mir.insns[4].object < mir.object_count &&
+        !strcmp(mir.insns[4].name,
+                mir.objects[mir.insns[4].object].name) &&
+        !strcmp(mir.insns[13].name, mir.insns[28].name) &&
+        !strcmp(mir.insns[13].name, mir.insns[41].name) &&
+        mir_machine_byte_rotate_cfg_valid();
+}
+
 static int mir_match_recursive_frame_fill(
     struct MirRecursiveFrameFill *plan)
 {
@@ -5189,6 +5297,7 @@ static int mir_match_recursive_frame_fill(
     int other_type, other_storage, other_offset;
     int call_argument;
     int instruction;
+    int array_declarations = 0;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 47 || mir_cfg_block_count() != 4 ||
@@ -5199,14 +5308,20 @@ static int mir_match_recursive_frame_fill(
         if (mir.insns[instruction].opcode != expected_opcodes[instruction])
             return mir_machine_reject(
                 "recursive-frame-fill", "opcode");
+    if (!mir_recursive_frame_fill_instruction_metadata())
+        return mir_machine_reject(
+            "recursive-frame-fill", "instruction-metadata");
     if (!mir_scalar_memory_location(
             parameter, &parameter_type, &parameter_storage,
             &parameter_offset) ||
-        parameter_storage != SC_PARAM || parameter_offset < 4 ||
-        type_size(parameter_type) != 2 ||
-        type_ptr_depth(parameter_type) != 0 ||
+        parameter->object < 0 || parameter->object >= mir.object_count ||
+        strcmp(parameter->name, mir.objects[parameter->object].name) ||
+        parameter_storage != SC_PARAM || parameter_offset != 4 ||
+        parameter_type != TYPE_INT || parameter->immediate != 0 ||
+        !mir_machine_named_nonvolatile(parameter) ||
         !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
         !mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        mir.insns[4].src1 != mir.insns[3].dst ||
         mir.insns[4].memory_size != 1 ||
         mir.insns[7].src1 != mir.insns[3].dst ||
         mir.insns[7].src2 != mir.insns[24].dst ||
@@ -5223,6 +5338,23 @@ static int mir_match_recursive_frame_fill(
         mir.insns[12].label != mir.insns[27].label)
         return mir_machine_reject("recursive-frame-fill", "loop");
     plan->count = (int)mir.insns[9].immediate;
+    for (instruction = 0; instruction < mir.declared_count; ++instruction) {
+        if (strcmp(mir.declared_names[instruction], mir.insns[13].name))
+            continue;
+        if (mir.declared_types[instruction] != TYPE_INT ||
+            mir.declared_storage[instruction] != SC_LOCAL ||
+            !mir.declared_is_array[instruction] ||
+            mir.declared_is_vla[instruction] ||
+            mir.declared_is_volatile[instruction] ||
+            mir.declared_dim_counts[instruction] != 1 ||
+            mir.declared_dims[instruction][0] != plan->count ||
+            mir.declared_elem_sizes[instruction] != 2 ||
+            mir.declared_sizes[instruction] != 2 * plan->count)
+            return mir_machine_reject("recursive-frame-fill", "array");
+        ++array_declarations;
+    }
+    if (array_declarations != 1)
+        return mir_machine_reject("recursive-frame-fill", "array");
     if ((plan->count & (plan->count - 1)) != 0 ||
         !mir_scalar_memory_location(
             &mir.insns[13], &array_type, &array_storage,
@@ -5268,7 +5400,9 @@ static int mir_match_recursive_frame_fill(
         !mir_machine_name_nonvolatile(mir.insns[35].name))
         return mir_machine_reject("recursive-frame-fill", "publish");
     plan->sink = find_global(mir.insns[35].name);
-    if (plan->sink == NULL || plan->sink->storage == SC_EXTERN ||
+    if (plan->sink == NULL || plan->sink->type != TYPE_INT ||
+        plan->sink->is_array || plan->sink->is_funcptr ||
+        plan->sink->storage == SC_EXTERN ||
         plan->sink->needs_extrn ||
         !mir_machine_constant_equals(mir.insns[37].dst, 1) ||
         mir.insns[38].immediate != '+' ||
@@ -5282,7 +5416,13 @@ static int mir_match_recursive_frame_fill(
         return mir_machine_reject("recursive-frame-fill", "call");
     plan->function = find_global(call->name);
     if (plan->function == NULL || !plan->function->is_defined ||
-        plan->function->is_funcptr ||
+        plan->function->storage != SC_FUNC ||
+        plan->function->is_funcptr || plan->function->is_fastcall ||
+        plan->function->type != TYPE_INT ||
+        plan->function->proto_variadic ||
+        (plan->function->has_proto &&
+         (plan->function->proto_nargs != 1 ||
+          plan->function->proto_types[0] != TYPE_INT)) ||
         (call->base_name[0] != 0 &&
          strcmp(call->base_name,
                 asm_name_for(sym_asm_name(plan->function)))) ||
