@@ -5344,6 +5344,94 @@ static void mir_emit_recursive_frame_fill(
             plan->parameter_frame_offset + 1);
 }
 
+static int mir_recursive_wide_product_cfg_valid(void)
+{
+    int instruction;
+
+    if (mir.next_label <= 0 || mir.next_label > mir.count)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int expected[2];
+        int expected_count = 0;
+        int label_instruction = -1;
+        int label_matches = 0;
+        int candidate;
+        int successor;
+
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE) {
+            if (insn->label < 0 || insn->label >= mir.next_label)
+                return 0;
+            for (candidate = 0; candidate < mir.count; ++candidate)
+                if (mir.insns[candidate].opcode == MIR_LABEL &&
+                    mir.insns[candidate].label == insn->label) {
+                    label_instruction = candidate;
+                    ++label_matches;
+                }
+            if (label_matches != 1)
+                return 0;
+            expected[expected_count++] = label_instruction;
+        }
+        if (insn->opcode == MIR_BRANCH_FALSE) {
+            if (instruction + 1 >= mir.count)
+                return 0;
+            expected[expected_count++] = instruction + 1;
+        } else if (insn->opcode != MIR_JUMP &&
+                   insn->opcode != MIR_RETURN &&
+                   instruction + 1 < mir.count) {
+            expected[expected_count++] = instruction + 1;
+        }
+        if (insn->successor_count != expected_count)
+            return 0;
+        for (successor = 0; successor < expected_count; ++successor)
+            if (insn->successors[successor] != expected[successor])
+                return 0;
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int other;
+
+        if (mir.insns[instruction].opcode != MIR_LABEL)
+            continue;
+        if (mir.insns[instruction].label < 0 ||
+            mir.insns[instruction].label >= mir.next_label)
+            return 0;
+        for (other = instruction + 1; other < mir.count; ++other)
+            if (mir.insns[other].opcode == MIR_LABEL &&
+                mir.insns[other].label ==
+                    mir.insns[instruction].label)
+                return 0;
+    }
+    return mir.insns[mir.count - 1].opcode == MIR_RETURN &&
+        mir.insns[mir.count - 1].successor_count == 0;
+}
+
+static int mir_recursive_wide_product_values_valid(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int other;
+
+        if (insn->opcode != MIR_PARAM && insn->opcode != MIR_CONST &&
+            insn->opcode != MIR_BINARY && insn->opcode != MIR_CALL)
+            continue;
+        if (insn->dst < 0 || insn->dst >= mir.next_value ||
+            mir_definition(insn->dst) != insn)
+            return 0;
+        for (other = instruction + 1; other < mir.count; ++other) {
+            const struct MirInsn *next = &mir.insns[other];
+
+            if ((next->opcode == MIR_PARAM || next->opcode == MIR_CONST ||
+                 next->opcode == MIR_BINARY || next->opcode == MIR_CALL) &&
+                next->dst == insn->dst)
+                return 0;
+        }
+    }
+    return 1;
+}
+
 static int mir_match_recursive_wide_product(
     struct MirRecursiveWideProduct *plan)
 {
@@ -5359,6 +5447,7 @@ static int mir_match_recursive_wide_product(
     const struct MirInsn *decrement;
     const struct MirInsn *call;
     const struct MirInsn *product;
+    const struct MirCallSignature *signature;
     int call_argument;
     int memory_type;
     int memory_storage;
@@ -5367,60 +5456,111 @@ static int mir_match_recursive_wide_product(
 
     memset(plan, 0, sizeof(*plan));
     if (mir_cfg_block_count() != 2 || mir.count != 20 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
         type_size(mir.return_type) != 4 ||
         type_is_float(mir.return_type))
-        return 0;
+        return mir_machine_reject(
+            "recursive-wide-product", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
             expected_opcodes[instruction])
-            return 0;
+            return mir_machine_reject(
+                "recursive-wide-product", "opcode");
+    if (!mir_recursive_wide_product_cfg_valid())
+        return mir_machine_reject(
+            "recursive-wide-product", "cfg");
+    if (!mir_recursive_wide_product_values_valid())
+        return mir_machine_reject(
+            "recursive-wide-product", "values");
     parameter = &mir.insns[1];
     comparison = &mir.insns[5];
     base_value = &mir.insns[8];
     decrement = &mir.insns[15];
     call = &mir.insns[17];
     product = &mir.insns[18];
-    if (type_size(parameter->type) != 4 ||
+    if (parameter->type != mir.return_type ||
+        type_size(parameter->type) != 4 ||
         type_is_float(parameter->type) ||
         type_ptr_depth(parameter->type) != 0 ||
         (parameter->type & TYPE_UNSIGNED) != 0 ||
-        comparison->immediate != TOK_EQ ||
-        !mir_machine_constant_equals(comparison->src1, 0) ||
-        comparison->src2 != parameter->dst ||
-        mir.insns[6].src1 != comparison->dst ||
-        mir.insns[6].label != mir.insns[10].label ||
-        (base_value->immediate != 0 &&
-         base_value->immediate != 1) ||
-        type_size(base_value->type) != 4 ||
-        mir.insns[9].src1 != base_value->dst ||
-        decrement->immediate != '-' ||
-        decrement->src1 != parameter->dst ||
-        !mir_machine_constant_equals(decrement->src2, 1) ||
-        !mir_machine_single_call_argument(
-            call, &call_argument) ||
-        call_argument != decrement->dst ||
-        (product->immediate != '*' &&
-         product->immediate != '+') ||
-        product->src1 != parameter->dst ||
-        product->src2 != call->dst ||
-        type_size(product->type) != 4 ||
-        mir.insns[19].src1 != product->dst)
-        return 0;
-    plan->function = find_global(call->name);
-    if (plan->function == NULL || !plan->function->is_defined ||
-        strcmp(call->name, mir.name) ||
-        (call->memory_flags &
-         (MIR_CALL_FLAG_VARIADIC |
-          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
-        (call->base_name[0] != 0 &&
-         strcmp(call->base_name,
-                asm_name_for(
-                    sym_asm_name(plan->function)))) ||
+        parameter->object < 0 || parameter->object >= mir.object_count ||
+        parameter->immediate != 0 || parameter->memory_flags != 0 ||
+        !mir_machine_named_nonvolatile(parameter) ||
         !mir_scalar_memory_location(
             parameter, &memory_type, &memory_storage,
             &memory_offset) ||
-        memory_storage != SC_PARAM || memory_offset < 2)
-        return 0;
+        memory_type != parameter->type ||
+        memory_storage != SC_PARAM || memory_offset != 4 ||
+        strcmp(mir.objects[parameter->object].name, parameter->name) ||
+        mir.objects[parameter->object].entry_value != parameter->dst)
+        return mir_machine_reject(
+            "recursive-wide-product", "parameter");
+    if (comparison->type != TYPE_INT ||
+        comparison->secondary_offset != parameter->type ||
+        comparison->immediate != TOK_EQ ||
+        comparison->src1 != mir.insns[4].dst ||
+        mir.insns[4].immediate != 0 ||
+        comparison->src2 != parameter->dst ||
+        mir.insns[6].src1 != comparison->dst ||
+        mir.insns[6].label != mir.insns[10].label ||
+        mir.insns[4].type != parameter->type ||
+        (base_value->immediate != 0 &&
+         base_value->immediate != 1) ||
+        base_value->type != mir.return_type ||
+        mir.insns[9].src1 != base_value->dst)
+        return mir_machine_reject(
+            "recursive-wide-product", "base-case");
+    if (mir.insns[14].type != parameter->type ||
+        decrement->type != parameter->type ||
+        decrement->secondary_offset != parameter->type ||
+        decrement->immediate != '-' ||
+        decrement->src1 != parameter->dst ||
+        decrement->src2 != mir.insns[14].dst ||
+        mir.insns[14].immediate != 1 ||
+        mir.insns[16].type != parameter->type ||
+        !mir_machine_single_call_argument(
+            call, &call_argument) ||
+        call_argument != decrement->dst)
+        return mir_machine_reject(
+            "recursive-wide-product", "decrement");
+    if (call->type != mir.return_type ||
+        call->memory_flags != 0 ||
+        call->secondary_offset < 0 ||
+        call->secondary_offset >= mir.call_signature_capacity ||
+        strcmp(call->name, mir.name))
+        return mir_machine_reject(
+            "recursive-wide-product", "call");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr ||
+        plan->function->is_noreturn ||
+        !plan->function->has_proto ||
+        plan->function->proto_variadic ||
+        plan->function->proto_nargs != 1 ||
+        plan->function->type != mir.return_type ||
+        plan->function->proto_types[0] != parameter->type ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(
+                    sym_asm_name(plan->function)))))
+        return mir_machine_reject(
+            "recursive-wide-product", "call-symbol");
+    signature = &mir.call_signatures[call->secondary_offset];
+    if (!signature->present || !signature->has_proto ||
+        signature->variadic || signature->parameter_count != 1 ||
+        signature->return_type != mir.return_type ||
+        signature->parameter_types[0] != parameter->type)
+        return mir_machine_reject(
+            "recursive-wide-product", "call-signature");
+    if ((product->immediate != '*' &&
+         product->immediate != '+') ||
+        product->src1 != parameter->dst ||
+        product->src2 != call->dst ||
+        product->type != mir.return_type ||
+        product->secondary_offset != mir.return_type ||
+        mir.insns[19].src1 != product->dst)
+        return mir_machine_reject(
+            "recursive-wide-product", "result");
     plan->parameter_stack_offset = memory_offset - 2;
     plan->operation = (int)product->immediate;
     plan->base_result = (int)base_value->immediate;
@@ -8067,6 +8207,7 @@ int mir_try_emit_float_recursion_kernels(MirStream *out)
     }
     if (mir_match_recursive_wide_product(
             &recursive_wide_product)) {
+        mir_machine_accept("recursive-wide-product");
         mir_emit_recursive_wide_product(
             out, &recursive_wide_product);
         return 1;
