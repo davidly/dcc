@@ -35,7 +35,8 @@ SELECTED_HASH = re.compile(
     r"selected-hash=(?P<hash>[0-9a-f]{8})"
 )
 BASELINE_SHA256 = (
-    "c9c86c97091c14451080c8a64ff0a0fcec70fe664049cd7a6dc0fc058568b954"
+    # Includes the surrounding functions' corrected promoted-bool homes.
+    "055bf6d1b242dc68e6eb98cfcf216103f1d214bd5cc10913c0c593430cc7ab4b"
 )
 BASELINE_SELECTED_HASH = "cf58a4d7"
 EXPECTED_RUNTIME = "fixed softmax failures=0"

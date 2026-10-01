@@ -15,14 +15,30 @@ if ($mainStart -lt 0) {
     throw "Pointer-condition mutation anchor changed: main"
 }
 $main = $source.Substring($mainStart)
-$inactiveStart = $main.IndexOf("#ifdef PTRW25_POINTER_TRUTHINESS")
-$inactiveEnd = $main.IndexOf("#else", $inactiveStart)
-if ($inactiveStart -lt 0 -or $inactiveEnd -lt 0) {
-    throw "Pointer-condition mutation anchor changed: inactive truthiness"
-}
+$inactiveRanges = @(
+    foreach ($macro in @(
+        "PTRW25_POINTER_TRUTHINESS",
+        "PTRW63_ALT_PICKW",
+        "PTRW63_LOOP_FUNCTION_ALIAS"
+    )) {
+        $inactiveStart = $main.IndexOf("#ifdef $macro")
+        $inactiveEnd = if ($inactiveStart -ge 0) {
+            $main.IndexOf("#else", $inactiveStart)
+        } else {
+            -1
+        }
+        if ($inactiveStart -lt 0 -or $inactiveEnd -lt 0) {
+            throw "Pointer-condition mutation anchor changed: inactive $macro"
+        }
+        [pscustomobject]@{
+            Start = $inactiveStart
+            End = $inactiveEnd
+        }
+    }
+)
 $mutations = [regex]::Matches(
     $main, '(?<operator>==|!=|<=|>=|<|>)\s*(?<number>\d+)(?<suffix>[LUlu]*)')
-if ($mutations.Count -ne 82) {
+if ($mutations.Count -ne 85) {
     throw "Pointer-condition mutation inventory changed: $($mutations.Count)"
 }
 $environmentNames = @(
@@ -78,8 +94,15 @@ try {
         if ($result.ExitCode -ne 0) {
             throw "Pointer-condition mutation $index did not compile"
         }
-        if ($number.Index -gt $inactiveStart -and
-            $number.Index -lt $inactiveEnd) {
+        $isInactive = $false
+        foreach ($range in $inactiveRanges) {
+            if ($number.Index -gt $range.Start -and
+                $number.Index -lt $range.End) {
+                $isInactive = $true
+                break
+            }
+        }
+        if ($isInactive) {
             if ($result.Text -notmatch
                     'MIR selection function=main selector=scheduled-machine-cfg' -or
                 $result.Assembly -cne $control.Assembly) {

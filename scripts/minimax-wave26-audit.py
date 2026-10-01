@@ -25,10 +25,13 @@ GENERIC_SELECTION = re.compile(
     r"regional-homed-scalar-cfg|spilled-scalar-cfg) result=mir"
 )
 BASELINE_SHA256 = (
-    "6d5f8dfa979c49addf9eab35fd747f362c9771f89b178f3577e6815f1dc802bc"
+    # Includes the surrounding functions' corrected promoted-bool homes.
+    "b4ae28d6a59c4d0db4dc975daf59d0a62cc0593e346ed30896602e8fa2c2b4b5"
 )
-EXPECTED_OUTCOMES = Counter(rejected=415, accepted=1103)
-EXPECTED_BENIGN = Counter(**{"unused-opcode-field": 1103})
+# Stronger byte-width, constant, and store-location checks reject 919 old
+# mutation survivors; every remaining accepted mutation is an unused field.
+EXPECTED_OUTCOMES = Counter(rejected=1334, accepted=184)
+EXPECTED_BENIGN = Counter(**{"unused-opcode-field": 184})
 FIELDS = (
     "type", "immediate", "memory_size", "src1", "src2", "identity"
 )

@@ -31,7 +31,8 @@ KB = S * D
 VB = 2 * S * D
 AB = 3 * S * D
 BASELINE_SHA256 = (
-    "c5f1c953dee335ce0bc389da9fcb803439136d19ea6e21ca6538cac2cd05586c"
+    # Includes the surrounding functions' corrected promoted-bool homes.
+    "5b90f2fbfcc9c23f2e3737f664f6cca78f4cbc023efb5b510bb894385790ba34"
 )
 BASELINE_SELECTED_HASH = "e16e3e51"
 EXPECTED_CHECKSUM = 276938403
