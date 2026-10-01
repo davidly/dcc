@@ -2,6 +2,35 @@
 
 Developer utility scripts for the `dcc` (CP/M-80 / Z80) toolchain.
 
+## `run-mir-proof-suite.ps1`
+
+Run the complete eleven-phase AST/MIR proof suite from the repository root:
+
+```sh
+pwsh ./scripts/run-mir-proof-suite.ps1 -All -MutationJobs 2 -MutationBuildJobs 2 -RunTimeout 60
+```
+
+`-Jobs` defaults to the host's logical processor count. Use a lower value when
+memory or nested compiler builds constrain throughput; examples using eight
+workers are conservative, not a requirement to leave other cores idle.
+Specialized campaigns retain their measured/enforced worker caps.
+
+The runner resolves a matching Clang, `llvm-cov`, and `llvm-profdata`, then sets
+`CC`, `LLVM_COV`, and `LLVM_PROFDATA` for child processes. Explicit environment
+overrides take precedence. Without `CC`, it searches `PATH`, then the
+repository-local `build/llvm/bin`; alternatively pass an LLVM binary directory:
+
+```sh
+pwsh ./scripts/run-mir-proof-suite.ps1 -PreflightOnly -LlvmDirectory /path/to/llvm/bin
+pwsh ./scripts/run-mir-proof-suite.ps1 -All -LlvmDirectory /path/to/llvm/bin
+```
+
+`-PreflightOnly` checks LLVM configuration without building or running proofs.
+`-List` prints the gate inventory without requiring LLVM. Missing tools or
+mismatched major versions fail explicitly; the runner does not install LLVM
+or silently replace a supplied override. The aggregate regression commands
+still use PowerShell internally; the Python bridge remains next-phase work.
+
 ## `runall.py`
 
 Native Python 3 runner for the standard build, emulator, baseline, fixture,

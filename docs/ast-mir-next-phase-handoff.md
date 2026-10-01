@@ -199,6 +199,13 @@ sanitized root binary. The canonical build must produce all host tools,
 
 If LLVM executables are versioned, export the installed matching paths through
 `CC`, `LLVM_COV`, and `LLVM_PROFDATA`. Confirm their versions before collection.
+The aggregate runner can instead resolve and set those variables itself:
+use `-LlvmDirectory /path/to/llvm/bin`, or a local toolchain at `build/llvm/bin`.
+Check it without starting proofs with
+`pwsh ./scripts/run-mir-proof-suite.ps1 -PreflightOnly`.
+Explicit environment overrides still win and must match; no machine-specific
+session path is committed. If no local toolchain is present, install/restore
+the matching tools rather than assuming they are bundled.
 PowerShell remains necessary for specialized proof harnesses even though
 ordinary regressions now use Python.
 

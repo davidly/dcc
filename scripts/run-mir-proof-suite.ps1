@@ -38,6 +38,14 @@ Require exact AST/MIR coverage completion during the final coverage phase.
 Explicitly request the full proof suite. Accepted for discoverability; the
 default run already executes every gate.
 
+.PARAMETER LlvmDirectory
+LLVM binary directory to search when CC is unset. Otherwise search PATH, then
+build/llvm/bin in the repository. Explicit LLVM environment overrides win.
+
+.PARAMETER PreflightOnly
+Resolve and validate the LLVM coverage tools, set CC/LLVM_COV/LLVM_PROFDATA for
+child processes, and print their values without running the proof phases.
+
 .EXAMPLE
 pwsh ./scripts/run-mir-proof-suite.ps1
 
@@ -61,7 +69,9 @@ param(
     [string]$OutputDirectory = "",
     [switch]$List,
     [switch]$RequireComplete,
-    [switch]$All
+    [switch]$All,
+    [string]$LlvmDirectory = "",
+    [switch]$PreflightOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -140,7 +150,39 @@ function Convert-ToShellPath {
     return $converted
 }
 
+function Resolve-ClangInDirectory {
+    param([Parameter(Mandatory)][string]$Directory)
+
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        return ""
+    }
+    foreach ($name in @("clang", "clang.exe")) {
+        $resolved = Get-Command (Join-Path $Directory $name) `
+            -ErrorAction SilentlyContinue
+        if ($resolved) {
+            return $resolved.Source
+        }
+    }
+    $versioned = @(Get-ChildItem -LiteralPath $Directory -File |
+        Where-Object { $_.BaseName -match "^clang-\d+$" } |
+        Sort-Object {
+            [int]($_.BaseName -replace "^clang-", "")
+        } -Descending)
+    foreach ($candidate in $versioned) {
+        $resolved = Get-Command $candidate.FullName `
+            -ErrorAction SilentlyContinue
+        if ($resolved) {
+            return $resolved.Source
+        }
+    }
+    return ""
+}
+
 function Resolve-AvailableClang {
+    if ($LlvmDirectory) {
+        $directory = [System.IO.Path]::GetFullPath($LlvmDirectory, $repoRoot)
+        return Resolve-ClangInDirectory $directory
+    }
     $unversioned = Get-Command "clang" -ErrorAction SilentlyContinue
     if ($unversioned) {
         return $unversioned.Source
@@ -157,7 +199,7 @@ function Resolve-AvailableClang {
     if ($versioned.Count -gt 0) {
         return $versioned[0].Source
     }
-    return ""
+    return Resolve-ClangInDirectory (Join-Path $repoRoot "build/llvm/bin")
 }
 
 function Resolve-LlvmPeer {
@@ -247,15 +289,18 @@ function Throw-CoverageToolPreflight {
         "Expected versus found:"
     ) + $StatusLines + @(
         "",
+        "Or pass -LlvmDirectory /path/to/llvm/bin (or use build/llvm/bin).",
         "Set matching LLVM tools explicitly, for example:",
         "  export CC=/path/to/clang-18 LLVM_COV=/path/to/llvm-cov-18 LLVM_PROFDATA=/path/to/llvm-profdata-18"
     )) -join "`n")
 }
 
-foreach ($command in @(
-    $python, $pwsh, $cmake, $ctest, $sh, "ntvcm"
-)) {
-    Assert-CommandAvailable $command
+if (-not $PreflightOnly) {
+    foreach ($command in @(
+        $python, $pwsh, $cmake, $ctest, $sh, "ntvcm"
+    )) {
+        Assert-CommandAvailable $command
+    }
 }
 $coverageCompiler = if ($env:CC) {
     $env:CC
@@ -268,7 +313,7 @@ if (-not $coverageCompiler) {
         @(
             (Format-CoverageToolStatus `
                 "CC" $env:CC `
-                "clang or clang-<major> on PATH, or CC=/path/to/clang-<major>")
+                "clang on PATH, in -LlvmDirectory/build/llvm/bin, or explicit CC")
         )
 }
 Assert-CommandAvailable $coverageCompiler
@@ -309,29 +354,52 @@ if ($env:LLVM_PROFDATA) {
     $llvmProfdata = Resolve-LlvmPeer $coverageCompiler "llvm-profdata"
 }
 if (-not $llvmCov -or -not $llvmProfdata) {
-    if (-not (Get-Command xcrun -ErrorAction SilentlyContinue)) {
-        Throw-CoverageToolPreflight `
-            "Could not resolve the LLVM coverage companions required for the final phase." `
-            @(
-                (Format-CoverageToolStatus "CC" $coverageCompiler "clang LLVM $clangMajor"),
-                (Format-CoverageToolStatus "LLVM_COV" $llvmCov "llvm-cov LLVM $clangMajor"),
-                (Format-CoverageToolStatus "LLVM_PROFDATA" $llvmProfdata "llvm-profdata LLVM $clangMajor")
-            )
+    if (Get-Command xcrun -ErrorAction SilentlyContinue) {
+        if (-not $llvmCov) {
+            $found = @(& xcrun --find llvm-cov 2>&1)
+            if ($LASTEXITCODE -eq 0) {
+                $llvmCov = ($found -join "`n").Trim()
+            }
+        }
+        if (-not $llvmProfdata) {
+            $found = @(& xcrun --find llvm-profdata 2>&1)
+            if ($LASTEXITCODE -eq 0) {
+                $llvmProfdata = ($found -join "`n").Trim()
+            }
+        }
     }
-} else {
-    Assert-CommandAvailable $llvmCov
-    Assert-CommandAvailable $llvmProfdata
-    $covMajor = Get-LlvmMajor $llvmCov
-    $profdataMajor = Get-LlvmMajor $llvmProfdata
-    if ($clangMajor -ne $covMajor -or $clangMajor -ne $profdataMajor) {
-        Throw-CoverageToolPreflight `
-            "Coverage tools must all match Clang LLVM $clangMajor." `
-            @(
-                (Format-CoverageToolStatus "CC" $coverageCompiler "clang LLVM $clangMajor"),
-                (Format-CoverageToolStatus "LLVM_COV" $llvmCov "llvm-cov LLVM $clangMajor"),
-                (Format-CoverageToolStatus "LLVM_PROFDATA" $llvmProfdata "llvm-profdata LLVM $clangMajor")
-            )
-    }
+}
+if (-not $llvmCov -or -not $llvmProfdata) {
+    Throw-CoverageToolPreflight `
+        "Could not resolve the LLVM coverage companions required for the final phase." `
+        @(
+            (Format-CoverageToolStatus "CC" $coverageCompiler "clang LLVM $clangMajor"),
+            (Format-CoverageToolStatus "LLVM_COV" $llvmCov "llvm-cov LLVM $clangMajor"),
+            (Format-CoverageToolStatus "LLVM_PROFDATA" $llvmProfdata "llvm-profdata LLVM $clangMajor")
+        )
+}
+Assert-CommandAvailable $llvmCov
+Assert-CommandAvailable $llvmProfdata
+$covMajor = Get-LlvmMajor $llvmCov
+$profdataMajor = Get-LlvmMajor $llvmProfdata
+if ($clangMajor -ne $covMajor -or $clangMajor -ne $profdataMajor) {
+    Throw-CoverageToolPreflight `
+        "Coverage tools must all match Clang LLVM $clangMajor." `
+        @(
+            (Format-CoverageToolStatus "CC" $coverageCompiler "clang LLVM $clangMajor"),
+            (Format-CoverageToolStatus "LLVM_COV" $llvmCov "llvm-cov LLVM $clangMajor"),
+            (Format-CoverageToolStatus "LLVM_PROFDATA" $llvmProfdata "llvm-profdata LLVM $clangMajor")
+        )
+}
+$env:CC = $coverageCompiler
+$env:LLVM_COV = $llvmCov
+$env:LLVM_PROFDATA = $llvmProfdata
+Write-Host "LLVM coverage tools (major $clangMajor):"
+Write-Host "  CC=$env:CC"
+Write-Host "  LLVM_COV=$env:LLVM_COV"
+Write-Host "  LLVM_PROFDATA=$env:LLVM_PROFDATA"
+if ($PreflightOnly) {
+    return
 }
 Clear-AmbientProofControls
 
