@@ -5,6 +5,7 @@ The diagnostic hook changes only the exact candidate and restores MIR before
 generic fallback. Source near-matches therefore supply the runtime oracle.
 With --before-ref, the active comparison-width mutant reproduces a target
 stack-check failure where the equivalent narrow-test source returns one.
+Prototyped and K&R definitions retain the same proven four-byte call ABI.
 """
 
 from __future__ import annotations
@@ -58,6 +59,9 @@ CONTROLS = (
     ("baseline", (), FUNCTION, True, "argument=10 result=3628800"),
     ("renamed", ("RWPROD_RENAMED",), "wide_product_renamed", True,
      "argument=10 result=3628800"),
+    ("kr", ("RWPROD_KR",), FUNCTION, True, "argument=10 result=3628800"),
+    ("renamed-kr", ("RWPROD_KR", "RWPROD_RENAMED"),
+     "wide_product_renamed", True, "argument=10 result=3628800"),
     ("base-zero", ("RWPROD_BASE_ZERO",), FUNCTION, True,
      "argument=10 result=0"),
     ("sum", ("RWPROD_SUM",), FUNCTION, True, "argument=10 result=56"),
@@ -272,6 +276,34 @@ def reproduction(before, current, output):
     print("after: active width mutant rejected; valid assembly byte-identical")
 
 
+def kr_preservation_controls(before, output):
+    for name, defines, function, _, _ in CONTROLS:
+        if name not in ("kr", "renamed-kr"):
+            continue
+        for stack in (True, False):
+            for peep in (True, False):
+                mode = f"s{int(stack)}p{int(peep)}f0"
+                original = output / "before-kr" / name / mode
+                report, runtime = build_target(
+                    before, original, defines, function, stack, peep
+                )
+                helpers.require_exact(report, function, f"parent {name}")
+                current = output / "runtime" / name / mode
+                if (original / "RWPROD.COM").read_bytes() != \
+                        (current / "RWPROD.COM").read_bytes():
+                    raise RuntimeError(f"{name}/{mode} linked bytes regressed")
+                pattern = r"Z80\s+cycles:\s+([\d,]+)"
+                old_cycles = helpers.re.search(pattern, runtime)
+                new_cycles = helpers.re.search(
+                    pattern, (current / "runtime.log").read_text()
+                )
+                if not old_cycles or not new_cycles or \
+                        old_cycles.group(1) != new_cycles.group(1):
+                    raise RuntimeError(f"{name}/{mode} cycles regressed")
+    print("K&R and renamed-K&R: parent/current linked bytes and cycles "
+          "identical in all four stack/peephole configurations")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jobs", type=int, default=4)
@@ -289,11 +321,14 @@ def main():
     output.mkdir(parents=True)
     os.environ["UBSAN_OPTIONS"] = "halt_on_error=1"
     compiler = prepare_compiler(output / "current", sanitize=args.sanitize)
+    before = None
     if args.before_ref:
         before = prepare_compiler(output / "before", args.before_ref)
         reproduction(before, compiler, output)
     rows = runtime_controls(compiler, output)
     helpers.write_tsv(output / "runtime-controls.tsv", rows)
+    if before is not None:
+        kr_preservation_controls(before, output)
     work = output / "mutations"
     work.mkdir()
     baseline_path = output / "mutation-baseline.MAC"

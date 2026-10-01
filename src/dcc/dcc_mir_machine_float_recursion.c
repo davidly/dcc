@@ -5674,11 +5674,11 @@ static int mir_match_recursive_wide_product(
     if (plan->function == NULL || !plan->function->is_defined ||
         plan->function->is_funcptr ||
         plan->function->is_noreturn ||
-        !plan->function->has_proto ||
         plan->function->proto_variadic ||
-        plan->function->proto_nargs != 1 ||
         plan->function->type != mir.return_type ||
-        plan->function->proto_types[0] != parameter->type ||
+        (plan->function->has_proto &&
+         (plan->function->proto_nargs != 1 ||
+          plan->function->proto_types[0] != parameter->type)) ||
         (call->base_name[0] != 0 &&
          strcmp(call->base_name,
                 asm_name_for(
@@ -5686,10 +5686,15 @@ static int mir_match_recursive_wide_product(
         return mir_machine_reject(
             "recursive-wide-product", "call-symbol");
     signature = &mir.call_signatures[call->secondary_offset];
-    if (!signature->present || !signature->has_proto ||
-        signature->variadic || signature->parameter_count != 1 ||
+    /* Default promotions do not change the proven 32-bit self-call argument.
+     * Old-style definitions do not record prototype parameter metadata. */
+    if (!signature->present ||
+        signature->has_proto != plan->function->has_proto ||
+        signature->variadic ||
         signature->return_type != mir.return_type ||
-        signature->parameter_types[0] != parameter->type)
+        (signature->has_proto &&
+         (signature->parameter_count != 1 ||
+          signature->parameter_types[0] != parameter->type)))
         return mir_machine_reject(
             "recursive-wide-product", "call-signature");
     if ((product->immediate != '*' &&

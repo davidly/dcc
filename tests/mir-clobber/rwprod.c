@@ -19,7 +19,12 @@
 #define PARAM_TYPE int32_t
 #endif
 
+#if defined(RWPROD_KR)
+RESULT_TYPE WIDE_PRODUCT(n)
+PARAM_TYPE n;
+#else
 RESULT_TYPE WIDE_PRODUCT(PARAM_TYPE n)
+#endif
 {
 #if defined(RWPROD_EXTRA_CFG)
     if (n < 0)
