@@ -259,7 +259,8 @@ int mir_value_only_used_by_absolute_access(
     int instruction;
     int found_use = 0;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
         if (insn->src2 == value || mir_call_uses_value(insn, value))
@@ -482,12 +483,9 @@ static int mir_byte_arithmetic_result_needs_normalization(
         (insn->immediate != '+' && insn->immediate != '-') ||
         insn->narrowed_for_counter_update)
         return 0;
-    for (i = 0; i < mir.count; ++i) {
+    for (i = mir_next_use(insn->dst, -1); i >= 0;
+         i = mir_next_use(insn->dst, i)) {
         const struct MirInsn *use = &mir.insns[i];
-
-        if (use->src1 != insn->dst && use->src2 != insn->dst &&
-            !mir_call_uses_value(use, insn->dst))
-            continue;
         if (use->opcode == MIR_BRANCH_FALSE ||
             (use->opcode == MIR_STORE && type_size(use->type) == 1) ||
             (use->opcode == MIR_STORE_INDIRECT &&

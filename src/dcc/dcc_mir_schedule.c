@@ -237,10 +237,8 @@ static int mir_schedule_maximum_pressure(void)
         int value;
 
         for (value = 0; value < mir.next_value; ++value)
-            if (mir.live_in[(size_t)instruction *
-                            mir.next_value + value] ||
-                mir.live_out[(size_t)instruction *
-                             mir.next_value + value] ||
+            if (MIR_LIVE_TEST(mir.live_in, instruction, value) ||
+                MIR_LIVE_TEST(mir.live_out, instruction, value) ||
                 mir.insns[instruction].dst == value)
                 ++pressure;
         if (maximum < pressure)
@@ -372,11 +370,9 @@ static int mir_schedule_build_segments(
         for (value = 0; value < mir.next_value; ++value) {
             unsigned flags = 0;
             int live_in =
-                mir.live_in[(size_t)blocks[block].first *
-                            mir.next_value + value] != 0;
+                MIR_LIVE_TEST(mir.live_in, blocks[block].first, value);
             int live_out =
-                mir.live_out[(size_t)blocks[block].last *
-                             mir.next_value + value] != 0;
+                MIR_LIVE_TEST(mir.live_out, blocks[block].last, value);
 
             if (!live_in && !live_out && !defined[value] &&
                 uses[value] == 0 && edge_uses[value] == 0)
