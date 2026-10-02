@@ -52,11 +52,17 @@ static int mir_cost_policy_selects_alternative(void)
 }
 
 #define MIR_MAX_DENSE_ANALYSIS_CELLS (64UL * 1024UL * 1024UL)
+/* values * values <= MIR_MAX_DENSE_ANALYSIS_CELLS. */
+#define MIR_MAX_DENSE_ANALYSIS_VALUES 8192UL
+/* The liveness matrices hold one bit per (instruction, value) cell, so this
+ * keeps each at the same 64MB the byte-per-cell matrices were bounded to. */
+#define MIR_MAX_LIVENESS_CELLS (8UL * MIR_MAX_DENSE_ANALYSIS_CELLS)
 
 static int mir_dense_analysis_is_bounded(void)
 {
     size_t instructions;
     size_t values;
+    size_t liveness_limit = (size_t)MIR_MAX_LIVENESS_CELLS;
     size_t limit = (size_t)MIR_MAX_DENSE_ANALYSIS_CELLS;
 
     if (mir.count < 0 || mir.next_value < 0)
@@ -64,13 +70,30 @@ static int mir_dense_analysis_is_bounded(void)
     instructions = (size_t)mir.count;
     values = (size_t)mir.next_value;
     /*
-     * Verification retains two instruction-by-value liveness matrices and
-     * allocation builds a value-by-value interference matrix. Bound the
+     * Verification retains two instruction-by-value liveness bit matrices
+     * and allocation builds a value-by-value interference graph. Bound the
      * dimensions those dynamic allocations actually consume rather than
      * rejecting functions at an unrelated instruction-count threshold.
      */
-    return (values == 0 || instructions <= limit / values) &&
+    return (values == 0 || instructions <= liveness_limit / values) &&
            (values == 0 || values <= limit / values);
+}
+
+/* A function past mir_dense_analysis_is_bounded has no code generator to
+ * fall back to, so name the function, the limit it exceeded, and how to get
+ * it to compile, rather than only that MIR emission failed. */
+static void mir_fatal_oversized_function(void)
+{
+    char message[512];
+
+    snprintf(message, sizeof(message),
+             "function '%s' is too large to compile: %d MIR instructions x "
+             "%d values exceeds the analysis limit (%lu cells, %lu values); "
+             "split it into smaller functions",
+             mir.name, mir.count, mir.next_value,
+             (unsigned long)MIR_MAX_LIVENESS_CELLS,
+             (unsigned long)MIR_MAX_DENSE_ANALYSIS_VALUES);
+    fatal(message);
 }
 
 static void mir_require_emitted_function(const char *reason)
@@ -4052,7 +4075,7 @@ void mir_end_function(void)
                     mir.aggregate_temp_bytes, mir.has_vla,
                     type_size(mir.return_type));
         mir_require_emitted_function("oversized");
-        fatal("MIR emission is required");
+        mir_fatal_oversized_function();
     }
 
     mir_prune_constant_unreachable();

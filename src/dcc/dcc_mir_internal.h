@@ -179,6 +179,25 @@ struct MirCallSignature {
 #define MIR_OBJECT_AMBIGUOUS (-2)
 #define MIR_OBJECT_UNREACHED (-3)
 
+/* Instruction-by-value liveness matrices (mir.live_in/live_out and the
+ * matrices mir_verify_and_dump builds): one row per instruction, one bit per
+ * value, rows MIR_LIVE_ROW_WORDS(mir.next_value) words wide. Bits rather
+ * than bytes so the dense-analysis bound (dcc_mir_select.c) admits 8x larger
+ * functions for the same memory. */
+typedef unsigned long long MirLiveWord;
+#define MIR_LIVE_ROW_WORDS(values) (((size_t)(values) + 63) / 64)
+#define MIR_LIVE_INDEX(i, v) \
+    ((size_t)(i) * MIR_LIVE_ROW_WORDS(mir.next_value) + (size_t)(v) / 64)
+#define MIR_LIVE_MASK(v) (1ULL << ((size_t)(v) % 64))
+#define MIR_LIVE_TEST(m, i, v) (((m)[MIR_LIVE_INDEX(i, v)] & MIR_LIVE_MASK(v)) != 0)
+#define MIR_LIVE_ROW(m, i) (&(m)[MIR_LIVE_INDEX(i, 0)])
+#define MIR_LIVE_ROW_TEST(row, v) \
+    (((row)[(size_t)(v) / 64] & MIR_LIVE_MASK(v)) != 0)
+#define MIR_LIVE_SET(m, i, v) ((m)[MIR_LIVE_INDEX(i, v)] |= MIR_LIVE_MASK(v))
+#define MIR_LIVE_CLEAR(m, i, v) ((m)[MIR_LIVE_INDEX(i, v)] &= ~MIR_LIVE_MASK(v))
+#define MIR_LIVE_MATRIX_WORDS(instructions, values) \
+    ((size_t)(instructions) * MIR_LIVE_ROW_WORDS(values))
+
 struct MirFunction {
     struct MirInsn *insns;
     int count;
@@ -254,8 +273,8 @@ struct MirFunction {
      * the exact same liveness data verification already computed, without
      * duplicating the dataflow fixed-point loop. Freed once per function in
      * mir_end_function(), after every selector has had a chance to run. */
-    unsigned char *live_in;
-    unsigned char *live_out;
+    MirLiveWord *live_in;
+    MirLiveWord *live_out;
     struct MirRegion *regions;
     int region_count;
     int region_capacity;
@@ -834,6 +853,8 @@ int mir_spilled_cfg_depends_on_wide_store_forwarding(void);
 int mir_try_emit_spilled_scalar_cfg(MirStream *out);
 int mir_spilled_cfg_depends_on_dead_store_forwarding(void);
 int mir_spilled_cfg_emitted_frame_bytes(void);
+int mir_next_use(int value, int after);
+int mir_last_use(int value);
 int mir_value_has_use(int value);
 int mir_value_has_use_after(int value, int instruction);
 int mir_value_live_out_of_instruction(int value, int instruction);

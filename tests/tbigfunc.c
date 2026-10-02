@@ -1,0 +1,241 @@
+/**
+ * @file tbigfunc.c
+ * @brief Regression test for compiling one very large function.
+ *
+ * @par Scenario
+ * mix() is a single straight-line function of 190 branchy steps that lowers
+ * to roughly 11,000 MIR instructions and 7,200 values, so its instruction-
+ * by-value liveness analysis covers ~80M cells. That is past the 64M-cell
+ * bound that byte-per-cell liveness matrices imposed, which made dcc stop
+ * with "fatal: MIR emission is required" instead of compiling it; with
+ * bit-per-cell matrices it is comfortably inside the bound.
+ *
+ * @par Boundary
+ * Intermediates stay well inside 16 bits, so the expected output is the same
+ * for a 16-bit and a 32-bit int and can be checked with a host compiler.
+ * STEP's table indexes are passed precomputed (n % 64, n % 7, n * 3 % 64)
+ * so mix()'s size does not depend on how index arithmetic is folded.
+ */
+#include <stdio.h>
+
+static unsigned char table[64];
+
+#define STEP(n, index, match, other)                                   \
+    if (table[index] == match)                                         \
+        a += b;                                                        \
+    b = (c ^ n) + table[other];                                        \
+    if (x++ != 255 || b > a)                                           \
+        c--;
+
+static int mix(unsigned char x)
+{
+    int a = 1, b = 2, c = 3;
+
+    STEP(1, 1, 1, 3)
+    STEP(2, 2, 2, 6)
+    STEP(3, 3, 3, 9)
+    STEP(4, 4, 4, 12)
+    STEP(5, 5, 5, 15)
+    STEP(6, 6, 6, 18)
+    STEP(7, 7, 0, 21)
+    STEP(8, 8, 1, 24)
+    STEP(9, 9, 2, 27)
+    STEP(10, 10, 3, 30)
+    STEP(11, 11, 4, 33)
+    STEP(12, 12, 5, 36)
+    STEP(13, 13, 6, 39)
+    STEP(14, 14, 0, 42)
+    STEP(15, 15, 1, 45)
+    STEP(16, 16, 2, 48)
+    STEP(17, 17, 3, 51)
+    STEP(18, 18, 4, 54)
+    STEP(19, 19, 5, 57)
+    STEP(20, 20, 6, 60)
+    STEP(21, 21, 0, 63)
+    STEP(22, 22, 1, 2)
+    STEP(23, 23, 2, 5)
+    STEP(24, 24, 3, 8)
+    STEP(25, 25, 4, 11)
+    STEP(26, 26, 5, 14)
+    STEP(27, 27, 6, 17)
+    STEP(28, 28, 0, 20)
+    STEP(29, 29, 1, 23)
+    STEP(30, 30, 2, 26)
+    STEP(31, 31, 3, 29)
+    STEP(32, 32, 4, 32)
+    STEP(33, 33, 5, 35)
+    STEP(34, 34, 6, 38)
+    STEP(35, 35, 0, 41)
+    STEP(36, 36, 1, 44)
+    STEP(37, 37, 2, 47)
+    STEP(38, 38, 3, 50)
+    STEP(39, 39, 4, 53)
+    STEP(40, 40, 5, 56)
+    STEP(41, 41, 6, 59)
+    STEP(42, 42, 0, 62)
+    STEP(43, 43, 1, 1)
+    STEP(44, 44, 2, 4)
+    STEP(45, 45, 3, 7)
+    STEP(46, 46, 4, 10)
+    STEP(47, 47, 5, 13)
+    STEP(48, 48, 6, 16)
+    STEP(49, 49, 0, 19)
+    STEP(50, 50, 1, 22)
+    STEP(51, 51, 2, 25)
+    STEP(52, 52, 3, 28)
+    STEP(53, 53, 4, 31)
+    STEP(54, 54, 5, 34)
+    STEP(55, 55, 6, 37)
+    STEP(56, 56, 0, 40)
+    STEP(57, 57, 1, 43)
+    STEP(58, 58, 2, 46)
+    STEP(59, 59, 3, 49)
+    STEP(60, 60, 4, 52)
+    STEP(61, 61, 5, 55)
+    STEP(62, 62, 6, 58)
+    STEP(63, 63, 0, 61)
+    STEP(64, 0, 1, 0)
+    STEP(65, 1, 2, 3)
+    STEP(66, 2, 3, 6)
+    STEP(67, 3, 4, 9)
+    STEP(68, 4, 5, 12)
+    STEP(69, 5, 6, 15)
+    STEP(70, 6, 0, 18)
+    STEP(71, 7, 1, 21)
+    STEP(72, 8, 2, 24)
+    STEP(73, 9, 3, 27)
+    STEP(74, 10, 4, 30)
+    STEP(75, 11, 5, 33)
+    STEP(76, 12, 6, 36)
+    STEP(77, 13, 0, 39)
+    STEP(78, 14, 1, 42)
+    STEP(79, 15, 2, 45)
+    STEP(80, 16, 3, 48)
+    STEP(81, 17, 4, 51)
+    STEP(82, 18, 5, 54)
+    STEP(83, 19, 6, 57)
+    STEP(84, 20, 0, 60)
+    STEP(85, 21, 1, 63)
+    STEP(86, 22, 2, 2)
+    STEP(87, 23, 3, 5)
+    STEP(88, 24, 4, 8)
+    STEP(89, 25, 5, 11)
+    STEP(90, 26, 6, 14)
+    STEP(91, 27, 0, 17)
+    STEP(92, 28, 1, 20)
+    STEP(93, 29, 2, 23)
+    STEP(94, 30, 3, 26)
+    STEP(95, 31, 4, 29)
+    STEP(96, 32, 5, 32)
+    STEP(97, 33, 6, 35)
+    STEP(98, 34, 0, 38)
+    STEP(99, 35, 1, 41)
+    STEP(100, 36, 2, 44)
+    STEP(101, 37, 3, 47)
+    STEP(102, 38, 4, 50)
+    STEP(103, 39, 5, 53)
+    STEP(104, 40, 6, 56)
+    STEP(105, 41, 0, 59)
+    STEP(106, 42, 1, 62)
+    STEP(107, 43, 2, 1)
+    STEP(108, 44, 3, 4)
+    STEP(109, 45, 4, 7)
+    STEP(110, 46, 5, 10)
+    STEP(111, 47, 6, 13)
+    STEP(112, 48, 0, 16)
+    STEP(113, 49, 1, 19)
+    STEP(114, 50, 2, 22)
+    STEP(115, 51, 3, 25)
+    STEP(116, 52, 4, 28)
+    STEP(117, 53, 5, 31)
+    STEP(118, 54, 6, 34)
+    STEP(119, 55, 0, 37)
+    STEP(120, 56, 1, 40)
+    STEP(121, 57, 2, 43)
+    STEP(122, 58, 3, 46)
+    STEP(123, 59, 4, 49)
+    STEP(124, 60, 5, 52)
+    STEP(125, 61, 6, 55)
+    STEP(126, 62, 0, 58)
+    STEP(127, 63, 1, 61)
+    STEP(128, 0, 2, 0)
+    STEP(129, 1, 3, 3)
+    STEP(130, 2, 4, 6)
+    STEP(131, 3, 5, 9)
+    STEP(132, 4, 6, 12)
+    STEP(133, 5, 0, 15)
+    STEP(134, 6, 1, 18)
+    STEP(135, 7, 2, 21)
+    STEP(136, 8, 3, 24)
+    STEP(137, 9, 4, 27)
+    STEP(138, 10, 5, 30)
+    STEP(139, 11, 6, 33)
+    STEP(140, 12, 0, 36)
+    STEP(141, 13, 1, 39)
+    STEP(142, 14, 2, 42)
+    STEP(143, 15, 3, 45)
+    STEP(144, 16, 4, 48)
+    STEP(145, 17, 5, 51)
+    STEP(146, 18, 6, 54)
+    STEP(147, 19, 0, 57)
+    STEP(148, 20, 1, 60)
+    STEP(149, 21, 2, 63)
+    STEP(150, 22, 3, 2)
+    STEP(151, 23, 4, 5)
+    STEP(152, 24, 5, 8)
+    STEP(153, 25, 6, 11)
+    STEP(154, 26, 0, 14)
+    STEP(155, 27, 1, 17)
+    STEP(156, 28, 2, 20)
+    STEP(157, 29, 3, 23)
+    STEP(158, 30, 4, 26)
+    STEP(159, 31, 5, 29)
+    STEP(160, 32, 6, 32)
+    STEP(161, 33, 0, 35)
+    STEP(162, 34, 1, 38)
+    STEP(163, 35, 2, 41)
+    STEP(164, 36, 3, 44)
+    STEP(165, 37, 4, 47)
+    STEP(166, 38, 5, 50)
+    STEP(167, 39, 6, 53)
+    STEP(168, 40, 0, 56)
+    STEP(169, 41, 1, 59)
+    STEP(170, 42, 2, 62)
+    STEP(171, 43, 3, 1)
+    STEP(172, 44, 4, 4)
+    STEP(173, 45, 5, 7)
+    STEP(174, 46, 6, 10)
+    STEP(175, 47, 0, 13)
+    STEP(176, 48, 1, 16)
+    STEP(177, 49, 2, 19)
+    STEP(178, 50, 3, 22)
+    STEP(179, 51, 4, 25)
+    STEP(180, 52, 5, 28)
+    STEP(181, 53, 6, 31)
+    STEP(182, 54, 0, 34)
+    STEP(183, 55, 1, 37)
+    STEP(184, 56, 2, 40)
+    STEP(185, 57, 3, 43)
+    STEP(186, 58, 4, 46)
+    STEP(187, 59, 5, 49)
+    STEP(188, 60, 6, 52)
+    STEP(189, 61, 0, 55)
+    STEP(190, 62, 1, 58)
+    return a ^ b ^ c;
+}
+
+int main(void)
+{
+    static const unsigned char seeds[] = { 0, 70, 120, 200, 240, 250 };
+    unsigned int state = 12345;
+    int i;
+
+    for (i = 0; i < 64; ++i) {
+        state = (state * 25173u + 13849u) & 0x7fff;
+        table[i] = (unsigned char)(state % 7);
+    }
+    for (i = 0; i < (int)sizeof(seeds); ++i)
+        printf("mix(%d) = %d\n", seeds[i], mix(seeds[i]));
+    printf("tbigfunc done\n");
+    return 0;
+}

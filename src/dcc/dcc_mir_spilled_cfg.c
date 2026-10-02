@@ -818,12 +818,9 @@ static int mir_value_only_used_by_dynamic_absolute_index(int value)
 
     if (base == NULL || base->opcode != MIR_ADDRESS)
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *use = &mir.insns[instruction];
-
-        if (use->src1 != value && use->src2 != value &&
-            !mir_call_uses_value(use, value))
-            continue;
         if (use->opcode != MIR_INDEX_ADDRESS ||
             use->src1 != value ||
             !mir_dynamic_absolute_index_base(use, NULL, NULL))
@@ -1720,12 +1717,9 @@ static int mir_constant_false_branch_consumer(int value)
     if (definition == NULL || definition->opcode != MIR_CONST ||
         definition->immediate != 0)
         return -1;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
-
-        if (insn->src1 != value && insn->src2 != value &&
-            !mir_call_uses_value(insn, value))
-            continue;
         if (consumer >= 0 || insn->opcode != MIR_BRANCH_FALSE ||
             insn->src1 != value)
             return -1;
@@ -1940,15 +1934,11 @@ static int mir_match_boolean_return_suffix(
     return 1;
 }
 
-static int mir_constant_return_slot_forwardable(
-    int value, int units, int instruction)
+static int mir_constant_return_slot_forwardable_uncached(int value)
 {
     struct MirConstantReturnSuffix plan;
     int start;
 
-    (void)instruction;
-    if (units != 1)
-        return 0;
     for (start = 0; start < mir.count; ++start)
         if (mir_match_constant_return_suffix(start, &plan) &&
             (value == mir.insns[start + 1].dst ||
@@ -1958,15 +1948,11 @@ static int mir_constant_return_slot_forwardable(
     return 0;
 }
 
-static int mir_boolean_return_slot_forwardable(
-    int value, int units, int instruction)
+static int mir_boolean_return_slot_forwardable_uncached(int value)
 {
     struct MirBooleanReturnSuffix plan;
     int start;
 
-    (void)instruction;
-    if (units != 1)
-        return 0;
     for (start = 0; start < mir.count; ++start)
         if (mir_match_boolean_return_suffix(start, &plan) &&
             (value == mir.insns[start + 5].dst ||
@@ -1975,6 +1961,113 @@ static int mir_boolean_return_slot_forwardable(
              value == plan.result_value))
             return 1;
     return 0;
+}
+
+static int mir_return_suffix_cache_verify_enabled(void)
+{
+    static int flag = -1;
+    if (flag < 0)
+        flag = getenv("DCC_MIR_RETURN_SUFFIX_CACHE_VERIFY") != NULL;
+    return flag;
+}
+
+static void mir_return_suffix_note(unsigned char *set, int capacity,
+                                   int value, unsigned char bit)
+{
+    if (value >= 0 && value < capacity)
+        set[value] |= bit;
+}
+
+/* The two *_return_slot_forwardable queries below run once per value from
+ * mir_prepare_backend_slots for every cost candidate, each a whole-function
+ * suffix-pattern scan - O(values * instructions) per candidate (~70M
+ * suffix-match calls for one large function). Both answers depend only on
+ * the value, so one pass per mir_use_cache_generation_id() records each
+ * value's membership in either set (bit 1: constant suffix, bit 2: boolean
+ * suffix), the same cache shape as mir_value_is_wide_narrow_multiply_widen.
+ * DCC_MIR_RETURN_SUFFIX_CACHE_VERIFY=1 checks every answer against the
+ * uncached scan and fatals on a mismatch. */
+static int mir_return_suffix_value_bits(int value)
+{
+    static unsigned cached_generation;
+    static unsigned char *cached_set;
+    static int cached_set_capacity;
+    static int cache_valid;
+    unsigned generation = mir_use_cache_generation_id();
+    int result;
+
+    if (!cache_valid || generation != cached_generation) {
+        int start;
+
+        if (mir.next_value > cached_set_capacity) {
+            unsigned char *grown = (unsigned char *)realloc(
+                cached_set, (size_t)mir.next_value);
+            if (mir.next_value && !grown)
+                fatal("out of memory building MIR return-suffix cache");
+            cached_set = grown;
+            cached_set_capacity = mir.next_value;
+        }
+        if (cached_set_capacity > 0)
+            memset(cached_set, 0, (size_t)cached_set_capacity);
+        for (start = 0; start < mir.count; ++start) {
+            struct MirConstantReturnSuffix constant_plan;
+            struct MirBooleanReturnSuffix boolean_plan;
+
+            if (mir_match_constant_return_suffix(start, &constant_plan)) {
+                mir_return_suffix_note(cached_set, cached_set_capacity,
+                                       mir.insns[start + 1].dst, 1);
+                mir_return_suffix_note(cached_set, cached_set_capacity,
+                                       mir.insns[start + 5].dst, 1);
+                mir_return_suffix_note(cached_set, cached_set_capacity,
+                                       constant_plan.result_value, 1);
+            }
+            if (mir_match_boolean_return_suffix(start, &boolean_plan)) {
+                mir_return_suffix_note(cached_set, cached_set_capacity,
+                                       mir.insns[start + 5].dst, 2);
+                mir_return_suffix_note(cached_set, cached_set_capacity,
+                                       mir.insns[start + 8].dst, 2);
+                mir_return_suffix_note(cached_set, cached_set_capacity,
+                                       mir.insns[start + 10].dst, 2);
+                mir_return_suffix_note(cached_set, cached_set_capacity,
+                                       boolean_plan.result_value, 2);
+            }
+        }
+        cached_generation = generation;
+        cache_valid = 1;
+    }
+    result = (value >= 0 && value < cached_set_capacity)
+        ? cached_set[value] : 0;
+    if (mir_return_suffix_cache_verify_enabled()) {
+        int expected =
+            (mir_constant_return_slot_forwardable_uncached(value) ? 1 : 0) |
+            (mir_boolean_return_slot_forwardable_uncached(value) ? 2 : 0);
+        if (result != expected) {
+            fprintf(stderr,
+                "; MIR CACHE MISMATCH mir_return_suffix_value_bits "
+                "function=%s value=%d cached=%d uncached=%d\n",
+                mir.name, value, result, expected);
+            fatal("MIR use-cache mismatch");
+        }
+    }
+    return result;
+}
+
+static int mir_constant_return_slot_forwardable(
+    int value, int units, int instruction)
+{
+    (void)instruction;
+    if (units != 1 || value < 0)
+        return units == 1 && mir_constant_return_slot_forwardable_uncached(value);
+    return (mir_return_suffix_value_bits(value) & 1) != 0;
+}
+
+static int mir_boolean_return_slot_forwardable(
+    int value, int units, int instruction)
+{
+    (void)instruction;
+    if (units != 1 || value < 0)
+        return units == 1 && mir_boolean_return_slot_forwardable_uncached(value);
+    return (mir_return_suffix_value_bits(value) & 2) != 0;
 }
 
 struct MirLocalConstantByteStore {
@@ -2167,11 +2260,9 @@ static int mir_value_only_used_by_phi_copies_or_dead_stores(int value)
     int instruction;
     int found_phi_use = 0;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
-        if (insn->src1 != value && insn->src2 != value &&
-            !mir_call_uses_value(insn, value))
-            continue;
         if (insn->opcode == MIR_STORE && insn->src1 == value &&
             (mir_object_is_fully_promoted(insn->object) ||
              mir_store_is_dead(instruction)))
@@ -2190,7 +2281,8 @@ static int mir_value_has_phi_use(int value)
 {
     int instruction;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
         if (insn->opcode == MIR_PHI &&
@@ -2262,12 +2354,9 @@ static int mir_value_only_used_by_float_constant_unary(int value)
     int instruction;
     int use = -1;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
-
-        if (insn->src1 != value && insn->src2 != value &&
-            !mir_call_uses_value(insn, value))
-            continue;
         if (use >= 0 || insn->opcode != MIR_UNARY ||
             insn->src1 != value ||
             !type_is_float(insn->type) ||
@@ -2383,7 +2472,8 @@ static int mir_address_value_has_simple_multi_use_shape(int value)
 {
     int instruction;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
         if (mir_call_uses_value(insn, value) || insn->src2 == value)
@@ -2521,12 +2611,9 @@ static int mir_wide_constant_is_signed_relational_immediate(int value)
          mir.local_bytes != 0 ||
          (mir.return_type & 15) != TYPE_INT))
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *use = &mir.insns[instruction];
-
-        if (use->src1 != value && use->src2 != value &&
-            !mir_call_uses_value(use, value))
-            continue;
         if (use->opcode != MIR_BINARY || use->src2 != value ||
             !mir_wide_operation_is_signed_const_relational(use))
             return 0;
@@ -2559,12 +2646,9 @@ static int mir_binary_is_wide_phi_update(
         phi->object < 0 || insn->src2 == phi->dst)
         return 0;
     phi_instruction = (int)(phi - mir.insns);
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(insn->dst, -1); instruction >= 0;
+         instruction = mir_next_use(insn->dst, instruction)) {
         const struct MirInsn *use = &mir.insns[instruction];
-
-        if (use->src1 != insn->dst && use->src2 != insn->dst &&
-            !mir_call_uses_value(use, insn->dst))
-            continue;
         if (use == phi && phi->src2 == insn->dst)
             continue;
         if (use->opcode == MIR_STORE && use->src1 == insn->dst &&
@@ -2669,12 +2753,9 @@ static int mir_binary_is_narrow_phi_adjust(
         one == NULL || one->opcode != MIR_CONST ||
         one->immediate != 1)
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(insn->dst, -1); instruction >= 0;
+         instruction = mir_next_use(insn->dst, instruction)) {
         const struct MirInsn *use = &mir.insns[instruction];
-
-        if (use->src1 != insn->dst && use->src2 != insn->dst &&
-            !mir_call_uses_value(use, insn->dst))
-            continue;
         if (use == phi && phi->src2 == insn->dst)
             continue;
         if (use->opcode == MIR_STORE &&
@@ -4178,11 +4259,9 @@ int mir_value_only_used_by_dead_stores(int value)
     int instruction;
     int found_use = 0;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
-        if (insn->src1 != value && insn->src2 != value &&
-            !mir_call_uses_value(insn, value))
-            continue;
         found_use = 1;
         if (insn->opcode != MIR_STORE || insn->src1 != value)
             return 0;
@@ -4207,11 +4286,9 @@ static int mir_value_only_used_by_dead_unary(int value)
     int instruction;
     int found_use = 0;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
-        if (insn->src1 != value && insn->src2 != value &&
-            !mir_call_uses_value(insn, value))
-            continue;
         found_use = 1;
         if (insn->opcode != MIR_UNARY || insn->src1 != value ||
             mir_value_has_use(insn->dst))
@@ -4974,7 +5051,8 @@ static int mir_value_only_used_by_stable_pointer_argument(int value)
 
     if (!mir_stable_pointer_argument_rematerialization_enabled)
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->src2 == value || mir_call_uses_value(insn, value))
             return 0;
@@ -14146,41 +14224,45 @@ static int mir_match_indirect_incdec(
         return 0;
     if (load->memory_size == 4 && !returns_value)
         return 0;
-    for (scan = 0; scan < mir.count; ++scan) {
+    /* Each of the four values' uses is checked independently, so walking
+     * each one's own use list (mir_next_use) is the same test as one
+     * whole-function scan checking all four per instruction. */
+    for (scan = mir_next_use(load->dst, -1); scan >= 0;
+         scan = mir_next_use(load->dst, scan)) {
         const struct MirInsn *use = &mir.insns[scan];
 
-        if (use->src1 == load->dst || use->src2 == load->dst ||
-            mir_call_uses_value(use, load->dst)) {
-            if (!((scan == instruction + 2 &&
-                   use->src1 == load->dst) ||
-                  (returns_value && !returns_adjusted &&
-                   scan == instruction + 4 &&
-                   use->src1 == load->dst)))
-                return 0;
-        }
-        if (use->src1 == constant->dst ||
-            use->src2 == constant->dst ||
-            mir_call_uses_value(use, constant->dst))
-            if (!(scan == instruction + 2 &&
-                  use->src2 == constant->dst))
-                return 0;
-        if (use->src1 == binary->dst || use->src2 == binary->dst ||
-            mir_call_uses_value(use, binary->dst)) {
-            if (!((scan == instruction + 3 &&
-                   use->src2 == binary->dst) ||
-                  (returns_value && returns_adjusted &&
-                   scan == instruction + 4 &&
-                   use->src1 == binary->dst)))
-                return 0;
-        }
-        if (use->src1 == load->src1 || use->src2 == load->src1 ||
-            mir_call_uses_value(use, load->src1)) {
-            if (!((scan == instruction &&
-                   use->src1 == load->src1) ||
-                  (scan == instruction + 3 &&
-                   use->src1 == load->src1)))
-                return 0;
-        }
+        if (!((scan == instruction + 2 &&
+               use->src1 == load->dst) ||
+              (returns_value && !returns_adjusted &&
+               scan == instruction + 4 &&
+               use->src1 == load->dst)))
+            return 0;
+    }
+    for (scan = mir_next_use(constant->dst, -1); scan >= 0;
+         scan = mir_next_use(constant->dst, scan))
+        if (!(scan == instruction + 2 &&
+              mir.insns[scan].src2 == constant->dst))
+            return 0;
+    for (scan = mir_next_use(binary->dst, -1); scan >= 0;
+         scan = mir_next_use(binary->dst, scan)) {
+        const struct MirInsn *use = &mir.insns[scan];
+
+        if (!((scan == instruction + 3 &&
+               use->src2 == binary->dst) ||
+              (returns_value && returns_adjusted &&
+               scan == instruction + 4 &&
+               use->src1 == binary->dst)))
+            return 0;
+    }
+    for (scan = mir_next_use(load->src1, -1); scan >= 0;
+         scan = mir_next_use(load->src1, scan)) {
+        const struct MirInsn *use = &mir.insns[scan];
+
+        if (!((scan == instruction &&
+               use->src1 == load->src1) ||
+              (scan == instruction + 3 &&
+               use->src1 == load->src1)))
+            return 0;
     }
     plan->load_instruction = instruction;
     plan->constant_instruction = instruction + 1;
@@ -14503,42 +14585,50 @@ static int mir_prepare_backend_slots(void)
             last[insn->src1] = i;
         if (insn->src2 >= 0 && last[insn->src2] < i)
             last[insn->src2] = i;
-        if (insn->opcode == MIR_CALL ||
-            insn->opcode == MIR_CALL_AGGREGATE) {
-            int argument;
-            for (argument = 0; argument < mir.next_value; ++argument)
-                if (mir_call_uses_value(insn, argument) &&
-                    last[argument] < i)
-                    last[argument] = i;
-        }
     }
-    for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_PHI) {
-            int predecessor;
-            for (predecessor = 0; predecessor < mir.count; ++predecessor) {
-                int successor;
-                int predecessor_label = mir_block_label_before(predecessor);
-                for (successor = 0;
-                     successor < mir.insns[predecessor].successor_count;
-                     ++successor) {
-                    int block_start =
-                        mir.insns[predecessor].successors[successor];
-                    int target =
-                        mir_next_phi_in_block(block_start, block_start);
-                    while (target >= 0 && target < i)
-                        target =
-                            mir_next_phi_in_block(block_start, target + 1);
-                    if (target != i)
-                        continue;
-                    if (predecessor_label == mir.insns[i].phi_pred1 &&
-                        last[mir.insns[i].src1] < predecessor)
-                        last[mir.insns[i].src1] = predecessor;
-                    if (predecessor_label == mir.insns[i].phi_pred2 &&
-                        last[mir.insns[i].src2] < predecessor)
-                        last[mir.insns[i].src2] = predecessor;
+    /* last[] only ever rises past a value's definition, so folding in each
+     * value's last use (which covers call arguments - the one use kind the
+     * scan above doesn't see) once here is the same as raising it at every
+     * call that uses it, without testing every value at every call. */
+    for (value = 0; value < mir.next_value; ++value) {
+        int last_use = mir_last_use(value);
+        if (last[value] < last_use)
+            last[value] = last_use;
+    }
+    /* Extend each phi operand to the end of the predecessor that feeds it.
+     * Every update is a max, so visiting (predecessor, successor) edges
+     * once and walking the phis at each edge's target block is the same as
+     * searching every predecessor edge for each phi in turn. */
+    {
+        int predecessor;
+        for (predecessor = 0; predecessor < mir.count; ++predecessor) {
+            int successor;
+            int predecessor_label = -1;
+            int predecessor_label_known = 0;
+            for (successor = 0;
+                 successor < mir.insns[predecessor].successor_count;
+                 ++successor) {
+                int block_start =
+                    mir.insns[predecessor].successors[successor];
+                int target;
+                for (target = mir_next_phi_in_block(block_start, block_start);
+                     target >= 0;
+                     target = mir_next_phi_in_block(block_start, target + 1)) {
+                    const struct MirInsn *phi = &mir.insns[target];
+                    if (!predecessor_label_known) {
+                        predecessor_label = mir_block_label_before(predecessor);
+                        predecessor_label_known = 1;
+                    }
+                    if (predecessor_label == phi->phi_pred1 &&
+                        last[phi->src1] < predecessor)
+                        last[phi->src1] = predecessor;
+                    if (predecessor_label == phi->phi_pred2 &&
+                        last[phi->src2] < predecessor)
+                        last[phi->src2] = predecessor;
                 }
             }
         }
+    }
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_JUMP) {
             int target = mir_find_label(mir.insns[i].label);
@@ -14546,8 +14636,8 @@ static int mir_prepare_backend_slots(void)
                 for (value = 0; value < mir.next_value; ++value)
                     if (first[value] > target &&
                         mir.live_in != NULL && mir.live_out != NULL &&
-                        mir.live_out[(size_t)i * mir.next_value + value] &&
-                        mir.live_in[(size_t)target * mir.next_value + value]) {
+                        MIR_LIVE_TEST(mir.live_out, i, value) &&
+                        MIR_LIVE_TEST(mir.live_in, target, value)) {
                         /* A value defined below the header can still be
                          * carried across the backedge. */
                         first[value] = target;
@@ -24774,7 +24864,7 @@ static int mir_fused_byte_constant_comparison(
     return 1;
 }
 
-static int mir_value_is_fused_byte_comparison_component(int value)
+static int mir_value_is_fused_byte_comparison_component_uncached(int value)
 {
     int instruction;
 
@@ -24792,6 +24882,80 @@ static int mir_value_is_fused_byte_comparison_component(int value)
             return 1;
     }
     return 0;
+}
+
+static int mir_fused_byte_comparison_cache_verify_enabled(void)
+{
+    static int flag = -1;
+    if (flag < 0)
+        flag = getenv("DCC_MIR_FUSED_BYTE_CACHE_VERIFY") != NULL;
+    return flag;
+}
+
+/* Called once per instruction by the spilled-scalar-cfg dispatch (three
+ * sites), for every cost candidate - each an uncached O(mir.count) rescan,
+ * so O(instructions^2) per candidate (profiled: ~195K calls and the largest
+ * self-time contributor on tbytepre.c). Same cache shape as
+ * mir_value_is_wide_narrow_multiply_widen: keyed on
+ * mir_use_cache_generation_id(), rebuilding the whole one-bit-per-value set
+ * in a single O(mir.count) pass. DCC_MIR_FUSED_BYTE_CACHE_VERIFY=1
+ * recomputes the uncached answer for every query and fatals on a mismatch. */
+static int mir_value_is_fused_byte_comparison_component(int value)
+{
+    static unsigned cached_generation;
+    static unsigned char *cached_set;
+    static int cached_set_capacity;
+    static int cache_valid;
+    unsigned generation = mir_use_cache_generation_id();
+    int result;
+
+    if (!cache_valid || generation != cached_generation) {
+        int instruction;
+
+        if (mir.next_value > cached_set_capacity) {
+            unsigned char *grown = (unsigned char *)realloc(
+                cached_set, (size_t)mir.next_value);
+            if (mir.next_value && !grown)
+                fatal("out of memory building MIR fused-byte-comparison cache");
+            cached_set = grown;
+            cached_set_capacity = mir.next_value;
+        }
+        if (cached_set_capacity > 0)
+            memset(cached_set, 0, (size_t)cached_set_capacity);
+        for (instruction = 3; instruction < mir.count; ++instruction) {
+            const struct MirInsn *binary = &mir.insns[instruction];
+            const struct MirInsn *widen;
+            int load_instruction;
+            int load_value;
+
+            if (!mir_fused_byte_constant_comparison(
+                    instruction, &load_instruction, NULL))
+                continue;
+            load_value = mir.insns[load_instruction].dst;
+            if (load_value >= 0 && load_value < cached_set_capacity)
+                cached_set[load_value] = 1;
+            widen = mir_definition(binary->src1);
+            if (widen != NULL && widen->dst >= 0 &&
+                widen->dst < cached_set_capacity)
+                cached_set[widen->dst] = 1;
+        }
+        cached_generation = generation;
+        cache_valid = 1;
+    }
+
+    result = (value >= 0 && value < cached_set_capacity)
+        ? cached_set[value] : 0;
+    if (mir_fused_byte_comparison_cache_verify_enabled() &&
+        result !=
+            mir_value_is_fused_byte_comparison_component_uncached(value)) {
+        fprintf(stderr,
+            "; MIR CACHE MISMATCH mir_value_is_fused_byte_comparison_component "
+            "function=%s value=%d cached=%d uncached=%d\n",
+            mir.name, value, result,
+            mir_value_is_fused_byte_comparison_component_uncached(value));
+        fatal("MIR use-cache mismatch");
+    }
+    return result;
 }
 
 static int mir_truth_parameter_comparison(const struct MirInsn *compare,
@@ -25329,16 +25493,14 @@ int mir_spilled_cfg_has_wide_mulmod_fusion(void)
     return 0;
 }
 
-static int mir_unary_is_fusable_not_branch(int i)
+/* Function-wide guard for mir_unary_is_fusable_not_branch: true if some
+ * "!x" feeding the very next branch negates a variadic call's result. */
+static int mir_has_variadic_not_branch_uncached(void)
 {
     const struct MirInsn *candidate;
     const struct MirInsn *candidate_source;
-    const struct MirInsn *insn;
-    const struct MirInsn *next;
     int instruction;
 
-    if (i < 0 || i + 1 >= mir.count)
-        return 0;
     for (instruction = 0; instruction + 1 < mir.count; ++instruction) {
         candidate = &mir.insns[instruction];
         if (candidate->opcode != MIR_UNARY ||
@@ -25350,8 +25512,56 @@ static int mir_unary_is_fusable_not_branch(int i)
         if (candidate_source != NULL &&
             candidate_source->opcode == MIR_CALL &&
             (candidate_source->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0)
-            return 0;
+            return 1;
     }
+    return 0;
+}
+
+static int mir_variadic_not_branch_cache_verify_enabled(void)
+{
+    static int flag = -1;
+    if (flag < 0)
+        flag = getenv("DCC_MIR_NOT_BRANCH_CACHE_VERIFY") != NULL;
+    return flag;
+}
+
+/* mir_unary_is_fusable_not_branch evaluates this whole-function guard on
+ * every call - once per instruction from mir_prepare_backend_slots for every
+ * cost candidate, so O(instructions^2) per candidate. Cached on
+ * mir_use_cache_generation_id(), the same as mir_cfg_block_count.
+ * DCC_MIR_NOT_BRANCH_CACHE_VERIFY=1 recomputes it on every call and fatals
+ * on a mismatch. */
+static int mir_has_variadic_not_branch(void)
+{
+    static unsigned cached_generation;
+    static int cache_valid;
+    static int cached_result;
+    unsigned generation = mir_use_cache_generation_id();
+
+    if (!cache_valid || generation != cached_generation) {
+        cached_result = mir_has_variadic_not_branch_uncached();
+        cached_generation = generation;
+        cache_valid = 1;
+    } else if (mir_variadic_not_branch_cache_verify_enabled() &&
+               cached_result != mir_has_variadic_not_branch_uncached()) {
+        fprintf(stderr,
+                "; MIR CACHE MISMATCH mir_has_variadic_not_branch "
+                "function=%s cached=%d\n",
+                mir.name, cached_result);
+        fatal("MIR use-cache mismatch");
+    }
+    return cached_result;
+}
+
+static int mir_unary_is_fusable_not_branch(int i)
+{
+    const struct MirInsn *insn;
+    const struct MirInsn *next;
+
+    if (i < 0 || i + 1 >= mir.count)
+        return 0;
+    if (mir_has_variadic_not_branch())
+        return 0;
     insn = &mir.insns[i];
     next = &mir.insns[i + 1];
     return insn->opcode == MIR_UNARY && insn->immediate == '!' &&
@@ -29982,12 +30192,9 @@ static int mir_binary_is_selfstore_wide_increment(
         (left_definition->object >= 0 &&
          mir_object_address_taken(left_definition->object)))
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(insn->dst, -1); instruction >= 0;
+         instruction = mir_next_use(insn->dst, instruction)) {
         const struct MirInsn *use = &mir.insns[instruction];
-
-        if (use->src1 != insn->dst && use->src2 != insn->dst &&
-            !mir_call_uses_value(use, insn->dst))
-            continue;
         if (instruction > last_use)
             last_use = instruction;
         if (use->opcode == MIR_STORE &&
@@ -30220,12 +30427,9 @@ static int mir_binary_is_selfstore_global_predecrement_load(
         type_ptr_depth(memory_type) == 0 ||
         type_size(memory_type) != 2)
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(insn->dst, -1); instruction >= 0;
+         instruction = mir_next_use(insn->dst, instruction)) {
         const struct MirInsn *use = &mir.insns[instruction];
-
-        if (use->src1 != insn->dst && use->src2 != insn->dst &&
-            !mir_call_uses_value(use, insn->dst))
-            continue;
         if (use->opcode == MIR_STORE &&
             use->src1 == insn->dst &&
             use->memory_flags == 0 &&
@@ -30288,11 +30492,9 @@ static int mir_binary_is_selfstore_global_indexed_predecrement_load(
         (storage != SC_GLOBAL && storage != SC_EXTERN) ||
         type_ptr_depth(memory_type) != 0 || type_size(memory_type) != 2)
         return 0;
-    for (scan = 0; scan < mir.count; ++scan) {
+    for (scan = mir_next_use(insn->dst, -1); scan >= 0;
+         scan = mir_next_use(insn->dst, scan)) {
         const struct MirInsn *use = &mir.insns[scan];
-        if (use->src1 != insn->dst && use->src2 != insn->dst &&
-            !mir_call_uses_value(use, insn->dst))
-            continue;
         if (use->opcode == MIR_STORE && use->src1 == insn->dst &&
             use->memory_flags == 0 && store < 0 &&
             mir_same_scalar_memory_location(left, use))
@@ -30312,11 +30514,9 @@ static int mir_binary_is_selfstore_global_indexed_predecrement_load(
         base_def->name[0] == 0 || (base = find_global(base_def->name)) == NULL ||
         !base->is_array || base->is_volatile || base->pointee_is_volatile)
         return 0;
-    for (scan = 0; scan < mir.count; ++scan) {
+    for (scan = mir_next_use(idx->dst, -1); scan >= 0;
+         scan = mir_next_use(idx->dst, scan)) {
         const struct MirInsn *use = &mir.insns[scan];
-        if (use->src1 != idx->dst && use->src2 != idx->dst &&
-            !mir_call_uses_value(use, idx->dst))
-            continue;
         if (use->opcode != MIR_LOAD_INDIRECT || use->src1 != idx->dst ||
             load >= 0 || use->memory_flags != 0 || use->bit_width != 0 ||
             type_size(use->type) != idx->immediate)
@@ -30659,12 +30859,9 @@ static int mir_value_only_used_by_selfstore_adjust_amount(int value)
     int load_index;
     struct MirIndexedPredecrementLoad indexed_load;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
-
-        if (insn->src1 != value && insn->src2 != value &&
-            !mir_call_uses_value(insn, value))
-            continue;
         if (insn->opcode != MIR_BINARY || insn->src2 != value)
             return 0;
         sole_user = instruction;
@@ -30740,15 +30937,13 @@ static int mir_value_is_selfstore_incdec_source(int value)
     int uses = 0;
     int sole_user = -1;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
-        if (insn->src1 == value || insn->src2 == value ||
-            mir_call_uses_value(insn, value)) {
-            if (insn->opcode != MIR_BINARY || insn->src1 != value)
-                return 0;
-            sole_user = instruction;
-            ++uses;
-        }
+        if (insn->opcode != MIR_BINARY || insn->src1 != value)
+            return 0;
+        sole_user = instruction;
+        ++uses;
     }
     if (uses != 1)
         return 0;
