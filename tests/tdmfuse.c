@@ -1,5 +1,5 @@
 /* tdivmodfuse.c - compiler-level correctness test for the AST-level %/ /
- * fusion pass (ast_divmod_fuse_compound, dcc_ast_gen_support.c), which
+ * fusion pass (ast_divmod_fuse_compound, dcc_ast_support.c), which
  * rewrites two adjacent `X = ... A%B ...;` / `Y = ... A/B ...;` statements
  * sharing bare-identifier operands A,B into a single __udivmod/__sdivmod
  * call - exercised here through real % and / source syntax (not the #asm

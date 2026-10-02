@@ -1228,7 +1228,7 @@ int main()
     /* Direct identifier-path access to 2D field arrays, e.g. gw[i].n[j].cm[r][c].
      * Tests that val_type is correctly decayed after consuming all dimensions of a
      * 1D field array (n[]) so subsequent 2D field array access uses the right type.
-     * Without the fix, emit_load_from_hl receives char* or long* instead of char/long,
+     * Without the fix, the load uses char* or long* instead of char/long,
      * producing wrong-width loads. */
     ri = gw[0].n[0].m[1][2];
     check_int("id2d_i1", ri, 1212);

@@ -6,8 +6,8 @@
  * (fastcall __icf), a global function pointer (general __sicm entry, the
  * long-established coverage pattern from tests/tfpcall.c), and a LOCAL
  * function pointer - the shape that turned up a real, unrelated
- * pre-existing bug: dcc_ast_gen_expr.c's gen_ident() never called
- * emit_extrn_if_needed() for a function name decaying to its address in a
+ * pre-existing bug: dcc_ast_capture.c's gen_ident() never called
+ * record_extern_reference() for a function name decaying to its address in a
  * LOCAL (not global) initializer, so any RTL function assigned to a
  * local function-pointer variable failed to link ("U ... ld hl,__mcmp")
  * - invisible before because every previous function-pointer test in

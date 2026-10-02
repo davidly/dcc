@@ -2776,7 +2776,7 @@ int mir_fold_constant_binary(int op, long left, long right,
      * (Linux/macOS) never goes negative for a 32-bit-wide value, so
      * signed and unsigned agree there by accident, which is why this was
      * invisible on that host. Same reasoning as ast_fold_binary_target
-     * (dcc_ast_gen_support.c), which already gets this right. */
+     * (dcc_ast_support.c), which already gets this right. */
     uleft = (unsigned long)left & mask;
     uright = (unsigned long)right & mask;
 
@@ -3224,8 +3224,8 @@ static int mir_value_only_used_by_stable_pointer_argument(int value);
 
 /* Item T76 (mir-text-size-plan.md): every "push ix\n\tpop hl\n" address-of-
  * local/param computation below unconditionally follows with "ld de,<off>/
- * add hl,de" for a non-zero offset, even for a magnitude of 1-3 - legacy's
- * own emit_load_sym_addr (dcc_symbols.c, ~line 845) special-cases exactly
+ * add hl,de" for a non-zero offset, even for a magnitude of 1-3 - the former
+ * direct symbol-address emitter special-cased exactly
  * this range with a straight-line inc/dec chain instead (cheaper in both
  * bytes and T-states: two `dec hl`s is 2 bytes/12 T-states vs. `ld de,-2`
  * + `add hl,de` at 4 bytes/21 T-states). This was invisible until a MIR-
@@ -3622,7 +3622,7 @@ static int mir_emit_cached_wide_call_argument(MirStream *out, int value)
     return stack_cached ? 2 : 1;
 }
 
-/* Item 15 (mir-migration-plan-to-100pct.md): mirrors dcc_ast_gen_expr.c's
+/* Item 15 (mir-migration-plan-to-100pct.md): mirrors dcc_ast_capture.c's
  * legacy AST "fastcall" recognition of memset(dest,c,count) - DCCRTL's
  * __msf takes dest in HL, the fill byte in E, count in BC directly,
  * skipping both the general push-3-args/call/pop-3 convention MIR_CALL's
@@ -3690,7 +3690,7 @@ int mir_call_is_memset_fastcall(int call_index, int *dest_value,
     return 1;
 }
 
-/* dcc_ast_gen_expr.c's legacy fastcall for strlen(s): DCCRTL's __slf takes
+/* dcc_ast_capture.c's legacy fastcall for strlen(s): DCCRTL's __slf takes
  * s directly in HL and returns the length in HL. */
 int mir_call_is_strlen_fastcall(int call_index, int *s_value)
 {
@@ -3850,7 +3850,7 @@ int mir_call_is_strncmp_fastcall(int call_index, int *s1_value,
  * bioshl(fn,dearg): all four share the same DE=dearg, C=fn-low-byte
  * argument convention, differing only in which DCCRTL entry point is
  * called (__bdosf/__bhlf/__biosf/__bhf respectively - see
- * dcc_ast_gen_expr.c). */
+ * dcc_ast_capture.c). */
 int mir_call_is_bdos_family_fastcall(int call_index,
                                            const char **rtl_name,
                                            int *fn_value, int *dearg_value)
@@ -26126,7 +26126,7 @@ static const char *mir_wide_runtime_helper(const struct MirInsn *insn)
 }
 
 /* Item T395/follow-on (mir-text-size-plan.md): direct port of the legacy
- * AST backend's emit_signed_long_const_cmp_ast (dcc_ast_gen_expr.c) into
+ * AST backend's emit_signed_long_const_cmp_ast (dcc_ast_capture.c) into
  * the MIR value-materializing wide-comparison path. Legacy never calls
  * __lts/__les/__gts/__ges when the right operand is a signed compile-time
  * long constant - it inlines a sign-flip + 32-bit sbc sequence instead,
@@ -26237,7 +26237,7 @@ int mir_emit_wide_operation(MirStream *out, const struct MirInsn *insn)
         }
         /* Item T395/follow-on: legacy's emit_signed_long_const_cmp_ast
          * only ever applies when the constant is the *right* operand
-         * (ast_const_scalar_fold(n->b, ...) in dcc_ast_gen_expr.c) - a
+         * (ast_const_scalar_fold(n->b, ...) in dcc_ast_capture.c) - a
          * constant on the left still falls through to the runtime
          * helper in legacy too, so leaving that ordering on the
          * existing call-based path below is exactly call-for-call
@@ -29649,7 +29649,7 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
         if (mir_declared_is_vla_object(insn->name) &&
             type_ptr_depth(insn->type) > type_ptr_depth(*type))
             *type = insn->type;
-        /* #itmpN inline-call-argument slots (dcc_ast_gen_expr.c's
+        /* #itmpN inline-call-argument slots (dcc_ast_capture.c's
          * prepare_inline_arg_temps) share one mir.declared_types[] entry
          * per name across every unrelated static-inline call site that
          * reuses that slot in this function - mir_note_declared_symbol

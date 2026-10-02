@@ -1,26 +1,26 @@
 /**
- * @file dcc_ast_gen_internal.h
+ * @file dcc_ast_internal.h
  * @brief Declares the private contract shared by split AST helper modules.
  *
  * @par Role
  * Exposes cross-file type/lvalue classifiers, support gates, constant folds,
  * condition analysis, retained expression helpers, and shared statement state
- * used by dcc_ast_gen*.c and dcc_ast_stmt_meta.c.
+ * used by dcc_ast_*.c and dcc_ast_stmt_meta.c.
  *
  * @par Module split
- * - dcc_ast_gen.c: type, value, lvalue, pointer, member, and index resolution.
- * - dcc_ast_gen_support.c: support dispatch, call gates, folds, and proofs.
- * - dcc_ast_gen_expr.c: initializer/inline handling and expression helpers.
- * - dcc_ast_gen_cond.c: statement/condition gates and branch-shape helpers.
+ * - dcc_ast_classify.c: type, value, lvalue, pointer, member, and index resolution.
+ * - dcc_ast_support.c: support dispatch, call gates, folds, and proofs.
+ * - dcc_ast_capture.c: initializer/inline handling and expression helpers.
+ * - dcc_ast_stmt_classify.c: statement/condition gates and branch-shape helpers.
  * - dcc_ast_stmt_meta.c: statement capture, sizing, and control metadata.
  *
  * @par Boundary
- * Do not include this header outside the AST helper module. Public AST data
- * and entry points belong in dcc_ast.h; production body emission belongs to
- * MIR.
+ * Private frontend classifier/capture contract, also consumed by MIR lowering
+ * and candidates. Public AST data and entry points belong in dcc_ast.h;
+ * production body emission belongs to MIR.
  */
-#ifndef DCC_AST_GEN_INTERNAL_H
-#define DCC_AST_GEN_INTERNAL_H
+#ifndef DCC_AST_INTERNAL_H
+#define DCC_AST_INTERNAL_H
 
 #include "dcc.h"
 #include "dcc_ast.h"
@@ -139,7 +139,7 @@ int ast_is_const_zero_condition(const struct AstNode *n);
 int ast_is_const_nonzero_condition(const struct AstNode *n);
 int ast_expr_yields_bool01(const struct AstNode *n);
 void ast_support_cache_begin(void);
-int ast_gen_supported(const struct AstNode *n);
+int ast_expr_supported(const struct AstNode *n);
 int ast_call_arg_word_supported(const struct AstNode *arg);
 int ast_call_struct_arg_supported(int want_type, const struct AstNode *arg);
 int ast_value_is_long_word(const struct AstNode *arg);
@@ -202,4 +202,4 @@ int ast_stmt_supported(const struct AstNode *n);
 int ast_for_decl_storage_supported(const struct AstNode *n);
 int ast_process_statement(void);
 
-#endif /* DCC_AST_GEN_INTERNAL_H */
+#endif /* DCC_AST_INTERNAL_H */

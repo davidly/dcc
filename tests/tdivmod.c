@@ -1,6 +1,6 @@
 /* tdivmod.c - isolated correctness test for DCCRTL.MAC's fused divmod
  * primitives (__udivmod, __sdivmod), added for the compiler's upcoming
- * a%b/a/b fusion optimization (see dcc_ast_gen_support.c). Calls them
+ * a%b/a/b fusion optimization (see dcc_ast_support.c). Calls them
  * directly via #asm wrapper functions rather than through C's % and /
  * operators, since no C-level construct reaches them yet - the fusion
  * pass that will do that doesn't exist until this RTL is proven correct

@@ -1,7 +1,7 @@
 #include <stdio.h>
 
 /*
- * Regression test for two dcc AST codegen fixes.
+ * Regression test for two dcc expression-semantics fixes.
  *
  * 1. Compound assignment (+=, -=, *=, |=, &=, ^=) into a struct MEMBER
  *    N-D array element inside nested for loops - e.g. matrix multiply

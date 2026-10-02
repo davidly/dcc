@@ -6,7 +6,7 @@
  * Instantiates shared option, type, symbol, lexer, preprocessing, function,
  * scope, diagnostic, initializer, debug, and emission state. Related live
  * fields are grouped in lifecycle records such as LexState, FrameState,
- * ExprState, FunctionPassState, DeclState, and EmitSink.
+ * FunctionPassState, DeclState, and EmitSink.
  *
  * @par Boundary
  * This file provides storage, not behavior. State used by only one module
@@ -45,9 +45,6 @@ int nfield_defs;
 int current_field_array_elem_size;
 int current_field_array_dim_count;
 int current_field_array_dims[4];
-int current_field_bit_width;
-int current_field_bit_shift;
-unsigned int current_field_bit_mask;
 
 /* ---- source buffer + lexer position + lookahead token ------------------ */
 char *src;
@@ -139,7 +136,6 @@ int errors;
 int scan_mode;
 DeclState g_decl;
 int expr_result_dead;
-ExprState g_expr;
 int g_tok_long_suffix; /* set by lexer when L/l suffix seen on integer literal */
 int g_tok_unsigned_suffix; /* set for U/u suffix or non-decimal unsigned-int literal */
 int g_parse_type_was_enum;

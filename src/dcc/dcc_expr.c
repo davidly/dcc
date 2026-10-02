@@ -1,19 +1,18 @@
 /**
  * @file dcc_expr.c
- * @brief Houses shared declarator, expression, and target-value utilities.
+ * @brief Parses declarators and resolves frontend expression metadata.
  *
  * @par Role
  * Parses sizeof operands and named/abstract function-pointer/array declarators,
  * preserves nested callable return and argument signatures, counts
- * initializer shapes, tracks user labels, and implements common memory,
- * aggregate, conversion, bitfield, call-cleanup, and increment/decrement
- * primitives.
+ * initializer shapes, tracks user labels, and supplies type lookahead and
+ * callable/aggregate type queries.
  *
  * @par Key entry points
  * parse_sizeof_expr_operand(), parse_funcptr_declarator(),
  * parse_abstract_funcptr_declarator(), parse_funcptr_prototype_suffix(),
- * parse_array_declarator_dims(), emit_load_from_hl(),
- * emit_store_de_to_addr_hl(), and define_user_label().
+ * parse_array_declarator_dims(), peek_simple_unary_type(), and
+ * define_user_label().
  *
  * @par Boundary
  * dcc_ast_build.c owns general expression grammar and dcc_types.c owns the
@@ -22,6 +21,7 @@
  */
 
 #include "dcc.h"
+
 int parse_sizeof_expr_operand(void)
 {
     int type;
@@ -66,77 +66,6 @@ int parse_sizeof_expr_operand(void)
 }
 
 
-void emit_load_from_hl(int type)
-{
-    if (type_size(type) == 1) {
-        emit("\tld l,(hl)\n");
-        if (type & TYPE_UNSIGNED)
-            emit("\tld h,0\n");
-        else
-            emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
-    } else if (type_size(type) == 4) {
-        /* read 4 bytes little-endian from [HL] into DE:HL (DE=high, HL=low) */
-        emit("\tld e,(hl)\n");
-        emit("\tinc hl\n");
-        emit("\tld d,(hl)\n");
-        emit("\tinc hl\n");
-        emit("\tld a,(hl)\n");
-        emit("\tinc hl\n");
-        emit("\tld h,(hl)\n");
-        emit("\tld l,a\n");
-        /* now H=high_hi, L=high_lo, D=low_hi, E=low_lo — need DE:HL swapped */
-        emit("\tex de,hl\n"); /* HL=low word, DE=high word */
-    } else {
-        emit("\tld e,(hl)\n");
-        emit("\tinc hl\n");
-        emit("\tld d,(hl)\n");
-        emit("\tex de,hl\n");
-    }
-}
-
-void emit_store_de_to_addr_hl(int type)
-{
-    if (type_size(type) == 1) {
-        if (type_is_bool(type))
-            emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n");
-        emit("\tld (hl),e\n");
-    } else if (type_size(type) == 4) {
-        /* value in DE:HL (DE=high, HL=low), address on stack (2 bytes) */
-        emit("\tld b,d\n\tld c,e\n"); /* BC = high word */
-        emit("\tpop de\n");           /* DE = address (popped from where caller pushed it) */
-        emit("\tex de,hl\n");         /* HL = address, DE = low word */
-        emit("\tld (hl),e\n");
-        emit("\tinc hl\n");
-        emit("\tld (hl),d\n");
-        emit("\tinc hl\n");
-        emit("\tld (hl),c\n");
-        emit("\tinc hl\n");
-        emit("\tld (hl),b\n");
-    } else {
-        emit("\tld (hl),e\n");
-        emit("\tinc hl\n");
-        emit("\tld (hl),d\n");
-    }
-}
-
-void emit_bool_normalize_hl(int source_type)
-{
-    if (type_is_float(source_type))
-        emit_convert_float_to_intlike(TYPE_INT);
-
-    if (type_is_long(source_type))
-        emit("\tld a,h\n\tor l\n\tor d\n\tor e\n");
-    else
-        emit("\tld a,h\n\tor l\n");
-
-    /* Reduce the (non-)zero flag to a canonical 0/1 in HL using a short forward
-     * skip instead of a two-label jump sequence.  The compact form matters for
-     * large unoptimised builds, where the verbose sequence can bloat the object
-     * enough to exceed the CP/M linker's memory (e.g. the a1 interpreter). */
-    emit("\tld hl,0\n\tjr z,$+3\n\tinc l\n");
-}
-
-
 int type_is_struct_object(int type)
 {
     return (type & TYPE_STRUCT) && type_ptr_depth(type) == 0;
@@ -148,66 +77,6 @@ int same_struct_type(int a, int b)
            type_struct_id(a) == type_struct_id(b);
 }
 
-void emit_copy_de_to_hl_bytes(int n)
-{
-    int lab;
-
-    if (n <= 0)
-        return;
-
-    lab = new_label();
-    if (n <= 255) {
-        fprintf(g_emit_sink.stream, "\tld b,%d\n", n);
-        emit_label(lab);
-        emit("\tld a,(de)\n");
-        emit("\tld (hl),a\n");
-        emit("\tinc de\n");
-        emit("\tinc hl\n");
-        fprintf(g_emit_sink.stream, "\tdjnz L%d\n", lab);
-    } else {
-        fprintf(g_emit_sink.stream, "\tld bc,%d\n", n);
-        emit_label(lab);
-        emit("\tld a,(de)\n");
-        emit("\tld (hl),a\n");
-        emit("\tinc de\n");
-        emit("\tinc hl\n");
-        emit("\tdec bc\n");
-        emit("\tld a,b\n");
-        emit("\tor c\n");
-        emit_jp_label("jp nz,", lab);
-    }
-}
-
-void emit_push_struct_arg_from_hl(int n)
-{
-    if (n <= 0)
-        return;
-    emit("\tex de,hl\n");          /* DE = source */
-    fprintf(g_emit_sink.stream, "\tld hl,-%d\n", n);
-    emit("\tadd hl,sp\n");        /* HL = destination */
-    emit("\tld sp,hl\n");
-    emit_copy_de_to_hl_bytes(n);
-}
-
-void emit_load_hl_from_sp_offset(int off)
-{
-    if (off == 0) {
-        emit("\tpop hl\n\tpush hl\n");
-    } else {
-        fprintf(g_emit_sink.stream, "\tld hl,%d\n", off);
-        emit("\tadd hl,sp\n");
-        emit("\tld e,(hl)\n");
-        emit("\tinc hl\n");
-        emit("\tld d,(hl)\n");
-        emit("\tex de,hl\n");
-    }
-}
-
-void gen_expr(void);
-void gen_expr_no_comma(void);
-void gen_unary(void);
-void gen_snippet_lvalue_addr(const char *snippet, int *ptype);
-void gen_statement(void);
 
 static void parse_pointer_array_suffixes(int base_type)
 {
@@ -996,43 +865,10 @@ int count_omitted_array_initializer_top_elems(void)
     return n;
 }
 
-void emit_init_auto_char_array_from_string(struct Sym *s, const char *str, int srclen)
-{
-    int i;
-    int n;
-    int limit;
-
-    n = srclen + 1;
-    limit = s->size;
-    if (limit <= 0)
-        limit = n;
-
-    /*
-     * Automatic aggregate initializers must zero-fill any elements not
-     * explicitly initialized.  The old code emitted only the string bytes
-     * plus the first NUL, leaving the rest of a larger local char array
-     * containing old stack contents.
-     *
-     * For char s[3] = "abc", limit is the declared size and the terminating
-     * NUL is correctly not emitted.  For char s[8] = "abc", bytes 4..7 are
-     * now explicitly zeroed.
-     */
-    for (i = 0; i < limit; ++i) {
-        int ch;
-        ch = (i + 1 < n) ? ((unsigned char)str[i]) : 0;
-        emit_load_sym_addr(s);
-        emit_add_const_to_hl(i);
-        fprintf(g_emit_sink.stream, "\tld e,%d\n", ch);
-        emit_store_de_to_addr_hl(TYPE_CHAR);
-    }
-}
-
 void parse_typedef_decl(void);
 void parse_global_init_list(struct Sym *s);
 void scan_static_local_decl_after_type(int base);
 char *copy_range(long a, long b);
-void gen_snippet_expr(const char *snippet);
-void emit_incdec_addr(int type, int op);
 
 /* Look up or pre-allocate a user label ID (for goto / label: targets).
  * Labels are function-scoped; nulabels is reset before each function. */
@@ -1054,15 +890,6 @@ int find_or_alloc_user_label_index(const char *name)
     memset(ulabel_vla_snap_off[nulabels], 0, sizeof(ulabel_vla_snap_off[nulabels]));
     ulabel_shallow_fwd_ref[nulabels] = 0;
     return nulabels++;
-}
-
-int mark_user_label_reference(const char *name)
-{
-    int i;
-
-    i = find_or_alloc_user_label_index(name);
-    ulabel_referenced[i] = 1;
-    return ulabel_ids[i];
 }
 
 int define_user_label(const char *name)
@@ -1103,257 +930,6 @@ int parse_enum_const_value(void)
 {
     return parse_typed_enum_const_expr();
 }
-
-
-
-
-
-void gen_post_update_symbol_addr_value(struct Sym *s, int op)
-{
-    int t;
-    int elem;
-
-    t = s->type;
-    elem = type_index_elem_size(t);
-
-    if (sym_can_ix_direct(s) || is_global_word_sym(s)) {
-        /* A plain ix-direct local or global-word symbol (the overwhelmingly
-         * common case for `p++`/`p--` on a pointer variable, e.g. the `pc`
-         * in `*pc++ = val;`) never needs its own address computed at all -
-         * emit_load_sym_value_direct/emit_store_hl_to_sym_direct already
-         * know how to read and write it with a couple of plain `ld`
-         * instructions each. The generic fallback below computes the
-         * variable's address, then reads and writes back *through* that
-         * address, which for exactly this case is a needless address
-         * computation plus a pile of push/pop/ex shuffling to keep the old
-         * value, the new value, and the variable's address all live at
-         * once - the classic "store the pointer back to itself" dance that
-         * is only actually required for lvalues without a direct load/store
-         * form (out-of-range stack offsets, etc). */
-        emit_load_sym_value_direct(s);  /* HL = old pointer value */
-        emit("\tpush hl\n");             /* save old pointer value for lvalue */
-        if (op == TOK_INC) {
-            emit("\tinc hl\n");
-            if (elem >= 2) emit("\tinc hl\n");
-            if (elem >= 4) { emit("\tinc hl\n"); emit("\tinc hl\n"); }
-        } else {
-            emit("\tdec hl\n");
-            if (elem >= 2) emit("\tdec hl\n");
-            if (elem >= 4) { emit("\tdec hl\n"); emit("\tdec hl\n"); }
-        }
-        emit_store_hl_to_sym_direct(s);  /* store new pointer value */
-        emit("\tpop hl\n");               /* HL = old pointer, used as lvalue address */
-        g_expr.type = t;
-        return;
-    }
-
-    emit_load_sym_addr(s);          /* HL = address of pointer variable */
-    emit("\tpush hl\n");            /* save pointer variable address */
-    emit_load_from_hl(t);           /* HL = old pointer value */
-    emit("\tpush hl\n");            /* save old pointer value for lvalue */
-
-    if (op == TOK_INC) {
-        emit("\tinc hl\n");
-        if (elem >= 2) emit("\tinc hl\n");
-        if (elem >= 4) { emit("\tinc hl\n"); emit("\tinc hl\n"); }
-    } else {
-        emit("\tdec hl\n");
-        if (elem >= 2) emit("\tdec hl\n");
-        if (elem >= 4) { emit("\tdec hl\n"); emit("\tdec hl\n"); }
-    }
-
-    emit("\tex de,hl\n");           /* DE = new pointer value */
-    emit("\tpop hl\n");             /* HL = old pointer value */
-    emit("\tex (sp),hl\n");         /* HL = pointer variable address, stack = old pointer */
-    emit_store_de_to_addr_hl(t);    /* store new pointer */
-    emit("\tpop hl\n");             /* HL = old pointer, used as lvalue address */
-    g_expr.type = t;
-}
-
-
-void gen_post_update_from_addr(int type, int op)
-{
-    int bf_width;
-    int bf_shift;
-    unsigned int bf_mask;
-
-    if (type_is_long(type)) {
-        if (expr_result_dead) {
-            /* Statement context: just increment in place, no old value needed */
-            emit_incdec_addr(type, op);
-            return;
-        }
-        /* Expression context: return old value in DE:HL, store new value.
-         * Save address in BC (HL will be destroyed by load), then store
-         * the new value byte-by-byte using BC as the address. */
-        int no_carry = new_label();
-        emit("\tld b,h\n\tld c,l\n");    /* BC = address */
-        emit_load_from_hl(type);          /* HL=low16_old, DE=high16_old */
-        emit("\tpush de\n");              /* save high16_old for return */
-        emit("\tpush hl\n");              /* save low16_old for return */
-        if (op == TOK_INC) {
-            emit("\tinc hl\n");
-            emit("\tld a,h\n\tor l\n");
-            emit_jp_label("jp nz,", no_carry);
-            emit("\tinc de\n");           /* carry from low to high word */
-        } else {
-            emit("\tdec hl\n");
-            emit("\tld a,h\n\tand l\n\tinc a\n"); /* A=0 only if HL==0xFFFF (borrow) */
-            emit_jp_label("jp nz,", no_carry);
-            emit("\tdec de\n");           /* borrow from high word */
-        }
-        emit_label(no_carry);
-        /* HL=new_low, DE=new_high; stack: [..., high16_old, low16_old] */
-        emit("\tpush hl\n");              /* save new_low */
-        emit("\tld h,b\n\tld l,c\n");    /* HL = address */
-        emit("\tpop bc\n");               /* BC = new_low */
-        emit("\tld (hl),c\n\tinc hl\n"); /* store new_low[0] */
-        emit("\tld (hl),b\n\tinc hl\n"); /* store new_low[1] */
-        emit("\tld (hl),e\n\tinc hl\n"); /* store new_high[0] */
-        emit("\tld (hl),d\n");           /* store new_high[1] */
-        emit("\tpop hl\n");              /* HL = low16_old  (return value low) */
-        emit("\tpop de\n");              /* DE = high16_old (return value high) */
-        g_expr.type = type;
-        return;
-    }
-
-    bf_width = current_field_bit_width;
-    bf_shift = current_field_bit_shift;
-    bf_mask = current_field_bit_mask;
-
-    if (bf_width > 0) {
-        emit("\tld b,h\n\tld c,l\n");
-        emit_load_from_hl(type);
-        current_field_bit_width = bf_width;
-        current_field_bit_shift = bf_shift;
-        current_field_bit_mask = bf_mask;
-        g_expr.type = type;
-        emit_extract_bitfield();
-        if (!expr_result_dead)
-            emit("\tpush hl\n");
-        if (op == TOK_INC)
-            emit("\tinc hl\n");
-        else
-            emit("\tdec hl\n");
-        emit("\tex de,hl\n");
-        emit("\tld h,b\n\tld l,c\n");
-        current_field_bit_width = bf_width;
-        current_field_bit_shift = bf_shift;
-        current_field_bit_mask = bf_mask;
-        emit_store_bitfield_de_to_addr_hl(0);
-        if (!expr_result_dead)
-            emit("\tpop hl\n");
-        g_expr.type = type;
-        g_expr.long_from16 = 0;
-        return;
-    }
-
-    emit("\tpush hl\n");             /* address */
-    emit_load_from_hl(type);
-    emit("\tpush hl\n");             /* old value */
-
-    if (type_ptr_depth(type) > 0) {
-        int element_size = type_index_elem_size(type);
-
-        if (element_size <= 0)
-            element_size = 1;
-        emit_add_const_to_hl(op == TOK_INC ? element_size : -element_size);
-    } else if (op == TOK_INC) {
-        emit("\tinc hl\n");
-    } else {
-        emit("\tdec hl\n");
-    }
-
-    emit("\tex de,hl\n");            /* DE = new */
-    emit("\tpop hl\n");              /* HL = old */
-    emit("\tex (sp),hl\n");          /* HL = addr, stack = old */
-    emit_store_de_to_addr_hl(type);
-    emit("\tpop hl\n");              /* expression result = old */
-    g_expr.type = type;
-}
-
-
-
-
-void emit_promote_byte_to_int(int actual_type)
-{
-    if ((actual_type & 15) != TYPE_CHAR || type_ptr_depth(actual_type) != 0)
-        return;
-
-    if (actual_type & TYPE_UNSIGNED)
-        emit("\tld h,0\n");
-    else
-        emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
-}
-
-void emit_promote_int_to_long(int actual_type, int expected_type)
-{
-    (void)expected_type;
-
-    /*
-     * A byte-typed expression, especially a function call returning
-     * unsigned char, is only guaranteed to have its value in L.  Normalize
-     * HL before forming DE:HL; otherwise stale/sign bits in H turn uint8_t
-     * 255 into 65535 or 0xffffffff when widened.
-     */
-    emit_promote_byte_to_int(actual_type);
-
-    if ((actual_type & TYPE_UNSIGNED) || type_ptr_depth(actual_type)) {
-        emit("\tld de,0\n");
-    } else {
-        /* Sign-extend signed 16-bit HL into DE. */
-        emit("\tld a,h\n");
-        emit("\trlca\n");
-        emit("\tsbc a,a\n");
-        emit("\tld d,a\n");
-        emit("\tld e,a\n");
-    }
-}
-
-
-void emit_convert_int_to_float(int actual_type)
-{
-    if (type_is_long(actual_type)) {
-        if (actual_type & TYPE_UNSIGNED)
-            emit_runtime_call("__fulf");
-        else
-            emit_runtime_call("__flf");
-        g_expr.type = TYPE_FLOAT;
-        return;
-    }
-    if ((actual_type & TYPE_UNSIGNED) || type_ptr_depth(actual_type))
-        emit_runtime_call("__fuf");
-    else
-        emit_runtime_call("__fif");
-    g_expr.type = TYPE_FLOAT;
-}
-
-void emit_convert_float_to_intlike(int target_type)
-{
-    if (type_is_long(target_type)) {
-        if (target_type & TYPE_UNSIGNED)
-            emit_runtime_call("__fful");
-        else
-            emit_runtime_call("__ffl");
-        g_expr.type = target_type;
-        return;
-    }
-
-    if ((target_type & TYPE_UNSIGNED) || type_ptr_depth(target_type))
-        emit_runtime_call("__ffu");
-    else
-        emit_runtime_call("__ffi");
-
-    if (type_size(target_type) == 1) {
-        if (target_type & TYPE_UNSIGNED)
-            emit("\tld h,0\n");
-        else
-            emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
-    }
-
-    g_expr.type = target_type;
-}
-
 int expected_arg_type(struct Sym *fn, int arg_index, int *ptype)
 {
     if (!fn || !fn->has_proto)
@@ -1365,141 +941,6 @@ int expected_arg_type(struct Sym *fn, int arg_index, int *ptype)
     ptype[0] = fn->proto_types[arg_index];
     return 1;
 }
-
-
-
-void emit_cleanup_stack_bytes(int bytes)
-{
-    int k;
-
-    /*
-     * POP BC is 1 byte and discards 2 bytes from the stack without touching
-     * HL, DE, or flags — safe regardless of whether the callee returned a
-     * 16-bit value (in HL) or a 32-bit value (in DE:HL).  Arguments are
-     * always pushed in 2- or 4-byte units so bytes is always even; the
-     * trailing inc sp is a safety net only.
-     */
-    for (k = bytes; k >= 2; k -= 2)
-        emit("\tpop bc\n");
-    if (k > 0)
-        emit("\tinc sp\n");
-}
-
-
-int try_emit_push_struct_return_call_arg(const char *snippet, int want_type);
-
-
-void emit_call_hl_from_stack_offset(int off)
-{
-    fprintf(g_emit_sink.stream, "\tld hl,%d\n", off);
-    emit("\tadd hl,sp\n");
-    emit("\tld e,(hl)\n");
-    emit("\tinc hl\n");
-    emit("\tld d,(hl)\n");
-    emit("\tex de,hl\n");
-    emit_runtime_call("__call_hl");
-}
-
-
-void emit_extract_bitfield(void)
-{
-    int i;
-    unsigned int mask;
-    int out_type;
-    int source_is_bool;
-
-    if (current_field_bit_width <= 0)
-        return;
-
-    source_is_bool = type_is_bool(g_expr.type);
-    out_type = (g_expr.type & TYPE_UNSIGNED) ? (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
-
-    for (i = 0; i < current_field_bit_shift; ++i)
-        emit("\tsrl h\n\trr l\n");
-
-    mask = (unsigned int)((1UL << current_field_bit_width) - 1UL);
-    fprintf(g_emit_sink.stream, "\tld de,%u\n", mask & 0xffffU);
-    emit("\tld a,l\n\tand e\n\tld l,a\n");
-    emit("\tld a,h\n\tand d\n\tld h,a\n");
-
-    /* `_Bool : 1` has values 0 and 1 and promotes to signed int; unlike a
-     * signed one-bit int field, its set bit must therefore be zero-extended,
-     * not sign-extended to -1. */
-    if (!(out_type & TYPE_UNSIGNED) && !source_is_bool &&
-        current_field_bit_width < 16) {
-        int lab;
-        unsigned int signbit;
-        unsigned int extend_mask;
-
-        lab = new_label();
-        signbit = (unsigned int)(1UL << (current_field_bit_width - 1));
-        extend_mask = (~mask) & 0xffffU;
-
-        fprintf(g_emit_sink.stream, "\tld de,%u\n", signbit & 0xffffU);
-        emit("\tld a,l\n\tand e\n\tld e,a\n");
-        emit("\tld a,h\n\tand d\n\tor e\n");
-        fprintf(g_emit_sink.stream, "\tjp z,L%d\n", lab);
-        fprintf(g_emit_sink.stream, "\tld de,%u\n", extend_mask);
-        emit("\tld a,l\n\tor e\n\tld l,a\n");
-        emit("\tld a,h\n\tor d\n\tld h,a\n");
-        emit_label(lab);
-    }
-
-    g_expr.type = out_type;
-}
-
-void emit_store_bitfield_de_to_addr_hl(int keep_result)
-{
-    int i;
-    unsigned int clear_mask;
-    unsigned int mask;
-
-    mask = current_field_bit_mask & 0xffffU;
-    clear_mask = (~mask) & 0xffffU;
-
-    /* keep_result: save the FIELD ADDRESS (not the raw value) so the live
-     * result can be read back from the stored field.  Returning the raw
-     * pre-store value would skip the field's width truncation / sign
-     * extension, e.g. `x = (s.bf3 += 5)` must yield the stored 3-bit value,
-     * not the untruncated sum.  g_expr.type must hold the field type at entry
-     * so emit_extract_bitfield sign- vs zero-extends correctly. */
-    if (keep_result)
-        emit("\tpush hl\n");
-    emit("\tpush hl\n");
-    emit("\tpush de\n");
-    emit_load_from_hl(TYPE_INT);
-
-    fprintf(g_emit_sink.stream, "\tld de,%u\n", clear_mask);
-    emit("\tld a,l\n\tand e\n\tld l,a\n");
-    emit("\tld a,h\n\tand d\n\tld h,a\n");
-
-    emit("\tpop de\n");
-    for (i = 0; i < current_field_bit_shift; ++i)
-        emit("\tsla e\n\trl d\n");
-
-    fprintf(g_emit_sink.stream, "\tld bc,%u\n", mask);
-    emit("\tld a,e\n\tand c\n\tld e,a\n");
-    emit("\tld a,d\n\tand b\n\tld d,a\n");
-    emit("\tld a,l\n\tor e\n\tld l,a\n");
-    emit("\tld a,h\n\tor d\n\tld h,a\n");
-
-    emit("\tex de,hl\n");
-    emit("\tpop hl\n");
-    emit_store_de_to_addr_hl(TYPE_INT);
-    if (keep_result) {
-        emit("\tpop hl\n");           /* HL = field address */
-        emit_load_from_hl(TYPE_INT);  /* HL = stored storage unit */
-        emit_extract_bitfield();      /* mask/shift/sign-extend to field value */
-    }
-}
-
-void emit_load_float_bits(unsigned long bits);
-void emit_load_const_sym_value(struct Sym *s);
-void emit_float_compare_call(int op);
-
-
-
-
 
 int paren_starts_cast(void)
 {
@@ -1519,100 +960,150 @@ int paren_starts_cast(void)
     return r;
 }
 
-
-
-
-void emit_incdec_value_in_dehl(int type, int op)
+int peek_simple_unary_type(void)
 {
-    int no_carry;
+    LexState _ls;
+    int save_long_suffix;
+    int save_unsigned_suffix;
+    int t;
+    struct Sym *s;
 
-    if (type_ptr_depth(type) > 0) {
-        int elem;
-        elem = type_index_elem_size(type);
-        if (op == TOK_INC) {
-            emit_add_const_to_hl(elem);
-        } else {
-            emit_ld_de_const(elem);
-            emit("\tor a\n\tsbc hl,de\n");
-        }
-        return;
-    }
+    _ls = lex_save();
+    save_long_suffix = g_tok_long_suffix;
+    save_unsigned_suffix = g_tok_unsigned_suffix;
 
-    if (type_is_long(type)) {
-        no_carry = new_label();
-        if (op == TOK_INC) {
-            emit("\tinc hl\n");
-            emit("\tld a,h\n\tor l\n");
-            emit_jp_label("jp nz,", no_carry);
-            emit("\tinc de\n");
+    t = TYPE_INT;
+
+    if (g_lex.tok.kind == '(') {
+        next_token();
+        if (starts_type()) {
+            t = parse_type();
+            if (g_lex.tok.kind == ')') {
+                lex_restore(&_ls);
+                g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix;
+                return promote_int_type(t);
+            }
         } else {
-            emit("\tld a,h\n\tor l\n");
-            emit_jp_label("jp nz,", no_carry);
-            emit("\tdec de\n");
-            emit_label(no_carry);
-            emit("\tdec hl\n");
-            return;
+            /*
+             * Parenthesized expression (not a cast): peek the type of its
+             * first operand so a compound RHS such as (fa * fb) or (la + lb)
+             * is predicted as float / long instead of defaulting to int.
+             * This keeps type lookahead from predicting 16-bit arithmetic
+             * for x + (fa * fb) when the operands are float or long.
+             * The recursion is bounded by paren nesting and only
+             * refines the lookahead; it returns the inner operand's promoted
+             * type.
+             */
+            int inner = peek_simple_unary_type();
+            lex_restore(&_ls);
+            g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix;
+            return inner;
         }
-        emit_label(no_carry);
-    } else {
-        if (op == TOK_INC)
-            emit("\tinc hl\n");
+    } else if (g_lex.tok.kind == TOK_FLOATLIT) {
+        t = TYPE_FLOAT;
+    } else if (g_lex.tok.kind == TOK_NUM) {
+        if (g_lex.tok.val > 0xffffL || g_lex.tok.val < -32768L || g_tok_long_suffix)
+            t = TYPE_LONG;
         else
-            emit("\tdec hl\n");
+            t = TYPE_INT;
+        if (g_tok_unsigned_suffix)
+            t |= TYPE_UNSIGNED;
+    } else if (g_lex.tok.kind == TOK_CHARLIT) {
+        t = TYPE_INT;
+    } else if (g_lex.tok.kind == TOK_ID) {
+        s = find_sym(g_lex.tok.text);
+        if (s) {
+            int is_arr;
+            int tt;
+            t = s->type;
 
-        /* The Z80 update is done in 16-bit HL even for 8-bit objects.
-         * For ++uint8_t at 0xff this leaves HL == 0x0100 unless we narrow
-         * it back to the stored object type.  That corrupts expressions such
-         * as m[0x100 + ++sp], where the stored byte wraps to 0 but the
-         * returned expression value was still 0x0100. */
-        emit_promote_byte_to_int(type);
-    }
-}
+            /* For lookahead purposes, recognize calls through function
+             * pointers and function-pointer arrays as returning int.
+             * Without this, an expression like:
+             *
+             *     tab[0](30) + tab[1](40)
+             *
+             * is misclassified as integer + pointer before the RHS is
+             * generated, so gen_add() applies pointer scaling to the left
+             * call result.  This compiler only tracks int-returning
+             * function pointers today, which matches the supported
+             * declarator forms. */
+            tt = t;
+            is_arr = s->is_array;
+            next_token();
+            {
+                int nsubs;
+                int dim_count;
+                int base_type;
+                nsubs = 0;
+                dim_count = s->dim_count;
+                base_type = s->type;
 
-void emit_pre_incdec_lvalue(int type, int op)
-{
-    if (type_is_long(type)) {
-        /* Address is in HL.  Save it, load DE:HL, update full 32-bit value,
-         * store through the saved address, and leave the new value in DE:HL. */
-        emit("\tpush hl\n");
-        emit_load_from_hl(type);
-        emit_incdec_value_in_dehl(type, op);
-        emit("\tpop bc\n");
-        emit("\tld a,l\n\tld (bc),a\n\tinc bc\n");
-        emit("\tld a,h\n\tld (bc),a\n\tinc bc\n");
-        emit("\tld a,e\n\tld (bc),a\n\tinc bc\n");
-        emit("\tld a,d\n\tld (bc),a\n");
-    } else {
-        int bf_width = current_field_bit_width;
-        int bf_shift = current_field_bit_shift;
-        unsigned int bf_mask = current_field_bit_mask;
+                for (;;) {
+                    if (g_lex.tok.kind == '[') {
+                        skip_balanced_bracket('[', ']');
+                        nsubs++;
 
-        if (bf_width > 0)
-            emit("\tld b,h\n\tld c,l\n");
-        else
-            emit("\tpush hl\n");
-        emit_load_from_hl(type);
-        if (bf_width > 0) {
-            current_field_bit_width = bf_width;
-            current_field_bit_shift = bf_shift;
-            current_field_bit_mask = bf_mask;
-            g_expr.type = type;
-            emit_extract_bitfield();
+                        if (is_arr) {
+                            /* A real array subscript consumes one array dimension.
+                             * If dimensions remain, the result is still an array
+                             * expression that decays to a pointer in value context;
+                             * otherwise it is the scalar element type. */
+                            if (dim_count > 0 && nsubs < dim_count)
+                                tt = type_add_ptr(base_type);
+                            else
+                                tt = base_type;
+                            if (dim_count <= 0 || nsubs >= dim_count)
+                                is_arr = 0;
+                            continue;
+                        } else if (dim_count > 0 && type_ptr_depth(base_type) > 0) {
+                            /* Pointer-to-array declarators need one more subscript
+                             * than their stored array-dimension count to reach the
+                             * scalar element. */
+                            if (nsubs <= dim_count)
+                                tt = type_add_ptr(type_decay_ptr(base_type));
+                            else
+                                tt = type_decay_ptr(base_type);
+                            continue;
+                        } else {
+                            tt = type_decay_ptr(tt);
+                            continue;
+                        }
+                    }
+
+                    if (g_lex.tok.kind == '.' || g_lex.tok.kind == TOK_ARROW) {
+                        struct FieldDef *fd;
+                        int sid;
+
+                        next_token();
+                        if (g_lex.tok.kind != TOK_ID)
+                            break;
+
+                        sid = base_struct_id_from_type(tt);
+                        fd = find_field_def(sid, g_lex.tok.text);
+                        if (!fd)
+                            break;
+
+                        tt = fd->is_array ? fd->elem_type : fd->type;
+                        is_arr = fd->is_array;
+                        dim_count = fd->dim_count;
+                        base_type = fd->elem_type;
+                        nsubs = 0;
+                        next_token();
+                        continue;
+                    }
+
+                    break;
+                }
+            }
+            t = tt;
+            if (g_lex.tok.kind == '(' && type_ptr_depth(tt) > 0)
+                t = TYPE_INT;
         }
-        emit_incdec_value_in_dehl(type, op);
-        emit("\tex de,hl\n");
-        if (bf_width > 0) {
-            emit("\tld h,b\n\tld l,c\n");
-            current_field_bit_width = bf_width;
-            current_field_bit_shift = bf_shift;
-            current_field_bit_mask = bf_mask;
-            g_expr.type = type;   /* field type -> correct extract signedness */
-            emit_store_bitfield_de_to_addr_hl(1);
-        } else {
-            emit("\tpop hl\n");
-            emit_store_de_to_addr_hl(type);
-            emit("\tex de,hl\n");
-        }
     }
-    g_expr.type = type;
+
+    lex_restore(&_ls);
+    g_tok_long_suffix = save_long_suffix;
+    g_tok_unsigned_suffix = save_unsigned_suffix;
+    return promote_int_type(t);
 }

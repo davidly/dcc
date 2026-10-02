@@ -46,14 +46,14 @@ void ast_replay_compound_literal(const struct AstNode *node)
 
     mir_begin_compound_literal(symbol);
     if ((type & TYPE_STRUCT) && type_ptr_depth(type) == 0) {
-        emit_init_auto_struct_from_list(symbol);
+        parse_auto_struct_initializer_list(symbol);
     } else if (accept('{')) {
-        emit_init_auto_struct_scalar(symbol, 0, type);
+        parse_auto_struct_scalar_initializer(symbol, 0, type);
         if (g_lex.tok.kind == ',')
             next_token();
         expect('}');
     } else {
-        emit_init_auto_struct_scalar(symbol, 0, type);
+        parse_auto_struct_scalar_initializer(symbol, 0, type);
     }
     mir_end_compound_literal(symbol);
     lex_restore(&saved);
@@ -210,7 +210,7 @@ void ast_process_stmt_metadata(const struct AstNode *node)
                 ? "break statement outside loop or switch"
                 : "continue statement outside loop");
         mir_begin_flow_replay();
-        emit_vla_restore_for_flow(flow_scope_depth[nflow - 1]);
+        capture_vla_restore_for_flow(flow_scope_depth[nflow - 1]);
         mir_end_flow_replay();
         return;
     case AST_GOTO: {
@@ -225,7 +225,7 @@ void ast_process_stmt_metadata(const struct AstNode *node)
                 error_here(
                     "goto into a variable-length array scope is not supported");
             else if (active_depth != 0)
-                emit_vla_restore_to_label_scope(label_index);
+                capture_vla_restore_to_label_scope(label_index);
         } else if (active_depth != 0) {
             (void)vla_record_fwd_goto(label_index, node->line);
         } else {
@@ -242,7 +242,7 @@ void ast_process_stmt_metadata(const struct AstNode *node)
             ulabel_shallow_fwd_ref[label_index])
             error_here(
                 "goto into a variable-length array scope is not supported");
-        vla_resolve_fwd_gotos(label_index, ulabel_ids[label_index]);
+        vla_resolve_fwd_gotos(label_index);
         mir_end_label_replay();
         (void)define_user_label(node->sval);
         ast_process_stmt_metadata(node->b);
@@ -315,7 +315,7 @@ void ast_process_stmt_metadata(const struct AstNode *node)
         }
         if (!dead && g_func_pass.scope_depth < MAX_SCOPE_DEPTH &&
             g_vla_scope_off[g_func_pass.scope_depth] != 0)
-            emit_vla_restore_sp(
+            capture_vla_restore_sp(
                 g_vla_scope_off[g_func_pass.scope_depth]);
         mir_end_scope_replay();
         if (!dead)

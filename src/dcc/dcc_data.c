@@ -88,7 +88,7 @@ static void mark_init_label_extrn(const char *p)
             }
         }
     }
-    emit_extrn_if_needed(s);
+    record_extern_reference(s);
 }
 
 static void emit_init_zero_bytes(int bytes);

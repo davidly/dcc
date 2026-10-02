@@ -50,7 +50,7 @@ All maintained C/header modules under `src/` follow the Doxygen file-header
 convention defined in the `dcc-project` skill: `@file`, `@brief`, explicit
 role, and useful entry-point/boundary notes. For MIR changes, keep the module
 map in `dcc_mir_internal.h` current whenever files move or responsibilities
-change. Never document `dcc_ast_gen*` as a production body-codegen fallback.
+change. Never document `dcc_ast_*` as a production body-codegen fallback.
 
 Place new schedules in the closest family module. Keep plan/matcher state
 automatic and expose only that module's dispatch function:

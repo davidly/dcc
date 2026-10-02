@@ -1,14 +1,14 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Regression test for a real miscompile in every fastcall special case in
- * dcc_ast_gen_expr.c's gen_call_ast (strlen/strchr/memcmp/memset/bdos and
+/* Regression test for a former fastcall argument-decay miscompile
+ * (strlen/strchr/memcmp/memset/bdos and
  * the memcpy/memchr/strcpy/strrchr/strstr fastcalls added alongside this
- * test): each one evaluated its arguments with plain ast_gen_expr instead
- * of first checking ast_pointer_expr_type/gen_pointer_expr_ast the way the
- * general (non-fastcall) argument-evaluation loop does. A 2D-array row
- * expression like names[nn++] decays to a pointer (the row's address) in
- * a real function call, but ast_gen_expr alone generated a VALUE-context
+ * test): fastcalls evaluated arguments as values rather than first checking
+ * pointer decay, unlike the general argument-evaluation path.
+ * A row argument must preserve its address rather than load its first element.
+ * An expression like names[nn++] decays to a pointer (the row's address) in
+ * a real function call, but the former emitter generated a VALUE-context
  * dereference instead - found via tests/pint.c and tests/adaint.c, both
  * of which build an identifier table with exactly this
  * strcpy(names[nn++], text) shape, and both crashed ("not-implemented z80

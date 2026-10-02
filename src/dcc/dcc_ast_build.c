@@ -775,10 +775,8 @@ static struct AstNode *p_unary(struct AstArena *ar)
             struct AstNode *n = ast_new(ar, AST_SIZEOF_EXPR);
             n->a = p_unary(ar);
             n->type = TYPE_INT;
-            /* The operand's size is resolved at EMIT time (see
-             * gen_sizeof_expr_ast): a local declared in a nested block only
-             * enters the symbol table when its declaration span is emitted,
-             * which is after this node is built but before it is walked. */
+            /* Resolve the operand's size during semantic processing, after
+             * nested declaration spans have entered their symbols. */
             return n;
         }
     }
@@ -1453,7 +1451,7 @@ void ast_replay_decl_span(const struct AstNode *n)
     g_lex.tok = sp->tok;
 
     /* Drive the declaration through the declaration codegen.  Initializer
-     * expressions are emitted via ast_emit_init_expr, which builds into the
+     * expressions are emitted via ast_capture_initializer_expr, which builds into the
      * isolated g_ast_init_arena and so never disturbs the shared g_ast_arena
      * that still holds the surrounding AST statement's pending sibling nodes. */
     if (g_lex.tok.kind == TOK_STATIC_ASSERT) {
@@ -1471,7 +1469,7 @@ void ast_replay_decl_span(const struct AstNode *n)
         else if (is_static_local)
             scan_static_local_decl_after_type(t);
         else
-            gen_local_decl_after_type(t);
+            parse_local_decl_after_type(t);
     }
 
     lex_restore(&_ls);
@@ -1581,9 +1579,8 @@ struct AstNode *ast_build_stmt(struct AstArena *ar)
     /* Expression statements that do not begin with an identifier: a deref
      * store `*p = x;`, a parenthesised expression `(expr);`, an address-of or
      * unary-led expression, or a prefix ++/-- statement.  ast_build_expr_stmt
-     * declines (NULL) on anything that is not a complete `expr ;`, and the
-     * outer ast_try_emit_statement restores the lexer snapshot on NULL, so
-     * mis-routing a non-expression lead is harmless. */
+     * declines (NULL) on anything that is not a complete `expr ;`; its caller
+     * owns lexer restoration and diagnostics for an unsuccessful build. */
     case '*': case '(': case '&': case '-': case '+': case '!': case '~':
     case TOK_INC: case TOK_DEC: case TOK_SIZEOF:
                        n = ast_build_expr_stmt(ar); break;

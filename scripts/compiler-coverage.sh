@@ -523,7 +523,10 @@ python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     -name-allowlist="$report_dir/ast-mir-functions.txt" -show-functions \
-    "$@" "$repo_root"/src/dcc/dcc_ast_gen*.c >"$report_dir/ast-mir-function-detail.txt"
+    "$@" "$repo_root/src/dcc/dcc_ast_capture.c" \
+    "$repo_root/src/dcc/dcc_ast_classify.c" \
+    "$repo_root/src/dcc/dcc_ast_stmt_classify.c" \
+    "$repo_root/src/dcc/dcc_ast_support.c" >"$report_dir/ast-mir-function-detail.txt"
 require_complete=
 if [ "${DCC_COVERAGE_REQUIRE_COMPLETE:-0}" = 1 ]; then
     require_complete=--require-complete

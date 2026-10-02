@@ -9,7 +9,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIXED = tuple(sorted((ROOT / "src/dcc").glob("dcc_ast_gen*.c")))
+MIXED = tuple(ROOT / "src/dcc" / name for name in (
+    "dcc_ast_capture.c",
+    "dcc_ast_classify.c",
+    "dcc_ast_stmt_classify.c",
+    "dcc_ast_support.c",
+))
 CATEGORIES = {"production", "diagnostic", "legacy"}
 
 

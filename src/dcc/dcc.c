@@ -1798,7 +1798,7 @@ int main(int argc, char **argv)
 
     /* stdout/stderr/stdin are runtime data objects, not functions.
      * They are predeclared lazily in parse_translation_unit() as
-     * SC_EXTERN so emit_load_sym_addr() emits EXTRN when they are
+     * SC_EXTERN so reference bookkeeping emits EXTRN when they are
      * actually referenced.  Do not pre-add them here as SC_FUNC,
      * or add_global() preserves the wrong storage class and M80 sees
      * ld hl,_stdout without a preceding EXTRN. */

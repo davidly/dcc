@@ -10,7 +10,7 @@
  *
  * @par Key entry points
  * dcc_error_at(), error_here(), warn_at(), source_location_at(), xmalloc(),
- * emit(), emit_label(), peekc(), and getc_src().
+ * emit(), new_label(), peekc(), and getc_src().
  *
  * @par Boundary
  * Parsers decide which diagnostics to issue, and MIR/data modules decide what
@@ -417,14 +417,6 @@ void *xmalloc(size_t n)
     return p;
 }
 
-char *xstrdup2(const char *s)
-{
-    char *p;
-    p = (char *)xmalloc(strlen(s) + 1);
-    strcpy(p, s);
-    return p;
-}
-
 /* Returns a NUL-terminated copy and leaves stream at EOF. Callers that need to
  * read the stream again must rewind it. */
 char *dcc_read_stream_text(FILE *stream, long *size_out, const char *error_msg)
@@ -467,37 +459,10 @@ void flush_pending_asm(void)
 
 void emit(const char *s);
 
-void emit_ld_de_const(long v)
-{
-    if (!scan_mode)
-        fprintf(g_emit_sink.stream, "\tld de,%ld\n", v & 0xffffL);
-}
-
-void emit_add_const_to_hl(long v)
-{
-    v &= 0xffffL;
-    if (v == 0)
-        return;
-    emit_ld_de_const(v);
-    emit("\tadd hl,de\n");
-}
-
 void emit(const char *s)
 {
     if (!scan_mode)
         fputs(s, g_emit_sink.stream);
-}
-
-void emit_label(int n)
-{
-    if (!scan_mode)
-        fprintf(g_emit_sink.stream, "L%d:\n", n);
-}
-
-void emit_jp_label(const char *op, int n)
-{
-    if (!scan_mode)
-        fprintf(g_emit_sink.stream, "\t%s L%d\n", op, n);
 }
 
 int is_ident_start(int c)

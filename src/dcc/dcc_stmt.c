@@ -8,10 +8,10 @@
  * re-entry labels, and records closing-brace diagnostics and debug locations.
  *
  * @par Key entry points
- * process_compound() and gen_statement().
+ * process_compound() and process_statement().
  *
  * @par Boundary
- * gen_statement() is a frontend bridge to AST processing and MIR capture, not
+ * process_statement() is a frontend bridge to AST processing and MIR capture, not
  * a legacy body emitter. AST modules own statement structure and metadata;
  * selected MIR candidates alone provide production function bodies.
  */
@@ -50,7 +50,7 @@ void process_compound(void)
         } else if (g_lex.tok.kind == TOK_TYPEDEF) {
             parse_typedef_decl();
         } else if (current_identifier_starts_label()) {
-            gen_statement();
+            process_statement();
             dead = ast_last_statement_exits();
         } else if (starts_type()) {
             int t;
@@ -71,7 +71,7 @@ void process_compound(void)
                     ast_record_debug_location(decl_tok.file, decl_line);
                 if (dead)
                     asm_suppress_depth++;
-                gen_local_decl_after_type(t);
+                parse_local_decl_after_type(t);
                 if (dead)
                     asm_suppress_depth--;
             }
@@ -91,7 +91,7 @@ void process_compound(void)
                 }
                 ast_arena_reset(&g_ast_arena);
             } else {
-                gen_statement();
+                process_statement();
                 dead = ast_last_statement_exits();
             }
         }
@@ -120,7 +120,7 @@ void process_compound(void)
     expect('}');
 }
 
-void gen_statement(void)
+void process_statement(void)
 {
     if (ast_process_statement())
         return;

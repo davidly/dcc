@@ -1092,8 +1092,8 @@ _bdos:
 __bdosf:
         ; fastcall int bdos(int fn, int dearg)
         ; Entry: C = fn (low byte), DE = dearg - skips the general
-        ; push-2/call/pop-2 convention entirely. See dcc_ast_gen_expr.c's
-        ; bdos call-site codegen.
+        ; push-2/call/pop-2 convention entirely. MIR call-site selection
+        ; supplies these registers.
 bdos_core:
         call    5
         ld      l,a             ; only needed for non-conformant emulators
@@ -1131,8 +1131,8 @@ _bdoshl:
 __bhlf:
         ; fastcall int bdoshl(int fn, int dearg)
         ; Entry: C = fn (low byte), DE = dearg - skips the general
-        ; push-2/call/pop-2 convention entirely. See dcc_ast_gen_expr.c's
-        ; bdoshl call-site codegen.
+        ; push-2/call/pop-2 convention entirely. MIR call-site selection
+        ; supplies these registers.
         ;
         ; Named __bhlf, not __bdoshlf: M80 truncates public symbols to 6
         ; significant characters, and __bdoshlf truncates to __BDOS,
@@ -1194,8 +1194,8 @@ _bios:
 __biosf:
         ; fastcall int bios(int fn, int dearg)
         ; Entry: C = fn (low byte), DE = dearg - skips the general
-        ; push-2/call/pop-2 convention entirely. See dcc_ast_gen_expr.c's
-        ; bios call-site codegen.
+        ; push-2/call/pop-2 convention entirely. MIR call-site selection
+        ; supplies these registers.
 bios_core:
         call    __bios_dispatch
         ld      l,a             ; only meaningful for byte-returning fns
@@ -2163,7 +2163,7 @@ __cmpf:
         ; Entry: DE = s1, HL = s2, BC = n (already the hot loop's own
         ; layout below) - skips both the caller's push-3/call/pop-3 general
         ; convention and this routine's own stack-reconstruction marshaling
-        ; entirely.  See dcc_ast_gen_expr.c's memcmp call-site codegen.
+        ; entirely. MIR call-site selection supplies these registers.
 mcmp_core:
         ld      a,b
         or      c
@@ -2529,7 +2529,7 @@ __udivmod:
         ; a fused divmod: both results are always computed together, so a
         ; caller that already knows it wants both x/y and x%y (the compiler,
         ; when it has proven a % and a / share identical operands - see
-        ; dcc_ast_gen_support.c's divmod fusion pass) can call this directly
+        ; dcc_ast_support.c's divmod fusion pass) can call this directly
         ; and skip __divu's/__modu's own cache-check overhead entirely,
         ; which exists only to detect that same redundancy at runtime when
         ; the compiler could not prove it up front.
@@ -2816,7 +2816,7 @@ __ms_done:
 ; Fused signed divmod: quotient and remainder in one call, for the compiler
 ; to target when it has proven (at compile time, not via __divu's/__modu's
 ; runtime cache) that a % and a / share identical operands - see
-; dcc_ast_gen_support.c's divmod fusion pass. Calls __udivmod directly, not
+; dcc_ast_support.c's divmod fusion pass. Calls __udivmod directly, not
 ; __divs/__mods, so it never touches the __divu/__modu result cache at all:
 ; there is nothing for that cache to usefully remember here, since the one
 ; redundant division it exists to catch has already been eliminated by the

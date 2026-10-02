@@ -13,49 +13,15 @@
  * ast_stmt_has_reentry_label(), and ast_plan_for_metadata().
  *
  * @par Boundary
- * Statement legality classifiers live in dcc_ast_gen_cond.c; final body Z80
+ * Statement legality classifiers live in dcc_ast_stmt_classify.c; final body Z80
  * comes from a selected MIR candidate rather than this orchestration layer.
  */
 #include <string.h>
-#include "dcc_ast_gen_internal.h"
+#include "dcc_ast_internal.h"
 #include "dcc_mir.h"
 
 static int g_ast_last_stmt_exits;
 
-
-/* Rewrites a copy of `rhs` (a for-loop body's assignment right-hand side),
- * hoisting the address of any 2D array read within it whose OUTER (row)
- * subscript does not reference `ivar_name` and has no side effects.
- * tests/mm.c's matmult() inner loop is the motivating case:
- *
- *     for (k = 0; k < m; k++)
- *         C[i][j] += A[i][k] * B[k][j];
- *
- * A[i][k]'s row subscript is `i`, invariant across the k-loop, but the
- * expensive non-power-of-2 row-stride multiply (i*80) needed to form
- * A[i][k]'s address is recomputed from scratch on every one of the m
- * iterations by ordinary codegen - exactly the same waste
- * ast_for_hoist_lvalue_addr_supported's hoist eliminates for a loop-
- * invariant lhs, just one level removed (inside the rhs rather than being
- * the lhs itself). B[k][j]'s row subscript is `k` itself, so it is NOT
- * eligible: hoisting a column-only invariant there would only save the
- * already-cheap power-of-2 column scale (j*4), not the expensive row
- * multiply, so that case is deliberately left alone.
- *
- * For each qualifying 2D read found, this computes &ARR[row][0] once (via
- * gen_index_addr_ast + emit_store_hl_to_sym_direct, as a side effect of
- * this call - so this must be invoked exactly once, right before the loop
- * whose body it is rewriting), stores it into a fresh compiler-temp
- * pointer local, and replaces the read with a 1-D index through that
- * pointer using the original (unhoisted) column subscript.
- *
- * Recurses through the tree sharing any subtree that needed no rewrite, and
- * returns `rhs` itself unchanged if nothing in it qualifies - so a no-op
- * call has no side effects and allocates nothing. Only descends through
- * binary/unary operand positions (`a`/`b`), which is sufficient for the
- * `A[i][k] * B[k][j]`-shaped expressions this targets; a hoistable read
- * reachable only through some other AST shape is simply left un-hoisted,
- * which is always safe, just less thorough. */
 
 /* True only for scalar arithmetic that contains no indirect memory read.
  * Plain identifiers are allowed: when the body assigns a plain scalar, a

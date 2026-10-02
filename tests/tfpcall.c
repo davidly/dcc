@@ -6,7 +6,7 @@ extern int bdos(int fn, int dearg);
 /* Regression test for a coverage gap: DCCRTL.MAC's fastcall entries
  * (__slf, __chf, __cmpf, __bdosf, __msf, __mcf, __mhf, __scf, __rcf,
  * __ssf) are only reached by dcc's compiler-side special case in
- * dcc_ast_gen_expr.c, which recognizes a direct call to the function by
+ * dcc_ast_capture.c, which recognizes a direct call to the function by
  * name. Calling the same functions through a function pointer instead
  * forces the general (stack-marshaling) entry points (__slen, __schr,
  * __mcmp, _bdos, __mset, __mcpy, __mchr, __scpy, __srch, __sstr) and

@@ -110,6 +110,12 @@ checkpoint and collection; profiles from separate worker revisions or faulty
 compiler mutants must not be combined. Initialized test-submodule files are
 included in the input identity.
 
+Input identity describes the working tree, including new untracked sources and
+excluding tracked files already deleted before `build`. Unstaged deletions and
+renames do not require a commit or staging first. Adding, removing, renaming,
+or modifying an input after the build snapshot still invalidates the checkpoint
+and requires rebuilding and recollecting.
+
 `inputs.json`, `build.json` and `collection.json` are generated provenance
 artifacts, not coverage exclusions. A build-directory lock prevents overlapping
 stages; separate checkpoints use separate directories.
@@ -2181,7 +2187,7 @@ The scoped report includes:
 - MIR lowering, verification, allocation, selection, streams, and production
    emitters, including the active `dcc_mir_machine_*.c` schedules.
 
-It excludes the legacy direct-codegen modules, all mixed `dcc_ast_gen*.c`
+It excludes the legacy direct-codegen modules, all mixed `dcc_ast_*.c`
 modules, and the optional `dcc_mir_schedule.c` / `dcc_mir_target.c` shadow
 models. The separate function-scoped report adds classified active AST helpers.
 This historical baseline is
@@ -2255,10 +2261,10 @@ validation. CI runs this check independently of expensive coverage collection.
 
 | Mixed module | Production | Legacy-only |
 | --- | ---: | ---: |
-| `dcc_ast_gen.c` | 87 | 7 |
-| `dcc_ast_gen_cond.c` | 29 | 27 |
-| `dcc_ast_gen_expr.c` | 14 | 73 |
-| `dcc_ast_gen_support.c` | 41 | 8 |
+| `dcc_ast_classify.c` | 87 | 7 |
+| `dcc_ast_stmt_classify.c` | 29 | 27 |
+| `dcc_ast_capture.c` | 14 | 73 |
+| `dcc_ast_support.c` | 41 | 8 |
 | Total | 171 | 115 |
 
 Production roots were traced from `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c`,
@@ -2273,7 +2279,7 @@ Seven mixed-module references cross from included functions to excluded
 emitters. The manifest records each guard: initializer capture returns when
 MIR is active; discarded expressions use MIR instead of dead-expression
 emission; inline metadata passes `emit_values=0`. The analogous external
-`emit_init_auto_struct_type` reference to `ast_gen_expr` also follows a MIR
+`parse_auto_struct_initializer` reference to `ast_gen_expr` also follows a MIR
 capture path that bypasses emission. These are reviewed control-flow arguments,
 not a whole-program reachability proof. The validator detects changed reference
 sets, not edits to the guards themselves. Positive execution of an excluded

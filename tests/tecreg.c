@@ -1,6 +1,6 @@
 /*
  * tecreg.c - regression test for codegen-time E register residency
- * (gen_local_decl_after_type's g_e_regalloc_claim_active hook, dcc_decl.c;
+ * (parse_local_decl_after_type's g_e_regalloc_claim_active hook, dcc_decl.c;
  * try_speculative_bc_regalloc_function_body, dcc_func.c): fill_bytes is a
  * leaf function whose loop counter `i` is declared with no initializer,
  * compared against a compile-time constant bound, and used solely as the

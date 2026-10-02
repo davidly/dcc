@@ -1,5 +1,5 @@
 /**
- * @file dcc_ast_gen_support.c
+ * @file dcc_ast_support.c
  * @brief Implements AST support gates, constant folds, and structural proofs.
  *
  * @par Role
@@ -9,7 +9,7 @@
  * planning.
  *
  * @par Key entry points
- * ast_gen_supported(), ast_support_cache_begin(), ast_const_*_fold(),
+ * ast_expr_supported(), ast_support_cache_begin(), ast_const_*_fold(),
  * ast_call_*_supported(), and the ast_for_*_supported() proof helpers.
  *
  * @par Boundary
@@ -18,7 +18,7 @@
  */
 #include <string.h>
 #include <stdint.h>
-#include "dcc_ast_gen_internal.h"
+#include "dcc_ast_internal.h"
 
 #define AST_SUPPORT_CACHE_SIZE 4096
 
@@ -32,7 +32,7 @@ struct AstSupportCacheEntry {
 static struct AstSupportCacheEntry ast_support_cache[AST_SUPPORT_CACHE_SIZE];
 static unsigned ast_support_cache_stamp = 1;
 
-static int ast_gen_supported_uncached(const struct AstNode *n);
+static int ast_expr_supported_uncached(const struct AstNode *n);
 static int ast_scalar_binary_supported_uncached(const struct AstNode *n);
 static int ast_assign_supported_uncached(const struct AstNode *n);
 static int ast_other_supported_uncached(const struct AstNode *n);
@@ -81,7 +81,7 @@ static int ast_int_elem_assign_rhs_ok(const struct AstNode *n)
                              ast_value_is_float_word(n->b)));
 }
 
-int ast_gen_supported(const struct AstNode *n)
+int ast_expr_supported(const struct AstNode *n)
 {
     uintptr_t h;
     unsigned idx;
@@ -99,7 +99,7 @@ int ast_gen_supported(const struct AstNode *n)
     if (e->stamp == ast_support_cache_stamp && e->node == n && e->dead == dead)
         return e->value;
 
-    value = ast_gen_supported_uncached(n);
+    value = ast_expr_supported_uncached(n);
     e->node = n;
     e->stamp = ast_support_cache_stamp;
     e->dead = dead;
@@ -136,11 +136,8 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
             if ((n->op == '-' || n->op == '+') && n->a != NULL &&
                 n->a->kind == AST_FLOAT_LIT)
                 return 1;
-            /* `-PI` / `+PI` where PI is a const-qualified float identifier:
-             * the AST path loads the value (exactly as a bare `PI` operand,
-             * which is already supported) and negates it with gen_unary_ast's
-             * float sign-bit flip.  Allow it so float expressions like
-             * `-PI - x` and `x < -PI` can be emitted. */
+            /* Unary +/- on a float identifier preserves its float type,
+             * including constant operands such as `-PI`. */
             if ((n->op == '-' || n->op == '+') && n->a != NULL &&
                 n->a->kind == AST_IDENT) {
                 struct Sym *fs = find_sym(n->a->sval);
@@ -151,11 +148,11 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
             if (n->op == '~' && ast_const_plain_int_binary_supported(n->a))
                 return 1;
             if (n->op == '!' && n->a != NULL && n->a->kind == AST_BINARY &&
-                is_cmp_op(n->a->op) && ast_gen_supported(n->a) &&
+                is_cmp_op(n->a->op) && ast_expr_supported(n->a) &&
                 (ast_value_is_float_word(n->a->a) || ast_value_is_float_word(n->a->b)))
                 return 1;
             /* `!<constant-int-expr>` (including chains like `!!0`) folds to a
-             * single 0/1 immediate in gen_unary_ast, so allow it even though
+             * single 0/1 value, so allow it even though
              * the operand is itself a constant. */
             if (n->op == '!') {
                 long cv;
@@ -164,15 +161,10 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
             }
             if (ast_node_is_const(n->a))
                 return 0;
-            return ast_gen_supported(n->a);
+            return ast_expr_supported(n->a);
         }
-        /* Address-of a bare addressable identifier reduces - in gen_lvalue_addr
-         * with no trailing [ ] / . / -> - to emit_load_sym_addr(s) plus a
-         * pointer-to-element result type.  The deref / phantom-deref / global
-         * pointer-subscript preload special cases all need a following token,
-         * so a bare-id operand cannot reach them.  Exclude const-value (enum /
-         * folded) and function symbols, which are not plain addressable
-         * objects. */
+        /* A bare addressable identifier has a pointer-to-element result.
+         * Exclude folded constants and functions, which are not plain objects. */
         if (n->op == '&') {
             struct Sym *as;
             if (n->a == NULL || n->a->kind != AST_IDENT)
@@ -238,7 +230,7 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
             return 1;
         if (ast_mixed_long_rhs_arith_supported(n))
             return 1;
-        if (!ast_gen_supported(n->a) || !ast_gen_supported(n->b))
+        if (!ast_expr_supported(n->a) || !ast_expr_supported(n->b))
             return 0;
         if (is_cmp_op(n->op) &&
             (ast_value_is_float_word(n->a) || ast_value_is_float_word(n->b)))
@@ -328,7 +320,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
             int rhs_ptr_type;
             int rhs_no_deref;
             int rhs_va_type;
-            if (!ast_gen_supported(n->b) && n->b->kind != AST_CAST &&
+            if (!ast_expr_supported(n->b) && n->b->kind != AST_CAST &&
                 !ast_pointer_expr_type(n->b, &rhs_ptr_type, &rhs_no_deref) &&
                 !(n->b->kind == AST_CALL && ast_value_is_pointer_word(n->b) &&
                   ast_call_named_args_supported(n->b)) &&
@@ -380,7 +372,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                     return type_size(elem) == 2 &&
                            expr_result_dead &&
                            (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
-                           ast_gen_supported(n->b) &&
+                           ast_expr_supported(n->b) &&
                            ast_value_is_plain_int(n->b);
                 }
             }
@@ -391,9 +383,8 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
              * pointer-to-array local/param, e.g. `int (*p)[4]`).  Long and
              * float element stores are already accepted by the
              * ast_index_lvalue_elem_type block above; add the plain-int and
-             * pointer element cases so `(*p)[i]` matches the address machine
-             * that gen_index_addr_ast already emits for this shape (via
-             * ast_index_deref_pointer_array_collect). */
+             * pointer element cases described by
+             * ast_index_deref_pointer_array_collect. */
             if (n->op == '=' &&
                 ast_index_deref_pointer_array_collect(n->a, &base, NULL, NULL,
                                                       NULL, &elem)) {
@@ -469,7 +460,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                 } else {
                     if (ast_node_is_const(n->a->b))
                         return 0;
-                    if (!ast_gen_supported(n->a->b) || !ast_value_is_plain_int(n->a->b))
+                    if (!ast_expr_supported(n->a->b) || !ast_value_is_plain_int(n->a->b))
                         return 0;
                 }
                 return ast_pointer_assign_rhs_supported(n->b);
@@ -600,7 +591,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                 return type_size(deref_type) == 2 &&
                        expr_result_dead &&
                        (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
-                       ast_gen_supported(n->b) &&
+                       ast_expr_supported(n->b) &&
                        ast_value_is_plain_int(n->b);
             }
             if (ast_is_plain_int_type(deref_type) &&
@@ -701,7 +692,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                  * decline only when the rhs isn't a supported plain int. */
                 if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
                     expr_result_dead && type_ptr_depth(s->type) > 0)
-                    return ast_gen_supported(n->b) && ast_value_is_plain_int(n->b);
+                    return ast_expr_supported(n->b) && ast_value_is_plain_int(n->b);
                 return 0;
             }
             if (type_ptr_depth(s->type) > 0)
@@ -742,7 +733,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
              * pointer, whose rhs 'inc16' local no longer fit), even though
              * the general path handles any plain-int rhs. */
             if (type_ptr_depth(s->type) > 0)
-                return ast_gen_supported(n->b) && ast_value_is_plain_int(n->b);
+                return ast_expr_supported(n->b) && ast_value_is_plain_int(n->b);
             if (n->b->kind == AST_INT_LIT)
                 return 1;
             if (n->b->kind == AST_IDENT) {
@@ -801,10 +792,8 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
         /* A byte-sized ix-direct bitwise compound-assign with a constant
          * integer literal rhs (e.g. `a |= 0xFFL;`) accepts the literal
          * regardless of its own declared type - only its value matters
-         * since &/|/^ truncate the same way at 8, 16, or 32 bits, and
-         * gen_assign_ident_compound_ast loads the literal's value directly
-         * rather than through ast_gen_expr's normal (width-respecting)
-         * lowering.  An `L`-suffixed literal is TYPE_LONG, which
+         * since &/|/^ truncate the same way at 8, 16, or 32 bits.
+         * An `L`-suffixed literal is TYPE_LONG, which
          * ast_value_is_plain_int below always declines. */
         if (sym_can_ix_direct(s) && type_size(s->type) == 1 &&
             (n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ) &&
@@ -837,7 +826,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
              * store-from-call tail (no byte->int promote).
              * A long-returning call truncates to the low byte the same way
              * (handled by the early long-call return above). */
-            if (ast_gen_supported(n->b) && ast_value_is_plain_int(n->b))
+            if (ast_expr_supported(n->b) && ast_value_is_plain_int(n->b))
                 return 1;
             /* Constant casts outside the general support gate can still fold
              * to an immediate store. */
@@ -855,10 +844,8 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
             return 0;
         if (is_compound && expr_result_dead &&
             (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ)) {
-            /* True dead-result fast RHS shapes (`i += 1`, `i += j`,
-             * `i += s.f`) return above and use the dedicated fast emitter.
-             * Other supported plain-int RHS expressions use the general direct
-             * compound tail emitted by gen_assign_ast. */
+            /* Simple dead-result RHS shapes return above; other supported
+             * plain-int expressions are valid compound-assignment operands. */
             return ast_value_is_plain_int(n->b);
         }
         return 1;
@@ -970,23 +957,22 @@ static int ast_other_supported_uncached(const struct AstNode *n)
         if (n->a == NULL)
             return 0;
         if ((n->type & 15) == TYPE_VOID)
-            return ast_gen_supported(n->a);
+            return ast_expr_supported(n->a);
         if (type_is_float(n->type)) {
-            if (!ast_gen_supported(n->a))
+            if (!ast_expr_supported(n->a))
                 return 0;
             return ast_value_is_float_word(n->a) || ast_value_is_plain_int(n->a) ||
                    ast_value_is_long_word(n->a);
         }
         if (type_is_long(n->type)) {
-            if (!ast_gen_supported(n->a))
+            if (!ast_expr_supported(n->a))
                 return 0;
             return ast_value_is_plain_int(n->a) || ast_value_is_long_word(n->a) ||
                    ast_value_is_float_word(n->a) || ast_value_is_pointer_word(n->a);
         }
         if (type_ptr_depth(n->type) > 0 && type_size(n->type) == 2) {
-            /* `(T *)expr`: pointers are 16-bit words, so gen_cast_ast just
-             * evaluates the operand and retags the type - no narrowing or
-             * conversion.  Accept pointer-typed operands (mirroring
+            /* `(T *)expr` has a 16-bit pointer result. Accept pointer operands
+             * (mirroring
              * ast_pointer_expr_type's cast rule), integer constants, and
              * plain-int / pointer-word values. */
             int pt, nd;
@@ -994,14 +980,14 @@ static int ast_other_supported_uncached(const struct AstNode *n)
                 return ast_value_is_plain_int(n->a);
             if (ast_pointer_expr_type(n->a, &pt, &nd))
                 return !nd;
-            if (!ast_gen_supported(n->a))
+            if (!ast_expr_supported(n->a))
                 return 0;
             return ast_value_is_plain_int(n->a) || ast_value_is_pointer_word(n->a);
         }
         if (!ast_is_plain_int_type(n->type) || type_size(n->type) > 2)
             return 0;
         if (ast_node_is_const(n->a))
-            return ast_gen_supported(n->a) &&
+            return ast_expr_supported(n->a) &&
                    (ast_value_is_plain_int(n->a) || ast_value_is_long_word(n->a) ||
                     ast_value_is_float_word(n->a));
         if (n->a->kind != AST_CALL && n->a->kind != AST_IDENT &&
@@ -1016,7 +1002,7 @@ static int ast_other_supported_uncached(const struct AstNode *n)
         if (n->a->a != NULL && n->a->a->kind == AST_IDENT &&
             n->a->a->sval != NULL && !strcmp(n->a->a->sval, "__offsetof"))
             return 0;                  /* handled by the constant folder */
-        return ast_gen_supported(n->a);
+        return ast_expr_supported(n->a);
     case AST_COMMA:
         /* `a , b`: evaluate the left operand (value discarded), then the
          * right, whose value/type is the result.  Gate the left under the same
@@ -1024,13 +1010,13 @@ static int ast_other_supported_uncached(const struct AstNode *n)
          * `(ptr++, *ptr)` do not require a nonexistent value-context lowering
          * for the discarded pointer postfix result. */
         return (ast_is_local_self_add_stmt(n->a) || ast_dead_expr_supported(n->a)) &&
-               ast_gen_supported(n->b);
+               ast_expr_supported(n->b);
     default:
         return 0;
     }
 }
 
-static int ast_gen_supported_uncached(const struct AstNode *n)
+static int ast_expr_supported_uncached(const struct AstNode *n)
 {
     int supported;
 
@@ -1055,7 +1041,7 @@ int ast_call_arg_word_supported(const struct AstNode *arg)
         return 0;
     if (ast_pointer_expr_type(arg, &ptr_type, &no_deref))
         return 1;
-    if (!ast_gen_supported(arg))
+    if (!ast_expr_supported(arg))
         return 0;
     if (arg->kind == AST_STR_LIT)
         return 1;                         /* char * literal in HL */
@@ -1152,7 +1138,7 @@ int ast_value_is_long_word(const struct AstNode *arg)
          * returns the old value in DE:HL. */
         return ast_update_lvalue_long_type(arg->a, NULL);
     }
-    if (!ast_gen_supported(arg))
+    if (!ast_expr_supported(arg))
         return 0;
     if (arg->kind == AST_COMPOUND_LITERAL)
         return type_is_long(arg->type);
@@ -1193,7 +1179,7 @@ int ast_value_is_long_word(const struct AstNode *arg)
             return type_is_long(lhs_type);
     }
     if (arg->kind == AST_CAST && type_is_long(arg->type))
-        return ast_gen_supported(arg);
+        return ast_expr_supported(arg);
     if (arg->kind == AST_COMMA)
         return ast_value_is_long_word(arg->b);
     if (arg->kind == AST_COND)
@@ -1285,8 +1271,8 @@ int ast_call_arg_supported(struct Sym *fn_sym, int arg_index,
 /* `va_start(ap, last)` / `va_end(ap)` after macro expansion to the builtin
  * calls `__va_start(ap, last)` / `__va_end(ap)`.  Both take bare identifier
  * arguments naming a va_list cursor (and, for va_start, the last fixed
- * parameter).  gen_call_ast emits the required address arithmetic for the
- * builtin.  va_arg is not handled here (its `type` argument is a sizeof the AST
+ * parameter). MIR lowering owns builtin address arithmetic.
+ * va_arg is not handled here (its `type` argument is a sizeof the AST
  * does not preserve as a simple operand). */
 int ast_va_builtin_supported(const struct AstNode *n)
 {
@@ -1637,7 +1623,7 @@ int ast_value_is_float_word(const struct AstNode *arg)
 {
     struct Sym *s;
 
-    if (arg == NULL || !ast_gen_supported(arg))
+    if (arg == NULL || !ast_expr_supported(arg))
         return 0;
     if (arg->kind == AST_FLOAT_LIT)
         return 1;
@@ -1669,7 +1655,7 @@ int ast_value_is_float_word(const struct AstNode *arg)
         return s != NULL && type_is_float(type_decay_ptr(s->type));
     }
     if (arg->kind == AST_CAST && type_is_float(arg->type))
-        return ast_gen_supported(arg);
+        return ast_expr_supported(arg);
     if (arg->kind == AST_ASSIGN && arg->a != NULL) {
         int lhs_type;
         if (arg->a->kind == AST_IDENT) {
@@ -1744,7 +1730,7 @@ int ast_value_is_pointer_word(const struct AstNode *n)
          * case, which already does this for the plain-int sibling. Without
          * this, an inner pointer-valued chained assignment (`p.next = p.end
          * = y;`) has no way to be recognised as a pointer-word rhs. */
-        return ast_gen_supported(n) && ast_value_is_pointer_word(n->a);
+        return ast_expr_supported(n) && ast_value_is_pointer_word(n->a);
     default:
         return 0;
     }
@@ -1763,7 +1749,7 @@ int ast_pointer_assign_rhs_supported(const struct AstNode *n)
         return 1;
     if (ast_va_arg_deref_type(value, &va_type))
         return type_ptr_depth(va_type) > 0;
-    if (n->kind == AST_CAST && ast_gen_supported(value) &&
+    if (n->kind == AST_CAST && ast_expr_supported(value) &&
         ast_value_is_plain_int(value))
         return 1;
     if (ast_pointer_expr_type(value, &ptr_type, &no_deref))
@@ -1771,7 +1757,7 @@ int ast_pointer_assign_rhs_supported(const struct AstNode *n)
     if (value != NULL && value->kind == AST_CALL &&
         ast_value_is_pointer_word(value) && ast_call_named_args_supported(value))
         return 1;                      /* pointer-returning direct call */
-    return ast_gen_supported(value) && ast_value_is_pointer_word(value);
+    return ast_expr_supported(value) && ast_value_is_pointer_word(value);
 }
 
 /* A unary chain (-, +, ~) bottoming out in a single non-long INT_LIT folds to
@@ -2336,12 +2322,8 @@ static const struct AstNode *ast_find_unconditional_divmod_op(const struct AstNo
     if (n->kind == AST_BINARY && n->op == op &&
         n->a != NULL && n->a->kind == AST_IDENT && n->a->sval != NULL &&
         n->b != NULL && n->b->kind == AST_IDENT && n->b->sval != NULL) {
-        /* AST_IDENT nodes carry no reliable ->type of their own until
-         * codegen actually evaluates them (gen_ident resolves the symbol
-         * and sets g_expr.type at that point, not stored back onto the
-         * node) - ast_expr_type_for_sizeof is the existing static
-         * inference path built for exactly this "need a node's type
-         * before/without running its codegen" situation. */
+        /* Resolve identifier types through symbol metadata rather than relying
+         * on an AST node's potentially incomplete type annotation. */
         /* Promote each operand's type before comparing, the same as C's own
          * usual-arithmetic-conversions would before evaluating % or / - a
          * char/bool-narrowed identifier (e.g. a register-allocated loop
@@ -2524,8 +2506,8 @@ struct AstNode *ast_divmod_fuse_compound(const struct AstNode *n)
         if (ast_expr_has_side_effects(s2->a->a) || ast_expr_has_side_effects(s2->a->b))
             continue;
 
-        if (!ast_gen_supported(s1->a->a) || !ast_gen_supported(s1->a->b) ||
-            !ast_gen_supported(s2->a->a) || !ast_gen_supported(s2->a->b))
+        if (!ast_expr_supported(s1->a->a) || !ast_expr_supported(s1->a->b) ||
+            !ast_expr_supported(s2->a->a) || !ast_expr_supported(s2->a->b))
             continue;
 
         sprintf(qname, "#dmq%d", g_func_pass.licm_seq++);
@@ -2665,7 +2647,7 @@ int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
         return 0;
     if (rhs == NULL || ast_expr_has_side_effects(rhs))
         return 0;
-    if (!ast_gen_supported(lhs))
+    if (!ast_expr_supported(lhs))
         return 0;
 
     if (out_ivar_name != NULL) *out_ivar_name = ivar_name;
@@ -2678,8 +2660,7 @@ int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
  * "for (...; ...; ivar++/ivar--)" loop whose whole body is one assignment
  * statement with a side-effect-free rhs), but says nothing about the lhs -
  * this fires whether or not the lhs address happens to be hoistable, since a
- * row-invariant 2D array read living in the rhs (see
- * ast_hoist_row_invariant_2d_reads in dcc_ast_gen_stmt.c) is a useful hoist
+ * row-invariant 2D array read living in the rhs is a useful hoist
  * on its own, independent of that other optimisation. Declining (0) is
  * always safe: the caller falls back to ordinary per-iteration codegen. */
 int ast_for_rhs_hoist_scan_supported(const struct AstNode *n,

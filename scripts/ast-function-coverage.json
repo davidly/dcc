@@ -5,7 +5,7 @@
   },
   "guarded_edges": [],
   "sources": {
-    "src/dcc/dcc_ast_gen.c": {
+    "src/dcc/dcc_ast_classify.c": {
       "production": [
         "ident_supported",
         "is_cmp_op",
@@ -97,7 +97,7 @@
       ],
       "legacy": []
     },
-    "src/dcc/dcc_ast_gen_cond.c": {
+    "src/dcc/dcc_ast_stmt_classify.c": {
       "production": [
         "ast_return_stmt_supported",
         "ast_cmp_operand_ok",
@@ -108,6 +108,7 @@
         "ast_strip_byte_cast_mask_cond",
         "ast_low_byte_sum_operand_cond",
         "ast_byte_operand",
+        "byte_operand_can_be_lhs",
         "ast_is_byte_cmp_cond",
         "ast_is_direct_byte_bitand_cond",
         "ast_is_direct_wide_bitand_cond",
@@ -131,11 +132,11 @@
       ],
       "legacy": []
     },
-    "src/dcc/dcc_ast_gen_expr.c": {
+    "src/dcc/dcc_ast_capture.c": {
       "production": [
-        "ast_emit_init_expr",
-        "ast_emit_discarded_expr",
-        "ast_emit_struct_init_expr_assign",
+        "ast_capture_initializer_expr",
+        "ast_capture_discarded_expr",
+        "ast_capture_struct_initializer",
         "inline_arg_reusable",
         "inline_param_index_for_call",
         "inline_temp_name_for_call",
@@ -150,16 +151,16 @@
       ],
       "legacy": []
     },
-    "src/dcc/dcc_ast_gen_support.c": {
+    "src/dcc/dcc_ast_support.c": {
       "production": [
         "ast_support_cache_begin",
         "ast_expr_yields_bool01",
         "ast_int_elem_assign_rhs_ok",
-        "ast_gen_supported",
+        "ast_expr_supported",
         "ast_scalar_binary_supported_uncached",
         "ast_assign_supported_uncached",
         "ast_other_supported_uncached",
-        "ast_gen_supported_uncached",
+        "ast_expr_supported_uncached",
         "ast_call_arg_word_supported",
         "ast_call_struct_arg_supported",
         "ast_update_lvalue_long_type",

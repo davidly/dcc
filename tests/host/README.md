@@ -14,6 +14,17 @@ CTest with `ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1`.
 An additional build with `-DCMAKE_C_FLAGS=-fwrapv` exercises offset rejection
 without allowing the host compiler to assume signed overflow is impossible.
 
+Frontend initializer/VLA controls verify constant normalization, array offsets,
+zero-fill, string bytes, and SP save/restore capture with MIR active and inactive
+in both ordinary and sizing modes. None may write assembly or consume emission
+labels; inactive capture must leave MIR unchanged. This prevents sizing passes
+from leaking obsolete direct-emitter instructions into the translation unit.
+
+The frontend ownership guard also checks the explicit AST module names and
+rejects old `gen_*`/`emit_*` contracts for parsing, capture, and reference
+bookkeeping. Classifier coverage must inventory the same four source files as
+its manifest, so a renamed module cannot silently disappear from the audit.
+
 The tests cover operand and object bounds, dimensions, opcodes, branch labels,
 definition uniqueness, PHI references, call identities, argument positions,
 and known direct/indirect-call ABI types. They also reject non-dominating

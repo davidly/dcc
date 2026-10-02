@@ -130,8 +130,61 @@ class CoverageCheckpointTests(unittest.TestCase):
     def test_deleted_tracked_input(self):
         subprocess.run(["git", "-C", str(self.root), "add", "src/dcc/a.c"],
                        check=True)
+        (self.root / "remaining.h").write_text("int remaining;\n")
+        checkpoint.prepare(self.root, self.build, {"clang": self.tool})
+        checkpoint.finish_build(self.root, self.build, {"dcc": self.tool})
         self.source.unlink()
-        with self.assertRaisesRegex(checkpoint.CheckpointError, "input missing"):
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "inputs changed"):
+            checkpoint.check_build(self.root, self.build)
+
+    def test_deleted_tracked_input_before_prepare(self):
+        old = self.source.with_name("removed.c")
+        old.write_text("int removed;\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "src/dcc/removed.c"],
+                       check=True)
+        old.unlink()
+        checkpoint.prepare(self.root, self.build, {"clang": self.tool})
+        checkpoint.finish_build(self.root, self.build, {"dcc": self.tool})
+        record = checkpoint.check_build(self.root, self.build)
+        self.assertEqual(record["inputs"], {
+            "src/dcc/a.c": checkpoint.digest(self.source)})
+
+    def test_unstaged_rename_includes_new_source_not_cached_old_source(self):
+        subprocess.run(["git", "-C", str(self.root), "add", "src/dcc/a.c"],
+                       check=True)
+        renamed = self.source.with_name("renamed.c")
+        self.source.rename(renamed)
+        checkpoint.prepare(self.root, self.build, {"clang": self.tool})
+        checkpoint.finish_build(self.root, self.build, {"dcc": self.tool})
+        record = checkpoint.check_build(self.root, self.build)
+        self.assertEqual(record["inputs"], {
+            "src/dcc/renamed.c": checkpoint.digest(renamed)})
+
+    def test_deleted_tracked_input_during_build(self):
+        subprocess.run(["git", "-C", str(self.root), "add", "src/dcc/a.c"],
+                       check=True)
+        (self.root / "remaining.h").write_text("int remaining;\n")
+        checkpoint.prepare(self.root, self.build, {"clang": self.tool})
+        self.source.unlink()
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "inputs changed"):
+            checkpoint.finish_build(self.root, self.build, {"dcc": self.tool})
+
+    def test_deleted_tracked_input_during_collection(self):
+        subprocess.run(["git", "-C", str(self.root), "add", "src/dcc/a.c"],
+                       check=True)
+        (self.root / "remaining.h").write_text("int remaining;\n")
+        checkpoint.prepare(self.root, self.build, {"clang": self.tool})
+        checkpoint.finish_build(self.root, self.build, {"dcc": self.tool})
+        self.complete()
+        self.source.unlink()
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "inputs changed"):
+            checkpoint.check_collection(self.root, self.build)
+
+    def test_deleting_all_inputs_is_rejected(self):
+        subprocess.run(["git", "-C", str(self.root), "add", "src/dcc/a.c"],
+                       check=True)
+        self.source.unlink()
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "no coverage inputs"):
             checkpoint.check_build(self.root, self.build)
 
     def test_build_stamp_change(self):

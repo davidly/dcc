@@ -27,6 +27,11 @@ def input_files(root, paths):
          "--exclude-standard", "--", *paths],
         check=True, capture_output=True,
     )
+    deleted_result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--deleted", "--", *paths],
+        check=True, capture_output=True,
+    )
+    deleted = set(deleted_result.stdout.split(b"\0")) - {b""}
     files = {}
     for raw in sorted(set(result.stdout.split(b"\0")) - {b""}):
         name = raw.decode("utf-8")
@@ -41,6 +46,9 @@ def input_files(root, paths):
                 raise CheckpointError(f"uninitialized coverage submodule: {name}")
             for child, value in input_files(path, []).items():
                 files[f"{name}/{child}"] = value
+            continue
+        # Cached entries retain unstaged removals; snapshot the working tree.
+        if raw in deleted:
             continue
         if not path.is_file():
             raise CheckpointError(f"coverage input missing or not a file: {name}")

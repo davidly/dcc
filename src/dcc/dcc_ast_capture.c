@@ -1,27 +1,26 @@
 /**
- * @file dcc_ast_gen_expr.c
- * @brief Provides AST expression helpers, initializer capture, and inline
- * metadata.
+ * @file dcc_ast_capture.c
+ * @brief Captures initializer/discarded expressions and traverses inline metadata.
  *
  * @par Role
- * Parses and captures scalar/aggregate declaration initializers, and clones
- * inline bodies for non-emitting metadata traversal.
+ * Parses scalar/aggregate initializers and discarded expressions for MIR
+ * capture, and clones inline bodies for non-emitting metadata traversal.
  *
  * @par Key entry points
- * ast_emit_init_expr(), ast_emit_struct_init_expr_assign(),
- * ast_emit_discarded_expr(), and ast_process_inline_call_metadata().
+ * ast_capture_initializer_expr(), ast_capture_struct_initializer(),
+ * ast_capture_discarded_expr(), and ast_process_inline_call_metadata().
  *
  * @par Boundary
  * Initializer semantics go through mir_capture_initializer() or
  * mir_capture_struct_initializer(). This layer never emits function bodies.
  */
 #include <string.h>
-#include "dcc_ast_gen_internal.h"
+#include "dcc_ast_internal.h"
 #include "dcc_mir.h"
 
 static const struct AstNode *inline_substitution_body(struct Sym *fn);
 
-void ast_emit_init_expr(void)
+void ast_capture_initializer_expr(void)
 {
     struct AstNode *n;
     int ptr_type;
@@ -38,15 +37,13 @@ void ast_emit_init_expr(void)
         ast_validate_expr_symbols(n);
 
     if (n != NULL && (ast_pointer_expr_type(n, &ptr_type, &no_deref) ||
-                      ast_gen_supported(n) || n->kind == AST_CAST ||
+                      ast_expr_supported(n) || n->kind == AST_CAST ||
                       ast_numeric_value_supported(n) ||
                       ast_pointer_assign_rhs_supported(n) ||
                       (n->kind == AST_CALL && ast_value_is_pointer_word(n) &&
                        ast_call_named_args_supported(n)))) {
         mir_capture_initializer(n);
         ast_process_expr_metadata(n);
-        g_expr.type = ast_expr_type_for_sizeof(n);
-        g_expr.long_from16 = 0;
         ast_arena_reset(&g_ast_init_arena);
         return;
     }
@@ -71,12 +68,11 @@ void ast_emit_init_expr(void)
             next_token();
     }
 
-    g_expr.type = TYPE_INT;
 }
 
 /* Capture an expression whose value is discarded but whose side
  * effects are required.  VLA parameter bounds use this at function entry. */
-void ast_emit_discarded_expr(void)
+void ast_capture_discarded_expr(void)
 {
     struct AstNode *n = ast_build_assign_expr(&g_ast_init_arena);
 
@@ -91,7 +87,7 @@ void ast_emit_discarded_expr(void)
     ast_arena_reset(&g_ast_init_arena);
 }
 
-void ast_emit_struct_init_expr_assign(struct Sym *s)
+void ast_capture_struct_initializer(struct Sym *s)
 {
     struct AstNode *rhs;
     LexState _ls;
@@ -529,7 +525,7 @@ int ast_process_inline_call_metadata(
 
 /* Look up a plain `BASE->FIELD` member node's value type without emitting
  * anything (base symbol's type -> struct id -> field def). Used by
- * ast_for_hoist_global_member_value_supported (dcc_ast_gen_support.c) to
+ * ast_for_hoist_global_member_value_supported (dcc_ast_support.c) to
  * size the value-cache temp it allocates. Only meaningful for exactly the
  * shape that predicate matches: n->a is a plain identifier. */
 int ast_member_field_value_type(const struct AstNode *n)

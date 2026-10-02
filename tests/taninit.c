@@ -2,7 +2,7 @@
  *
  * Local (auto) initialization of anonymous unions/structs and promoted
  * anonymous bit-field designators.  Regression coverage for the dcc auto
- * aggregate initializer fixes in emit_init_auto_struct_type:
+ * aggregate initializer fixes in parse_auto_struct_initializer:
  *
  *   1. Promoted anonymous bit-field designators (.major/.minor/.patch) are
  *      packed into the correct bit-field storage unit, including when the

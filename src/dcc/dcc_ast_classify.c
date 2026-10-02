@@ -1,5 +1,5 @@
 /**
- * @file dcc_ast_gen.c
+ * @file dcc_ast_classify.c
  * @brief Implements shared AST type, value, lvalue, and address classifiers.
  *
  * @par Role
@@ -11,18 +11,17 @@
  * ast_pointer_expr_type(), ast_member_lvalue_type(),
  * ast_index_composite_elem_type(), ast_value_is_plain_int(), and the other
  * ast_*_supported()/ast_*_type() predicates declared in
- * dcc_ast_gen_internal.h.
+ * dcc_ast_internal.h.
  *
  * @par Boundary
- * Despite the historical gen name, this module is not a production
- * function-body fallback. dcc_ast_gen_expr.c owns expression helpers,
- * dcc_ast_gen_cond.c owns condition/statement gates, and MIR owns final body
+ * Classification and type resolution only. dcc_ast_capture.c owns capture,
+ * dcc_ast_stmt_classify.c owns condition/statement gates, and MIR owns final body
  * emission.
  */
 #include "dcc.h"
 #include "dcc_ast.h"
 #include <string.h>
-#include "dcc_ast_gen_internal.h"
+#include "dcc_ast_internal.h"
 
 static int ast_preincdec_pointer_type(const struct AstNode *n, int *out_type);
 
@@ -39,7 +38,7 @@ int ident_supported(const char *name)
     for (ei = 0; ei < nenum_consts; ++ei)
         if (!strcmp(enum_const_names[ei], name))
             return 1;
-    /* Let the AST emitter report the unresolved identifier. */
+    /* Symbol validation reports unresolved identifiers. */
     return 1;
 }
 
@@ -244,11 +243,11 @@ int ast_value_is_plain_int(const struct AstNode *n)
     case AST_COMMA:
         return ast_value_is_plain_int(n->b);
     case AST_ASSIGN:
-        return ast_gen_supported(n) && ast_value_is_plain_int(n->a);
+        return ast_expr_supported(n) && ast_value_is_plain_int(n->a);
     case AST_POSTFIX:
         return ast_postfix_plain_int(n);
     case AST_CAST:
-        return ast_is_plain_int_type(n->type) && ast_gen_supported(n);
+        return ast_is_plain_int_type(n->type) && ast_expr_supported(n);
     default:
         return 0;
     }
@@ -288,8 +287,8 @@ int ast_node_is_const(const struct AstNode *n)
  * value (the non-const, single-index, non-field-array case).  Conservative:
  * only a bare identifier base that is a 1-D plain-int array or a plain int/char
  * pointer (element size 1 or 2), indexed by a supported plain-int expression.
- * emit_load_from_hl sign/zero-extends a 1-byte element into the full HL, so a
- * char element still yields a valid 16-bit int in HL.  Integer-literal indexes
+ * Narrow elements are sign/zero-extended to valid 16-bit integer values.
+ * Integer-literal indexes
  * are folded into the address; other constant expressions, multi-dimensional or
  * field arrays, the n[ptr] commutative case and any wider/non-int element are
  * not handled here. */
@@ -569,7 +568,7 @@ int ast_index_subscript_binary_literal(const struct AstNode *idx)
         return 0;
     if (idx->a == NULL || ast_node_is_const(idx->a))
         return 0;
-    return ast_gen_supported(idx->a) && ast_value_is_plain_int(idx->a) &&
+    return ast_expr_supported(idx->a) && ast_value_is_plain_int(idx->a) &&
            ast_value_is_plain_int(idx->b);
 }
 
@@ -590,10 +589,9 @@ int ast_index_subscript_supported(const struct AstNode *idx)
         return 1;
     if (ast_value_is_long_word(idx))
         return 1;
-    /* A constant unary applied to a plain-int literal (e.g. `p[-1]`) is not a
-     * bare literal but folds to a plain int; the emitter evaluates it through
-     * gen_index_subscript_expr_ast (correct two's-complement scaling), so allow
-     * it before the generic const rejection below. */
+    /* A constant unary applied to a plain-int literal (e.g. `p[-1]`) folds to
+     * a plain int with signed index semantics. Accept it before the generic
+     * constant rejection below. */
     if (idx->kind == AST_UNARY &&
         (idx->op == '-' || idx->op == '+' || idx->op == '~') &&
         idx->a != NULL && idx->a->kind == AST_INT_LIT &&
@@ -601,12 +599,9 @@ int ast_index_subscript_supported(const struct AstNode *idx)
         return 1;
     if (ast_node_is_const(idx))
         return 0;
-    /* A long-valued subscript (e.g. `src[pos]` with `long pos`) is truncated to
-     * its low 16-bit word for the address computation: the emitter evaluates it
-     * into DE:HL and the index machine uses HL only (scale_hl_by_elem_size acts
-     * on HL, and the non-power-of-2 __mulu path overwrites the stale high word
-     * in DE).  This matches the 16-bit address space exactly. */
-    return ast_gen_supported(idx) && ast_value_is_plain_int(idx);
+    /* Long-valued subscripts use their low 16 bits for address computation,
+     * matching the target's 16-bit address space. */
+    return ast_expr_supported(idx) && ast_value_is_plain_int(idx);
 }
 
 int ast_index_2d_addressable_addr(const struct AstNode *n)
@@ -1155,9 +1150,8 @@ int ast_index_member_pointer_elem_type(const struct AstNode *n, int *out_type)
 
 /* `p[i]` where p is a scalar pointer identifier (NOT an array) whose element is
  * itself a pointer (e.g. `char **argv` -> `char *`).  The element address is
- * p's pointer VALUE plus i*elem_size, which gen_index_addr_ast computes exactly
- * as it does for the plain-int char/int element case; emit_load_from_hl then
- * reads the 2-byte pointer element.  Plain-int (char/int) elements are already
+ * p's pointer value plus i*elem_size, and the result is a 2-byte pointer load.
+ * Plain-int (char/int) elements are already
  * covered by ast_index_plain_int_read, so this only opens the pointer-element
  * case (a pointer base of depth >= 2). */
 int ast_index_scalar_pointer_elem_type(const struct AstNode *n, int *out_type)
@@ -1379,8 +1373,8 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         /* ast_index_pointer_expr_elem_type's own contract is just "what type
          * does indexing this pointer expression produce" - it hands back
          * whatever element type it finds, pointer or not, which is exactly
-         * right for its other caller (gen_index_addr_ast, which wants the
-         * indexed VALUE's type regardless of pointer-ness). Every sibling
+         * right for address analysis, which needs the indexed value's type
+         * regardless of pointer-ness. Every sibling
          * check in this same case (above and below) re-verifies
          * type_ptr_depth(member_type) > 0 before trusting its result as "n
          * itself is a pointer expression" - this one didn't, so
@@ -1388,7 +1382,7 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
          * add a plain int) misclassified the whole '+' as pointer
          * arithmetic: member_type came back as plain int, ptr_depth 0, but
          * fell through to the accept branch anyway, then
-         * gen_binary_try_fast_preeval's pointer-arithmetic fast path scaled
+         * a former pointer-arithmetic fast path scaled
          * `a` by sizeof(int) as if it were an array index. Confirmed via a
          * 20-line standalone repro (`x[0] = x[0] + a` on a cast void*
          * doubled every delta) and traced back from tests/cobint.c's
@@ -1411,7 +1405,7 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         return 0;
 
     case AST_CALL:
-        if (!ast_gen_supported(n) || n->a == NULL)
+        if (!ast_expr_supported(n) || n->a == NULL)
             return 0;
         *out_type = ast_call_result_type(n);
         if (type_ptr_depth(*out_type) == 0)
@@ -1426,7 +1420,7 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         if (s == NULL || s->is_const_value || s->storage == SC_FUNC ||
             s->is_array || type_ptr_depth(s->type) <= 0 || type_size(s->type) != 2)
             return 0;
-        if (!ast_gen_supported(n))
+        if (!ast_expr_supported(n))
             return 0;
         *out_type = s->type;
         *out_no_deref = 0;
@@ -1442,7 +1436,7 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
             *out_no_deref = 0;
             return 1;
         }
-        if (!ast_gen_supported(n->a))
+        if (!ast_expr_supported(n->a))
             return 0;
         if (!ast_value_is_plain_int(n->a) &&
             !ast_value_is_long_word(n->a) &&
@@ -1459,7 +1453,7 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         int false_no_deref;
         int true_ptr;
         int false_ptr;
-        if (n->a == NULL || !ast_gen_supported(n->a) ||
+        if (n->a == NULL || !ast_expr_supported(n->a) ||
             (!ast_value_is_plain_int(n->a) && !ast_value_is_pointer_word(n->a)))
             return 0;
         true_ptr = ast_pointer_expr_type(n->b, &true_type, &true_no_deref);
@@ -1706,8 +1700,8 @@ int ast_member_pointer_array_field_elem_type(const struct AstNode *n, int *out_t
  * 16-bit int value, via the identifier-rooted field machine for a SINGLE field
  * access.  Conservative: a bare-identifier base that is a struct object (for
  * `.`) or a depth-1 pointer to a struct (for `->`), and a field that is a plain
- * int/char SCALAR - non-array, non-bitfield.  emit_load_from_hl sign/zero-
- * extends a 1-byte field into the full HL, so a char field still yields a valid
+ * int/char SCALAR - non-array, non-bitfield. A 1-byte field is sign/zero-
+ * extended, so a char field still yields a valid
  * 16-bit int.  Field arrays, bitfields, nested/chained accesses, and
  * wider/non-int field types are not handled here. */
 int ast_member_plain_int_read(const struct AstNode *n)
@@ -1748,10 +1742,8 @@ int ast_member_plain_int_read(const struct AstNode *n)
     return 1;
 }
 
-/* A plain-int bitfield struct field read `s.f` / `p->f`.  gen_member_ast loads
- * the storage unit and calls emit_extract_bitfield to mask/shift (and
- * sign-extend a signed field), yielding a plain 16-bit int value, so this is a
- * supported plain-int rvalue.  Kept separate from ast_member_plain_int_read so
+/* A bitfield read yields a plain 16-bit int after extraction and any required
+ * sign extension. Kept separate from ast_member_plain_int_read so
  * the special non-extracting assign/subscript paths still decline bitfields. */
 int ast_member_bitfield_read(const struct AstNode *n)
 {
@@ -1832,10 +1824,8 @@ int ast_member_float_read(const struct AstNode *n)
     return type_is_float(t);
 }
 
-/* A pointer-typed struct field read `s.f` / `p->f` (a 2-byte pointer value).
- * gen_member_ast loads it with emit_load_from_hl(field_type) exactly as for a
- * plain-int field, so the value lands in HL identically; only the gate needs to
- * recognise it as a pointer-word rvalue. */
+/* A pointer-typed struct field read `s.f` / `p->f` yields a 2-byte pointer
+ * rvalue rather than a plain-int field value. */
 int ast_member_pointer_read(const struct AstNode *n)
 {
     int t;
@@ -1905,8 +1895,7 @@ struct FieldDef *ast_unique_field_by_name(const char *name)
  * or ++ / -- - which is exactly an AST_UNARY '*' whose operand is a bare
  * AST_IDENT (any trailing postfix would reparent the operand into an
  * INDEX/MEMBER/CALL/POSTFIX node).  Restrict to a single-level pointer to a
- * plain int/char element (size 1 or 2) so the load is the simple
- * emit_load_from_hl(base).  Function pointers, arrays, const/enum symbols,
+ * plain int/char element (size 1 or 2). Function pointers, arrays, const/enum symbols,
  * wider/non-int and void elements are not handled here. */
 int ast_deref_plain_int_read(const struct AstNode *n)
 {
@@ -2071,10 +2060,8 @@ int ast_deref_float_read(const struct AstNode *n)
     return type_is_float(base);
 }
 
-/* A prefix `++lv` / `--lv` on a plain-int identifier or struct member.
- * Streaming gen_unary emits gen_lvalue_addr(&t) + emit_pre_incdec_lvalue(t, op)
- * unconditionally for prefix ++/--.  Restrict to a plain int/char scalar (size
- * 1 or 2) so emit_pre_incdec_lvalue takes its integer branch. */
+/* Classify prefix updates of plain int/char identifiers or struct members,
+ * restricting the stored scalar to size 1 or 2. */
 int ast_preincdec_plain_int(const struct AstNode *n)
 {
     struct Sym *s;
@@ -2195,14 +2182,9 @@ static int ast_preincdec_pointer_type(const struct AstNode *n, int *out_type)
     return 1;
 }
 
-/* A postfix `lv++` / `lv--` on a bare plain-int identifier, struct member, or
- * dereferenced pointer expression.
- * Bare identifiers use the try_emit_post_update_sym_direct fast path
- * deterministically (it returns 1 for any non-array, non-long, non-float scalar
- * of size <= 2 that is IX-direct or a global word).  Member lvalues compute the
- * field address then use gen_post_update_from_addr; dereferenced pointer
- * lvalues use the same address+update tail.  Restrict to plain int/char (size 1
- * or 2, not a pointer) so the non-pointer inc/dec branch applies. */
+/* Classify postfix updates of plain int/char identifiers, struct members, or
+ * dereferenced pointers. Restrict the stored value to size 1 or 2 and exclude
+ * pointer arithmetic; MIR owns the actual address computation and update. */
 int ast_postfix_plain_int(const struct AstNode *n)
 {
     struct Sym *s;
@@ -2250,9 +2232,8 @@ int ast_postfix_plain_int(const struct AstNode *n)
         return 0;
     /* Accept IX-direct locals/params, global/extern words, any SC_LOCAL, and
      * global/extern BYTES.  A global byte is not is_global_word_sym (that is
-     * word-only), so it needs its own clause; gen_postfix_ast lowers it through
-     * emit_load_sym_addr + gen_post_update_from_addr, the same address path the
-     * SC_LOCAL byte case uses. */
+     * word-only), so it needs its own clause. MIR supports the same byte
+     * address/update semantics for global and local storage. */
     if (!sym_can_ix_direct(s) && !is_global_word_sym(s) && s->storage != SC_LOCAL &&
         !((s->storage == SC_GLOBAL || s->storage == SC_EXTERN) && sz == 1))
         return 0;
@@ -2331,13 +2312,13 @@ int ast_cond_numeric_supported(const struct AstNode *n)
 {
     if (n == NULL || n->kind != AST_COND)
         return 0;
-    if (!ast_gen_supported(n->a) ||
+    if (!ast_expr_supported(n->a) ||
         (!ast_value_is_plain_int(n->a) && !ast_value_is_float_word(n->a) &&
          !ast_value_is_pointer_word(n->a) && !ast_value_is_long_word(n->a)))
         return 0;
-    if (!ast_gen_supported(n->b) || !ast_numeric_value_supported(n->b))
+    if (!ast_expr_supported(n->b) || !ast_numeric_value_supported(n->b))
         return 0;
-    if (!ast_gen_supported(n->c) || !ast_numeric_value_supported(n->c))
+    if (!ast_expr_supported(n->c) || !ast_numeric_value_supported(n->c))
         return 0;
     return 1;
 }
@@ -2361,10 +2342,10 @@ int ast_void_expr_supported(const struct AstNode *n)
     if (n == NULL)
         return 0;
     if (n->kind == AST_CAST && (n->type & 15) == TYPE_VOID)
-        return n->a != NULL && ast_gen_supported(n->a);
+        return n->a != NULL && ast_expr_supported(n->a);
     if (n->kind == AST_CALL && n->a != NULL && n->a->kind == AST_IDENT) {
         s = find_global(n->a->sval);
-        return s != NULL && (s->type & 15) == TYPE_VOID && ast_gen_supported(n);
+        return s != NULL && (s->type & 15) == TYPE_VOID && ast_expr_supported(n);
     }
     return 0;
 }
@@ -2373,7 +2354,7 @@ int ast_cond_void_supported(const struct AstNode *n)
 {
     if (n == NULL || n->kind != AST_COND)
         return 0;
-    if (!ast_gen_supported(n->a) ||
+    if (!ast_expr_supported(n->a) ||
         (!ast_value_is_plain_int(n->a) && !ast_value_is_float_word(n->a) &&
          !ast_value_is_pointer_word(n->a) && !ast_value_is_long_word(n->a)))
         return 0;
@@ -2394,8 +2375,8 @@ int ast_index_cmp_cond_supported(const struct AstNode *n)
     if (lhs_index && rhs_index)
         return 1;
     if (lhs_index)
-        return ast_gen_supported(n->b) && ast_value_is_plain_int(n->b);
-    return ast_gen_supported(n->a) && ast_value_is_plain_int(n->a);
+        return ast_expr_supported(n->b) && ast_value_is_plain_int(n->b);
+    return ast_expr_supported(n->a) && ast_value_is_plain_int(n->a);
 }
 
 /* True when a value may be a `&&` / `||` operand: the short-circuit emit only
@@ -2412,7 +2393,7 @@ int ast_logical_operand_ok(const struct AstNode *n)
         return ast_logical_operand_ok(n->a) && ast_logical_operand_ok(n->b);
     if (n->kind == AST_BINARY && is_cmp_op(n->op))
         return ast_cond_generic(n) && ast_value_is_plain_int(n);
-    if (ast_gen_supported(n) &&
+    if (ast_expr_supported(n) &&
         (ast_value_is_plain_int(n) || ast_value_is_pointer_word(n) ||
          ast_value_is_float_word(n) || ast_value_is_long_word(n)))
         return 1;
@@ -2527,8 +2508,8 @@ int ast_const_plain_int_binary_supported(const struct AstNode *n)
     if ((n->op == '/' || n->op == '%') &&
         ast_unary_int_const_fold(n->b, &rhs) && rhs == 0)
         return 0;
-    return ast_node_is_const(n) && ast_gen_supported(n->a) &&
-           ast_gen_supported(n->b) && ast_value_is_plain_int(n->a) &&
+    return ast_node_is_const(n) && ast_expr_supported(n->a) &&
+           ast_expr_supported(n->b) && ast_value_is_plain_int(n->a) &&
            ast_value_is_plain_int(n->b);
 }
 
