@@ -1576,9 +1576,6 @@ static void diamond(void);
 
 static void verify_diamond_edge_liveness(void)
 {
-    size_t left;
-    size_t right;
-
     diamond();
     if (!mir_verify_and_dump()) {
         fprintf(stderr, "FAIL diamond edge liveness verification\n");
@@ -1586,10 +1583,12 @@ static void verify_diamond_edge_liveness(void)
         clear_liveness();
         return;
     }
-    left = (size_t)5 * mir.next_value;
-    right = (size_t)7 * mir.next_value;
-    if (!mir.live_out[left + 1] || mir.live_out[left + 2] ||
-        mir.live_out[right + 1] || !mir.live_out[right + 2]) {
+    /* Instruction 5 ends the left edge, 7 the right; v1/v2 are their PHI
+     * inputs. */
+    if (!MIR_LIVE_TEST(mir.live_out, 5, 1) ||
+        MIR_LIVE_TEST(mir.live_out, 5, 2) ||
+        MIR_LIVE_TEST(mir.live_out, 7, 1) ||
+        !MIR_LIVE_TEST(mir.live_out, 7, 2)) {
         fprintf(stderr, "FAIL PHI values must be live only on their own edges\n");
         ++failures;
     }
@@ -1651,8 +1650,6 @@ static void verify_immediate_phi_consumer_forwarding(void)
 
 static void verify_call_argument_liveness(void)
 {
-    size_t call;
-
     setup(6, 3, 1);
     mir.next_call_id = 1;
     mir.insns[2].opcode = MIR_ARG;
@@ -1668,8 +1665,8 @@ static void verify_call_argument_liveness(void)
         clear_liveness();
         return;
     }
-    call = (size_t)3 * mir.next_value;
-    if (!mir.live_in[call] || mir.live_out[call]) {
+    if (!MIR_LIVE_TEST(mir.live_in, 3, 0) ||
+        MIR_LIVE_TEST(mir.live_out, 3, 0)) {
         fprintf(stderr, "FAIL argument must remain live through its matching call\n");
         ++failures;
     }
