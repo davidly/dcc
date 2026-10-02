@@ -82,6 +82,83 @@ profiles; compiler sources and checked baseline hashes were unchanged. This
 proves the stated source-function objective for this checkpoint, not exhaustive
 branch/path or cross-platform coverage.
 
+## Live memory rewrite proof tranche
+
+This bounded proof layer keeps the completed function-coverage scopes and
+accounting unchanged. `mir_verify_and_dump` exercises the live dominated-load
+and little-endian rewrites with 71 named healthy host cases, independent
+original dominance checks, exact access/retirement/use assertions and repeated
+fresh-function cache checks. Thirteen dedicated compiler guard mutants extend
+the existing 28, with healthy-baseline gating and exact intended assertions.
+Profitability-only boundaries remain separate from semantic legality.
+
+The `memory-rewrite` clobber group adds 12 release/debug/stack/peep leaves with
+33 defined arithmetic/alias/qualifier checks per target execution and exact
+function-scoped MIR evidence. Full `-g` retains its intentionally unpromoted
+parameter loads; release/`-gline` must still optimize positive controls. The
+shared evidence checker also preserves the existing alias/qualifier assertions
+while rejecting missing, duplicate or wrong-function reports.
+
+Freeze the finite case/guard inventory before collection under a separate
+`build/memory-rewrite-proof/` workspace. After the fresh integrated checkpoint,
+validate its healthy unfiltered export, CTest host log, and compiler mutation
+logs against that inventory:
+
+```sh
+python3 scripts/audit-mir-memory-proof.py \
+  --inventory build/memory-rewrite-proof/inventory.json \
+  --coverage build/NEW-CHECKPOINT/compiler-coverage/report/compiler-coverage.json \
+  --host-log build/NEW-CHECKPOINT/mir-host/Testing/Temporary/LastTest.log \
+  --mutations build/NEW-CHECKPOINT/compiler-mutations/results.json \
+  --previous-mutations build/mir-proof-suite-20261002-195051-1893381/compiler-mutations/results.json \
+  --output build/memory-rewrite-proof/final-evidence.json
+```
+
+Every frozen feasible guard requires both positive outcome counts; excluded
+defensive or structurally unreachable paths remain explicitly classified.
+Pass-tail cache invalidation removed alone is masked by subsequent pipeline
+invalidation and is not claimed as a killed mutant. Do not merge compiler-mutant
+profiles into healthy coverage or alter historical checkpoint evidence.
+
+### Completed memory checkpoint: 2026-10-03
+
+`build/mir-proof-suite-20261003-030338-2930764/` completed all 11 integrated
+phases in 3h 53m 36s. The frozen audit confirms 71 cases, both outcomes of all
+30 mandatory feasible guards, one passing compiler baseline, and 41 killed
+mutants (28 retained plus 13 new), with no survivors or invalid results. Normal
+and sanitized host tests, debugger-host tests, 180 script tests, both strict
+release modes, and all prior proof workloads passed. All 10,080 previous
+clobber leaves remain present; only the 12 memory-rewrite leaves were added.
+
+| Scope | Source functions | Branch outcomes before / after |
+| --- | ---: | ---: |
+| Whole compiler | **5,168/5,168** | 115,848 / 115,898 of 170,672 |
+| Selected production AST/MIR | **4,638/4,638** | 107,287 / 107,337 of 159,346 |
+
+All 179 classifications and the independent source-function inventory are
+unchanged. Compiler sources and checked baselines matched all 585 protected
+hashes; both stack/no-stack migration censuses had zero changed apps/selections.
+No production compiler defect reproduced, so no production compiler changes
+were made. Dominated-load coverage advanced from 78/96 to 86/96 outcomes, endian
+combining from 31/42 to 39/42, and byte recognition from 18/42 to 38/42. These
+are bounded proof improvements, not claims of exhaustive semantic coverage.
+
+Report-only regeneration preserved profiles, provenance, JSON/native evidence
+and inventories. Of 835 captured hashes, 782 matched byte-for-byte and the
+remaining 53 HTML files differed only in LLVM's `Created:` timestamp, verified
+against the original hashes after normalizing that one header.
+
+Final review corrected one harness-only validation gap: `MirExpectations` now
+validates even when `DebugModes` is absent. Supplemental loader regressions,
+all 12 memory target modes and the identical full 10,092-leaf inventory passed.
+The original two affected harness files are retained under
+`build/memory-rewrite-proof/final-campaign-inputs/`; the completed checkpoint
+was not repinned or recollected. Current-checkout reuse of that frozen profile
+correctly rejects these two input changes. Its compiler/host graph sources,
+binaries, manifests and profiles remain unchanged. See
+`final-evidence.json`, `branch-delta.json`, `report-identity.json` and
+`supplemental-loader-validation.json` in the proof workspace.
+
 ## October 1 bounded structural-proof checkpoint
 
 Merged-main base: `1dc57abd`; final integrated compiler: `548964f9`.

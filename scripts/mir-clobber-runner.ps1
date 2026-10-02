@@ -23,7 +23,7 @@ function Import-MirClobberCases(
     )
     $boolProperties = @("RequireExact", "RequireRejected", "OddUpperRuntime")
     $allowed = $stringProperties + $arrayProperties + $boolProperties +
-        @("Exit", "StackBytes", "StackModes")
+        @("Exit", "StackBytes", "StackModes", "MirExpectations")
     $definitions = [System.Collections.Generic.List[object]]::new()
     if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
         return
@@ -108,6 +108,9 @@ function Import-MirClobberCases(
                     throw "DebugModes must contain distinct 'true' or 'lines' values: $file"
                 }
             }
+            if ($definition.Contains("MirExpectations")) {
+                Assert-MirAccessExpectations $definition.MirExpectations
+            }
             if (($definition.RequireExact -or $definition.RequireRejected) -and
                 (-not $definition.ExactTemplate -or -not $definition.ExactFunction)) {
                 throw "Exact assertions require ExactTemplate and ExactFunction: $file"
@@ -149,6 +152,107 @@ function Import-MirClobberCases(
             throw "MIR clobber Group collides with case name '$($definition.Group)'"
         }
         $definition
+    }
+}
+
+function Assert-MirAccessExpectations($Expectations) {
+    if ($Expectations -isnot [array] -or $Expectations.Count -eq 0) {
+        throw "MirExpectations must be a nonempty array"
+    }
+    $names = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($expectation in $Expectations) {
+        if ($expectation -isnot [System.Collections.IDictionary] -or
+            @($expectation.Keys | Where-Object {
+                $_ -cnotin @("Function", "Loads", "Volatile", "Width", "ByteVolatile",
+                            "Opcode", "FullDebugLoads", "FullDebugWidth")
+            }).Count) {
+            throw "Invalid MIR access expectation"
+        }
+        if (-not $expectation.Contains("Function") -or
+            $expectation.Function -isnot [string] -or
+            $expectation.Function -cnotmatch '^[A-Za-z_][A-Za-z0-9_]*$' -or
+            -not $names.Add($expectation.Function)) {
+            throw "Invalid or duplicate MIR access function"
+        }
+        foreach ($key in @("Loads", "Volatile", "Width", "ByteVolatile",
+                          "FullDebugLoads", "FullDebugWidth")) {
+            if (-not $expectation.Contains($key)) {
+                if ($key -in @("Loads", "Volatile")) { throw "Missing MIR access $key" }
+                continue
+            }
+            $value = $expectation[$key]
+            if (($value -isnot [int] -and $value -isnot [long]) -or
+                $value -lt 0 -or $value -gt [int]::MaxValue -or
+                ($key -in @("Width", "FullDebugWidth") -and $value -eq 0)) {
+                throw "Invalid MIR access $key"
+            }
+        }
+        if ($expectation.Volatile -gt $expectation.Loads -or
+            ($expectation.Contains("FullDebugLoads") -and
+             $expectation.Volatile -gt $expectation.FullDebugLoads) -or
+            ($expectation.Contains("ByteVolatile") -and
+             $expectation.ByteVolatile -gt $expectation.Volatile) -or
+            ($expectation.Contains("Opcode") -and
+             $expectation.Opcode -cnotin @("loadind", "storeind"))) {
+            throw "Inconsistent MIR access expectation"
+        }
+    }
+}
+
+function Assert-MirAccessEvidence(
+    [string]$Output, [array]$Expectations, [string]$DebugMode = ""
+) {
+    Assert-MirAccessExpectations $Expectations
+    foreach ($expectation in $Expectations) {
+        $function = [regex]::Escape($expectation.Function)
+        $bodies = [regex]::Matches($Output,
+            "(?ms)^; MIR function=$function [^\r\n]*\r?`n" +
+            "(?:(?!^; MIR function=).)*?^; MIR summary function=$function ")
+        if ($bodies.Count -ne 1) {
+            throw "Missing or duplicate MIR access evidence for $($expectation.Function)"
+        }
+        $body = $bodies[0].Value
+        $expectedLoads = if ($DebugMode -eq "true" -and
+            $expectation.Contains("FullDebugLoads")) {
+            $expectation.FullDebugLoads
+        } else { $expectation.Loads }
+        $expectedWidth = if ($DebugMode -eq "true" -and
+            $expectation.Contains("FullDebugWidth")) {
+            $expectation.FullDebugWidth
+        } else { $expectation.Width }
+        $opcode = if ($expectation.Opcode) { $expectation.Opcode } else { "loadind" }
+        $loads = [regex]::Matches($body, "\b$opcode\b")
+        $volatile = [regex]::Matches($body, "\b$opcode\b[^\r\n]*\bmem=\d+v\b").Count
+        if ($loads.Count -ne $expectedLoads -or
+            $volatile -ne $expectation.Volatile) {
+            throw "$($expectation.Function) has incorrect MIR access counts/flags:`n$body"
+        }
+        if ($expectedWidth -and
+            [regex]::Matches($body,
+                "\b$opcode\b[^\r\n]*\bmem=$($expectedWidth)v?\b").Count -ne $loads.Count) {
+            throw "$($expectation.Function) has incorrect MIR access width:`n$body"
+        }
+        if ($expectation.Contains("ByteVolatile") -and
+            [regex]::Matches($body, "\b$opcode\b[^\r\n]*\bmem=1v\b").Count -ne
+                $expectation.ByteVolatile) {
+            throw "$($expectation.Function) has incorrect pointer-level volatility:`n$body"
+        }
+    }
+}
+
+function Assert-MirTargetResult(
+    $Result, [string]$Name, [string]$Configuration,
+    [int]$ExpectedExit, [string[]]$Expected
+) {
+    if ($Result.TimedOut -or $Result.ExitCode -ne $ExpectedExit) {
+        throw "$Name exited $($Result.ExitCode), expected $ExpectedExit " +
+            "($Configuration), timedOut=$($Result.TimedOut):`n$($Result.Output)"
+    }
+    foreach ($text in $Expected) {
+        if (-not $Result.Output.Contains($text)) {
+            throw "$Name did not emit '$text' ($Configuration):`n$($Result.Output)"
+        }
     }
 }
 

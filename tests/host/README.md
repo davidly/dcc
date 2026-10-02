@@ -45,6 +45,44 @@ retain their meaning. See [compiler coverage](../../docs/compiler-coverage.md)
 for artifact names, configuration-aware inventory checks, and immutable
 checkpoint/report-only provenance.
 
+## Live memory rewrite proofs
+
+The existing verifier contains 36 dominated-load and 35 little-endian cases,
+all invoked through `mir_verify_and_dump`, not newly exposed static helpers.
+Original CFG dominance is checked independently before rewriting. Assertions
+cover positive reuse, profitability boundaries, alternate predecessors,
+one-path stores/calls, backedge writes, every memory barrier opcode, qualifiers
+and PHIs, address/type/width/bitfield differences, shared uses, and bounded
+address trees. Final load identities, access metadata, retired definitions and
+uses, still-live subtrees, and idempotence are checked under the real cache
+verifier across fresh functions.
+
+Thirteen dedicated isolated compiler mutants challenge barriers, path stability,
+access types/widths/bitfields, inherited volatility, address equality, adjacency,
+shift count, low-load/conversion uses, shared-tree retirement, and byte signedness.
+They supplement, rather than replace, the previous 28 mutants. The runner's
+optional `-Names` selector always includes the healthy baseline; default runs
+still execute the entire registry. A removed pass-tail invalidation alone is
+masked by the next pipeline invalidation, so it is not advertised as a killed
+cache mutant.
+
+`tests/mir-clobber/memproof.c` supplies defined two-byte target oracles with
+asymmetric `0x00`, `0x7f`, `0x80`, and `0xff` data, explicit arithmetic expectations,
+alias/join/backedge writes and inherited volatility. The `memory-rewrite`
+clobber group checks exact function-scoped access evidence in all 12
+release/full-debug/line-debug, stack/no-stack, peep/nopeep configurations.
+Full `-g` intentionally retains named parameter loads and therefore has explicit
+uncombined/unreused expectations; release and `-gline` retain their optimizations.
+No forced generic emitter is treated as an independent rewrite oracle.
+
+Generated frozen inventories and evidence stay under
+`build/memory-rewrite-proof/`. `scripts/audit-mir-memory-proof.py` checks the
+named healthy cases, both outcomes of every frozen feasible guard, the intact
+old/new mutant inventory, and each new mutant's exact failing case and clean
+assertion exit. Missing/wrong-function evidence, duplicate cases, survivors,
+invalid results, or missing outcomes fail closed; raw branch percentages are
+not acceptance criteria.
+
 For Clang/GCC sanitizer coverage, configure with
 `-DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer'` and run
 CTest with `ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1`.

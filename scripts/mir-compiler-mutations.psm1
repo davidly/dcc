@@ -50,6 +50,84 @@ function Get-MirCompilerMutations {
             MatcherReject = "large-writes"
             ExpectedFailure =
                 "FAIL allocation matcher accepted mutated store width"
+        },
+        @{
+            Name = "memory-dominated-barrier"
+            Before = "static int mir_dominated_load_memory_barrier(const struct MirInsn *insn)`n{`n    switch (insn->opcode) {"
+            After = "static int mir_dominated_load_memory_barrier(const struct MirInsn *insn)`n{`n    (void)insn;`n    switch (MIR_NOP) {"
+            ExpectedFailure = "FAIL memory rewrite dom-path-store"
+        },
+        @{
+            Name = "memory-dominated-path"
+            Before = "    memset(visited, 0, (size_t)mir.count);`n    worklist[work_count++] = instruction;"
+            After = "    return 1;`n    memset(visited, 0, (size_t)mir.count);`n    worklist[work_count++] = instruction;"
+            ExpectedFailure = "FAIL memory rewrite dom-bypass"
+        },
+        @{
+            Name = "memory-dominated-type"
+            Before = "                next->type != first->type ||`n                next->memory_size != first->memory_size ||`n                !mir_dominated_load_pure_value_equal("
+            After = "                0 && next->type != first->type ||`n                next->memory_size != first->memory_size ||`n                !mir_dominated_load_pure_value_equal("
+            ExpectedFailure = "FAIL memory rewrite dom-type"
+        },
+        @{
+            Name = "memory-dominated-width"
+            Before = "                next->memory_size != first->memory_size ||`n                !mir_dominated_load_pure_value_equal(`n                    first->src1, next->src1, 0) ||"
+            After = "                0 && next->memory_size != first->memory_size ||`n                !mir_dominated_load_pure_value_equal(`n                    first->src1, next->src1, 0) ||"
+            ExpectedFailure = "FAIL memory rewrite dom-width"
+        },
+        @{
+            Name = "memory-dominated-bitfield"
+            Before = "            struct MirInsn *next = &mir.insns[instruction];`n            int address;`n`n            if (next->opcode != MIR_LOAD_INDIRECT ||`n                next->memory_flags != 0 || next->bit_width != 0 ||"
+            After = "            struct MirInsn *next = &mir.insns[instruction];`n            int address;`n`n            if (next->opcode != MIR_LOAD_INDIRECT ||`n                next->memory_flags != 0 || 0 && next->bit_width != 0 ||"
+            ExpectedFailure = "FAIL memory rewrite dom-bitfield"
+        },
+        @{
+            Name = "memory-inherited-volatility"
+            Before = "return (mir_pointer_volatile_mask(value, depth) & 1U) != 0;"
+            After = "return (mir_pointer_volatile_mask(value, depth) & 0U) != 0;"
+            ExpectedFailure = "FAIL memory rewrite dom-inherited-volatile"
+        },
+        @{
+            Name = "memory-address-equality"
+            Before = "    if (left_value == right_value)"
+            After = "    if (1 || left_value == right_value)"
+            ExpectedFailure = "FAIL memory rewrite dom-base"
+        },
+        @{
+            Name = "memory-endian-adjacency"
+            Before = "           high_index->immediate == low_index->immediate + 1;"
+            After = "           1;"
+            ExpectedFailure = "FAIL memory rewrite end-nonadjacent"
+        },
+        @{
+            Name = "memory-endian-shift"
+            Before = "            shift_amount->immediate != 8 ||"
+            After = "            0 && shift_amount->immediate != 8 ||"
+            ExpectedFailure = "FAIL memory rewrite end-shift-seven"
+        },
+        @{
+            Name = "memory-endian-low-use"
+            Before = "            mir_value_use_count(low_load->dst) != 1 ||"
+            After = "            0 && mir_value_use_count(low_load->dst) != 1 ||"
+            ExpectedFailure = "FAIL memory rewrite end-low-extra-use"
+        },
+        @{
+            Name = "memory-endian-conversion-use"
+            Before = "            mir_value_use_count(low_conversion->dst) != 1 ||"
+            After = "            0 && mir_value_use_count(low_conversion->dst) != 1 ||"
+            ExpectedFailure = "FAIL memory rewrite end-conversion-extra-use"
+        },
+        @{
+            Name = "memory-endian-retirement"
+            Before = "static void mir_retire_dead_endian_tree(int value)`n{`n    struct MirInsn *definition;`n    int src1;`n    int src2;`n`n    if (value < 0 || mir_value_use_count(value) != 0)"
+            After = "static void mir_retire_dead_endian_tree(int value)`n{`n    struct MirInsn *definition;`n    int src1;`n    int src2;`n`n    if (value < 0)"
+            ExpectedFailure = "FAIL memory rewrite end-high-shared"
+        },
+        @{
+            Name = "memory-endian-signed-byte"
+            Before = "        (!explicit_byte_conversion && (load->type & TYPE_UNSIGNED) == 0))"
+            After = "        (0 && !explicit_byte_conversion && (load->type & TYPE_UNSIGNED) == 0))"
+            ExpectedFailure = "FAIL memory rewrite end-low-signed"
         }
     )
 }

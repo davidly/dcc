@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "memrewrite",
+    "Group": "memory-rewrite",
+    "Sources": ["tests/mir-clobber/memproof.c"],
+    "Expected": ["MIR memory rewrites checks=33 failures=0"],
+    "Exit": 0,
+    "DebugModes": ["true", "lines"],
+    "MirExpectations": [
+      {"Function": "mword", "Loads": 1, "Volatile": 0, "Width": 2, "FullDebugLoads": 2, "FullDebugWidth": 1},
+      {"Function": "mcast", "Loads": 1, "Volatile": 0, "Width": 2, "FullDebugLoads": 2, "FullDebugWidth": 1},
+      {"Function": "mshare", "Loads": 2, "Volatile": 0, "Width": 1},
+      {"Function": "mhigh", "Loads": 2, "Volatile": 0, "Width": 1},
+      {"Function": "mseven", "Loads": 2, "Volatile": 0, "Width": 1},
+      {"Function": "msign", "Loads": 2, "Volatile": 0, "Width": 1},
+      {"Function": "mrepeat", "Loads": 1, "Volatile": 0, "Width": 1, "FullDebugLoads": 3},
+      {"Function": "mstore", "Loads": 3, "Volatile": 0, "Width": 1},
+      {"Function": "mjoin", "Loads": 3, "Volatile": 0, "Width": 1},
+      {"Function": "mloop", "Loads": 5, "Volatile": 0, "Width": 1},
+      {"Function": "mvolatile", "Loads": 6, "Volatile": 3, "ByteVolatile": 3}
+    ]
+  }
+]

@@ -4,7 +4,8 @@ param(
     [ValidateRange(1, 1024)][int]$Jobs = 1,
     [ValidateRange(1, 1024)][int]$BuildJobs = 2,
     # Overall worker deadline, including startup, builds, tests, and pipe drain.
-    [ValidateRange(1, 86400)][int]$WorkerTimeout = 2100
+    [ValidateRange(1, 86400)][int]$WorkerTimeout = 2100,
+    [string[]]$Names = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +19,15 @@ $lock = [System.IO.File]::Open(
     [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
 $workspace = Join-Path $output ("work-" + [guid]::NewGuid())
 $cases = @(Get-MirCompilerMutations)
+if ($Names.Count) {
+    $Names = @($Names -split ',' | Select-Object -Unique)
+    foreach ($name in $Names) {
+        if ($name -cnotin $cases.Name) { throw "Unknown compiler mutation: $name" }
+    }
+    $cases = @($cases | Where-Object {
+        $_.Name -eq "baseline" -or $_.Name -cin $Names
+    })
+}
 $results = @($cases | ForEach-Object {
     [pscustomobject][ordered]@{
         mutation = $_.Name; outcome = "invalid"; phase = "not-run"

@@ -45,6 +45,7 @@ try {
         RequiredSelector = "spilled-scalar-cfg"; RequiredCandidate = "spilled-all"
         AssemblyPatterns = @("required"); ForbiddenAssemblyPatterns = @("forbidden")
         OddUpperRuntime = $false
+        MirExpectations = @(@{Function="main"; Loads=1; Volatile=0; Width=1})
     }
     Write-Campaign @($definition)
     $loaded = @(Import-MirClobberCases (Split-Path $campaign) $root @("existing"))
@@ -95,6 +96,19 @@ try {
         Import-MirClobberCases (Split-Path $campaign) $root @()
     } "Duplicate"
     Write-Campaign @($definition)
+    $noDebug = $definition.Clone()
+    $noDebug.Remove("DebugModes")
+    $noDebug.MirExpectations = @()
+    Write-Campaign @($noDebug)
+    Assert-Throws {
+        Import-MirClobberCases (Split-Path $campaign) $root @()
+    } "nonempty"
+    $noDebug.MirExpectations = @(@{Function="main"; Loads=1; Volatile=0; Width=1})
+    Write-Campaign @($noDebug)
+    Assert-True (
+        @(Import-MirClobberCases (Split-Path $campaign) $root @()).Count -eq 1
+    ) "Valid non-debug MIR access expectations rejected"
+    Write-Campaign @($definition)
 
     Assert-MirClobberManifest @("a", "b") @("b", "a")
     Assert-MirClobberManifest @() @()
@@ -103,6 +117,60 @@ try {
     Assert-Throws { Assert-MirClobberManifest @("a", "b") @("a") } "missing"
     Assert-Throws { Assert-MirClobberManifest @("a", "b") @("a", "c") } "unexpected"
     Assert-Throws { Get-MirClobberShard @("a") 2 2 } "Invalid"
+    $access = @(@{Function="memory"; Loads=1; Volatile=1; Width=1; ByteVolatile=1})
+    $evidence = "; MIR function=memory purpose=final`n" +
+        "; 1 loadind v1 mem=1v`n; MIR summary function=memory insns=2`n"
+    Assert-MirAccessEvidence $evidence $access
+    $debugAccess = @(@{
+        Function="memory"; Loads=1; Volatile=1; Width=1;
+        FullDebugLoads=2; FullDebugWidth=2
+    })
+    $debugEvidence = "; MIR function=memory purpose=final`n" +
+        "; 1 loadind v1 mem=2v`n; 2 loadind v2 mem=2`n" +
+        "; MIR summary function=memory insns=3`n"
+    Assert-MirAccessEvidence $debugEvidence $debugAccess "true"
+    Assert-MirAccessEvidence $evidence $debugAccess "lines"
+    Assert-Throws {
+        Assert-MirAccessEvidence $debugEvidence $debugAccess "lines"
+    } "incorrect MIR access"
+    foreach ($bad in @(
+        "", $evidence.Replace("function=memory", "function=memory_other"),
+        $evidence.Replace("mem=1v", "mem=2v"),
+        $evidence.Replace("mem=1v", "mem=1"),
+        ($evidence + $evidence),
+        $evidence.Replace("; MIR summary function=memory", "; MIR summary function=other"),
+        $evidence.Replace("; 1 loadind", "; MIR function=other purpose=final`n; 1 loadind")
+    )) {
+        Assert-Throws { Assert-MirAccessEvidence $bad $access } "."
+    }
+    foreach ($bad in @(
+        @(), @(@{Function="memory"; Loads=1}),
+        @(@{Function="memory"; Loads=1; Volatile=2}),
+        @(@{Function="memory"; Loads=1; Volatile=0; Width=0}),
+        @(@{Function="memory.*"; Loads=1; Volatile=0}),
+        @(@{Function="memory"; Loads=1; Volatile=0; Unknown=1}),
+        @($access[0], $access[0])
+    )) {
+        Assert-Throws { Assert-MirAccessExpectations $bad } "."
+    }
+    Assert-MirTargetResult ([pscustomobject]@{
+        TimedOut=$false; ExitCode=0; Output="correct"
+    }) "memory" "release" 0 @("correct")
+    Assert-Throws {
+        Assert-MirTargetResult ([pscustomobject]@{
+            TimedOut=$false; ExitCode=0; Output="expected failure"
+        }) "memory" "release" 1 @("expected failure")
+    } "exited 0, expected 1"
+    Assert-Throws {
+        Assert-MirTargetResult ([pscustomobject]@{
+            TimedOut=$true; ExitCode=0; Output="correct"
+        }) "memory" "release" 0 @("correct")
+    } "timedOut=True"
+    Assert-Throws {
+        Assert-MirTargetResult ([pscustomobject]@{
+            TimedOut=$false; ExitCode=0; Output="wrong"
+        }) "memory" "release" 0 @("correct")
+    } "did not emit"
     $plan = [System.Collections.Generic.Dictionary[string, object]]::new()
     $parameters = @{Name = "example"; StackBytes = 1024}
     Add-MirClobberExecution $plan "example|nostack-peep" "Assert-RunCase" $parameters @()
