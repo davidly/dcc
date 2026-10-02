@@ -189,8 +189,11 @@ selector establishes a complete generated incumbent from the rollout or general
 CFG candidates, then `mir-v1` may compare that incumbent with homed,
 lazy-parameter, hybrid, regional, and spilled variants. The policy compares
 only generated MIR candidates.
-`DCC_MIR_REQUIRE_COMPLETE=1` and `DCC_MIR_REQUIRE_EMIT=1` are the strict
-semantic and generated-output boundaries.
+AST construction, MIR verification, and generated-only body emission are
+unconditional. `DCC_MIR_REQUIRE_COMPLETE=1` and `DCC_MIR_REQUIRE_EMIT=1` request
+strict completeness and emission-failure diagnostics for proof campaigns;
+they do not enable an otherwise optional backend. `DCC_AST_DUMP=1` and
+`DCC_MIR_REPORT=1` dump the active intermediate representations to stderr.
 
 Proofs are deliberately conservative. Unknown, recursive, cyclic, volatile,
 aliased, or unsupported shapes decline an optimization, not MIR emission.

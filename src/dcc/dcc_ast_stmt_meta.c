@@ -509,7 +509,7 @@ int ast_process_statement(void)
     if (n != NULL && ast_stmt_supported(n)) {
         g_func_pass.for_seq = sv_for_seq;
         g_func_pass.block_seq = sv_block_seq;
-        if (g_ast_build_enabled == 2)
+        if (g_ast_dump_enabled)
             ast_dump(n, 0);
         mir_capture_stmt(n);
         ast_process_stmt_metadata(n);

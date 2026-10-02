@@ -28,9 +28,7 @@ $tempRoot = Join-Path $repoRoot (
 $environmentNames = @(
     "DCC_MIR_COST_REPORT",
     "DCC_MIR_CACHE_VERIFY",
-    "DCC_MIR_CANDIDATES",
     "DCC_MIR_EMIT_FUNCTION",
-    "DCC_MIR_GENERAL_CANDIDATES",
     "DCC_MIR_MACHINE_REPORT",
     "DCC_MIR_MACHINE_FUNCTION",
     "DCC_MIR_MACHINE_TEMPLATE",
@@ -269,15 +267,9 @@ __ctu:
     $savedSelectReportFunction =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_SELECT_REPORT_FUNCTION", "Process")
-    $savedCandidates =
-        [Environment]::GetEnvironmentVariable(
-            "DCC_MIR_CANDIDATES", "Process")
     $savedEmitFunction =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_EMIT_FUNCTION", "Process")
-    $savedGeneralCandidates =
-        [Environment]::GetEnvironmentVariable(
-            "DCC_MIR_GENERAL_CANDIDATES", "Process")
     $savedGeneralFunction =
         [Environment]::GetEnvironmentVariable(
             "DCC_MIR_GENERAL_FUNCTION", "Process")
@@ -315,8 +307,6 @@ __ctu:
         })
     Set-ProcessEnvironment "DCC_MIR_REPORT" $null
     Set-ProcessEnvironment "DCC_MIR_FUNCTION" $null
-    Set-ProcessEnvironment "DCC_MIR_CANDIDATES" $null
-    Set-ProcessEnvironment "DCC_MIR_GENERAL_CANDIDATES" $null
     if ($RequiredSelector -ne "specialized") {
         Set-ProcessEnvironment "DCC_MIR_EMIT_FUNCTION" $null
     }
@@ -338,10 +328,7 @@ __ctu:
         Set-ProcessEnvironment "DCC_MIR_COST_REPORT" $savedCostReport
         Set-ProcessEnvironment "DCC_MIR_REPORT" $savedMirReport
         Set-ProcessEnvironment "DCC_MIR_FUNCTION" $savedMirFunction
-        Set-ProcessEnvironment "DCC_MIR_CANDIDATES" $savedCandidates
         Set-ProcessEnvironment "DCC_MIR_EMIT_FUNCTION" $savedEmitFunction
-        Set-ProcessEnvironment "DCC_MIR_GENERAL_CANDIDATES" `
-            $savedGeneralCandidates
         Set-ProcessEnvironment "DCC_MIR_GENERAL_FUNCTION" `
             $savedGeneralFunction
         Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $savedSelectFunction

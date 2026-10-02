@@ -330,10 +330,10 @@ char *ast_arena_memdup(struct AstArena *ar, const char *s, int len);
 /* ------------------------------------------------------------------------- *
  * AST builder + debug dump.
  *
- * ast_build_init() enables AST construction by default.  DCC_AST_BUILD=2 dumps
- * built trees to stderr for debugging.
+ * AST construction is unconditional. DCC_AST_DUMP=1 dumps built trees to
+ * stderr for debugging.
  * ------------------------------------------------------------------------- */
-extern int g_ast_build_enabled;     /* 0 internal suppress, 1 build, 2 dump  */
+extern int g_ast_dump_enabled;
 extern struct AstArena g_ast_arena; /* shared function-local build arena      */
 extern struct AstArena g_ast_init_arena; /* isolated decl-initializer arena   */
 extern struct AstArena g_ast_inline_arena; /* persistent inline function arena */

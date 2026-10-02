@@ -76,8 +76,16 @@ or discard stream remains.
 
 Two stderr-only debugging knobs are available: `DCC_AST_REPORT=1` logs the
 `; AST-unsupported ...` statement/initializer that a support gate declined (it
-prints just before the `unsupported AST statement` fatal), and `DCC_AST_BUILD=2`
+prints just before the `unsupported AST statement` fatal), and `DCC_AST_DUMP=1`
 dumps each built AST tree before it is lowered. Neither affects codegen.
+
+AST construction and verified MIR emission are unconditional. The retired
+`DCC_AST_BUILD`, `DCC_MIR_CANDIDATES`, and `DCC_MIR_GENERAL_CANDIDATES` controls
+are no longer read; use `DCC_AST_DUMP` for AST dumps and `DCC_MIR_REPORT` for
+MIR dumps. Active selector-isolation, cost-policy, cache-verification, and
+mutation controls remain available for backend diagnosis and proof campaigns.
+`DCC_MIR_REQUIRE_COMPLETE` and `DCC_MIR_REQUIRE_EMIT` retain their stricter
+failure diagnostics; they are not required to enable the production pipeline.
 
 Local declarations remain captured lexer spans, but explicit scan/replay APIs
 now own their frame and initializer side effects. Production function assembly

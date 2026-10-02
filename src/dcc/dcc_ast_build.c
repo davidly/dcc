@@ -22,7 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-int g_ast_build_enabled = 1;
+int g_ast_dump_enabled;
 struct AstArena g_ast_arena;
 
 /* Separate arena for declaration-initializer expressions.  Kept distinct from
@@ -1600,8 +1600,7 @@ struct AstNode *ast_build_stmt(struct AstArena *ar)
  * ------------------------------------------------------------------------- */
 void ast_build_init(void)
 {
-    const char *e = getenv("DCC_AST_BUILD");
-    g_ast_build_enabled = (e != NULL && e[0] == '2') ? 2 : 1;
+    g_ast_dump_enabled = getenv("DCC_AST_DUMP") != NULL;
 
     ast_arena_init(&g_ast_arena);
     ast_arena_init(&g_ast_init_arena);

@@ -4355,11 +4355,8 @@ void mir_begin_function(const char *name, const char *assembly_name,
     mir.init_expression_target = NULL;
     mir.vla_target = NULL;
     mir.sink_purpose = sink_purpose;
-    mir.emit_mode = 1;
     mir.report_mode = getenv("DCC_MIR_REPORT") != NULL ||
                       getenv("DCC_MIR_FUNCTION") != NULL ||
-                      getenv("DCC_MIR_CANDIDATES") != NULL ||
-                      getenv("DCC_MIR_GENERAL_CANDIDATES") != NULL ||
                       getenv("DCC_MIR_EMIT_FUNCTION") != NULL ||
                       getenv("DCC_MIR_GENERAL_FUNCTION") != NULL;
     mir.return_type = current_return_type != 0 ? current_return_type

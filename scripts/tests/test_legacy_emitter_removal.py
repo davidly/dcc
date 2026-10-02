@@ -34,7 +34,7 @@ OBSOLETE_FRONTEND_NAMES = {
     "emit_init_auto_struct_array_from_list", "emit_init_auto_array_scalar",
     "emit_init_auto_array_level", "emit_init_auto_array_from_list", "emit_vla_alloc",
     "xstrdup2", "append_global_zero_bytes", "append_global_char_array_string",
-    "parse_global_init_type",
+    "parse_global_init_type", "g_ast_build_enabled", "emit_mode",
 }
 REMOVED_APIS = {
     "gen_expr", "gen_expr_no_comma", "gen_unary", "gen_binop", "gen_binop_typed",
@@ -103,6 +103,20 @@ class LegacyEmitterRemovalTests(unittest.TestCase):
                 self.assertTrue((COMPILER / new).is_file())
                 self.assertNotIn(old, cmake)
                 self.assertIn(new, cmake)
+
+    def test_retired_rollout_controls_are_not_read(self):
+        controls = set()
+        for source in sorted(COMPILER.glob("*.c")):
+            controls.update(re.findall(
+                r'\bgetenv\s*\(\s*"([^"]+)"\s*\)', source.read_text()))
+        self.assertFalse(controls & {
+            "DCC_AST_BUILD", "DCC_MIR_CANDIDATES",
+            "DCC_MIR_GENERAL_CANDIDATES",
+        })
+        self.assertTrue({
+            "DCC_AST_DUMP", "DCC_MIR_REPORT",
+            "DCC_MIR_REQUIRE_COMPLETE", "DCC_MIR_REQUIRE_EMIT",
+        } <= controls)
 
     def test_declaration_and_expression_frontend_cannot_write_assembly(self):
         for name in ("dcc_decl.c", "dcc_expr.c", "dcc_fold.c"):

@@ -64,19 +64,23 @@ python3 scripts/audit-c-module-exports.py src/dcc/module.c \
 
 | Control | Purpose |
 | --- | --- |
+| `DCC_AST_DUMP=1` | Dump built AST trees without changing compilation |
 | `DCC_MIR_SELECT_REPORT=1` | Selected emitter, reason, bytes, instructions, blocks, hash |
 | `DCC_MIR_REPORT=1` | Dump every MIR function, liveness, and allocation |
 | `DCC_MIR_FUNCTION=name` | Enable named MIR diagnostics; filter stderr by function |
 | `DCC_MIR_COVERAGE=1` | Report remaining opaque lowering |
 | `DCC_MIR_REQUIRE_COMPLETE=1` | Reject incomplete semantic MIR |
-| `DCC_MIR_REQUIRE_EMIT=1` | Reject any non-generated body |
+| `DCC_MIR_REQUIRE_EMIT=1` | Detailed diagnostics when required MIR emission fails |
 | `DCC_MIR_SELECT_FUNCTION=name` | Restrict a candidate comparison |
 | `DCC_MIR_SELECT_CANDIDATE=name` | Select a named generated candidate |
 | `DCC_MIR_EMIT_FUNCTION=name` | Diagnostic specialized-emitter isolation |
 | `DCC_MIR_GENERAL_FUNCTION=name` | Diagnostic general-emitter isolation |
 | `DCC_MIR_COST_POLICY=mir-v1-report` | Report alternatives without selecting them |
 
-Do not document or revive removed forced-legacy controls.
+AST construction and verified MIR body emission are unconditional. The strict
+flags remain proof diagnostics, not backend enable switches. Do not revive
+removed forced-legacy controls or the retired `DCC_AST_BUILD`,
+`DCC_MIR_CANDIDATES`, and `DCC_MIR_GENERAL_CANDIDATES` rollout switches.
 
 ## Snapshot and compare
 
