@@ -20,7 +20,7 @@ expect_failure()
 }
 
 sh "$repo_root/scripts/coverage-sources.sh" >"$workspace/sources"
-if grep -E 'dcc_ast_gen|dcc_mir_(schedule|target)\.c' "$workspace/sources"; then
+if grep -E 'dcc_ast_(capture|classify|stmt_classify|support)\.c|dcc_mir_(schedule|target)\.c' "$workspace/sources"; then
     echo "FAIL: excluded modules entered active coverage" >&2
     exit 1
 fi

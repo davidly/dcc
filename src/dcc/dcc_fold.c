@@ -9,7 +9,7 @@
  *
  * @par Key entry points
  * try_parse_const_expr_value(), try_parse_integer_const_expr_value(),
- * cf_parse_cond(), cf_convert_to_type(), and emit_const_value().
+ * cf_parse_cond() and cf_convert_to_type().
  *
  * @par Boundary
  * dcc_constexpr.c applies declaration-specific validity and range rules.
@@ -766,26 +766,3 @@ int try_parse_integer_const_expr_value(struct ConstVal *out)
     cf_ice_invalid = saved_invalid;
     return parsed;
 }
-
-void emit_const_value(struct ConstVal v)
-{
-    cf_cast_to_type(&v, v.type);
-    if (type_size(v.type) == 4) {
-        fprintf(g_emit_sink.stream, "\tld hl,%lu\n", v.u & 0xffffUL);
-        fprintf(g_emit_sink.stream, "\tld de,%lu\n", (v.u >> 16) & 0xffffUL);
-    } else if (type_size(v.type) == 1) {
-        unsigned long b = v.u & 0xffUL;
-        fprintf(g_emit_sink.stream, "\tld l,%lu\n", b);
-        if (v.type & TYPE_UNSIGNED)
-            emit("\tld h,0\n");
-        else if (b & 0x80UL)
-            emit("\tld h,255\n");
-        else
-            emit("\tld h,0\n");
-    } else {
-        fprintf(g_emit_sink.stream, "\tld hl,%lu\n", v.u & 0xffffUL);
-    }
-    g_expr.type = v.type;
-}
-
-

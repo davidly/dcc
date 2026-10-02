@@ -4249,6 +4249,5 @@ finish:
     free(mir.live_out);
     mir.live_in = NULL;
     mir.live_out = NULL;
-    mir.emit_mode = 0;
     mir.active = 0;
 }

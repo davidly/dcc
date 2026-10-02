@@ -1091,7 +1091,7 @@ static int mir_get_object(const struct Sym *sym, const char *name)
         }
     }
     if (index >= 0) {
-        /* #itmpN inline-call-argument slots (dcc_ast_gen_expr.c's
+        /* #itmpN inline-call-argument slots (dcc_ast_capture.c's
          * prepare_inline_arg_temps) are a fixed pool of names reused, with a
          * fresh type/offset stamped per call, across every unrelated
          * static-inline call site in the function. A real C identifier's
@@ -4355,11 +4355,8 @@ void mir_begin_function(const char *name, const char *assembly_name,
     mir.init_expression_target = NULL;
     mir.vla_target = NULL;
     mir.sink_purpose = sink_purpose;
-    mir.emit_mode = 1;
     mir.report_mode = getenv("DCC_MIR_REPORT") != NULL ||
                       getenv("DCC_MIR_FUNCTION") != NULL ||
-                      getenv("DCC_MIR_CANDIDATES") != NULL ||
-                      getenv("DCC_MIR_GENERAL_CANDIDATES") != NULL ||
                       getenv("DCC_MIR_EMIT_FUNCTION") != NULL ||
                       getenv("DCC_MIR_GENERAL_FUNCTION") != NULL;
     mir.return_type = current_return_type != 0 ? current_return_type
@@ -4457,7 +4454,7 @@ void mir_note_declared_symbol(struct Sym *symbol)
         /* Most re-declarations of an existing name are the same variable
          * seen again (e.g. every AST_IDENT for it) and keep the same type,
          * so this rarely trips - but #itmpN inline-call-argument slots
-         * (dcc_ast_gen_expr.c's prepare_inline_arg_temps) are a small pool
+         * (dcc_ast_capture.c's prepare_inline_arg_temps) are a small pool
          * of names *reused with a fresh type per call* across unrelated
          * static-inline call sites, and mir.declared_types[] only has room
          * for one type per name. Once a name is seen with more than one
@@ -7687,7 +7684,7 @@ void mir_resolve_deferred_metadata(void)
         int named_type;
         if (insn->name[0] == 0)
             continue;
-        /* #itmpN inline-call-argument slots (dcc_ast_gen_expr.c's
+        /* #itmpN inline-call-argument slots (dcc_ast_capture.c's
          * prepare_inline_arg_temps) are a fixed pool of 16 names reused,
          * with a fresh type stamped per call, across every unrelated
          * static-inline call site in the function - unlike a real C99

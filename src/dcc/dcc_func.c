@@ -102,11 +102,8 @@ static int inline_expr_is_simple(struct Sym *fn, const struct AstNode *n)
         /* Same hazard as TOK_INC/TOK_DEC just above, for the same reason:
          * substituted verbatim onto a parameter, the assignment target
          * would become the caller's argument EXPRESSION, not an lvalue
-         * ("3 = 0" for a call site like f(3)) - inline_param_index's own
-         * caller (gen_assign_ast, dcc_ast_gen_expr.c) then calls find_sym
-         * on whatever AST_IDENT node the substitution produced there,
-         * which is simply absent for a non-identifier expression,
-         * crashing on a NULL name. Found via a minimal repro: `static
+         * ("3 = 0" for a call site like f(3)), which is not a valid target
+         * for inline substitution. Found via a minimal repro: `static
          * inline int f(int cond,int idx){if(cond)idx=0;return idx+1;}` -
          * the existing guard-capture machinery (inline_return_expr_from_
          * seq's "side-effect-only guard" case, this file) explicitly
@@ -533,7 +530,7 @@ static void record_inline_function_if_simple(struct Sym *s)
      * so only accept it here when ret_expr already provably yields 0/1 on
      * its own (ast_expr_yields_bool01: a bool-typed subexpression, a 0/1
      * literal, `!`, a comparison, `&&`/`||`, or a cast to bool - the same
-     * proof dcc_ast_gen_expr.c already trusts elsewhere for an RHS being
+     * proof dcc_ast_capture.c already trusts elsewhere for an RHS being
      * stored into a bool). Anything else (e.g. `return some_int_expr;` used
      * where C's implicit bool conversion would normally truncate/canonicalize
      * it) is declined rather than risk splicing in a non-canonical value. */
@@ -646,7 +643,7 @@ static void record_narrow_return_expr_if_simple(struct Sym *s)
 /* Any other static function's body: buffer it too, so it can be dropped at
  * end-of-file if nothing in this translation unit ever calls it or uses its
  * address (see emit_needed_deferred_bodies / the deferred_body_needed
- * marking sites in dcc_ast_gen_expr.c and the global-initializer symbol
+ * marking sites in dcc_ast_capture.c and the global-initializer symbol
  * resolution in this file). `main` is excluded even though it is never
  * `static` in valid, idiomatic C: the CRT startup shim below calls it via a
  * raw fprintf'd `call` that bypasses the AST-based marking entirely, so a
@@ -684,7 +681,7 @@ static int inline_function_has_multiuse_param(struct Sym *s)
 
 /* Lexically scans a call's argument list (tok positioned just after the
  * opening '(') for anything that could make emit_inline_arg_temps
- * materialize a temp under dcc_ast_gen_expr.c's conservative argument rule,
+ * materialize a temp under dcc_ast_capture.c's conservative argument rule,
  * independent of whether the callee has a multi-use parameter - the
  * pre-existing case inline_function_has_multiuse_param covers. Only needs
  * to be a safe over-approximation, not exact: a false positive just
@@ -713,7 +710,7 @@ static int call_args_may_need_temps(void)
             /* Block locals are not in the symbol table during this lexical
              * pre-scan, so it cannot distinguish a private automatic from a
              * global, volatile, or address-taken object. Reserve on any
-             * identifier and let the AST emitter make the exact decision. */
+             * identifier and let AST metadata make the exact decision. */
             return 1;
         }
         next_token();
@@ -1108,7 +1105,7 @@ static int param_array_bound_has_side_effect(void)
     return side_effect;
 }
 
-static void emit_param_vla_bound_expressions(void)
+static void capture_param_vla_bound_expressions(void)
 {
     LexState body;
     int i;
@@ -1118,7 +1115,7 @@ static void emit_param_vla_bound_expressions(void)
     body = lex_save();
     for (i = 0; i < param_vla_bound_count; ++i) {
         lex_restore(&param_vla_bound_states[i]);
-        ast_emit_discarded_expr();
+        ast_capture_discarded_expr();
     }
     lex_restore(&body);
 }
@@ -1291,7 +1288,7 @@ void clear_parsed_prototype(void)
  * return, and a real prototype (rules out K&R old-style parameter lists,
  * which never populate proto_types). Call after copy_parsed_prototype_to_sym
  * so proto_nargs/proto_types/proto_variadic are current. See gen_fastcall_
- * user_call in dcc_ast_gen_expr.c for the matching HL/DE/BC codegen. */
+ * user_call in dcc_ast_capture.c for the matching HL/DE/BC codegen. */
 void validate_fastcall_prototype(struct Sym *s)
 {
     int i;
@@ -1803,7 +1800,7 @@ void begin_function_mir(const char *name, int local_bytes)
         strcmp(name, "main") == 0 &&
             (function_type & 15) == TYPE_INT &&
             type_ptr_depth(function_type) == 0);
-    emit_param_vla_bound_expressions();
+    capture_param_vla_bound_expressions();
     for (i = 0; i < g_frame.nlocals; ++i)
         if (locals[i].storage == SC_PARAM)
             emit_debug_variable(&locals[i]);
@@ -1918,7 +1915,7 @@ static int scan_compound_literal_if_present(void)
      * each reserves its own frame slot in source order. The codegen pass
      * re-parses this same initializer at emit time and allocates one frame
      * slot per nested compound literal (add_compound_literal_local, reached
-     * through ast_emit_init_expr for each non-constant field). Emit consumes
+     * through ast_capture_initializer_expr for each non-constant field). Emit consumes
      * the initializer tokens in source order, so a source-order recursive walk
      * here reserves exactly the same slots at the same offsets. Skipping the
      * body (the old behavior) under-reserved the frame: the prologue is sized
@@ -1931,7 +1928,7 @@ static int scan_compound_literal_if_present(void)
         if (depth >= 1 && g_lex.tok.kind == '(' && scan_compound_literal_if_present())
             continue;
         /* Non-constant fields are re-parsed at emit time through
-         * ast_emit_init_expr, whose AST build allocates a hidden temp for a
+         * ast_capture_initializer_expr, whose AST build allocates a hidden temp for a
          * struct-return call member base (`mk(...).f`); reserve the same
          * slot here so the scan-derived frame size matches. */
         if (depth >= 1 && g_lex.tok.kind == TOK_ID)
@@ -2264,7 +2261,7 @@ static void spec_parse_restore(const SpecParseState *s)
  * value ever stored into `name` is provably in [0,255]. Always rewinds the
  * lexer position and every per-function counter that must stay in sync
  * between this (scan) pass and the later, independent codegen pass
- * (gen_local_decl_after_type must reach the identical conclusion using the
+ * (parse_local_decl_after_type must reach the identical conclusion using the
  * identical scratch parse, since both determine the same array's frame
  * size/offset independently - see the frame-sizing comments in
  * parse_function_or_global).
@@ -2345,8 +2342,8 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
  *   3. Even with #1 and #2 fixed, a broader regression-suite run still
  *      showed 12 failures, including tests/a1.c (the 6502 emulator test)
  *      hanging outright. This turned out to be a THIRD, unrelated bug -
- *      not in either narrowing proof at all, but in gen_assign_ast
- *      (dcc_ast_gen_expr.c): assigning a constant to a byte-sized ix-direct
+ *      not in either narrowing proof at all, but in the former direct
+ *      assignment emitter: assigning a constant to a byte-sized ix-direct
  *      local (`byteVar = K;`) took a fast path that stored the byte
  *      directly and returned WITHOUT ever leaving the (possibly
  *      sign/zero-extended) value in HL - fine when the assignment's own
@@ -2358,7 +2355,7 @@ int try_narrow_local_int_array(const char *name, int type, int arrlen, int total
  *      reproduced identically with the plain `register` keyword too - and
  *      was simply never exercised before, since narrowing a byte-sized
  *      scalar used inside a chained assignment was rare. Fixed by emitting
- *      a value reload (emit_load_sym_value_direct) after the store,
+ *      a value reload after the store,
  *      whenever expr_result_dead is false. This resolved #3 (a1 and the
  *      rest of the 12 all pass now) with no further fallout found across
  *      the full fast/nopeep/extended-C89/extended-C99 suites.
@@ -2583,7 +2580,7 @@ void scan_local_decl_after_type(int base)
             /* `ARR2 table[2]` composes the typedef's own array length as an
              * extra trailing dimension - see the identical composition in
              * parse_function_or_global (dcc_func.c) and
-             * gen_local_decl_after_type (dcc_decl.c), which must reach the
+             * parse_local_decl_after_type (dcc_decl.c), which must reach the
              * same conclusion for the codegen pass. */
             g_last_array_dims[g_last_array_dim_count++] = g_typedef_array_len;
             if (target_size_multiply(arrlen, g_typedef_array_len, &arrlen))
@@ -2674,7 +2671,7 @@ void scan_local_decl_after_type(int base)
                     struct Sym *size_slot;
                     /* VLA: keep the elem_size set above (element size for
                      * a[n], row stride for a[n][C]); the slot holds a runtime
-                     * pointer, mirrored by gen_local_decl_after_type. */
+                     * pointer, mirrored by parse_local_decl_after_type. */
                     s->is_vla = 1;
                     s->array_len = 0;
                     if (s->elem_size <= 0) s->elem_size = 1;
@@ -2685,7 +2682,7 @@ void scan_local_decl_after_type(int base)
                     vla_scope_ensure_save_slot();
                 } else {
                     /* A VLA's slot holds a runtime pointer, not a fixed
-                     * address (see emit_load_sym_addr's is_vla branch), so
+                     * address, so
                      * the address-caching optimization below - which assumes
                      * the array's address never changes for the life of the
                      * function - only applies to ordinary fixed arrays. */
@@ -2928,42 +2925,11 @@ void scan_function_body(void)
         } else if (g_lex.tok.kind == TOK_FOR || g_lex.tok.kind == TOK_WHILE ||
                    g_lex.tok.kind == TOK_DO ||
                    g_lex.tok.kind == TOK_IF || g_lex.tok.kind == TOK_SWITCH) {
-            /*
-             * Build and replay the whole statement (header + body) through
-             * the AST builder/emitter (ast_scan_for_stmt, output suppressed)
-             * instead of hand-walking tokens. This is the exact same
-             * builder+emitter the real codegen pass uses, so frame sizing -
-             * declarations inside the body, C99 for-init renaming, any
-             * AST-level for-loop fast path that reserves extra frame space,
-             * and (originally for-only, now also reachable from while/do/if
-             * bodies) ast_divmod_fuse_compound's #dmq/#dmr temps - stays in
-             * sync with the real pass by construction, rather than needing a
-             * hand-written parallel scanner kept in sync by hand. (That
-             * hand-written scanner used to live here; see git history for
-             * its final form and the cast-vs-declaration bug it once had to
-             * work around - both are now moot since this runs the real
-             * parser instead of guessing at token shapes.)
-             *
-             * Bare compounds and while/do/if/switch were added alongside for
-             * once ast_divmod_fuse_compound (dcc_ast_gen_support.c) proved
-             * that a non-loop-
-             * specific AST_COMPOUND hoist can synthesize new frame locals
-             * from ANY of these bodies, not just a for-loop's - see
-             * tests/e.c's own `while(--n) { a[n]=x%n; x=10*a[n-1]+x/n; }`,
-             * which motivated this pass and is not itself inside a for loop.
-             * ast_try_emit_statement (the real pass's per-statement
-             * dispatcher) treats ast_stmt_supported()==false as a hard
-             * compile error for every statement kind uniformly, not just
-             * for-loops - so any program that reaches real codegen without
-             * a diagnostic is guaranteed to have every top-level compound,
-             * while/do/if/switch pass the identical ast_stmt_supported() check
-             * this scan uses, meaning this extension can never newly desync
-             * from the real pass on already-compiling input.
-             *
-             * A 0 return (AST build declined) is left alone: it only happens
-             * for malformed/unsupported input that the real pass will report
-             * with a proper diagnostic anyway.
-             */
+            /* Use the same AST parser and metadata walk as MIR capture so
+             * declarations, for-init renaming, and synthesized #dmq/#dmr
+             * temporaries agree with the final frame. This sizing pass emits
+             * no body instructions. Malformed input is diagnosed by the
+             * ordinary function pass. */
             ast_scan_for_stmt();
             can_decl = 1;
         } else if (can_decl && g_lex.tok.kind == TOK_STATIC_ASSERT) {
@@ -3336,9 +3302,8 @@ void parse_function_or_global(int base_type)
                  * Every body-inspection helper and frame-sizing scan below
                  * tokenizes past the body, which processes any later
                  * `#pragma stack_check(...)` and mutates the global
-                 * opt_stack_check as a side effect.  None of them READ
-                 * opt_stack_check (runtime-call emission is a no-op while
-                 * scanning - see emit_runtime_call's scan_mode guard), so a
+                 * opt_stack_check as a side effect. Sizing/metadata work
+                 * emits no runtime calls, so a
                  * single restore after the group re-synchronizes the flag with
                  * the rewound source position; the two rewind blocks further
                  * below each restore it again alongside posi/tok/nlocals. */

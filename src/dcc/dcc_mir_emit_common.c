@@ -857,12 +857,9 @@ static int mir_emit_scalar_value(MirStream *out, int value, int depth)
             return 1;
         case '/':
             {
-                /* Item T49 (mir-text-size-plan.md): unsigned `int_expr /
-                 * <compile-time power-of-2 constant>` mirrors legacy's
-                 * fast path in ast_gen_binary_ast (dcc_ast_gen_expr.c
-                 * ~1551) - `emit_logical_shift_right_hl_const` instead of
-                 * a __divu runtime call. Signed division is intentionally
-                 * left alone (matches legacy's exact scope): a plain
+                /* Unsigned division by a compile-time power of two uses a
+                 * logical shift instead of __divu. Signed division is
+                 * intentionally left alone: a plain
                  * right-shift is not equivalent to signed division's
                  * round-toward-zero for negative dividends. */
                 const struct MirInsn *right_definition =

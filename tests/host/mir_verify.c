@@ -2,7 +2,7 @@
 #include "../../src/dcc/dcc.c"
 #undef main
 #include "dcc_mir_internal.h"
-#include "dcc_ast_gen_internal.h"
+#include "dcc_ast_internal.h"
 #include "dcc_mir_machine_internal.h"
 #include <limits.h>
 #ifdef _WIN32
@@ -242,7 +242,7 @@ static int ast_assignment_probe(
     assign->b = rhs;
     assign->type = lhs->type;
     ast_support_cache_begin();
-    return ast_gen_supported(assign);
+    return ast_expr_supported(assign);
 }
 
 static int expect_ast_assignment_support(
@@ -7712,10 +7712,91 @@ static void verify_conditional_callable_prototypes(void)
     }
 }
 
+static void verify_frontend_initializer_capture_only(void)
+{
+    EmitSink saved_sink = g_emit_sink;
+    int saved_scan_mode = scan_mode;
+    struct Sym symbol;
+    FILE *output = tmpfile();
+    int active;
+    int scanning;
+
+    if (output == NULL)
+        fatal("cannot create frontend capture test stream");
+    g_emit_sink.stream = output;
+    g_emit_sink.purpose = EMIT_SINK_FINAL;
+    memset(&symbol, 0, sizeof(symbol));
+    strcpy(symbol.name, "capture_array");
+    symbol.storage = SC_LOCAL;
+    symbol.type = TYPE_LONG;
+    symbol.offset = -16;
+    symbol.size = 16;
+    symbol.is_array = 1;
+    symbol.array_len = 4;
+    symbol.elem_size = 4;
+
+    for (active = 0; active <= 1; ++active) {
+        for (scanning = 0; scanning <= 1; ++scanning) {
+            int start;
+            int values;
+            int labels = label_id;
+
+            mir_begin_function("capture_only", "_capture_only",
+                               EMIT_SINK_FINAL, 1, 16, 0);
+            mir.active = active;
+            scan_mode = scanning;
+            start = mir.count;
+            values = mir.next_value;
+            capture_local_init_constant(&symbol, 0, TYPE_BOOL, 17);
+            capture_local_array_init_constant(&symbol, TYPE_LONG, 2, 123);
+            capture_local_init_zero_bytes(&symbol, 12, 2);
+            capture_local_string_initializer(
+                &symbol, 0, 4, "xy", 3);
+            capture_vla_save_sp(-18);
+            capture_vla_restore_sp(-18);
+
+            if (ftell(output) != 0 || label_id != labels) {
+                fprintf(stderr, "FAIL frontend capture emitted assembly or labels"
+                        " active=%d scan=%d\n", active, scanning);
+                ++failures;
+            }
+            if (!active) {
+                if (mir.count != start || mir.next_value != values) {
+                    fprintf(stderr, "FAIL inactive frontend capture mutated MIR\n");
+                    ++failures;
+                }
+            } else if (mir.count != start + 18 ||
+                       mir.next_value != values + 8 ||
+                       mir.insns[start].opcode != MIR_CONST ||
+                       mir.insns[start].immediate != 1 ||
+                       mir.insns[start + 1].opcode != MIR_STORE ||
+                       mir.insns[start + 1].type != TYPE_BOOL ||
+                       mir.insns[start + 3].immediate != 8 ||
+                       mir.insns[start + 7].immediate != 13 ||
+                       mir.insns[start + 8].immediate != 'x' ||
+                       mir.insns[start + 10].immediate != 'y' ||
+                       mir.insns[start + 12].immediate != 0 ||
+                       mir.insns[start + 14].immediate != 0 ||
+                       mir.insns[start + 16].opcode != MIR_VLA_SAVE ||
+                       mir.insns[start + 16].immediate != -18 ||
+                       mir.insns[start + 17].opcode != MIR_VLA_RESTORE ||
+                       mir.insns[start + 17].immediate != -18) {
+                fprintf(stderr, "FAIL frontend initializer/VLA capture shape\n");
+                ++failures;
+            }
+        }
+    }
+    mir.active = 0;
+    scan_mode = saved_scan_mode;
+    g_emit_sink = saved_sink;
+    fclose(output);
+}
+
 int main(void)
 {
     struct Sym *callee;
     int mutation;
+    verify_frontend_initializer_capture_only();
     setup(3, 1, 1);
     mir.count = 0;
     if (!mir_verify_dominance()) {

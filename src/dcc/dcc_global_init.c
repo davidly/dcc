@@ -8,7 +8,7 @@
  * including padding, overwrites, and inferred array bounds.
  *
  * @par Key entry points
- * parse_global_init_list(), parse_global_init_type(),
+ * parse_global_init_list(),
  * parse_global_init_array(), parse_global_init_struct(),
  * parse_global_init_atom(), and append_global_init().
  *
@@ -593,16 +593,6 @@ void append_global_init(struct Sym *s, const char *label, long v, int bytes, int
     s->init_count++;
 }
 
-void append_global_zero_bytes(struct Sym *s, int bytes)
-{
-    while (bytes > 0) {
-        int n;
-        n = bytes >= 2 ? 2 : 1;
-        append_global_init(s, NULL, 0, n, 0);
-        bytes -= n;
-    }
-}
-
 static int global_init_used_bytes(struct Sym *s)
 {
     int i;
@@ -772,31 +762,6 @@ static void global_init_write_value_at(struct Sym *s, int off, const char *label
     for (i = 0; i < bytes; ++i)
         global_init_write_byte_at(s, off + i, (unsigned int)((uv >> (8 * i)) & 255UL));
 }
-
-void append_global_char_array_string(struct Sym *s, int count, const char *str)
-{
-    int i;
-    int n;
-
-    n = (int)strlen(str);
-    if (count <= 0)
-        return;
-
-    if (n > count) {
-        error_here("string initializer too long for char array field");
-        n = count;
-    }
-
-    for (i = 0; i < n; ++i)
-        append_global_init(s, NULL, (unsigned char)str[i], 1, 0);
-
-    while (i < count) {
-        append_global_init(s, NULL, 0, 1, 0);
-        i++;
-    }
-}
-
-void parse_global_init_type(struct Sym *s, int type, int size);
 
 static void global_init_write_char_array_string_at(struct Sym *s, int baseoff, int count, const char *str, int n)
 {
@@ -1163,11 +1128,6 @@ static void parse_global_init_type_at(struct Sym *s, int type, int size, int bas
         global_init_write_value_at(s, baseoff, label, 0, size, 1);
     else
         next_token();
-}
-
-void parse_global_init_type(struct Sym *s, int type, int size)
-{
-    parse_global_init_type_at(s, type, size, global_init_used_bytes(s));
 }
 
 void parse_global_scalar_array_init_scalar(struct Sym *s, int *np)

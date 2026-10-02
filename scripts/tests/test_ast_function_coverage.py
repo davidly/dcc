@@ -10,6 +10,19 @@ SPEC.loader.exec_module(coverage)
 
 
 class FunctionCoverageTests(unittest.TestCase):
+    def test_default_sources_match_the_manifest(self):
+        classified, _ = coverage.read_manifest(
+            coverage.ROOT / "scripts/ast-function-coverage.json")
+        self.assertEqual(
+            {source.relative_to(coverage.ROOT).as_posix()
+             for source in coverage.MIXED},
+            {source for source, _ in classified},
+        )
+        self.assertTrue(coverage.MIXED)
+        for source in coverage.MIXED:
+            with self.subTest(source=source.name):
+                self.assertTrue(source.is_file())
+
     def test_definitions_exclude_prototypes_and_headers(self):
         tree = {"inner": [
             {"kind": "FunctionDecl", "name": "prototype"},

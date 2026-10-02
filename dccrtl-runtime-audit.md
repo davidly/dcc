@@ -3,6 +3,14 @@
 **Status: AUDIT ONLY.** No runtime code was changed to produce this report. This
 is a findings/backlog document for a future, separate fix-implementation pass.
 
+Historical `archive/` citations below refer to files removed from the working
+tree after this audit. Retrieve their original text and line numbers from
+revision `54b44e1c`, for example:
+`git show 54b44e1c:archive/runtime-memory-optimisations.md`.
+
+Compiler source/API citations likewise retain their audited snapshot names;
+see [the current source map](src/dcc/README.md) for frontend ownership.
+
 ## Follow-up implementation status
 
 The audit itself remains a read-only snapshot. Follow-up work on this branch has

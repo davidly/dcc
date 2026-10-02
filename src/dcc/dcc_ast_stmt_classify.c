@@ -1,5 +1,5 @@
 /**
- * @file dcc_ast_gen_cond.c
+ * @file dcc_ast_stmt_classify.c
  * @brief Classifies statement and condition/comparison AST shapes.
  *
  * @par Role
@@ -16,16 +16,19 @@
  * module is classification-only and is not a body-codegen fallback.
  */
 #include <string.h>
-#include "dcc_ast_gen_internal.h"
+#include "dcc_ast_internal.h"
 #include "dcc_mir.h"
 
+static int byte_operand_can_be_lhs(struct ByteOperand *op)
+{
+    return op->kind == 1 || op->kind == 3 || op->kind == 4 || op->kind == 5 || op->kind == 6;
+}
 
 /* ------------------------------------------------------------------------- *
- * Statement-level AST codegen.
+ * Statement-level AST admission.
  *
- * A statement hook in gen_statement builds the upcoming statement from the
- * token stream and emits it from the AST.  Unsupported shapes are reported as
- * compiler errors in normal codegen.
+ * The statement bridge builds ASTs for MIR capture and metadata processing.
+ * Unsupported shapes are reported as compiler errors.
  * ------------------------------------------------------------------------- */
 
 /* Gate for `return [expr] ;`. */
@@ -37,8 +40,7 @@ int ast_return_stmt_supported(const struct AstNode *n)
         int src_type;
         if (n->a == NULL)
             return 0;
-        /* `return f(args);` where f returns this same struct type: emitted
-         * as a destination-passthrough call (gen_return_ast). */
+        /* Matching struct-return calls can pass through the destination. */
         if (n->a->kind == AST_CALL &&
             ast_struct_return_call_assign_supported(rt, n->a))
             return 1;
@@ -73,7 +75,7 @@ int ast_return_stmt_supported(const struct AstNode *n)
          * assignment.  Do not require an identifier to already be byte-sized
          * or a literal to fit before conversion: `signed char f(int x) {
          * return x; }` and `return -1` are both ordinary C conversions. */
-        return ast_gen_supported(n->a) &&
+        return ast_expr_supported(n->a) &&
                (ast_value_is_plain_int(n->a) || ast_value_is_long_word(n->a) ||
                 ast_value_is_float_word(n->a));
     }
@@ -85,7 +87,7 @@ int ast_return_stmt_supported(const struct AstNode *n)
             return 1;
         if (ast_value_is_float_word(n->a))
             return 1;
-        if (!ast_gen_supported(n->a) || !ast_value_is_plain_int(n->a))
+        if (!ast_expr_supported(n->a) || !ast_value_is_plain_int(n->a))
             return 0;
     }
     return 1;
@@ -204,11 +206,9 @@ int ast_is_simple_cmp_cond(const struct AstNode *n)
     return ast_cmp_operand_ok(n->a) && ast_cmp_operand_ok(n->b);
 }
 
-/* If `n` is a relational comparison lowered via the small-const-int
- * signed-local16 fast path (emit_cmp_const_branch_for_signed_local16 in
- * dcc_cmp.c), fill sp/opp/cp with the (sym, effective-op, const) to hand that
- * emitter and return 1; else 0.  The emitter accepts ONLY an IX-direct SIGNED
- * 16-bit local/param compared with a 0..255 constant, for `var < const` (any
+/* Classify a small-constant signed-local16 relational comparison, filling
+ * sp/opp/cp with its symbol, effective operator, and constant. Accept ONLY an
+ * IX-direct SIGNED 16-bit local/param compared with a 0..255 constant, for `var < const` (any
  * 0..255) or `var >= 0`.  Two shapes are accepted: the DIRECT form
  * `var OP const`, and the FLIPPED const-on-left form which accepts only
  * `const > var` (=> var < const) and `const <= var` (=> var >= const).
@@ -300,9 +300,8 @@ int ast_is_const_plain_int_cmp_cond(const struct AstNode *n)
  * kind 2 (0..255 constant), kind 3 (global byte array element, indexed by
  * either a constant or an IX-direct UNSIGNED char local/param), and kind 4
  * (`*p`, p an IX-direct pointer-to-unsigned-char local/param - e.g. the very
- * common `for (...) if (*p != val) ...; p++;` byte-scan loop). The kind-3
- * emitters (emit_byte_operand_to_a / emit_cp_byte_operand in dcc_cmp.c)
- * zero-extend op->idx_sym's single byte into D before the address add, so a
+ * common `for (...) if (*p != val) ...; p++;` byte-scan loop). Kind 3
+ * describes a zero-extended byte index, so a
  * qualifying index must itself be a byte - a wider index is not handled here
  * (falls through to the generic path, same as any other unsupported shape). */
 
@@ -448,12 +447,9 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
             if (type_size(base) == 1) {
                 if (e->b->kind == AST_IDENT) {
                     struct Sym *idx = find_sym(e->b->sval);
-                    /* A byte-sized (unsigned) index is just as valid as a
-                     * plain int one here - emit_byte_operand_to_a/
-                     * emit_cp_byte_operand (dcc_cmp.c) branch on the index
-                     * symbol's own size to zero-extend a byte or load both
-                     * bytes of an int, either way producing the right 16-bit
-                     * offset. Originally only the 2-byte case was handled;
+                    /* A byte-sized unsigned index and a plain int index both
+                     * describe a valid 16-bit element offset.
+                     * Originally only the 2-byte case was handled;
                      * once a loop counter narrows to a byte (e.g. via
                      * try_narrow_for_counter), a `p[i]` comparison like
                      * tests/tbig.c's `b[i] != (char)((rec+i)&0xff)` no
@@ -548,11 +544,8 @@ int ast_is_direct_wide_bitand_cond(const struct AstNode *n)
 
 /* Is `n` an `==`/`!=` comparison of a long (4-byte) ix-direct scalar against
  * a compile-time integer constant (either operand order)?  ast_long_cmp_supported
- * already accepts this shape, but its emitter (gen_long_cmp_ast) treats the
- * constant as an ordinary runtime operand - loading it through the general
- * expression path, pushing it, sign-extending it - before doing a full
- * generic long compare and materialising a 0/1 bool to test.  Since the
- * "other operand" here is known at compile time, the whole comparison
+ * already accepts this shape. Since the other operand is known at compile
+ * time, the whole comparison
  * collapses to XOR-ing each of the 4 stored bytes against its matching
  * constant byte and OR-ing the results together (zero iff equal), with no
  * register shuffling or intermediate bool at all - direct-branchable exactly
@@ -626,7 +619,7 @@ int ast_is_float_cmp_cond(const struct AstNode *n)
  * decline for a condition that has no top-level relational/logical/conditional
  * operator, is not a constant, is not a global-char-array subscript, and is not
  * the `char_ixvar & byteconst` bitand shape (the latter is already excluded
- * because a binary with a literal operand is not ast_gen_supported).  We accept
+ * because a binary with a literal operand is not ast_expr_supported).  We accept
  * only a conservative whitelist proven to reach the generic path; anything else
  * defers (always safe).  The while gate additionally excludes bare deref
  * conditions that belong to pointer-walk fast paths. */
@@ -735,7 +728,7 @@ int ast_cond_generic(const struct AstNode *n)
         return 1;
     if (ast_index_cmp_cond_supported(n))
         return 1;
-    if (ast_gen_supported(n) &&
+    if (ast_expr_supported(n) &&
         (ast_value_is_float_word(n) || ast_value_is_pointer_word(n) ||
          ast_value_is_long_word(n)) &&
         !ast_node_is_const(n))
@@ -744,7 +737,7 @@ int ast_cond_generic(const struct AstNode *n)
         return 1;
     if (ast_cond_not_indexed_scalar(n))
         return 1;
-    if (!ast_gen_supported(n) || !ast_value_is_plain_int(n))
+    if (!ast_expr_supported(n) || !ast_value_is_plain_int(n))
         return 0;
     switch (n->kind) {
     case AST_IDENT:
@@ -784,7 +777,7 @@ int ast_cond_generic(const struct AstNode *n)
          * not direct fast-path shapes (for example struct-member comparisons)
          * fall back to the generic value-emit + nonzero-test classification. */
         if (is_cmp_op(n->op))
-            return ast_is_simple_cmp_cond(n) || ast_gen_supported(n);
+            return ast_is_simple_cmp_cond(n) || ast_expr_supported(n);
         if (n->op == '&')
             return !ast_is_direct_byte_bitand_cond(n);
         return 1;
@@ -795,7 +788,7 @@ int ast_cond_generic(const struct AstNode *n)
          * no logical operator), so this falls to the generic
          * gen_expr + emit_test_expr_nonzero classification (the short-circuit
          * 0/1 value followed by a nonzero test).  The guard above already
-         * required ast_gen_supported && plain-int && non-const. */
+         * required ast_expr_supported && plain-int && non-const. */
         return 1;
     case AST_COND:
         /* A top-level ?: controlling expression has no condition fast path;
@@ -866,10 +859,8 @@ struct Sym *ast_deadincdec_sym_direct(const struct AstNode *e)
     return s;
 }
 
-/* Dead-result ++/-- on a struct member lvalue: AST computes the field
- * address (gen_lvalue_addr) then emit_incdec_addr, which inc/decs in place by
- * 1 for sizes 1/2/4.  Pointers are advanced by 1 byte here, so only elem-size-1
- * pointers (e.g. char*) match; wider element pointers stay deferred. */
+/* Classify dead-result member updates by 1 for sizes 1/2/4.
+ * Only elem-size-1 pointers (e.g. char*) match; wider pointers stay deferred. */
 int ast_deadincdec_member_ok(const struct AstNode *e)
 {
     int t;
@@ -1007,13 +998,13 @@ int ast_dead_expr_supported(const struct AstNode *e)
         return 0;
     /* Evaluate the support gate in the SAME dead-result context the walker will
     * emit under: expression statements set expr_result_dead = 1 before lowering,
-     * and ast_gen_supported's AST_ASSIGN case defers the dead-result `+=`/`-=`
+     * and ast_expr_supported's AST_ASSIGN case defers the dead-result `+=`/`-=`
      * fast paths only when expr_result_dead is set.  Without this, those shapes
      * (e.g. `x += 5;`) would wrongly pass the gate here and the walker would
     * emit a divergent (longer) sequence instead of the compact one. */
     old_dead = expr_result_dead;
     expr_result_dead = 1;
-    ok = ast_gen_supported(e);
+    ok = ast_expr_supported(e);
     expr_result_dead = old_dead;
     return ok;
 }
@@ -1266,7 +1257,7 @@ int ast_stmt_supported(const struct AstNode *n)
     case AST_SWITCH: {
         int old_nflow;
         int ok;
-        if (n->a == NULL || !ast_gen_supported(n->a) ||
+        if (n->a == NULL || !ast_expr_supported(n->a) ||
             (!ast_value_is_plain_int(n->a) && !ast_value_is_long_word(n->a)))
             return 0;
         if (n->b == NULL)
@@ -1350,4 +1341,3 @@ int ast_stmt_supported(const struct AstNode *n)
         return 0;
     }
 }
-

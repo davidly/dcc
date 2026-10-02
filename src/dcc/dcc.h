@@ -19,8 +19,7 @@
  * - dcc_global_init.c / dcc_data.c: file-scope initializer records and data
  *   layout.
  * - dcc_array_narrow.c / dcc_licm.c: conservative frontend proofs and plans.
- * - dcc_expr.c / dcc_cmp.c / dcc_ops.c / dcc_assign.c / dcc_stmt_fast.c:
- *   shared typing and low-level target helpers.
+ * - dcc_expr.c: declarator parsing, type lookahead, and label metadata.
  * - dcc_ast*.c: function-local trees, MIR capture support, and metadata only.
  * - dcc_mir*.c: production function capture, selection, scheduling, and
  *   emission.
@@ -285,9 +284,7 @@ typedef struct DeclState {
     int is_register;
 } DeclState;
 
-/* Destination role is metadata, not suppression: VERIFY sinks may still need
- * raw formatted writes while scan_mode is active so their text can be read
- * back for a commit/decline decision. */
+/* Destination role for final output or a deferred, already-generated body. */
 enum EmitSinkPurpose {
     EMIT_SINK_FINAL,
     EMIT_SINK_DEFERRED
@@ -297,24 +294,6 @@ typedef struct EmitSink {
     FILE *stream;
     int purpose;
 } EmitSink;
-
-/*
- * Description of the value the most recently generated expression left in
- * registers, grouped so the related result-state travels together:
- *   type          - the expression's result type (g_expr_type)
- *   long_from16   - the DE:HL long was just widened from 16-bit: 0 no,
- *                   1 signed, 2 unsigned (g_long_from16)
- *   decay_stride  - stride override when a multi-dim array decays to a
- *                   pointer; 0 = use the type default (g_array_decay_stride)
- *   no_deref      - suppress the next '*' load, a phantom deref for a
- *                   multi-dim array row pointer (g_expr_no_deref)
- */
-typedef struct ExprState {
-    int type;
-    int long_from16;
-    int decay_stride;
-    int no_deref;
-} ExprState;
 
 struct AstNode;
 
@@ -372,7 +351,7 @@ struct Sym {
                       * (char/short/int/pointer, non-variadic) parameters are
                       * passed directly in HL, then DE, then BC instead of on
                       * the stack - see gen_fastcall_user_call in
-                      * dcc_ast_gen_expr.c and validate_fastcall_prototype in
+                      * dcc_ast_capture.c and validate_fastcall_prototype in
                       * dcc_func.c. Phase 1: the function must be declared
                       * extern and defined out of line as hand-written #asm
                       * reading its arguments directly out of those
@@ -387,7 +366,7 @@ struct Sym {
      * separately from inline_return_expr/inline_stmt_expr/inline_stmt_body
      * (which never include it - those are built from the statements AFTER
      * it). See dcc_func.c's try_scan_inline_local_decl for the eligibility
-     * scan and dcc_ast_gen_expr.c's emit_inline_local_temp for how it's
+     * scan and dcc_ast_capture.c's emit_inline_local_temp for how it's
      * materialized once per call site. */
     int has_inline_local;
     char inline_local_name[64];
@@ -553,9 +532,6 @@ void lex_restore(const LexState *s);
 extern int current_field_array_elem_size;
 extern int current_field_array_dim_count;
 extern int current_field_array_dims[4];
-extern int current_field_bit_width;
-extern int current_field_bit_shift;
-extern unsigned int current_field_bit_mask;
 
 /* source buffer + lexer position + lookahead token */
 extern char *src;
@@ -654,14 +630,14 @@ void enter_scope(void);
 void leave_scope(void);
 int vla_scope_ensure_save_slot(void);
 int vla_active_scope_depth(void);
-void emit_vla_save_sp(int off);
-void emit_vla_restore_sp(int off);
-void emit_vla_restore_for_flow(int floor_depth);
+void capture_vla_save_sp(int off);
+void capture_vla_restore_sp(int off);
+void capture_vla_restore_for_flow(int floor_depth);
 int  vla_record_fwd_goto(int label_index, int line);
-void vla_resolve_fwd_gotos(int label_index, int real_id);
+void vla_resolve_fwd_gotos(int label_index);
 void vla_snapshot_user_label(int label_index);
 int  vla_jump_enters_label_scope(int label_index);
-void emit_vla_restore_to_label_scope(int label_index);
+void capture_vla_restore_to_label_scope(int label_index);
 struct Sym *find_local_decl(const char *name);
 
 extern int errors;
@@ -669,7 +645,6 @@ extern int warnings;
 extern int scan_mode;
 extern DeclState g_decl;
 extern int expr_result_dead;
-extern ExprState g_expr;
 extern int g_tok_long_suffix; /* set by lexer when L/l suffix seen on integer literal */
 extern int g_tok_unsigned_suffix; /* set for U/u suffix or non-decimal unsigned-int literal */
 extern int g_parse_type_was_enum; /* most recent parse_base_type consumed enum */
@@ -766,17 +741,13 @@ extern struct Token g_vla_dim_tok;
 extern int g_vla_scope_off[MAX_SCOPE_DEPTH];
 extern int flow_scope_depth[MAX_FLOW];
 
-/* C99 forward-goto VLA fixups.  A forward goto issued from within a VLA scope
- * cannot know its target label's scope until the label is emitted later, so the
- * jump is routed to a per-goto fixup stub.  Each pending entry snapshots the
- * goto's active VLA save-slot offsets (offsets uniquely identify a scope
- * instance); when the target label is reached, vla_resolve_fwd_gotos() emits
- * each stub, restoring SP to reclaim exactly the VLA scopes the goto leaves and
- * rejecting jumps that would enter a VLA scope. */
+/* Forward-goto VLA metadata. Snapshots identify the scopes active at each
+ * goto; resolving a target validates scope entry and records MIR reclamation.
+ * Metadata IDs retain the established label numbering across parser passes. */
 #define MAX_VLA_FWD_GOTOS MAX_LOCALS
 struct VlaFwdGoto {
     int label_index;                 /* target label (index into ulabel_*)   */
-    int fixup_id;                    /* stub label the goto jumps to          */
+    int fixup_id;                    /* stable metadata ID, not an emitted stub */
     int snap_depth;                  /* g_func_pass.scope_depth at the goto             */
     int snap_off[MAX_SCOPE_DEPTH];   /* g_vla_scope_off snapshot at the goto  */
     int line;                        /* goto source line, for diagnostics     */
@@ -813,14 +784,9 @@ void dcc_error_at(const char *file, int line, long ofs, const char *msg, const c
 void error_here(const char *msg);
 void warn_at(const char *file, int line, const char *msg);
 void *xmalloc(size_t n);
-char *xstrdup2(const char *s);
 char *dcc_read_stream_text(FILE *stream, long *size_out, const char *error_msg);
 int new_label(void);
-void emit_ld_de_const(long v);
-void emit_add_const_to_hl(long v);
 void emit(const char *s);
-void emit_label(int n);
-void emit_jp_label(const char *op, int n);
 int is_ident_start(int c);
 int is_ident_char(int c);
 int peekc(void);
@@ -869,6 +835,10 @@ int type_scalar_atom_count(int type);
 int type_is_long(int type);
 int type_is_float(int type);
 int type_is_bool(int type);
+int type_is_unsigned(int type);
+int type_is_arith(int type);
+int promote_int_type(int type);
+int common_arith_type(int a, int b);
 int object_array_size(int type, int count);
 int target_size_multiply(int left, int right, int *result);
 int type_ptr_depth(int type);
@@ -910,8 +880,6 @@ struct Sym *find_local(const char *name);
 struct Sym *find_global(const char *name);
 struct Sym *find_sym(const char *name);
 int is_global_char_array_sym(struct Sym *s);
-void emit_global_char_index_addr(struct Sym *s);
-void emit_test_global_char_index_zero(struct Sym *s, int false_label);
 struct Sym *add_global(const char *name, int type, int storage);
 struct Sym *add_local_known(const char *name, int type, int storage, int offset, int bytes);
 struct Sym *add_block_extern_alias(const char *name, const char *link_name,
@@ -921,28 +889,11 @@ struct Sym *add_compound_literal_local(int type);
 struct Sym *add_param_alloc(const char *name, int type);
 int add_string_ex(const char *s, int len, int is_wide);
 char *read_adjacent_string_literals_ex(int *is_widep, int *lenp);
-void emit_extrn_if_needed(struct Sym *s);
+void record_extern_reference(struct Sym *s);
 void emit_deferred_extrns(void);
-void emit_runtime_extrn_if_needed(const char *name);
-void emit_runtime_call(const char *name);
-void emit_load_frame_addr_hl(struct Sym *s);
-void emit_load_sym_addr(struct Sym *s);
 int sym_can_ix_direct(struct Sym *s);
-int local_offset_can_ix_direct(struct Sym *s, int off, int size);
 int is_global_word_sym(struct Sym *s);
-void emit_load_global_word_direct(struct Sym *s);
-void emit_store_global_word_direct(struct Sym *s);
-void emit_load_sym_value_direct(struct Sym *s);
-int sym_word_load_is_two_byte_fetch(struct Sym *s);
-void emit_load_sym_low_byte_and_const(struct Sym *s, unsigned int mask);
-int sym_is_direct_byte_fetch(struct Sym *s);
-void emit_load_sym_byte_to_a(struct Sym *s);
-void emit_load_sym_de_direct(struct Sym *s);
-void emit_store_hl_to_sym_direct(struct Sym *s);
-int try_emit_post_update_sym_direct(struct Sym *s, int op);
-void emit_incdec_sym_direct(struct Sym *s, int op);
 int base_struct_id_from_type(int type);
-void emit_add_field_offset(struct FieldDef *fd);
 void skip_balanced_bracket(int open_ch, int close_ch);
 int parse_offsetof_value(void);
 int sizeof_common_type(int a, int b, int op);
@@ -972,18 +923,11 @@ int cf_parse_lor(struct ConstVal *out);
 int cf_parse_cond(struct ConstVal *out);
 int try_parse_const_expr_value(struct ConstVal *out);
 int try_parse_integer_const_expr_value(struct ConstVal *out);
-void emit_const_value(struct ConstVal v);
 
 /* ---- expr ---- */
 int parse_sizeof_expr_operand(void);
-void emit_load_from_hl(int type);
-void emit_bool_normalize_hl(int source_type);
-void emit_store_de_to_addr_hl(int type);
 int type_is_struct_object(int type);
 int same_struct_type(int a, int b);
-void emit_copy_de_to_hl_bytes(int n);
-void emit_push_struct_arg_from_hl(int n);
-void emit_load_hl_from_sp_offset(int off);
 int parse_funcptr_declarator(int *ptype, char *name, int namesz);
 void parse_funcptr_prototype_suffix(void);
 int parse_abstract_funcptr_declarator(int *ptype);
@@ -996,79 +940,14 @@ void skip_array_dim_to_close(void);
 int count_initializer_atoms_level(void);
 int count_omitted_array_initializer_atoms(void);
 int count_omitted_array_initializer_top_elems(void);
-void emit_init_auto_char_array_from_string(struct Sym *s, const char *str, int srclen);
 int find_or_alloc_user_label_index(const char *name);
-int mark_user_label_reference(const char *name);
 int define_user_label(const char *name);
 int find_or_alloc_user_label_index(const char *name);
 void check_undefined_user_labels(void);
 int parse_enum_const_value(void);
-void gen_post_update_symbol_addr_value(struct Sym *s, int op);
-void gen_post_update_from_addr(int type, int op);
-void emit_promote_byte_to_int(int actual_type);
-void emit_promote_int_to_long(int actual_type, int expected_type);
-void emit_convert_int_to_float(int actual_type);
-void emit_convert_float_to_intlike(int target_type);
 int expected_arg_type(struct Sym *fn, int arg_index, int *ptype);
-void emit_cleanup_stack_bytes(int bytes);
-void emit_call_hl_from_stack_offset(int off);
-void emit_extract_bitfield(void);
-void emit_store_bitfield_de_to_addr_hl(int keep_result);
 int paren_starts_cast(void);
-void emit_incdec_value_in_dehl(int type, int op);
-void emit_pre_incdec_lvalue(int type, int op);
-
-/* ---- cmp ---- */
-void gen_cmp(int op);
-void gen_cmp_typed(int op, int lhs_type);
-void emit_signed_bias_for_relop(int op);
-void emit_cmp_branch_false(int op, int lfalse);
-void emit_cmp_branch_true(int op, int ltrue);
-void emit_cmp_branch_false_unsigned(int op, int lfalse);
-void emit_cmp_branch_true_unsigned(int op, int ltrue);
-int invert_relop_for_swap(int op);
-void emit_byte_operand_to_a(struct ByteOperand *op);
-void emit_cp_byte_operand(struct ByteOperand *op);
-int byte_operand_can_be_lhs(struct ByteOperand *op);
-void emit_byte_cmp_branch_after_cp(int op, int label, int branch_when_true);
-void emit_branch_on_bool_hl(int label, int branch_when_true);
-int emit_cmp_const_branch_for_signed_local16(struct Sym *s, int op, long c, int label, int branch_when_true);
-
-/* ---- ops ---- */
-void gen_signed_divmod16(int op);
-void gen_binop(int op);
-void gen_binop_typed(int op, int lhs_type);
-void emit_extend_to_long_typed(int source_type);
-void emit_extend_to_long(int source_is_unsigned);
-void gen_binop32(int op, int lhs_type);
-void gen_cmp32(int op, int lhs_type);
-void gen_binop32_typed(int op, int lhs_type);
-void emit_mul_hl_const(long v);
-int type_is_unsigned(int t);
-int type_is_arith(int t);
-int promote_int_type(int t);
-int common_arith_type(int a, int b);
-void emit_cast_16_to_common(int from_type, int common_type);
 int peek_simple_unary_type(void);
-void scale_hl_by_elem_size(int elem);
-int int_log2_pow2(int v);
-void emit_arith_shift_right_hl_const(int count);
-void emit_logical_shift_right_hl_const(int count);
-void emit_and_hl_const(unsigned int mask);
-void emit_and_long_const(unsigned long mask);
-void divide_hl_by_elem_size(int elem);
-int emit_shift_const_long(int op, int lhs_type, long count);
-void emit_shift_loop(int op, int lhs_type);
-int emit_mul_pow2_long_const(long multiplier);
-void emit_float_compare_call(int op);
-void emit_test_expr_nonzero(int expr_type, int true_label, int branch_when_true);
-
-/* ---- assign ---- */
-void emit_load_float_bits(unsigned long bits);
-void emit_global_byte_array_index_addr(struct Sym *arr, struct Sym *idx_sym, long idx_const, int has_const);
-
-/* ---- stmt_fast ---- */
-void emit_incdec_addr(int type, int op);
 
 /* ---- decl ---- */
 int parse_float_init_literal(unsigned long *bits);
@@ -1076,16 +955,15 @@ int type_is_const_scalar_candidate(int type);
 int try_parse_local_const_initializer(int type, unsigned long *valuep);
 struct Sym *try_const_fold_local(const char *store_name, const char *src_name,
                                  int type, int has_array);
-void emit_load_const_sym_value(struct Sym *s);
 int try_parse_auto_const_init_value(int type, long *valuep);
-void emit_store_const_to_local_array_elem(struct Sym *s, int elem_type, int index, long v);
-void emit_store_const_to_local_offset(struct Sym *s, int off, int type, long v);
-void emit_store_expr_to_local_offset(struct Sym *s, int off, int type);
-void emit_store_expr_to_local_array_elem(struct Sym *s, int elem_type, int index);
-void emit_zero_local_bytes(struct Sym *s, int off, int count);
-void emit_init_auto_char_array_at_offset_from_string(struct Sym *s, int baseoff, int count, const char *str, int n);
-void emit_init_auto_struct_scalar(struct Sym *s, int off, int type);
-void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int count, int elem_size);
+void capture_local_array_init_constant(struct Sym *s, int elem_type, int index, long v);
+void capture_local_init_constant(struct Sym *s, int off, int type, long v);
+void capture_local_init_expr(struct Sym *s, int off, int type);
+void capture_local_array_init_expr(struct Sym *s, int elem_type, int index);
+void capture_local_init_zero_bytes(struct Sym *s, int off, int count);
+void capture_local_string_initializer(struct Sym *s, int baseoff, int count, const char *str, int n);
+void parse_auto_struct_scalar_initializer(struct Sym *s, int off, int type);
+void parse_auto_struct_array_initializer(struct Sym *s, int baseoff, int elem_type, int count, int elem_size);
 long parse_struct_init_const_value(void);
 unsigned int bitfield_init_part(struct FieldDef *fd, long v);
 unsigned int bitfield_field_mask(struct FieldDef *fd);
@@ -1096,19 +974,19 @@ unsigned int pack_struct_bitfield_unit(int sid, int i, struct FieldDef *fd,
                                        int *nunits, int cap,
                                        int *out_unit_off, int *out_k,
                                        int *out_stop);
-void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type);
-void emit_init_auto_struct_from_list(struct Sym *s);
-void emit_init_auto_struct_array_from_list(struct Sym *s);
+void parse_auto_struct_initializer(struct Sym *s, int baseoff, int type);
+void parse_auto_struct_initializer_list(struct Sym *s);
+void parse_auto_struct_array_initializer_list(struct Sym *s);
 int sym_array_elems_from_level(struct Sym *s, int level);
 int sym_array_total_elems(struct Sym *s);
-void emit_init_auto_array_scalar(struct Sym *s, int elem_type, int *np);
-void emit_init_auto_array_level(struct Sym *s, int elem_type, int *np, int level);
-void emit_init_auto_array_from_list(struct Sym *s, int elem_type);
-void gen_local_decl_after_type(int base);
+void parse_auto_array_scalar_initializer(struct Sym *s, int elem_type, int *np);
+void parse_auto_array_initializer_level(struct Sym *s, int elem_type, int *np, int level);
+void parse_auto_array_initializer_list(struct Sym *s, int elem_type);
+void parse_local_decl_after_type(int base);
 
 /* ---- stmt ---- */
 void process_compound(void);
-void gen_statement(void);
+void process_statement(void);
 
 /* ---- func ---- */
 int current_void_is_empty_param_list(void);
@@ -1151,11 +1029,8 @@ void scan_function_body(void);
 void parse_typedef_decl(void);
 int parse_global_init_atom(long *val, char *label, int labelsz);
 void append_global_init(struct Sym *s, const char *label, long v, int bytes, int is_label);
-void append_global_zero_bytes(struct Sym *s, int bytes);
-void append_global_char_array_string(struct Sym *s, int count, const char *str);
 void parse_global_init_array(struct Sym *s, int elem_type, int count, int elem_size);
 void parse_global_init_struct(struct Sym *s, int type);
-void parse_global_init_type(struct Sym *s, int type, int size);
 void parse_global_scalar_array_init_scalar(struct Sym *s, int *np);
 void parse_global_scalar_array_zero_to(struct Sym *s, int *np, int limit);
 void parse_global_scalar_array_init_level(struct Sym *s, int *np, int level);

@@ -9,19 +9,24 @@ split into focused, separately compiled modules — one `.c` per subsystem plus 
 shared umbrella header — so that both human and agentic developers can navigate
 and modify one subsystem at a time.
 
-> The original monolith is preserved at [`../ddc.c`](../ddc.c) as a reference
-> snapshot. The repository-root [`../../dcc.c`](../../dcc.c) is an older
-> standalone copy and is **not** part of this build.
+> The historical monolithic compiler is available in Git history, not the
+> maintained source tree. It is not a code-generation oracle.
 
 ---
 
 ## How the modular build is structured
 
 `dcc` now lowers function bodies through a **function-local AST**. The parser
-builds typed statement/expression trees for function bodies, then the AST
-walker emits Z80 assembly by calling shared low-level emit helpers. The compiler
-still shares foundational types/state through `dcc.h`; focused AST,
-preprocessor, and register-allocation contracts use internal headers.
+builds typed statement/expression trees, captures their semantics into verified
+MIR, and emits Z80 only from a selected generated MIR candidate. Subsequent AST
+walks preserve frontend metadata without emitting body instructions. The
+compiler shares foundational types/state through `dcc.h`; focused AST, MIR,
+and preprocessor contracts use internal headers.
+
+Frontend names describe ownership: AST modules classify, check support, or
+capture semantics; `parse_*` consumes syntax, `capture_*` records MIR when
+active, and `record_*` tracks metadata/linkage. `emit_*` is reserved for actual
+output, such as deferred EXTRNs and generated MIR candidate instructions.
 
 - [`dcc.h`](dcc.h) is the umbrella header. It declares everything shared:
   capacity macros, the type/storage/token constants, the core record types
@@ -34,20 +39,10 @@ preprocessor, and register-allocation contracts use internal headers.
   module reaches them through the `extern` declarations in [`dcc.h`](dcc.h).
 - [`dcc.c`](dcc.c) is the driver translation unit and contains `main()`.
 
-This is the traditional `.c` / `.h` layout. The split itself was
-behaviour-preserving: at the time of the split the modular compiler generated
-**byte-for-byte identical** assembly to the monolith, verified by the project's
-regression suite (see *Verifying* below).
-
-> The modular tree has since gained **correctness fixes that the monolith
-> snapshot does not have** (notably the AST-driven expression and statement
-> lowering work). Those changes intentionally diverge from
-> [`../ddc.c`](../ddc.c); the regression baseline
-> ([`../../baseline_test_dcc.txt`](../../baseline_test_dcc.txt)) now tracks the
-> modular compiler itself, and the byte-identical guarantee is against that
-> baseline, not against the monolith. The suite still compares program output,
-> so a fix that only makes a previously-miscompiled program correct keeps every
-> other app's output unchanged.
+The current compiler intentionally differs from the historical snapshot.
+Behavior-preserving refactors compare against the current generated-only
+compiler. Checked program-output and performance baselines live under
+[`../../tests/`](../../tests/).
 
 ### Why there is one shared header instead of many
 
@@ -64,7 +59,7 @@ Most mutable state is shared and therefore defined in [`dcc_state.c`](dcc_state.
 and declared `extern` in [`dcc.h`](dcc.h). A small amount of state is private to
 a single module and kept `static` there:
 
-- `pp_expr_p` / `pp_expr_depth` → [`dcc_preproc.c`](dcc_preproc.c) (the `#if`
+- `pp_expr_p` / `pp_expr_depth` → [`dcc_pp_expr.c`](dcc_pp_expr.c) (the `#if`
   expression cursor)
 - `include_dirs` / `num_include_dirs` → [`dcc.c`](dcc.c) (the include search
   path)
@@ -81,8 +76,16 @@ or discard stream remains.
 
 Two stderr-only debugging knobs are available: `DCC_AST_REPORT=1` logs the
 `; AST-unsupported ...` statement/initializer that a support gate declined (it
-prints just before the `unsupported AST statement` fatal), and `DCC_AST_BUILD=2`
+prints just before the `unsupported AST statement` fatal), and `DCC_AST_DUMP=1`
 dumps each built AST tree before it is lowered. Neither affects codegen.
+
+AST construction and verified MIR emission are unconditional. The retired
+`DCC_AST_BUILD`, `DCC_MIR_CANDIDATES`, and `DCC_MIR_GENERAL_CANDIDATES` controls
+are no longer read; use `DCC_AST_DUMP` for AST dumps and `DCC_MIR_REPORT` for
+MIR dumps. Active selector-isolation, cost-policy, cache-verification, and
+mutation controls remain available for backend diagnosis and proof campaigns.
+`DCC_MIR_REQUIRE_COMPLETE` and `DCC_MIR_REQUIRE_EMIT` retain their stricter
+failure diagnostics; they are not required to enable the production pipeline.
 
 Local declarations remain captured lexer spans, but explicit scan/replay APIs
 now own their frame and initializer side effects. Production function assembly
@@ -122,31 +125,34 @@ graph TB
         ASTN["dcc_ast.c / dcc_ast.h<br/>arena · nodes"]
         ASTB["dcc_ast_build.c<br/>AST builder"]
         ASTM["dcc_ast_metadata.c / dcc_ast_stmt_meta.c<br/>non-emitting metadata"]
-        ASTG["dcc_ast_gen*.c<br/>support + initializer compatibility"]
+        ASTG["dcc_ast_*.c<br/>support + initializer compatibility"]
       end
 
-      subgraph CG["4 · Code generation helpers"]
-        EXPR["dcc_expr.c<br/>expressions · unary · calls"]
-        OPS["dcc_ops.c<br/>arithmetic · bitwise · shifts"]
-        CMP["dcc_cmp.c<br/>compare · branch"]
-        ASSIGN["dcc_assign.c<br/>assignment · float"]
+      subgraph FRONT["4 · Frontend helpers"]
+        EXPR["dcc_expr.c<br/>declarators · type lookahead"]
         STMT["dcc_stmt.c<br/>compound parser · MIR dispatch"]
-        DECL["dcc_decl.c<br/>local decls · initializers"]
-        SFAST["dcc_stmt_fast.c<br/>statement fast paths"]
+        DECL["dcc_decl.c<br/>local decls · initializer capture"]
     end
 
-    subgraph TOP["5 · Top level & output"]
+    subgraph MIR["5 · Verified MIR code generation"]
+        LOWER["dcc_mir.c / dcc_mir_verify.c<br/>lowering · verification"]
+        SELECT["dcc_mir_select.c<br/>transactional candidate selection"]
+        EMITTERS["dcc_mir_emit_common · homed · spilled · machine families"]
+        LOWER --> SELECT --> EMITTERS
+    end
+
+    subgraph TOP["6 · Top level & output"]
         FUNC["dcc_func.c<br/>functions · top-level parse"]
         DATA["dcc_data.c<br/>data-section emission"]
     end
 
     SHARED -. included by all .-> FE
-    FE ==> TYP ==> AST ==> CG ==> TOP
+    FE ==> TYP ==> AST ==> FRONT ==> MIR ==> TOP
 ```
 
 *Reading the diagram:* the **Shared contract** (top) is `#include`d by every
 module. The thick arrows are the dominant translation pipeline — front end →
-types/symbols → code generation → top level & output. Within a stage the files
+types/symbols → AST/MIR capture → generated emission → output. Within a stage the files
 are peers; the per-file call relationships are summarised in the runtime flow
 below.
 
@@ -159,7 +165,8 @@ flowchart LR
     PPF --> LEX["dcc_preproc.c<br/>next_token · lexer"]
     LEX --> PARSE["dcc_func · dcc_stmt<br/>parse function bodies"]
     PARSE --> AST["dcc_ast_build.c<br/>build function-local AST"]
-    AST --> EMIT["dcc_ast_gen*.c<br/>emit from AST"]
+    AST --> MIR["dcc_mir.c / dcc_mir_verify.c<br/>lower · verify"]
+    MIR --> EMIT["dcc_mir_select.c<br/>select generated Z80"]
     EMIT --> DATA["dcc_data.c<br/>emit data section"]
     DATA --> OUT([".mac assembly"])
 ```
@@ -177,24 +184,22 @@ The arrows above show the dominant direction, not a hard layering restriction.
 | [`dcc.h`](dcc.h) | Umbrella header included by every module: capacity macros (`MAX_*`), type/storage/token constants (`TYPE_*`, `SC_*`, `TOK_*`), the nine core record types, `extern` declarations of the shared globals, and grouped prototypes for every cross-module function. |
 | [`dcc_state.c`](dcc_state.c) | Definitions of the shared globals declared `extern` in `dcc.h`: source buffer + lexer position + lookahead token, symbol/typedef/struct/field tables, the macro table, the `#if` stack, the string pool, per-function codegen flags, and parser scratch state. |
 | [`dcc_asmname.c`](dcc_asmname.c) | Maps each C identifier to its emitted M80 assembler symbol: when to mangle (M80's 6-significant-character publics, reserved words), recognises fixed runtime-library entry points, and caches results in `asm_names[]`. |
-| [`dcc_diag_emit.c`](dcc_diag_emit.c) | Plumbing: `fatal`/`error_here` diagnostics, `source_location_at` (`#line`-aware), `xmalloc`/`xstrdup2`, label allocation, the `emit*` assembly-output primitives, and the raw source readers `peekc`/`getc_src`. |
+| [`dcc_diag_emit.c`](dcc_diag_emit.c) | Plumbing: `fatal`/`error_here` diagnostics, `source_location_at` (`#line`-aware), `xmalloc`, label allocation, top-level assembly-output plumbing, and the raw source readers `peekc`/`getc_src`. |
 | [`dcc_preproc.c`](dcc_preproc.c) | Preprocessor + lexer: `#define`/`#undef`/`#if`/`#ifdef`, object- and function-like macro expansion (`#` stringize, `##` paste), the `#if` constant-expression evaluator, and the main tokenizer `next_token`. |
 | [`dcc_types.c`](dcc_types.c) | Type system: base-type and declarator parsing, struct/union and typedef tables, bitfield layout, type sizing/promotion/arithmetic helpers, and enum-constant lookup. |
 | [`dcc_constexpr.c`](dcc_constexpr.c) | Context-specific wrappers around typed `ConstVal` evaluation and C11 `_Static_assert` declaration parsing. |
-| [`dcc_symbols.c`](dcc_symbols.c) | Symbol tables (locals, parameters, globals), the string-literal pool, EXTRN bookkeeping, and code that loads/stores a symbol's address or value, including post-increment/decrement fast paths. |
-| [`dcc_fold.c`](dcc_fold.c) | The `cf_*` constant-folding engine (with C type/promotion rules), `sizeof`/`offsetof` evaluation, and emission of folded constant results. |
+| [`dcc_symbols.c`](dcc_symbols.c) | Symbol tables, string pool, scope/VLA metadata, layout predicates, sizeof/offsetof parsing, and deferred EXTRN bookkeeping. No symbol load/store body emitter remains. |
+| [`dcc_fold.c`](dcc_fold.c) | The `cf_*` typed constant-folding engine; records values rather than emitting instructions. |
 | [`dcc_ast.h`](dcc_ast.h), [`dcc_ast.c`](dcc_ast.c) | Function-local AST node definitions, list helpers, arena allocation, and debug dumping. |
 | [`dcc_ast_build.c`](dcc_ast_build.c) | AST builder for expressions and statements, including declaration-span capture for local declarations. |
-| [`dcc_ast_gen.c`](dcc_ast_gen.c), [`dcc_ast_gen_support.c`](dcc_ast_gen_support.c), [`dcc_ast_gen_expr.c`](dcc_ast_gen_expr.c), [`dcc_ast_gen_cond.c`](dcc_ast_gen_cond.c), [`dcc_ast_gen_internal.h`](dcc_ast_gen_internal.h) | Shared AST type/support classifiers and local-initializer compatibility helpers. Function-body statement emission has been removed. |
+| [`dcc_ast_classify.c`](dcc_ast_classify.c), [`dcc_ast_support.c`](dcc_ast_support.c), [`dcc_ast_capture.c`](dcc_ast_capture.c), [`dcc_ast_stmt_classify.c`](dcc_ast_stmt_classify.c), [`dcc_ast_internal.h`](dcc_ast_internal.h) | Shared AST type/support classifiers and local-initializer compatibility helpers. Function-body statement emission has been removed. |
 | [`dcc_ast_metadata.c`](dcc_ast_metadata.c), [`dcc_ast_stmt_meta.c`](dcc_ast_stmt_meta.c) | Non-emitting declaration, scope/VLA, inline, string, label, diagnostic, debug, and frame-sizing metadata walks. |
-| [`dcc_expr.c`](dcc_expr.c) | Shared low-level expression helpers for the AST emitter: load/store through HL, struct copies, casts and conversions, bitfield extract/insert, pre/post increment-decrement, call cleanup, and declaration-side parsing helpers. |
-| [`dcc_cmp.c`](dcc_cmp.c) | Relational/equality comparison codegen (signed/unsigned, 16- and 32-bit) and condition-to-branch lowering, including single-`cp` byte-operand comparators. |
-| [`dcc_ops.c`](dcc_ops.c) | Binary-operator/arithmetic helpers for `+ - * / %`, shifts, bitwise ops, 16/32-bit and unsigned variants, integer promotion, pointer element-size scaling, float comparisons, and nonzero tests. |
-| [`dcc_assign.c`](dcc_assign.c) | Shared assignment/float primitives for the AST emitter: materialising float constants and computing global byte-array element addresses. |
-| [`dcc_stmt_fast.c`](dcc_stmt_fast.c) | In-place increment/decrement helper for lvalue addresses already in HL, covering byte, 16-bit, and 32-bit operands. |
-| [`dcc_decl.c`](dcc_decl.c) | Local declaration and initializer codegen: scalars, arrays, structs/unions, bitfields, brace initializer lists, and const-scalar folding of local initializers. |
+| [`dcc_expr.c`](dcc_expr.c) | Declarator/sizeof parsing, initializer-shape counting, user labels, callable/aggregate queries, and type lookahead. |
+| [`dcc_decl.c`](dcc_decl.c) | Local declaration parsing, constant folding, and scalar/array/aggregate/bitfield/VLA initializer MIR capture; no non-MIR instruction fallback. |
 | [`dcc_stmt.c`](dcc_stmt.c) | Compound-block parser and statement-to-MIR/metadata dispatcher. |
 | [`dcc_func.c`](dcc_func.c) | Function and top-level declaration parsing, frame sizing, MIR lifecycle, typedef declarations, and file-scope object parsing/emission. |
+| [`dcc_mir.c`](dcc_mir.c), [`dcc_mir_verify.c`](dcc_mir_verify.c) | Function lowering, metadata repair, CFG/dataflow/allocation, and independent dominance verification. |
+| [`dcc_mir_select.c`](dcc_mir_select.c), `dcc_mir_emit_common.c`, `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c`, `dcc_mir_machine_*.c` | Transactional selection and generated Z80 candidates; the only production function-body emitters. |
 | [`dcc_data.c`](dcc_data.c) | Data-section emission: the string-literal pool and global object storage with initializers, rendered as `DEFB`/`DEFW`. |
 | [`dcc.c`](dcc.c) | Driver and entry point: input file I/O, `#include` resolution and line-directive splicing, the active-source filtering pass, command-line option parsing, and `main()`. |
 
@@ -221,31 +226,36 @@ and example debugger I/O adapter.
 
 ## Verifying
 
-The modular build must produce assembly identical to the monolith. To check a
-single program:
+For one application, use the normal toolchain and its fixture-aware runner:
 
 ```sh
-./dcc -f sieve.c -o /tmp/sieve.mac
+./dccmake tests/tlong.c dcc-output=TLONG dcc-peep=true
+pwsh ./scripts/runall.ps1 -Apps tlong -Mode full -RunTimeout 30
 ```
 
-To run the full C89 regression suite (requires the `ntvcm` emulator on `PATH`):
+Run both strict full+extended release gates (requires `ntvcm` on `PATH`):
 
 ```sh
-export PATH="/path/to/ntvcm:$PWD:$PATH"
-export DCC=./dcc DCCPEEP=./dccpeep DCCRTLSTRIP=./dccrtlstrip
-sh ./runall.sh ntvcm
+DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
+  pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30 -FailuresOnly
+DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
+  pwsh ./scripts/runall.ps1 -Mode full -Extended -NoStackCheck \
+  -RunTimeout 30 -FailuresOnly
 ```
 
-The suite writes `test_dcc.txt` (peephole-optimised) and `test_dccu.txt`
-(unoptimised) and diffs them against `baseline_test_dcc.txt`. A non-zero exit
-caused **only** by the `__DATE__` / `__TIME__` lines (the compile wall-clock
-from the `tstdc` test) is expected and counts as green:
+`-Mode full` covers peep and nopeep. Per-app stdout baselines, execution
+overrides, and checked cycle/size baselines are in `tests/baselines/`,
+`tests/_test_overrides.json`, and `tests/perf_baselines.csv`. Do not move
+baselines to hide regressions. POSIX users can use the equivalent
+`python3 scripts/runall.py --mode full --extended` interface.
 
-```sh
-diff baseline_test_dcc.txt test_dcc.txt \
-  | grep -vE '__DATE__|__TIME__|^[0-9]+(,[0-9]+)?c[0-9]+|^---$'
-# empty output == GREEN
-```
+For pure refactors, compare complete application/function inventories, raw
+assembly, diagnostics, and debug metadata against the current compiler.
+Selector census hashes alone do not cover top-level assembly/data. The
+documented `tstdc` embedded `__TIME__` difference is not an instruction change.
+See [host tests](../../tests/host/README.md) for MIR/sanitizer checks and
+[architecture](../../docs/docs/en/appendix/00-architecture.md) for the full
+module map.
 
 ---
 
@@ -261,7 +271,7 @@ diff baseline_test_dcc.txt test_dcc.txt \
   and add an `extern` declaration to [`dcc.h`](dcc.h). If it is used by only one
   module, prefer a `static` at the top of that module instead.
 - **After any change**, rebuild and run the regression suite. For pure
-  refactors, the filtered diff must stay empty.
+  refactors, investigate every raw-output difference.
 - **Reaching for an operand's type before it is lowered?** Carry it on the
   AST node and lower through MIR/shared AST support. Avoid
   adding new shallow source-text peeks; the AST is the source of truth for typed

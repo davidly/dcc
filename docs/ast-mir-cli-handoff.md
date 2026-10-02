@@ -110,8 +110,8 @@ Keep this evidence as the pre-removal baseline and collect fresh profiles after
 cleanup. Source deletion and changes in denominators are not new test coverage.
 
 **Removal completed.** All 115 manifest-classified legacy functions across
-`dcc_ast_gen.c` (7), `dcc_ast_gen_cond.c` (27), `dcc_ast_gen_expr.c` (73), and
-`dcc_ast_gen_support.c` (8) were deleted, along with their exclusive local
+`dcc_ast_classify.c` (7), `dcc_ast_stmt_classify.c` (27), `dcc_ast_capture.c` (73), and
+`dcc_ast_support.c` (8) were deleted, along with their exclusive local
 state and forward declarations. Two follow-on fixes were required and are
 recorded here for the next reader:
 
@@ -156,8 +156,8 @@ Its scoped totals are 4,617/4,617 functions, 190,968/202,741 lines (94.19%),
 pre-removal collection, the function-scoped denominator shrank by 58 lines,
 28 branch outcomes, and 36 regions, entirely from deleting the now-unreachable
 `!mir_is_active()` fallback branches inside five still-active production
-functions (`ast_emit_init_expr`, `ast_emit_discarded_expr`,
-`ast_emit_struct_init_expr_assign`, `prepare_inline_arg_temps`,
+functions (`ast_capture_initializer_expr`, `ast_capture_discarded_expr`,
+`ast_capture_struct_initializer`, `prepare_inline_arg_temps`,
 `prepare_inline_local_temp`). This is a justified denominator reduction from
 deleting genuinely dead code, not a new executed-coverage claim.
 

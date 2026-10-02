@@ -232,7 +232,6 @@ struct MirFunction {
     int flow_replay_active;
     char label_replay_name[64];
     int label_replay_active;
-    int emit_mode;
     int report_mode;
     int return_type;
     int local_bytes;

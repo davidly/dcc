@@ -2,6 +2,10 @@
 
 This document summarizes the AST migration checkpoint that reached full forced-AST coverage across the current `tests/*.c` corpus.
 
+This is a historical checkpoint, not the current compiler architecture. Names
+below belong to that snapshot; current function bodies are MIR-generated. See
+[the compiler source map](src/dcc/README.md) for maintained ownership.
+
 ## Result
 
 Forced AST code generation now covers every statement/expression site in the current fast test corpus.

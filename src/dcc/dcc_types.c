@@ -4,6 +4,7 @@
  *
  * @par Role
  * Encodes size and pointer-depth operations, array dimensions and strides,
+ * integer promotions and usual arithmetic conversions,
  * target-size checks, struct/union and bitfield layout, typedef and enum
  * lookup, qualifiers, base types, declarators, and abstract type names.
  *
@@ -18,6 +19,7 @@
  */
 
 #include "dcc.h"
+
 int find_enum_const(const char *name)
 {
     int i;
@@ -1120,3 +1122,46 @@ int parse_type_name_decl(int *typep, int *sizep)
 }
 
 int parse_sizeof_expr_operand(void);
+
+/* On this target, unsigned char promotes to int and unsigned int fits long. */
+int type_is_unsigned(int t)
+{
+    return (t & TYPE_UNSIGNED) != 0;
+}
+
+int type_is_arith(int t)
+{
+    if (t & (TYPE_PTR | TYPE_PTR2 | TYPE_STRUCT)) return 0;
+    return 1;
+}
+
+int promote_int_type(int t)
+{
+    if (!type_is_arith(t)) return t;
+    if (type_is_float(t)) return t;
+    if (type_is_long(t)) return t;
+    if ((t & 15) == TYPE_CHAR || (t & 15) == TYPE_BOOL) return TYPE_INT;
+    return (t & TYPE_UNSIGNED) ? (TYPE_INT | TYPE_UNSIGNED) : TYPE_INT;
+}
+
+int common_arith_type(int a, int b)
+{
+    a = promote_int_type(a);
+    b = promote_int_type(b);
+
+    if (type_is_float(a) || type_is_float(b))
+        return TYPE_FLOAT;
+
+    if (type_is_long(a) || type_is_long(b)) {
+        /* unsigned long dominates; otherwise signed long can hold all
+         * 16-bit unsigned values on this target. */
+        if ((type_is_long(a) && type_is_unsigned(a)) ||
+            (type_is_long(b) && type_is_unsigned(b)))
+            return TYPE_LONG | TYPE_UNSIGNED;
+        return TYPE_LONG;
+    }
+
+    if (type_is_unsigned(a) || type_is_unsigned(b))
+        return TYPE_INT | TYPE_UNSIGNED;
+    return TYPE_INT;
+}

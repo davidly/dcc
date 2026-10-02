@@ -115,10 +115,9 @@ static void licm_scan_modified_switch_body(const struct AstNode *n, struct LicmM
  *
  * AST_CALL to a function dcc's inliner has captured as substitutable
  * (is_inline_substitutable, dcc_func.c) is likewise not an automatic
- * overflow: dcc's real codegen-time substitution (try_gen_inline_call_ast,
- * invoked from gen_call_ast during ast_gen_expr) replaces the call with the
+ * overflow: MIR lowering can replace the call with the
  * callee's own captured body at the call site, so by the time this AST_CALL
- * node reaches actual codegen it may never become a real "call" instruction
+ * node reaches generated selection it may never become a real "call" instruction
  * at all - declining every loop that merely calls an inlinable helper (this
  * file's motivating change: forint.c's eval_e, whose hot loop calls
  * get_sym_val/set_sym_val for every variable access) would be needlessly
@@ -126,7 +125,7 @@ static void licm_scan_modified_switch_body(const struct AstNode *n, struct LicmM
  * recurses into the callee's captured inline_return_expr/inline_stmt_expr/
  * inline_stmt_body as if it were written at the call site - parameter names
  * inside that captured body are left as-is (real substitution onto this
- * call's actual arguments happens later, at codegen time) and scanned as
+ * call's actual arguments happens later, during lowering) and scanned as
  * ordinary identifiers, which is correct for this purpose: this scan only
  * cares about what's modified/address-taken/called, and dcc's own scoping
  * already prevents a parameter name from colliding with an unrelated

@@ -104,11 +104,11 @@ int nested(const int *a, int n)
     return total;
 }
 
-/* A written POINTER parameter walked with ++, mixed with reads. Expected to
- * DECLINE: `*a` routes through gen_deref_addr_ast, whose plain-identifier
- * path deliberately has no reg_alloc arm because promoting there defeats
- * dccpeep's loop-invariant pointer hoisting. Here to pin that decision down -
- * if it ever changes, the answer must still be right. */
+/* A written pointer parameter walked with ++, mixed with reads.
+ * This combines pointer mutation with accumulation rather than leaving the
+ * parameter invariant throughout the loop. Register allocation and peephole
+ * pointer hoisting must preserve every update and read, including the final
+ * accumulated result. */
 int written(const int *a, int n)
 {
     int total = 0;

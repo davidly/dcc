@@ -6,7 +6,7 @@
  * one of the function's own parameters, e.g. `if (cond) idx = 0;` ahead of
  * a `return` that uses idx. Substituting a call site's argument EXPRESSION
  * into what's now an assignment TARGET isn't a valid lvalue ("3 = 0" for a
- * call like f(3)) - gen_assign_ast then called find_sym on an AST_IDENT
+ * call like f(3)) - the former assignment emitter called find_sym on an AST_IDENT
  * node the substitution never populated a name for, dereferencing a NULL
  * pointer inside strcmp and crashing the compiler outright, not just
  * miscompiling.

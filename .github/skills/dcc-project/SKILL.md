@@ -21,7 +21,8 @@ legacy register-allocation retries do not exist.
 | --- | --- |
 | Driver, parser, symbols | `src/dcc/dcc.c`, `dcc_func.c`, `dcc_symbols.c` |
 | Preprocessor | `src/dcc/dcc_preproc.c`, `dcc_pp_expr.c` |
-| Function-local AST | `dcc_ast.c`, `dcc_ast.h`, `dcc_ast_build.c`, `dcc_ast_gen*.c` |
+| Function-local AST | `dcc_ast.c`, `dcc_ast.h`, `dcc_ast_build.c` |
+| AST classifiers and capture | `dcc_ast_classify.c`, `dcc_ast_support.c`, `dcc_ast_stmt_classify.c`, `dcc_ast_capture.c`, `dcc_ast_internal.h` |
 | Non-emitting AST metadata | `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c` |
 | MIR lowering and verification | `dcc_mir.c`, `dcc_mir.h` |
 | Independent MIR dominance verification | `dcc_mir_verify.c` |
@@ -62,7 +63,7 @@ unless their own subsystem requires it.
 Keep the source map above, the AST map in `dcc_ast.h`, the MIR map in
 `dcc_mir_internal.h`, and subsystem maps in private headers current when
 adding, removing, renaming, or moving modules. Update a file's header whenever
-its ownership or boundary changes. Do not describe `dcc_ast_gen*` as a
+its ownership or boundary changes. Do not describe `dcc_ast_*` as a
 production function-body fallback: AST processing after parsing is
 metadata/classification support and production body Z80 comes only from
 selected MIR candidates.

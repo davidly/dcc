@@ -6,7 +6,7 @@
  * memcmp, chosen because it predates this bug fix and has nothing to do
  * with stricmp - failed to link ("U ... ld hl,__mcmp") because
  * gen_ident()'s function-name-decays-to-address path never called
- * emit_extrn_if_needed() for the target symbol. A GLOBAL function
+ * record_extern_reference() for the target symbol. A GLOBAL function
  * pointer with the same initializer works fine (dcc_data.c's own
  * initializer codegen already calls it), which is why this went
  * unnoticed: every function-pointer test added so far (tests/tfpcall.c)

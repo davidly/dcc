@@ -2,6 +2,11 @@
 
 Branch: `modularise-dcc`
 
+This is a historical branch report, not the current source map. The maintained
+compiler uses generated MIR only; the old `dcc_cmp.c`, `dcc_ops.c`,
+`dcc_assign.c`, and `dcc_stmt_fast.c` emitters listed below have been removed.
+See [README.md](README.md) for current ownership and validation.
+
 This document summarises the work done on the `modularise-dcc` branch: splitting the
 single-file `dcc` compiler into maintainable modules, the four new peephole
 optimisations added to `dccpeep.c`, and the empirical size/speed savings measured

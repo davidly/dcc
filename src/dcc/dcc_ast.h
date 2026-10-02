@@ -22,15 +22,15 @@
  * - dcc_ast_build.c: token-to-AST expression and statement parsing.
  * - dcc_ast_stmt_meta.c: statement gating, MIR capture, sizing, exit analysis.
  * - dcc_ast_metadata.c: non-emitting declaration/scope/debug metadata replay.
- * - dcc_ast_gen.c: type, lvalue, pointer, member, and index classifiers.
- * - dcc_ast_gen_support.c: support gates, constant folds, structural proofs.
- * - dcc_ast_gen_expr.c: initializer capture, inline metadata, expression
+ * - dcc_ast_classify.c: type, lvalue, pointer, member, and index classifiers.
+ * - dcc_ast_support.c: support gates, constant folds, structural proofs.
+ * - dcc_ast_capture.c: initializer capture, inline metadata, expression
  *   helpers.
- * - dcc_ast_gen_cond.c: statement/condition gates and branch-shape helpers.
- * - dcc_ast_gen_internal.h: private contract shared by the split modules.
+ * - dcc_ast_stmt_classify.c: statement/condition gates and branch-shape helpers.
+ * - dcc_ast_internal.h: private contract shared by the split modules.
  *
  * @par Boundary
- * The dcc_ast_gen* helpers do not provide a production body-codegen fallback.
+ * The dcc_ast_* helpers do not provide a production body-codegen fallback.
  * dcc_mir.h exposes function capture; dcc_mir_select.c owns generated
  * candidate selection.
  */
@@ -212,14 +212,14 @@ struct AstNode *ast_call(struct AstArena *ar, struct AstNode *callee, int type);
 void ast_list_push(struct AstArena *ar, struct AstNode *parent,
                    struct AstNode *child);
 
-/* Detects the "cyclic byte fill" for-loop idiom (see dcc_ast_gen_support.c
+/* Detects the "cyclic byte fill" for-loop idiom (see dcc_ast_support.c
  * for the full shape). Callable from both ast_build_for_stmt (build time,
  * to reserve the rolling-counter's frame slot) and metadata planning. */
 int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
                                       long *out_init, long *out_base,
                                       long *out_mod, const char **out_ivar_name);
 
-/* General-purpose expression predicates (dcc_ast_gen_support.c): does the
+/* General-purpose expression predicates (dcc_ast_support.c): does the
  * subtree reference a given identifier anywhere, and does it contain any
  * observable side effect anywhere. Used together to prove a candidate
  * lvalue address is loop-invariant (see ast_for_hoist_lvalue_addr_supported). */
@@ -228,14 +228,14 @@ int ast_expr_has_side_effects(const struct AstNode *n);
 
 /* True if `n` provably yields exactly 0 or 1 on its own: a bool-typed
  * subexpression, a 0/1 integer literal, `!`, a comparison operator, `&&`/
- * `||`, or a cast to bool - the same proof dcc_ast_gen_expr.c trusts
+ * `||`, or a cast to bool - the same proof dcc_ast_capture.c trusts
  * elsewhere for an RHS being stored into a bool. Used by dcc_func.c to gate
  * inlining a bool-returning function's return expression, since splicing it
  * directly at a call site bypasses AST_RETURN's own 0/1 canonicalization. */
 int ast_expr_yields_bool01(const struct AstNode *n);
 
 /* Byte-memory word-packing idiom (mem_get_word/mem_set_word-shaped code -
- * see dcc_ast_gen_support.c for the full rationale): `arr[E] | (arr[E+1]
+ * see dcc_ast_support.c for the full rationale): `arr[E] | (arr[E+1]
  * << 8)` for a read, `arr[E] = lo; arr[E+1] = hi;` for a write, where E is
  * a non-trivial shared index expression currently recomputed twice. */
 
@@ -263,7 +263,7 @@ struct Sym *ast_sizeof_whole_vla_sym(const struct AstNode *n);
 
 /* Detects a for-loop whose whole body is one assignment to an array-element
  * lvalue whose address is provably the same on every iteration (see
- * dcc_ast_gen_support.c for the full shape and rationale). */
+ * dcc_ast_support.c for the full shape and rationale). */
 int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
                                                const char **out_ivar_name,
                                                const struct AstNode **out_lhs,
@@ -282,7 +282,7 @@ int ast_for_rhs_hoist_scan_supported(const struct AstNode *n,
  * value that is provably invariant across the whole file (via the
  * dcc_global_scan.c whole-file write scan), even though the rest of the
  * loop body is full of calls ordinary side-effect analysis can't see
- * through (see dcc_ast_gen_support.c for the full shape and rationale -
+ * through (see dcc_ast_support.c for the full shape and rationale -
  * tests/cint.c's run() dispatch loop is the motivating case). */
 int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
                                                   const struct AstNode **out_member,
@@ -315,7 +315,7 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod);
  * contains `X % Y` and the other `X / Y` (either order, bare-identifier
  * operands only in v1), and rewrites them to share one DCCRTL.MAC
  * __udivmod/__sdivmod call instead of each independently calling __modu/
- * __divu (or __mods/__divs) - see dcc_ast_gen_support.c for the full shape/
+ * __divu (or __mods/__divs) - see dcc_ast_support.c for the full shape/
  * rationale/safety argument (tests/e.c's `a[n] = x % n; x = ...+ x/n;` is
  * the motivating case, found via dccprof profiling). Unlike the for-loop-
  * specific hoists above, this applies to any compound metadata walk.
@@ -330,10 +330,10 @@ char *ast_arena_memdup(struct AstArena *ar, const char *s, int len);
 /* ------------------------------------------------------------------------- *
  * AST builder + debug dump.
  *
- * ast_build_init() enables AST construction by default.  DCC_AST_BUILD=2 dumps
- * built trees to stderr for debugging.
+ * AST construction is unconditional. DCC_AST_DUMP=1 dumps built trees to
+ * stderr for debugging.
  * ------------------------------------------------------------------------- */
-extern int g_ast_build_enabled;     /* 0 internal suppress, 1 build, 2 dump  */
+extern int g_ast_dump_enabled;
 extern struct AstArena g_ast_arena; /* shared function-local build arena      */
 extern struct AstArena g_ast_init_arena; /* isolated decl-initializer arena   */
 extern struct AstArena g_ast_inline_arena; /* persistent inline function arena */
@@ -353,27 +353,26 @@ void ast_dump(const struct AstNode *n, int depth);
  * emit code. Set DCC_AST_REPORT to log per-statement classification
  * diagnostics to stderr.
  * ------------------------------------------------------------------------- */
-int ast_gen_supported(const struct AstNode *n);
+int ast_expr_supported(const struct AstNode *n);
 int ast_stmt_supported(const struct AstNode *n);
 int ast_stmt_has_reentry_label(const struct AstNode *n);
 int ast_stmt_exits(const struct AstNode *n);
 int ast_last_statement_exits(void);
 
-/* Reset the per-statement support-probe caches (ast_gen_supported and
+/* Reset the per-statement support-probe caches (ast_expr_supported and
  * friends memoize by AST node pointer within a single statement's checks;
  * arena nodes are reused across statements, so the cache must be dropped
- * before probing a freshly-built one - see dcc_ast_gen_support.c). */
+ * before probing a freshly-built one - see dcc_ast_support.c). */
 void ast_support_cache_begin(void);
 
-/* Pure-AST emission of a declaration initializer's assignment-expression.
- * Builds into the isolated g_ast_init_arena; fatal on unsupported constructs. */
-void ast_emit_init_expr(void);
-void ast_emit_discarded_expr(void);
-void ast_emit_struct_init_expr_assign(struct Sym *s);
+/* Parse initializer/discarded expressions into g_ast_init_arena, capture MIR
+ * when active, and process metadata. Malformed/unsupported input is diagnosed. */
+void ast_capture_initializer_expr(void);
+void ast_capture_discarded_expr(void);
+void ast_capture_struct_initializer(struct Sym *s);
 
-/* Statement hook.  Called from gen_statement to build the next statement from
- * the token stream and emit it from the AST.  Returns 0 only in scanner/debug
- * paths that deliberately bypass AST codegen. */
+/* Build the next statement for MIR capture and non-emitting metadata.
+ * A declined statement is diagnosed by process_statement(). */
 int ast_process_statement(void);
 void ast_record_debug_location(const char *file, int line);
 

@@ -11,9 +11,9 @@
  * direct register-substituted port of the shared __fcmps/__frcmp
  * classifier, not the original naive stack-frame-reconstruction attempt
  * that regressed tc89fcmp.c's perf baseline ~8.5% before being replaced).
- * Also covers literal/variable/function asymmetry and both codegen call
- * sites (ordinary expression context in gen_binary_ast, and branch context
- * via ast_gen_float_cmp_branch), guarding against an operand mixup like the
+ * Also covers literal/variable/function asymmetry and comparisons used as
+ * values or branch conditions. Both contexts must agree despite using different
+ * register/branch schedules, guarding against an operand mixup like the
  * earlier __fdf bug.
  */
 #include <stdio.h>

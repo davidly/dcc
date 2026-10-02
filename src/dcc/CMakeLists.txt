@@ -40,10 +40,6 @@ set(DCC_SOURCES
     dcc_symbols.c
     dcc_fold.c
     dcc_expr.c
-    dcc_cmp.c
-    dcc_ops.c
-    dcc_assign.c
-    dcc_stmt_fast.c
     dcc_decl.c
     dcc_stmt.c
     dcc_func.c
@@ -54,12 +50,12 @@ set(DCC_SOURCES
     dcc_ast.c           # function-local AST (arena + nodes)
     dcc_ast_build.c     # function-local AST builder
     dcc_ast_metadata.c  # non-emitting function-body metadata replay
-    dcc_ast_gen.c           # AST classifiers / type & lvalue resolvers
-    dcc_ast_gen_support.c   # AST support dispatch, calls/structs/folds
-    dcc_ast_gen_expr.c      # AST initializer capture and inline metadata
-    dcc_ast_gen_cond.c      # AST statement/condition classification gates
+    dcc_ast_classify.c           # AST classifiers / type & lvalue resolvers
+    dcc_ast_support.c   # AST support dispatch, calls/structs/folds
+    dcc_ast_capture.c      # AST initializer capture and inline metadata
+    dcc_ast_stmt_classify.c      # AST statement/condition classification gates
     dcc_ast_stmt_meta.c     # AST statement parsing/sizing metadata
-    dcc_mir.c               # analysis-only virtual-register MIR prototype
+    dcc_mir.c               # MIR lowering, metadata repair, and analysis
     dcc_mir_verify.c
     dcc_mir_emit_common.c
     dcc_mir_homed_cfg.c
@@ -81,13 +77,13 @@ set(DCC_SOURCES
     dcc_mir_machine_byte_scans.c # byte/row scanning and fill kernels
     dcc_mir_machine_constant_folding.c # constant-folding and result-switch kernels
     dcc_mir_select.c
-    dcc_mir_schedule.c      # shadow sparse live-segment scheduler
+    dcc_mir_schedule.c      # diagnostic sparse live-segment scheduler
     dcc_mir_spilled_cfg.c
     dcc_mir_stream.c        # transactional in-memory candidate streams
-    dcc_mir_target.c        # shadow Z80 constraints and template costs
+    dcc_mir_target.c        # diagnostic Z80 constraints and template costs
 )
 
-add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_gen_internal.h
+add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_internal.h
                    dcc_preproc_internal.h dcc_mir.h
                    dcc_mir_machine_internal.h)
 target_include_directories(dcc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

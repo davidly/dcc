@@ -189,8 +189,11 @@ selector establishes a complete generated incumbent from the rollout or general
 CFG candidates, then `mir-v1` may compare that incumbent with homed,
 lazy-parameter, hybrid, regional, and spilled variants. The policy compares
 only generated MIR candidates.
-`DCC_MIR_REQUIRE_COMPLETE=1` and `DCC_MIR_REQUIRE_EMIT=1` are the strict
-semantic and generated-output boundaries.
+AST construction, MIR verification, and generated-only body emission are
+unconditional. `DCC_MIR_REQUIRE_COMPLETE=1` and `DCC_MIR_REQUIRE_EMIT=1` request
+strict completeness and emission-failure diagnostics for proof campaigns;
+they do not enable an otherwise optional backend. `DCC_AST_DUMP=1` and
+`DCC_MIR_REPORT=1` dump the active intermediate representations to stderr.
 
 Proofs are deliberately conservative. Unknown, recursive, cyclic, volatile,
 aliased, or unsupported shapes decline an optimization, not MIR emission.
@@ -332,8 +335,8 @@ graph TB
 | Shared | `dcc.h`, `dcc_state.c`, subsystem `*_internal.h` files | Target model, shared contracts, and lifecycle-owned compiler state |
 | Front end | `dcc.c`, `dcc_preproc.c`, `dcc_pp_expr.c`, `dcc_func.c`, `dcc_stmt.c`, `dcc_diag_emit.c`, `dcc_global_scan.c` | Driver, preprocessing/lexing, declarations/statements, conservative global-use prepass, frame scan, and diagnostics |
 | Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c`, `dcc_asmname.c` | Type system, symbol tables, constant evaluation/folding, and M80-safe assembly-name mapping |
-| Typed AST / metadata | `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen*.c`, `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c`, `dcc_licm.c` | Transient typed trees, semantic classifiers, and non-emitting LICM/CSE planning and declaration/scope replay |
-| Compatibility helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_decl.c`, `dcc_stmt_fast.c`, `dcc_array_narrow.c` | Shared initializer/type behavior and conservative source proofs; not a production body emitter |
+| Typed AST / metadata | `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_*.c`, `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c`, `dcc_licm.c` | Transient typed trees, semantic classifiers, and non-emitting LICM/CSE planning and declaration/scope replay |
+| Frontend helpers | `dcc_expr.c`, `dcc_decl.c`, `dcc_array_narrow.c` | Declarator/type lookahead, initializer MIR capture, and conservative source proofs; no direct body instruction emission |
 | MIR core | `dcc_mir.c`, `dcc_mir_stream.c` | Persistent IR, metadata repair, CFG/verifier, liveness, baseline allocation, and isolated candidate streams |
 | MIR dominance verification | `dcc_mir_verify.c` | Independent reachable CFG, immediate dominators, ordinary-value and PHI-edge checks, and call-argument dominance; no IR rewriting or allocation |
 | MIR emission / selection | `dcc_mir_select.c`, `dcc_mir_emit_common.c`, `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c` | Exact-schedule priority, scalar DAG rollout, transactional generated candidates, candidate-specific homes/spills, shared emission, and `mir-v1` selection |

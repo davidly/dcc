@@ -2,7 +2,7 @@
  * 3 register-passed arguments, called from ordinary C call sites (including
  * one with an array-indexing pointer argument, the exact shape that once
  * miscompiled the strlen/strchr fastcall special cases before
- * gen_fastcall_arg existed - see its comment in dcc_ast_gen_expr.c). */
+ * gen_fastcall_arg existed - see its comment in dcc_ast_capture.c). */
 #include <stdio.h>
 #include <stdint.h>
 

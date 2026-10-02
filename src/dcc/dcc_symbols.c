@@ -5,18 +5,16 @@
  * @par Role
  * Allocates globals, locals, parameters, temporaries, and strings; manages
  * block and for-init renames plus VLA scope/fixup state; tracks deferred
- * EXTRNs and runtime calls; and supplies frame/global address, load, store,
- * sizeof, and offsetof helpers.
+ * EXTRNs; and supplies symbol-layout predicates plus sizeof/offsetof parsing.
  *
  * @par Key entry points
  * find_sym(), add_global(), add_local_alloc(), enter_scope(), leave_scope(),
- * emit_extrn_if_needed(), emit_runtime_call(), emit_load_sym_addr(), and
- * sizeof_parse_primary_type().
+ * record_extern_reference() and sizeof_parse_primary_type().
  *
  * @par Boundary
  * dcc_state.c stores shared tables, dcc_asmname.c maps target spellings, and
- * dcc_types.c owns type construction. Low-level access helpers here do not
- * choose production function-body candidates; MIR does.
+ * dcc_types.c owns type construction. VLA scope helpers record MIR metadata,
+ * not instructions; MIR alone emits production function bodies.
  */
 
 #include "dcc.h"
@@ -220,9 +218,7 @@ int vla_scope_ensure_save_slot(void)
         return 0;                       /* already allocated for this scope */
     s = add_local_alloc("#vlasp", TYPE_INT, 2);
     g_vla_scope_off[g_func_pass.scope_depth] = s->offset;
-    /* Noted for the IY register allocator, which must stay out of functions
-     * that juggle SP themselves - see
-     * function_qualifies_for_speculative_iy_regalloc. */
+    /* MIR allocation and epilogues must account for dynamic stack storage. */
     current_function_has_vla = 1;
     return s->offset;
 }
@@ -236,30 +232,16 @@ int vla_active_scope_depth(void)
     return 0;
 }
 
-/* HL-free helper: save the current SP into the frame slot at `off`. */
-void emit_vla_save_sp(int off)
+/* Record the scope's SP save for MIR lowering; sizing passes only reserve it. */
+void capture_vla_save_sp(int off)
 {
     mir_capture_vla_save(off);
-    if (mir_is_active())
-        return;
-    emit("\tld hl,0\n\tadd hl,sp\n");   /* HL = SP */
-    emit("\tpush hl\n");                /* stash SP value */
-    emit("\tpush ix\n\tpop hl\n");      /* HL = IX */
-    fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", off);
-    emit("\tpop de\n");                 /* DE = SP value */
-    emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n");
 }
 
-/* Restore SP from the frame slot at `off`, reclaiming that scope's VLAs. */
-void emit_vla_restore_sp(int off)
+/* Record reclamation of the scope's VLAs without emitting instructions. */
+void capture_vla_restore_sp(int off)
 {
     mir_capture_vla_restore(off);
-    if (mir_is_active())
-        return;
-    emit("\tpush ix\n\tpop hl\n");      /* HL = IX */
-    fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", off);
-    emit("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n");  /* HL = saved SP */
-    emit("\tld sp,hl\n");
 }
 
 /*
@@ -269,26 +251,21 @@ void emit_vla_restore_sp(int off)
  * scope's VLAs, so only one restore is needed.  Emits nothing when no VLA was
  * declared inside the loop.
  */
-void emit_vla_restore_for_flow(int floor_depth)
+void capture_vla_restore_for_flow(int floor_depth)
 {
     int d;
     for (d = floor_depth + 1; d <= g_func_pass.scope_depth && d < MAX_SCOPE_DEPTH; ++d) {
         if (g_vla_scope_off[d] != 0) {
-            emit_vla_restore_sp(g_vla_scope_off[d]);
+            capture_vla_restore_sp(g_vla_scope_off[d]);
             return;
         }
     }
 }
 
 /*
- * Record a forward goto issued from within a VLA scope.  Single-pass codegen
- * cannot yet know whether the (not-yet-emitted) target label sits inside the
- * same VLA scopes, an enclosing one, or outside them all, so the exact SP to
- * restore is unknown here.  Snapshot the goto's active VLA save-slot offsets
- * and hand back a fresh stub label id; the caller jumps there, and
- * vla_resolve_fwd_gotos() later emits the stub once the label's scope is known.
- * Returns the stub label id (a fresh label even on overflow so the emitted jump
- * is still well-formed).
+ * Snapshot a forward goto's active VLA scopes for target validation and MIR
+ * reclamation. Reserve the established metadata label ID even during sizing
+ * passes so removing instruction emission does not renumber later labels.
  */
 int vla_record_fwd_goto(int label_index, int line)
 {
@@ -296,9 +273,9 @@ int vla_record_fwd_goto(int label_index, int line)
     int fixup;
     int d, i, same;
 
-    /* Reuse an existing pending stub when another goto already targets this
+    /* Reuse an existing snapshot when another goto already targets this
      * label with the identical active-VLA snapshot: same target and same
-     * scope offsets mean identical reclaim, so one shared stub suffices (and
+     * scope offsets mean identical reclaim, so one shared entry suffices (and
      * a fresh label is not consumed). */
     for (i = 0; i < g_vla_fwd_ngoto; ++i) {
         g = &g_vla_fwd_gotos[i];
@@ -377,7 +354,7 @@ int vla_jump_enters_label_scope(int label_index)
     return 0;
 }
 
-void emit_vla_restore_to_label_scope(int label_index)
+void capture_vla_restore_to_label_scope(int label_index)
 {
     int d;
     if (label_index < 0 || label_index >= MAX_USER_LABELS)
@@ -385,23 +362,18 @@ void emit_vla_restore_to_label_scope(int label_index)
     for (d = 1; d <= g_func_pass.scope_depth && d < MAX_SCOPE_DEPTH; ++d) {
         int off = g_vla_scope_off[d];
         if (off != 0 && !vla_off_in_label_scope(label_index, off)) {
-            emit_vla_restore_sp(off);
+            capture_vla_restore_sp(off);
             return;
         }
     }
 }
 
 /*
- * Emit the deferred SP-fixup stubs for every forward goto that targeted this
- * label from inside a VLA scope, now that the label's own scope is known.  For
- * each such goto: verify the C99 constraint that the jump does not enter the
- * scope of a VLA (every VLA scope still active at the label must also have been
- * active at the goto), then restore SP to reclaim exactly the VLA scopes the
- * goto is leaving before jumping to the real label.  Emits nothing when no
- * forward goto targeted this label.  Must be called just before the real label
- * is emitted; `real_id` is that label's id.
+ * Resolve forward-goto scope snapshots at their target. Reject jumps into VLA
+ * scopes and record restoration of the scopes being left through MIR replay.
+ * Sizing/metadata passes validate the same constraints without emitting code.
  */
-void vla_resolve_fwd_gotos(int label_index, int real_id)
+void vla_resolve_fwd_gotos(int label_index)
 {
     int i, d, k;
     int any;
@@ -412,11 +384,6 @@ void vla_resolve_fwd_gotos(int label_index, int real_id)
         if (g_vla_fwd_gotos[i].label_index == label_index) { any = 1; break; }
     if (!any)
         return;
-
-    /* Fall-through from the preceding statement must land on the real label,
-     * not run into the stubs that sit just above it. */
-    if (!mir_is_active())
-        emit_jp_label("jp", real_id);
 
     for (i = 0; i < g_vla_fwd_ngoto; ++i) {
         struct VlaFwdGoto *g = &g_vla_fwd_gotos[i];
@@ -446,19 +413,15 @@ void vla_resolve_fwd_gotos(int label_index, int real_id)
         if (bad)
             continue;
 
-        if (!mir_is_active())
-            emit_label(g->fixup_id);
         /* Reclaim the goto's inner VLA scopes the label is not within: restore
          * the outermost such slot (which reclaims it and every deeper scope). */
         for (k = 1; k <= g->snap_depth && k < MAX_SCOPE_DEPTH; ++k) {
             int off = g->snap_off[k];
             if (off != 0 && !vla_off_active_now(off)) {
-                emit_vla_restore_sp(off);
+                capture_vla_restore_sp(off);
                 break;
             }
         }
-        if (!mir_is_active())
-            emit_jp_label("jp", real_id);
     }
 }
 
@@ -585,22 +548,6 @@ int is_global_char_array_sym(struct Sym *s)
     if ((s->type & 15) != TYPE_CHAR) return 0;
     if (type_ptr_depth(s->type) != 0) return 0;
     return 1;
-}
-
-void emit_global_char_index_addr(struct Sym *s)
-{
-    emit_extrn_if_needed(s);
-    fprintf(g_emit_sink.stream, "\tld de,%s\n", asm_name_for(sym_asm_name(s)));
-    emit("\tadd hl,de\n");
-}
-
-
-void emit_test_global_char_index_zero(struct Sym *s, int false_label)
-{
-    emit_global_char_index_addr(s);
-    emit("\tld a,(hl)\n");
-    emit("\tor a\n");
-    emit_jp_label("jp z,", false_label);
 }
 
 struct Sym *add_global(const char *name, int type, int storage)
@@ -759,7 +706,7 @@ char *read_adjacent_string_literals_ex(int *is_widep, int *lenp)
 }
 
 /* If an extern symbol had its extrn deferred, emit it now (once). */
-void emit_extrn_if_needed(struct Sym *s)
+void record_extern_reference(struct Sym *s)
 {
     int i;
 
@@ -804,120 +751,6 @@ void emit_deferred_extrns(void)
 }
 
 
-void emit_runtime_extrn_if_needed(const char *name)
-{
-    static const char *emitted[64];
-    static int nemitted;
-    static const char *buf_emitted[64];
-    static int n_buf_emitted;
-    static int buf_epoch;
-    int i;
-
-    /*
-     * During a suppressed scan/replay (scan_mode), do not emit the EXTRN and,
-     * crucially, do not record it as emitted.  Otherwise a runtime helper first
-     * "used" inside a suppressed gate replay would be marked emitted while its
-     * EXTRN line went nowhere, so the real emission would skip it and leave the
-     * helper undefined at link time.
-     */
-    if (scan_mode)
-        return;
-
-    if (g_inline_body_buffering) {
-        /* Dedup within this one buffered/speculative attempt only - never
-         * against the persistent `emitted` cache below, which would
-         * reintroduce the exact hazard this branch exists to avoid (see the
-         * caller-side comment on g_inline_body_buffering). g_buffering_epoch
-         * is bumped at every g_inline_body_buffering++ site (dcc_func.c), so
-         * comparing it (not `g_emit_sink.stream`'s pointer value) is what detects "a new
-         * attempt started": g_emit_sink.stream points at a tmpfile(), and a closed
-         * tmpfile's freed FILE* can be reused by a later, unrelated
-         * tmpfile() at the exact same address - keying off g_emit_sink.stream identity
-         * caused a real miscompilation (tests/mm.c producing fewer output
-         * lines than expected) by wrongly treating an unrelated later
-         * attempt as a continuation of an earlier one and suppressing an
-         * EXTRN it still needed. Without any such reset, a function with
-         * many sequential calls to the same runtime helper (e.g. a
-         * usage()-style block of printf calls) emits one duplicate `extrn`
-         * per call when buffered - confirmed to send ntvcm's L80 emulation
-         * into a multi-minute stall on a real test (tests/a1.c) once printf
-         * itself started routing through this path. */
-        if (buf_epoch != g_buffering_epoch) {
-            buf_epoch = g_buffering_epoch;
-            n_buf_emitted = 0;
-        }
-        for (i = 0; i < n_buf_emitted; ++i)
-            if (!strcmp(buf_emitted[i], name))
-                return;
-        if (n_buf_emitted < 64)
-            buf_emitted[n_buf_emitted++] = name;
-        fprintf(g_emit_sink.stream, "\textrn %s\n", name);
-        return;
-    }
-
-    for (i = 0; i < nemitted; ++i) {
-        if (!strcmp(emitted[i], name))
-            return;
-    }
-
-    if (nemitted >= 64)
-        fatal("too many runtime extrns");
-
-    fprintf(g_emit_sink.stream, "\textrn %s\n", name);
-    emitted[nemitted++] = name;
-}
-
-void emit_runtime_call(const char *name)
-{
-    emit_runtime_extrn_if_needed(name);
-    if (!scan_mode)
-        fprintf(g_emit_sink.stream, "\tcall %s\n", name);
-}
-
-void emit_load_frame_addr_hl(struct Sym *s)
-{
-    int n;
-    if (s->has_addr_cache) {
-        /* This local array's address was materialized once, unconditionally,
-         * right after the prologue allocated locals (see dcc_func.c) - it
-         * never changes for the life of the function, so every later
-         * reference just rereads the cached pointer instead of redoing the
-         * push ix/pop hl/ld de,N/add hl,de below. */
-        fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", s->addr_cache_offset);
-        fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", s->addr_cache_offset + 1);
-        return;
-    }
-    emit("\tpush ix\n");
-    emit("\tpop hl\n");
-    if (s->offset > 0 && s->offset <= 3) {
-        for (n = 0; n < s->offset; ++n) emit("\tinc hl\n");
-    } else if (s->offset < 0 && s->offset >= -3) {
-        for (n = 0; n < -s->offset; ++n) emit("\tdec hl\n");
-    } else if (s->offset != 0) {
-        fprintf(g_emit_sink.stream, "\tld de,%d\n", s->offset);
-        emit("\tadd hl,de\n");
-    }
-}
-
-void emit_load_sym_addr(struct Sym *s)
-{
-    if (s->is_vla) {
-        /* A VLA's storage is allocated at run time below SP; its frame slot
-         * holds a pointer to that block.  The array decays to that pointer
-         * value, so load the slot contents rather than the slot's address. */
-        emit_load_frame_addr_hl(s);
-        emit("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n");
-        return;
-    }
-    if (s->storage == SC_LOCAL || s->storage == SC_PARAM) {
-        emit_load_frame_addr_hl(s);
-    } else {
-        emit_extrn_if_needed(s);
-        fprintf(g_emit_sink.stream, "\tld hl,%s\n", asm_name_for(sym_asm_name(s)));
-    }
-}
-
-
 int sym_can_ix_direct(struct Sym *s)
 {
     int sz;
@@ -930,27 +763,6 @@ int sym_can_ix_direct(struct Sym *s)
     return 1;
 }
 
-/* Like sym_can_ix_direct, but for a `size`-byte access at frame-relative
- * `s->offset + off` rather than for the whole of `s`'s own type/extent -
- * i.e. one element of a local array, or one member of a local struct, at a
- * possibly nonzero byte offset from the symbol's base. Deliberately does
- * NOT exclude s->is_array (an in-range element of an array is still a
- * perfectly good (ix+d) direct access), but DOES exclude a VLA: its frame
- * slot holds a runtime pointer to the actual (heap/stack-allocated)
- * storage, not the data itself, so no fixed (ix+d) offset addresses its
- * elements. */
-int local_offset_can_ix_direct(struct Sym *s, int off, int size)
-{
-    int lo, hi;
-    if (!s) return 0;
-    if (s->storage != SC_LOCAL && s->storage != SC_PARAM) return 0;
-    if (s->is_vla) return 0;
-    if (size < 1) size = 1;
-    lo = s->offset + off;
-    hi = lo + size - 1;
-    return lo >= -128 && hi <= 127;
-}
-
 /* True for global/extern 16-bit non-array variables that support direct word load/store. */
 int is_global_word_sym(struct Sym *s)
 {
@@ -960,368 +772,12 @@ int is_global_word_sym(struct Sym *s)
     return type_size(s->type) == 2;
 }
 
-/* Z80: ld hl,(name) — load 16-bit value from global/extern directly. */
-void emit_load_global_word_direct(struct Sym *s)
-{
-    emit_extrn_if_needed(s);
-    fprintf(g_emit_sink.stream, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(s)));
-}
-
-/* Z80: ld (name),hl — store 16-bit HL value to global/extern directly. */
-void emit_store_global_word_direct(struct Sym *s)
-{
-    emit_extrn_if_needed(s);
-    fprintf(g_emit_sink.stream, "\tld (%s),hl\n", asm_name_for(sym_asm_name(s)));
-}
-
-void emit_load_sym_value_direct(struct Sym *s)
-{
-    if (is_global_word_sym(s)) {
-        emit_load_global_word_direct(s);
-        return;
-    }
-    if (type_size(s->type) == 1) {
-        fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", s->offset);
-        if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
-            emit("\tld h,0\n");
-        else
-            emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
-        if (type_is_bool(s->type) && s->storage == SC_PARAM)
-            emit_bool_normalize_hl(s->type);
-    } else if (type_size(s->type) == 4) {
-        fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", s->offset);
-        fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", s->offset + 1);
-        fprintf(g_emit_sink.stream, "\tld e,(ix%+d)\n", s->offset + 2);
-        fprintf(g_emit_sink.stream, "\tld d,(ix%+d)\n", s->offset + 3);
-    } else {
-        fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", s->offset);
-        fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", s->offset + 1);
-    }
-}
-
-/* True if s's value load is a genuine two-byte memory fetch that a
- * `sym & <const < 256>` fast path could trim to one byte - i.e. not
- * already register-resident (there a full load is already just 1-2 cheap
- * register moves, nothing to trim) and not an array/const-folded/long/
- * float/pointer symbol (out of scope for this fast path; long has its own
- * separate `& const` fast path in gen_long_arith_ast).
- *
- * The remaining three load shapes emit_load_sym_low_byte_and_const uses
- * each have their own addressing constraint: is_global_word_sym and the
- * no-ix-frame frame-address case both compute a full 16-bit address (via
- * `ld a,(name)` or emit_load_frame_addr_hl's HL arithmetic), so any offset
- * works; the plain ix-relative fallback instead emits a bare `(ix+d)`,
- * whose displacement is a signed 8-bit field - sym_can_ix_direct is the
- * existing range check for exactly that (a local frame can easily exceed
- * +-127 bytes; found via tests/tptrcnd.c's large-frame case, where an
- * unchecked `ld a,(ix-756)` silently wrapped to the wrong offset instead
- * of failing to assemble, corrupting an unrelated read). */
-int sym_word_load_is_two_byte_fetch(struct Sym *s)
-{
-    if (s == NULL)
-        return 0;
-    if (s->is_array || s->is_const_value)
-        return 0;
-    if (type_size(s->type) != 2)
-        return 0;
-    if (type_is_float(s->type) || type_ptr_depth(s->type) != 0)
-        return 0;
-    if (is_global_word_sym(s))
-        return 1;
-    return sym_can_ix_direct(s);
-}
-
-/* Load only s's low byte and AND it with mask (caller guarantees
- * mask <= 255). The result's high byte is always 0 regardless of s's
- * actual value or sign - a mask with no bits above bit 7 set can never
- * depend on s's high byte - so this skips fetching it at all, unlike the
- * normal two-byte load emit_load_sym_value_direct does before any masking
- * happens. Leaves the zero-extended result in HL. Caller has already
- * confirmed sym_word_load_is_two_byte_fetch(s). */
-void emit_load_sym_low_byte_and_const(struct Sym *s, unsigned int mask)
-{
-    if (is_global_word_sym(s)) {
-        emit_extrn_if_needed(s);
-        fprintf(g_emit_sink.stream, "\tld a,(%s)\n", asm_name_for(sym_asm_name(s)));
-    } else {
-        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
-    }
-    fprintf(g_emit_sink.stream, "\tand %u\n", mask & 255);
-    emit("\tld l,a\n\tld h,0\n");
-}
-
-/* True if s is a byte-sized (char/uchar/bool) scalar whose value is a
- * single-instruction raw byte fetch - i.e. safe to use directly in an
- * 8-bit-only comparison (sub/cp) without this codebase's usual int-
- * promotion (sign/zero-extend into H) on every byte read. Same three load
- * shapes and the same sym_can_ix_direct range check as
- * sym_word_load_is_two_byte_fetch, just for a 1-byte rather than 2-byte
- * value. */
-int sym_is_direct_byte_fetch(struct Sym *s)
-{
-    if (s == NULL)
-        return 0;
-    if (s->is_array || s->is_const_value)
-        return 0;
-    if (type_size(s->type) != 1)
-        return 0;
-    if (s->storage == SC_GLOBAL || s->storage == SC_EXTERN)
-        return 1;
-    return sym_can_ix_direct(s);
-}
-
-/* Load s's raw byte value into A - no int-promotion, since the only use is
- * an 8-bit-only comparison that doesn't need one. Caller has already
- * confirmed sym_is_direct_byte_fetch(s). */
-void emit_load_sym_byte_to_a(struct Sym *s)
-{
-    if (s->storage == SC_GLOBAL || s->storage == SC_EXTERN) {
-        emit_extrn_if_needed(s);
-        fprintf(g_emit_sink.stream, "\tld a,(%s)\n", asm_name_for(sym_asm_name(s)));
-        return;
-    }
-    fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
-}
-
-void emit_load_sym_de_direct(struct Sym *s)
-{
-    if (s == NULL)
-        fatal("emit_load_sym_de_direct: missing symbol");
-    if (is_global_word_sym(s)) {
-        emit("\tpush hl\n");
-        emit_load_global_word_direct(s);
-        emit("\tex de,hl\n\tpop hl\n");
-        return;
-    }
-    if ((s->storage == SC_GLOBAL || s->storage == SC_EXTERN) &&
-        !s->is_array && type_size(s->type) == 1) {
-        emit("\tpush hl\n");
-        emit_load_sym_addr(s);
-        emit("\tld e,(hl)\n\tpop hl\n");
-        if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
-            emit("\tld d,0\n");
-        else
-            emit("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n");
-        if (type_is_bool(s->type))
-            emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n\tld d,0\n");
-        return;
-    }
-    if (!sym_can_ix_direct(s))
-        fatal("emit_load_sym_de_direct: symbol is not directly loadable");
-    if (type_size(s->type) == 1) {
-        fprintf(g_emit_sink.stream, "\tld e,(ix%+d)\n", s->offset);
-        if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
-            emit("\tld d,0\n");
-        else
-            emit("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n");
-        if (type_is_bool(s->type) && s->storage == SC_PARAM)
-            emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n\tld d,0\n");
-    } else {
-        fprintf(g_emit_sink.stream, "\tld e,(ix%+d)\n", s->offset);
-        fprintf(g_emit_sink.stream, "\tld d,(ix%+d)\n", s->offset + 1);
-    }
-}
-
-void emit_store_hl_to_sym_direct(struct Sym *s)
-{
-    if (is_global_word_sym(s)) {
-        emit_store_global_word_direct(s);
-        return;
-    }
-    if ((s->storage == SC_LOCAL || s->storage == SC_PARAM) &&
-        type_size(s->type) <= 2 && !sym_can_ix_direct(s)) {
-        /* Frame slot is outside the (ix+d) signed-8-bit displacement range,
-         * so compute the address and store through it. Normalize a _Bool
-         * value up front (mirroring the plain (ix+d) path below) so the
-         * value left in HL on exit is the normalized 0/1, not just the
-         * stored byte - keeping this fallback's HL contract identical to the
-         * in-range path for a consumed assignment result.
-         *
-         * Only 1- and 2-byte objects need this: every caller that stores a
-         * 4-byte long/float to an out-of-range frame slot already computes
-         * the address itself and uses emit_store_de_to_addr_hl (see
-         * gen_assign_ast's !sym_can_ix_direct long/float branches), so a
-         * size-4 store only ever reaches the (ix+d) code below with an
-         * in-range offset. */
-        if (type_is_bool(s->type))
-            emit_bool_normalize_hl(s->type);
-        emit("\tpush hl\n");
-        emit_load_sym_addr(s);
-        emit("\tpop de\n");
-        emit_store_de_to_addr_hl(s->type);
-        emit("\tex de,hl\n");
-        return;
-    }
-    if (type_size(s->type) == 1) {
-        if (type_is_bool(s->type))
-            emit_bool_normalize_hl(s->type);
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", s->offset);
-    } else if (type_size(s->type) == 4) {
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", s->offset);
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", s->offset + 1);
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),e\n", s->offset + 2);
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),d\n", s->offset + 3);
-    } else {
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", s->offset);
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", s->offset + 1);
-    }
-}
-
-
-int try_emit_post_update_sym_direct(struct Sym *s, int op)
-{
-    int elem;
-
-    if (!s || s->is_array)
-        return 0;
-    if (type_is_long(s->type) || type_is_float(s->type))
-        return 0;
-    if (type_size(s->type) > 2)
-        return 0;
-    if (!sym_can_ix_direct(s) && !is_global_word_sym(s))
-        return 0;
-
-    emit_load_sym_value_direct(s);     /* HL = old value, expression result */
-    emit("\tpush hl\n");              /* save old value for result */
-
-    if (type_ptr_depth(s->type) > 0) {
-        elem = type_index_elem_size(s->type);
-        if (op == TOK_INC) {
-            emit_add_const_to_hl(elem);
-        } else {
-            emit_ld_de_const(elem);
-            emit("\tor a\n\tsbc hl,de\n");
-        }
-    } else {
-        if (op == TOK_INC)
-            emit("\tinc hl\n");
-        else
-            emit("\tdec hl\n");
-    }
-
-    emit_store_hl_to_sym_direct(s);    /* store new value */
-    emit("\tpop hl\n");               /* return old value */
-    g_expr.type = s->type;
-    return 1;
-}
-
-void emit_incdec_sym_direct(struct Sym *s, int op)
-{
-    int done;
-
-    /* Global 16-bit integer (non-pointer): ld hl,(nn); inc/dec hl; ld (nn),hl.
-     * inc hl / dec hl are atomic 16-bit ops so no byte-by-byte ripple needed. */
-    if (is_global_word_sym(s) && type_ptr_depth(s->type) == 0) {
-        emit_load_global_word_direct(s);
-        if (op == TOK_INC) emit("\tinc hl\n");
-        else               emit("\tdec hl\n");
-        emit_store_global_word_direct(s);
-        return;
-    }
-
-    /* Pointer ++/-- advances by the pointed-to object size, not by one
-     * byte. Global pointer case now handled via emit_load_sym_value_direct +
-     * emit_store_hl_to_sym_direct which both support globals. */
-    if (s && type_ptr_depth(s->type) > 0) {
-        int elem;
-        elem = type_index_elem_size(s->type);
-        emit_load_sym_value_direct(s);
-        if (op == TOK_INC) {
-            emit_add_const_to_hl(elem);
-        } else {
-            emit_ld_de_const(elem);
-            emit("\tor a\n\tsbc hl,de\n");
-        }
-        emit_store_hl_to_sym_direct(s);
-        return;
-    }
-
-    if (type_size(s->type) == 1) {
-        if (op == TOK_INC)
-            fprintf(g_emit_sink.stream, "\tinc (ix%+d)\n", s->offset);
-        else
-            fprintf(g_emit_sink.stream, "\tdec (ix%+d)\n", s->offset);
-        return;
-    }
-
-    done = new_label();
-
-    if (type_size(s->type) == 4) {
-        /*
-         * 4-byte IX-direct long ++/--.  The previous fast path always used
-         * the 2-byte sequence, so a long decrement 0 -> -1 produced
-         * 0000FFFF instead of FFFFFFFF.  That made loops like:
-         *
-         *     for (i = BLOCKS - 1; i >= 0; i--)
-         *
-         * continue once more with i's low word equal to -1.
-         */
-        if (op == TOK_INC) {
-            fprintf(g_emit_sink.stream, "\tinc (ix%+d)\n", s->offset);
-            emit_jp_label("jp nz,", done);
-            fprintf(g_emit_sink.stream, "\tinc (ix%+d)\n", s->offset + 1);
-            emit_jp_label("jp nz,", done);
-            fprintf(g_emit_sink.stream, "\tinc (ix%+d)\n", s->offset + 2);
-            emit_jp_label("jp nz,", done);
-            fprintf(g_emit_sink.stream, "\tinc (ix%+d)\n", s->offset + 3);
-        } else {
-            fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
-            fprintf(g_emit_sink.stream, "\tdec (ix%+d)\n", s->offset);
-            emit("\tor a\n");
-            emit_jp_label("jp nz,", done);
-            fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + 1);
-            fprintf(g_emit_sink.stream, "\tdec (ix%+d)\n", s->offset + 1);
-            emit("\tor a\n");
-            emit_jp_label("jp nz,", done);
-            fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset + 2);
-            fprintf(g_emit_sink.stream, "\tdec (ix%+d)\n", s->offset + 2);
-            emit("\tor a\n");
-            emit_jp_label("jp nz,", done);
-            fprintf(g_emit_sink.stream, "\tdec (ix%+d)\n", s->offset + 3);
-        }
-    } else {
-        /* 2-byte int ++/--. */
-        if (op == TOK_INC) {
-            fprintf(g_emit_sink.stream, "\tinc (ix%+d)\n", s->offset);
-            emit_jp_label("jp nz,", done);
-            fprintf(g_emit_sink.stream, "\tinc (ix%+d)\n", s->offset + 1);
-        } else {
-            fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
-            fprintf(g_emit_sink.stream, "\tdec (ix%+d)\n", s->offset);
-            emit("\tor a\n");
-            emit_jp_label("jp nz,", done);
-            fprintf(g_emit_sink.stream, "\tdec (ix%+d)\n", s->offset + 1);
-        }
-    }
-
-    emit_label(done);
-}
-
-
-
-void emit_load_from_hl(int type);
-void emit_promote_byte_to_int(int actual_type);
-void emit_extend_to_long_typed(int source_type);
-void emit_extend_to_long(int source_is_unsigned);
 
 int base_struct_id_from_type(int type)
 {
     if (type & TYPE_STRUCT)
         return type_struct_id(type);
     return 0;
-}
-
-void emit_add_field_offset(struct FieldDef *fd)
-{
-    int i;
-    /* inc hl is 1 byte; ld de,N + add hl,de is 4 bytes regardless of N */
-    if (fd->offset >= 1 && fd->offset <= 3) {
-        for (i = 0; i < fd->offset; i++)
-            emit("\tinc hl\n");
-    } else if (fd->offset) {
-        fprintf(g_emit_sink.stream, "\tld de,%d\n", fd->offset);
-        emit("\tadd hl,de\n");
-    }
 }
 
 void skip_balanced_bracket(int open_ch, int close_ch)
