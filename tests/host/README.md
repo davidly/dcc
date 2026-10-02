@@ -8,6 +8,43 @@ cmake --build build/mir-tests --target mir-verify-test --parallel
 ctest --test-dir build/mir-tests --output-on-failure
 ```
 
+## Whole-compiler source-function coverage
+
+The coverage collector additionally runs
+`scripts/test-compiler-entrypoints.py` with the checkpoint compiler and this
+existing verifier harness before writing its collection success stamp. Driver
+probes assert exact version/help/usage status and output, isolated `-I` search
+and values, and diagnostic-only shadow schedule/target reports. They compare
+assembly and embedded debug metadata off/on across release, `-g`, and `-gline`,
+with and without stack checks. Every subprocess has a timeout and private
+environment/paths; inherited `LLVM_PROFILE_FILE` is preserved.
+
+Frontend host assertions use the real lexer for nested conditional active-state
+transitions and the real type-name parser for nested suffix/token advancement
+and bounded EOF behavior. Global-text ownership tests exercise same/different
+function writes, absent/multiple writes, and live AST classifier/value-numbering
+acceptance or rejection; shared state is restored afterward.
+
+Target/scheduler host fixtures verify straight-line, diamond/PHI, loop/PHI, and
+narrow/wide call-pressure graphs, asserting constraints, CFG/liveness summaries,
+legal colors/rematerialization/spills, call splits, and movements. Snapshots
+ensure this diagnostic analysis does not alter production state.
+
+The verifier's `--shadow-schedule-require-invalid` subprocess mode builds the
+unsupported fixture named `coverage_unsupported` and invokes the schedule
+report entry point. REPORT-only diagnoses `valid=0` without terminating;
+REQUIRE terminates through the existing fatal path, isolated from normal host
+tests. Ordinary driver `#asm` compilation is not an unsupported-MIR oracle.
+
+The five host objects remain identical across JSON, native, and HTML reporting.
+`main` and the unexecuted `dcc_driver_main` alias share a source function; do not
+call the alias just to raise instantiation coverage. Normal reporting gates
+exact nonempty whole-compiler **source-function** totals, not instantiations or
+rounded percentages. Existing all-metric selected AST/MIR completeness controls
+retain their meaning. See [compiler coverage](../../docs/compiler-coverage.md)
+for artifact names, configuration-aware inventory checks, and immutable
+checkpoint/report-only provenance.
+
 For Clang/GCC sanitizer coverage, configure with
 `-DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer'` and run
 CTest with `ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1`.

@@ -1,5 +1,87 @@
 # Compiler source coverage
 
+## October 2 whole-compiler source-function contract
+
+Normal `compiler-coverage.sh` reporting now requires a nonempty whole-compiler
+LLVM **source-function** denominator under `src/dcc/*.c`, exact integer
+`covered == count`, and `missed == 0`. Rounded `100.00%` text is insufficient.
+The existing selected production AST/MIR scope and classifications are unchanged;
+`DCC_COVERAGE_REQUIRE_COMPLETE` / `-RequireComplete` retains its separate
+all-metric selected AST/MIR meaning. The new function-only gate runs normally,
+including through the proof suite's `-All` workflow.
+
+`scripts/compiler-function-coverage.py` establishes its expected inventory
+independently from the checkpoint's `compile_commands.json`, using each target's
+compiler, active defines, and include options. It requires the complete current
+source set across the compiler and five existing host targets, unions function
+body source ranges across configurations, and retains data-only files with zero
+functions. LLVM per-file function summaries, independent inventory counts, and
+native totals must agree; missing, empty, partial, extra, or inconsistent data
+fails closed. Each body also requires exact expected/exported canonical-name
+equality, so unknown aliases cannot disguise partial or extraneous exports.
+
+Production `main` and the host's `dcc_driver_main` alias share one source body.
+Executing `main` covers that source function even if the alias remains
+unexecuted. Both raw identities/counts stay visible; the alias is not called
+merely to inflate instantiation coverage.
+
+Before the collection success stamp, `scripts/test-compiler-entrypoints.py`
+asserts exact CLI status/stdout/stderr and no early-exit assembly, unique
+`-I`-only include paths/values/order/separators/spaces, and structured shadow
+schedule/target reports and filters. Private environments, unique paths, and
+timeouts preserve `LLVM_PROFILE_FILE`. Diagnostics off/on must leave assembly
+and embedded debug metadata byte-identical for release, `-g`, and `-gline`,
+with/without stack checks. The existing verifier's
+`--shadow-schedule-require-invalid` mode isolates invalid REPORT-only status and
+REQUIRE fatal failure. Host assertions additionally use the real lexer,
+type-name suffix parser, and global-write ownership/value-numbering consumers,
+plus verified straight-line, diamond/PHI, loop/PHI, and narrow/wide call-pressure
+fixtures with production-state snapshots.
+
+All unfiltered exports/native reports/HTML use the same compiler and five host
+objects. New artifacts under the checkpoint's `compiler-coverage/report/` are:
+
+| Artifact | Evidence |
+| --- | --- |
+| `compiler-coverage.json` | Unfiltered LLVM export |
+| `compiler-function-detail.txt` | Native function/instantiation detail |
+| `compiler-function-inventory.json` | Independent body/name inventory, including zero-function files |
+| `compiler-function-coverage.json`, `compiler-function-summary.txt` | Exact source totals and identity counts |
+| `compiler-function-gaps.json`, `compiler-function-aliases.json` | Missed source bodies and transparent alias detail |
+
+Existing `summary.txt`, `ast-mir-*`, and HTML artifacts remain intact. Collection
+failure removes/prevents a success stamp; completed collection is not itself a
+successful function-coverage proof. Report-only provenance is checked before
+export against unchanged inputs/tools/binaries, execution manifest, and raw
+profiles. Coverage gaps return nonzero after writing diagnostic artifacts.
+Do not alter, resume, or mix the historical
+`build/mir-proof-suite-20261002-{130430-410603,175420-1564947}` checkpoints.
+
+### Completed checkpoint: 2026-10-02
+
+The fresh integrated proof at `build/mir-proof-suite-20261002-195051-1893381/`
+passed all 11 phases with:
+
+```sh
+pwsh ./scripts/run-mir-proof-suite.ps1 -All -MutationJobs 0 -MutationBuildJobs 4 -RunTimeout 60
+```
+
+Native and HTML evidence under its `compiler-coverage/report/` agrees:
+
+| Metric | Whole compiler | Selected production AST/MIR |
+| --- | ---: | ---: |
+| Source functions covered/count | **5,168/5,168** | **4,638/4,638** |
+| Missed source functions | **0** | **0** |
+| Lines / regions / branches | 93.92% / 94.26% / 67.88% | 94.25% / 94.69% / 67.33% |
+
+All 35 historical gap targets executed; the 179 mixed-module classifications
+remained unchanged. Production `main=419391` and alias `dcc_driver_main=0`
+remain distinct raw identities of one covered source function. Report-only
+regeneration matched all 676 provenance/profile/report hashes, including 655 raw
+profiles; compiler sources and checked baseline hashes were unchanged. This
+proves the stated source-function objective for this checkpoint, not exhaustive
+branch/path or cross-platform coverage.
+
 ## October 1 bounded structural-proof checkpoint
 
 Merged-main base: `1dc57abd`; final integrated compiler: `548964f9`.

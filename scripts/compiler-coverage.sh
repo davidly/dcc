@@ -100,6 +100,7 @@ python3 "$checkpoint" prepare --build-dir "$build_dir" \
 cmake -S "$repo_root/src/dcc" -B "$build_dir/cmake" \
     -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_C_COMPILER="$clang_cmd" \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
     -DDCC_ENABLE_COVERAGE=ON \
     -DDCC_BUILD_MIR_TESTS=ON \
     -DDCC_RUNTIME_OUTPUT_DIRECTORY="$binary_dir"
@@ -130,6 +131,9 @@ export DCC="$binary_dir/dcc"
 export LLVM_PROFILE_FILE="$raw_dir/dcc-%8m.profraw"
 
 cd "$repo_root"
+python3 "$repo_root/scripts/test-compiler-entrypoints.py" \
+    --compiler "$DCC" --host "$build_dir/cmake/mir-verify-test" \
+    --workspace "$build_dir/compiler-entrypoints"
 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -NoStackCheck -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/runall-extended.ps1 -C11 -Mode full -ThrottleLimit "$jobs"
@@ -489,6 +493,21 @@ fi
     -object "$build_dir/cmake/mir-selector-isolation-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$repo_root"/src/dcc/*.c >"$report_dir/summary.txt"
+"$llvm_cov" export "$binary_dir/dcc" \
+    -object "$build_dir/cmake/mir-verify-test" \
+    -object "$build_dir/cmake/mir-scalar-dag-test" \
+    -object "$build_dir/cmake/mir-consteval-isolation-test" \
+    -object "$build_dir/cmake/mir-vla-smooth-isolation-test" \
+    -object "$build_dir/cmake/mir-selector-isolation-test" \
+    -instr-profile="$build_dir/dcc.profdata" >"$report_dir/compiler-coverage.json"
+"$llvm_cov" report "$binary_dir/dcc" \
+    -object "$build_dir/cmake/mir-verify-test" \
+    -object "$build_dir/cmake/mir-scalar-dag-test" \
+    -object "$build_dir/cmake/mir-consteval-isolation-test" \
+    -object "$build_dir/cmake/mir-vla-smooth-isolation-test" \
+    -object "$build_dir/cmake/mir-selector-isolation-test" \
+    -instr-profile="$build_dir/dcc.profdata" -show-functions \
+    "$repo_root"/src/dcc/*.c >"$report_dir/compiler-function-detail.txt"
 set --
 while IFS= read -r source; do
     set -- "$@" "$source"
@@ -551,8 +570,14 @@ python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
     -show-branches=count \
     "$repo_root"/src/dcc/*.c
 
+python3 "$repo_root/scripts/compiler-function-coverage.py" \
+    --compile-commands "$build_dir/cmake/compile_commands.json" \
+    --coverage "$report_dir/compiler-coverage.json" \
+    --native-report "$report_dir/summary.txt" \
+    --output-dir "$report_dir" >"$report_dir/compiler-function-summary.txt"
 python3 "$checkpoint" report --build-dir "$build_dir"
-echo "Unfiltered collection summary (not a target): $report_dir/summary.txt"
+echo "Whole-compiler source-function summary: $report_dir/compiler-function-summary.txt"
+echo "Unfiltered native coverage summary: $report_dir/summary.txt"
 echo "Legacy-excluded AST/MIR summary: $report_dir/ast-mir-summary.txt"
 echo "AST/MIR source manifest:   $report_dir/ast-mir-sources.txt"
 echo "AST/MIR coverage data:     $report_dir/ast-mir-coverage.json"
