@@ -10,7 +10,8 @@
  *
  * @par Key entry points
  * next_token(), parse_preprocessor_line(), add_define(), remove_define(),
- * macro_expand_argument_text(), lex_save(), and lex_restore().
+ * macro_expand_argument_text(), parse_escape_string_char(), lex_save(), and
+ * lex_restore().
  *
  * @par Boundary
  * dcc.c owns recursive include expansion and the initial inactive-source
@@ -921,6 +922,20 @@ int parse_escape_string_char(const char **ps)
             n++;
         }
         return v & 255;
+    }
+
+    if (c == 'x') {
+        int v;
+        v = 0;
+        while (isxdigit((unsigned char)**ps)) {
+            int d = (unsigned char)**ps;
+            if (d >= '0' && d <= '9') d -= '0';
+            else if (d >= 'a' && d <= 'f') d -= 'a' - 10;
+            else d -= 'A' - 10;
+            v = (v * 16 + d) & 255;
+            *ps = *ps + 1;
+        }
+        return v;
     }
 
     return c;

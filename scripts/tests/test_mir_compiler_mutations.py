@@ -66,6 +66,27 @@ struct MirAllocationSummary
             path.write_text("\n".join(fragments))
         self.configure_fixture()
 
+    def test_liveness_mutants_target_the_shipping_bitset_transfer(self):
+        source = (ROOT / "src/dcc/dcc_mir.c").read_text()
+        begin = source.index("static int mir_compute_liveness_bitsets(")
+        end = source.index("\nint mir_verify_and_dump(", begin)
+        bitsets = source[begin:end]
+        for name in ("phi-edge-liveness", "call-argument-liveness"):
+            mutation = next(item for item in self.mutations if item["Name"] == name)
+            with self.subTest(name=name):
+                self.assertEqual(source.count(mutation["Before"]), 1)
+                self.assertIn(mutation["Before"], bitsets)
+                self.assertNotIn(mutation["Before"], source[:begin])
+
+    def test_branch_manifest_mutants_restore_unique_production_guards(self):
+        manifest = json.loads((ROOT / "scripts/compiler-branch-proof.json").read_text())
+        for name, label in manifest["mutant_assertions"].items():
+            mutation = next(item for item in self.mutations if item["Name"] == name)
+            with self.subTest(name=name):
+                self.assertEqual(mutation["ExpectedFailure"], label)
+                self.assertEqual((ROOT / mutation["Source"]).read_text().count(
+                    mutation["Before"]), 1)
+
     def tearDown(self):
         shutil.rmtree(self.workspace)
 
@@ -215,13 +236,15 @@ int main(int argc, char **argv) {
             "int main(void) { return 0; }\n"
         )
 
-    def run_fixture(self, jobs=None, expected_exit=0):
+    def run_fixture(self, jobs=None, expected_exit=0, names=None):
         output = self.workspace / "output with spaces"
         command = [PWSH, "-NoLogo", "-NoProfile", "-File",
                    str(self.repo / "scripts/run-mir-compiler-mutations.ps1"),
                    "-OutputDirectory", str(output)]
         if jobs is not None:
             command += ["-Jobs", str(jobs), "-BuildJobs", "2"]
+        if names is not None:
+            command += ["-Names", ",".join(names)]
         environment = dict(os.environ, DCC_MIR_SELECT_CANDIDATE="poison",
                            DCC_MIR_CACHE_VERIFY="poison",
                            LLVM_PROFILE_FILE=str(self.workspace / "forbidden-normal-coverage"))
@@ -242,12 +265,20 @@ int main(int argc, char **argv) {
             self.assertNotEqual(completed.returncode, 0)
         results = json.loads((output / "results.json").read_text())
         self.assertEqual([r["mutation"] for r in results],
-                         [m["Name"] for m in self.mutations])
+                         [m["Name"] for m in self.mutations
+                          if names is None or m["Name"] == "baseline" or m["Name"] in names])
         self.assertFalse(list(output.glob("work-*")))
         self.assertFalse((self.workspace / "forbidden-normal-coverage").exists())
         for relative, fragments in self.source_text.items():
             self.assertEqual((self.repo / relative).read_text(), "\n".join(fragments))
         return results
+
+    def test_focused_names_always_include_healthy_baseline(self):
+        results = self.run_fixture(
+            jobs=2, names=["memory-dominated-type", "memory-endian-shift"])
+        self.assertEqual([r["outcome"] for r in results],
+                         ["passed", "killed", "killed"])
+        self.assertEqual(len(list(self.trace.glob("*.start"))), 3)
 
     def test_default_serial_and_parallel_are_equal_and_bounded(self):
         serial = self.run_fixture()
@@ -309,11 +340,13 @@ int main(int argc, char **argv) {
             '    exit 0\n}\n'))
         results = self.run_fixture(jobs=2, expected_exit=1)
         outcomes = {r["mutation"]: r["outcome"] for r in results}
-        self.assertEqual(outcomes, {
+        expected = {
             "baseline": "passed", "dominance": "survived", "argument-abi": "invalid",
             "call-arity": "invalid", "indirect-callee": "invalid",
             "callback-identity": "invalid", "phi-edge-liveness": "invalid",
             "call-argument-liveness": "killed", "phi-consumer-value": "invalid",
+            "preprocessor-character-escape": "killed",
+            "preprocessor-character-hex": "killed",
             "promotion-cache": "killed",
             "global-field-vn-cache": "killed",
             "global-field-vn-call-barrier": "killed",
@@ -334,7 +367,39 @@ int main(int argc, char **argv) {
             "paired-byte-adjacency": "killed",
             "allocation-first-result": "killed",
             "allocation-store-width": "killed",
-        })
+        }
+        expected.update({m["Name"]: "killed" for m in self.mutations
+                         if m["Name"].startswith("memory-")})
+        self.assertEqual(outcomes, expected)
+
+    def test_memory_guards_require_their_exact_assertion(self):
+        module = (ROOT / "scripts/mir-compiler-mutations.psm1").as_posix()
+        command = f"Import-Module '{module}'; " + r'''
+$checks = @()
+foreach ($mutation in Get-MirCompilerMutations | Where-Object Name -like "memory-*") {
+    $log = "$($mutation.ExpectedFailure)`nMIR verifier failures=1`n"
+    foreach ($probe in @(
+        @{Output=$log; ExitCode=1; TimedOut=$false; Expected="killed"},
+        @{Output=$log; ExitCode=0; TimedOut=$false; Expected="invalid"},
+        @{Output=$log; ExitCode=134; TimedOut=$false; Expected="invalid"},
+        @{Output=$log; ExitCode=1; TimedOut=$true; Expected="invalid"},
+        @{Output="FAIL unrelated assertion`nMIR verifier failures=1`n";
+          ExitCode=1; TimedOut=$false; Expected="invalid"},
+        @{Output="prefix $log"; ExitCode=1; TimedOut=$false; Expected="invalid"},
+        @{Output="MIR verifier failures=0`n"; ExitCode=0;
+          TimedOut=$false; Expected="survived"}
+    )) {
+        $actual = Get-MirMutationOutcome ([pscustomobject]$probe) $mutation
+        if ($actual -ne $probe.Expected) { throw "$($mutation.Name): $actual" }
+        $checks += $actual
+    }
+}
+ConvertTo-Json -InputObject $checks
+'''
+        outcomes = json.loads(subprocess.check_output(
+            [PWSH, "-NoProfile", "-Command", command], text=True))
+        self.assertEqual(len(outcomes),
+                         7 * sum(m["Name"].startswith("memory-") for m in self.mutations))
 
     def test_classifier_requires_exact_diagnostic_exit_and_completion(self):
         module = (ROOT / "scripts/mir-compiler-mutations.psm1").as_posix()

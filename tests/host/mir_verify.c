@@ -75,6 +75,14 @@ static void setup(int count, int values, int labels)
     int instruction;
 
     mir_begin_function("verify_test", "_verify_test", EMIT_SINK_FINAL, 0, 0, 0);
+    if (count > mir.capacity) {
+        struct MirInsn *insns = realloc(
+            mir.insns, (size_t)count * sizeof(*insns));
+        if (insns == NULL)
+            fatal("out of memory setting up MIR test");
+        mir.insns = insns;
+        mir.capacity = count;
+    }
     mir.count = count;
     mir.next_value = values;
     mir.next_label = labels;
@@ -131,6 +139,776 @@ static void expect_verification(const char *name, int valid)
         ++failures;
     }
     clear_liveness();
+}
+
+static void memory_proof_instruction(
+    int index, enum MirOpcode opcode, int dst, int src1, int src2,
+    int type, long immediate)
+{
+    struct MirInsn *insn = &mir.insns[index];
+
+    insn->opcode = opcode;
+    insn->dst = dst;
+    insn->src1 = src1;
+    insn->src2 = src2;
+    insn->type = type;
+    insn->immediate = immediate;
+}
+
+static void memory_proof_result(const char *name, int ok)
+{
+    if (!ok) {
+        fprintf(stderr, "FAIL memory rewrite %s\n", name);
+        ++failures;
+    }
+    fprintf(stderr, "; MIR memory-proof case=%s outcome=%s\n",
+            name, ok ? "passed" : "failed");
+    clear_liveness();
+}
+
+static int memory_proof_verify(void)
+{
+    int value;
+
+    prepare_test_cfg_metadata();
+    if (!mir_verify_dominance())
+        return 0;
+    mir_invalidate_use_cache();
+    for (value = 0; value < mir.next_value; ++value)
+        (void)mir_definition(value);
+    return mir_verify_and_dump();
+}
+
+static int memory_proof_idempotent(void)
+{
+    struct MirInsn saved[512];
+    int count = mir.count;
+
+    if (count > (int)(sizeof(saved) / sizeof(saved[0])))
+        return 0;
+    memcpy(saved, mir.insns, (size_t)count * sizeof(saved[0]));
+    if (!mir_verify_and_dump() || mir.count != count)
+        return 0;
+    return !memcmp(saved, mir.insns, (size_t)count * sizeof(saved[0]));
+}
+
+static void setup_dominated_memory_proof(void)
+{
+    int load;
+    int pointer_type = type_add_ptr(TYPE_CHAR | TYPE_UNSIGNED);
+
+    setup(44, 40, 4);
+    memory_proof_instruction(2, MIR_ADDRESS, 1, -1, -1, pointer_type, 0);
+    strcpy(mir.insns[2].name, "memory_proof_bytes");
+    for (load = 0; load < 4; ++load) {
+        int index = 12 + 7 * load;
+        int value = 2 + 4 * load;
+
+        memory_proof_instruction(index, MIR_CONST, value, -1, -1, TYPE_INT, 1);
+        memory_proof_instruction(index + 1, MIR_BINARY, value + 1,
+                                 0, value, TYPE_INT, '+');
+        memory_proof_instruction(index + 2, MIR_INDEX_ADDRESS, value + 2,
+                                 1, value + 1, pointer_type, 1);
+        memory_proof_instruction(index + 3, MIR_LOAD_INDIRECT, value + 3,
+                                 value + 2, -1, TYPE_CHAR | TYPE_UNSIGNED, 0);
+        mir.insns[index + 3].memory_size = 1;
+    }
+    memory_proof_instruction(40, MIR_BINARY, 18, 5, 13, TYPE_INT, '+');
+    memory_proof_instruction(41, MIR_BINARY, 19, 18, 17, TYPE_INT, '+');
+    mir.insns[43].src1 = 19;
+}
+
+static void memory_proof_barrier(int index, enum MirOpcode opcode)
+{
+    memory_proof_instruction(index, opcode, -1, 1, 0, TYPE_VOID, 0);
+    mir.insns[index].memory_size = 1;
+    strcpy(mir.insns[index].name, "memory_proof_effect");
+    if (opcode == MIR_CALL || opcode == MIR_CALL_AGGREGATE) {
+        mir.insns[index].src1 = -1;
+        mir.insns[index].src2 = -1;
+        mir.next_call_id = 1;
+    }
+}
+
+static void verify_dominated_memory_rewrites(void)
+{
+    static const char *names[] = {
+        "dom-positive", "dom-two-loads", "dom-one-address", "dom-shared-address",
+        "dom-safe-join", "dom-bypass", "dom-path-store", "dom-path-call",
+        "dom-backedge-write", "dom-store", "dom-storeind", "dom-copy",
+        "dom-call", "dom-callagg", "dom-vlasave", "dom-vlaalloc",
+        "dom-vlarestore", "dom-vastart", "dom-vaend", "dom-vaarg", "dom-opaque",
+        "dom-type", "dom-width", "dom-bitfield", "dom-explicit-volatile",
+        "dom-inherited-volatile", "dom-deep-volatile", "dom-phi-volatile",
+        "dom-qualifier-removal", "dom-base", "dom-index", "dom-offset",
+        "dom-stride", "dom-address-metadata", "dom-shared-live-tree",
+        "dom-depth-bound"
+    };
+    static const enum MirOpcode barriers[] = {
+        MIR_STORE, MIR_STORE_INDIRECT, MIR_COPY_AGGREGATE,
+        MIR_CALL, MIR_CALL_AGGREGATE, MIR_VLA_SAVE, MIR_VLA_ALLOC,
+        MIR_VLA_RESTORE, MIR_VA_START, MIR_VA_END, MIR_VA_ARG, MIR_OPAQUE
+    };
+    int test;
+
+    for (test = 0; test < (int)(sizeof(names) / sizeof(names[0])); ++test) {
+        int retained = 1;
+        int ok;
+        int load;
+        struct MirInsn original_loads[4];
+        int pointer_type = type_add_ptr(TYPE_CHAR | TYPE_UNSIGNED);
+
+        setup_dominated_memory_proof();
+        strcpy(mir.name, names[test]);
+        if (test == 1) {
+            mir.insns[29].opcode = MIR_NOP;
+            mir.insns[29].dst = -1;
+            mir.insns[36].opcode = MIR_NOP;
+            mir.insns[36].dst = -1;
+            mir.insns[40].src2 = 9;
+            mir.insns[41].src2 = 9;
+            retained = 3;
+        } else if (test == 2) {
+            for (load = 0; load < 4; ++load) {
+                mir.insns[13 + 7 * load].opcode = MIR_UNARY;
+                mir.insns[13 + 7 * load].src1 = 2 + 4 * load;
+                mir.insns[13 + 7 * load].src2 = -1;
+                mir.insns[13 + 7 * load].immediate = 0;
+            }
+            retained = 15;
+        } else if (test == 3)
+            mir.insns[36].src1 = 4;
+        else if (test == 4 || test == 5) {
+            memory_proof_instruction(test == 5 ? 3 : 16,
+                                     MIR_BRANCH_FALSE, -1, 0, -1, TYPE_INT, 0);
+            mir.insns[test == 5 ? 3 : 16].label = test == 5 ? 1 : 2;
+            memory_proof_instruction(test == 5 ? 18 : 25,
+                                     MIR_LABEL, -1, -1, -1, TYPE_INT, 0);
+            mir.insns[test == 5 ? 18 : 25].label = test == 5 ? 1 : 2;
+            if (test == 5) {
+                mir.insns[40].src1 = 9;
+                retained = 3;
+            }
+        } else if (test == 6 || test == 7) {
+            memory_proof_instruction(30, MIR_BRANCH_FALSE, -1, 0, -1, TYPE_INT, 0);
+            mir.insns[30].label = 1;
+            memory_proof_barrier(31, test == 6 ? MIR_STORE_INDIRECT : MIR_CALL);
+            mir.insns[32].opcode = MIR_LABEL;
+            mir.insns[32].label = 1;
+            retained = 9;
+        } else if (test == 8) {
+            memory_proof_instruction(18, MIR_LABEL, -1, -1, -1, TYPE_INT, 0);
+            mir.insns[18].label = 1;
+            memory_proof_barrier(30, MIR_STORE_INDIRECT);
+            memory_proof_instruction(31, MIR_BRANCH_FALSE, -1, 0, -1, TYPE_INT, 0);
+            mir.insns[31].label = 1;
+            retained = 15;
+        } else if (test >= 9 && test <= 20) {
+            memory_proof_barrier(16, barriers[test - 9]);
+            retained = 3;
+        } else if (test >= 21 && test <= 24) {
+            retained = 9;
+            if (test == 21)
+                mir.insns[36].type = TYPE_CHAR;
+            else if (test == 22)
+                mir.insns[36].memory_size = 2;
+            else if (test == 23) {
+                mir.insns[36].bit_width = 1;
+                mir.insns[36].bit_mask = 1;
+            } else
+                mir.insns[36].memory_flags = MIR_MEMORY_FLAG_VOLATILE;
+        } else if (test == 25 || test == 26) {
+            if (test == 25) {
+                mir.insns[35].has_pointer_qualifiers = 1;
+                mir.insns[35].pointee_volatile_mask = 1;
+                retained = 9;
+            } else {
+                mir.insns[2].has_pointer_qualifiers = 1;
+                mir.insns[2].pointee_volatile_mask = 2;
+                mir.insns[2].dst = 30;
+                mir.insns[2].type = type_add_ptr(pointer_type);
+                memory_proof_instruction(10, MIR_LOAD_INDIRECT, 1, 30, -1,
+                                         pointer_type, 0);
+                mir.insns[10].memory_size = 2;
+                retained = 15;
+            }
+        } else if (test == 27) {
+            mir.insns[2].dst = 30;
+            memory_proof_instruction(3, MIR_ADDRESS, 31, -1, -1, pointer_type, 0);
+            mir.insns[3].has_pointer_qualifiers = 1;
+            mir.insns[3].pointee_volatile_mask = 1;
+            strcpy(mir.insns[3].name, "memory_proof_observed");
+            memory_proof_instruction(4, MIR_BRANCH_FALSE, -1, 0, -1, TYPE_INT, 0);
+            mir.insns[4].label = 2;
+            mir.insns[5].opcode = MIR_LABEL;
+            mir.insns[5].label = 1;
+            mir.insns[6].opcode = MIR_JUMP;
+            mir.insns[6].label = 3;
+            mir.insns[7].opcode = MIR_LABEL;
+            mir.insns[7].label = 2;
+            mir.insns[8].opcode = MIR_LABEL;
+            mir.insns[8].label = 3;
+            memory_proof_instruction(9, MIR_PHI, 1, 30, 31, pointer_type, 0);
+            mir.insns[9].phi_pred1 = 1;
+            mir.insns[9].phi_pred2 = 2;
+            retained = 15;
+        } else if (test == 28) {
+            mir.insns[2].has_pointer_qualifiers = 1;
+            mir.insns[2].pointee_volatile_mask = 1;
+            mir.insns[2].dst = 30;
+            memory_proof_instruction(10, MIR_UNARY, 1, 30, -1, pointer_type, 0);
+            mir.insns[10].has_pointer_qualifiers = 1;
+            mir.insns[10].pointee_volatile_mask = 0;
+        } else if (test >= 29 && test <= 33) {
+            retained = 9;
+            if (test == 29) {
+                memory_proof_instruction(3, MIR_ADDRESS, 30, -1, -1, pointer_type, 0);
+                strcpy(mir.insns[3].name, "different_memory_proof_bytes");
+                mir.insns[35].src1 = 30;
+            } else if (test == 30)
+                mir.insns[33].immediate = 2;
+            else if (test == 31)
+                mir.insns[35].secondary_offset = 1;
+            else if (test == 32)
+                mir.insns[35].immediate = 2;
+            else
+                mir.insns[35].memory_size = 2;
+        } else if (test == 34) {
+            memory_proof_instruction(42, MIR_UNARY, 20, 8, -1, pointer_type, 0);
+        } else if (test == 35) {
+            int chain;
+            struct MirInsn groups[28];
+            struct MirInsn sums[2];
+            struct MirInsn *insns;
+
+            memcpy(groups, &mir.insns[12], sizeof(groups));
+            memcpy(sums, &mir.insns[40], sizeof(sums));
+            insns = realloc(mir.insns, 180 * sizeof(*insns));
+            if (insns == NULL)
+                fatal("out of memory setting up bounded address proof");
+            mir.insns = insns;
+            mir.capacity = 180;
+            mir.count = 180;
+            mir.next_value = 180;
+            for (chain = 3; chain < 180; ++chain) {
+                memset(&mir.insns[chain], 0, sizeof(mir.insns[chain]));
+                mir.insns[chain].opcode = MIR_NOP;
+                mir.insns[chain].dst = mir.insns[chain].src1 =
+                    mir.insns[chain].src2 = mir.insns[chain].object = -1;
+            }
+            for (chain = 0; chain < 66; ++chain) {
+                memory_proof_instruction(3 + chain, MIR_UNARY,
+                                         40 + chain, chain ? 39 + chain : 1,
+                                         -1, pointer_type, 0);
+                memory_proof_instruction(69 + chain, MIR_UNARY,
+                                         106 + chain, chain ? 105 + chain : 1,
+                                         -1, pointer_type, 0);
+            }
+            memcpy(&mir.insns[140], groups, sizeof(groups));
+            for (load = 0; load < 4; ++load) {
+                struct MirInsn *address = &mir.insns[142 + 7 * load];
+                address->src1 = load == 3 ? 171 : 105;
+                address->has_pointer_qualifiers = 1;
+                address->pointee_volatile_mask = 0;
+            }
+            memcpy(&mir.insns[168], sums, sizeof(sums));
+            memory_proof_instruction(179, MIR_RETURN, -1, 19, -1, TYPE_INT, 0);
+            retained = 9;
+        }
+        for (load = 0; load < 4; ++load)
+            original_loads[load] = mir.insns[
+                (test == 35 ? 143 : 15) + 7 * load];
+        ok = memory_proof_verify();
+        for (load = 0; load < 4; ++load) {
+            int index = (test == 35 ? 143 : 15) + 7 * load;
+            int live = (retained >> load) & 1;
+            const struct MirInsn *original = &original_loads[load];
+            const struct MirInsn *current = &mir.insns[index];
+
+            if (current->opcode != (live ? MIR_LOAD_INDIRECT : MIR_NOP))
+                ok = 0;
+            if (live && (mir_definition(5 + 4 * load) != current ||
+                         current->src1 != original->src1 ||
+                         current->type != original->type ||
+                         current->memory_size != original->memory_size ||
+                         current->memory_flags != original->memory_flags ||
+                         current->bit_width != original->bit_width ||
+                         current->bit_mask != original->bit_mask ||
+                         current->bit_shift != original->bit_shift))
+                ok = 0;
+            if (!live && (mir_definition(5 + 4 * load) != NULL ||
+                          mir_value_use_count(5 + 4 * load) != 0))
+                ok = 0;
+        }
+        if (test == 34 && (mir.insns[21].opcode != MIR_INDEX_ADDRESS ||
+                          mir.insns[42].src1 != 8))
+            ok = 0;
+        if (test != 1 && test != 5 && test != 35 &&
+            mir.insns[40].src1 != 5)
+            ok = 0;
+        ok = memory_proof_idempotent() && ok;
+        memory_proof_result(names[test], ok);
+    }
+}
+
+static void setup_endian_memory_proof(void)
+{
+    int pointer_type = type_add_ptr(TYPE_CHAR | TYPE_UNSIGNED);
+    int unsigned_int = TYPE_INT | TYPE_UNSIGNED;
+
+    setup(25, 40, 4);
+    memory_proof_instruction(2, MIR_ADDRESS, 1, -1, -1, pointer_type, 0);
+    strcpy(mir.insns[2].name, "memory_proof_bytes");
+    memory_proof_instruction(3, MIR_CONST, 2, -1, -1, TYPE_INT, 0);
+    memory_proof_instruction(4, MIR_INDEX_ADDRESS, 3, 1, 2, pointer_type, 1);
+    memory_proof_instruction(5, MIR_LOAD_INDIRECT, 4, 3, -1,
+                             TYPE_CHAR | TYPE_UNSIGNED, 0);
+    mir.insns[5].memory_size = 1;
+    memory_proof_instruction(7, MIR_UNARY, 6, 4, -1, unsigned_int, 0);
+    memory_proof_instruction(10, MIR_CONST, 7, -1, -1, TYPE_INT, 1);
+    memory_proof_instruction(11, MIR_INDEX_ADDRESS, 8, 1, 7, pointer_type, 1);
+    memory_proof_instruction(12, MIR_LOAD_INDIRECT, 9, 8, -1,
+                             TYPE_CHAR | TYPE_UNSIGNED, 0);
+    mir.insns[12].memory_size = 1;
+    memory_proof_instruction(14, MIR_UNARY, 11, 9, -1, unsigned_int, 0);
+    memory_proof_instruction(15, MIR_CONST, 12, -1, -1, TYPE_INT, 8);
+    memory_proof_instruction(16, MIR_BINARY, 13, 11, 12, unsigned_int, TOK_SHL);
+    memory_proof_instruction(17, MIR_BINARY, 14, 6, 13, unsigned_int, '|');
+    mir.insns[24].src1 = 14;
+}
+
+static void verify_endian_memory_rewrites(void)
+{
+    static const char *names[] = {
+        "end-positive", "end-explicit-byte-cast", "end-nonadjacent", "end-base",
+        "end-stride", "end-shift-seven", "end-shift-nine", "end-shift-nonconstant",
+        "end-not-shift", "end-shift-width", "end-shift-signed",
+        "end-low-extra-use", "end-conversion-extra-use", "end-high-shared",
+        "end-shift-shared", "end-address-shared", "end-low-signed",
+        "end-high-signed", "end-wide-load", "end-bitfield",
+        "end-explicit-volatile", "end-inherited-volatile", "end-cast-signed",
+        "end-cast-width", "end-inner-not-byte", "end-inner-signed",
+        "end-inner-operation", "end-inner-not-load", "end-store", "end-call",
+        "end-label", "end-branch", "end-reversed", "end-or-signed", "end-or-width"
+    };
+    int test;
+
+    for (test = 0; test < (int)(sizeof(names) / sizeof(names[0])); ++test) {
+        int variant;
+        int variants = test == 8 || test == 18 || test == 23 || test == 27 ? 2 : 1;
+        int ok = 1;
+
+        for (variant = 0; variant < variants; ++variant) {
+            int accepted = test <= 1 || (test >= 13 && test <= 15);
+            int pointer_type = type_add_ptr(TYPE_CHAR | TYPE_UNSIGNED);
+            int unsigned_int = TYPE_INT | TYPE_UNSIGNED;
+            int verified;
+            struct MirInsn original_low;
+            struct MirInsn original_high;
+
+            setup_endian_memory_proof();
+            strcpy(mir.name, names[test]);
+            if (test == 1 || (test >= 24 && test <= 27)) {
+                memory_proof_instruction(6, MIR_UNARY, 5, 4, -1,
+                                         TYPE_CHAR | TYPE_UNSIGNED, 0);
+                mir.insns[7].src1 = 5;
+                if (test == 1) {
+                    mir.insns[5].type = TYPE_CHAR;
+                    mir.insns[12].type = TYPE_CHAR;
+                    memory_proof_instruction(13, MIR_UNARY, 10, 9, -1,
+                                             TYPE_CHAR | TYPE_UNSIGNED, 0);
+                    mir.insns[14].src1 = 10;
+                } else if (test == 24)
+                    mir.insns[6].type = unsigned_int;
+                else if (test == 25)
+                    mir.insns[6].type = TYPE_CHAR;
+                else if (test == 26)
+                    mir.insns[6].immediate = '-';
+                else {
+                    mir.insns[6].src1 = 2;
+                    if (variant == 1)
+                        mir.insns[7].src1 = 2;
+                }
+            } else if (test == 2)
+                mir.insns[10].immediate = 2;
+            else if (test == 3) {
+                memory_proof_instruction(9, MIR_ADDRESS, 30, -1, -1, pointer_type, 0);
+                strcpy(mir.insns[9].name, "different_memory_proof_bytes");
+                mir.insns[11].src1 = 30;
+            } else if (test == 4)
+                mir.insns[11].immediate = 2;
+            else if (test == 5 || test == 6)
+                mir.insns[15].immediate = test == 5 ? 7 : 9;
+            else if (test == 7) {
+                mir.insns[15].opcode = MIR_UNARY;
+                mir.insns[15].src1 = 0;
+                mir.insns[15].immediate = 0;
+            } else if (test == 8) {
+                mir.insns[16].immediate = '+';
+                if (variant == 1) {
+                    mir.insns[16].opcode = MIR_UNARY;
+                    mir.insns[16].src2 = -1;
+                }
+            } else if (test == 9)
+                mir.insns[16].type = TYPE_LONG | TYPE_UNSIGNED;
+            else if (test == 10)
+                mir.insns[16].type = TYPE_INT;
+            else if (test >= 11 && test <= 15) {
+                int sources[] = {4, 6, 9, 13, 8};
+
+                memory_proof_instruction(20, MIR_UNARY, 15, sources[test - 11],
+                                         -1, test == 15 ? pointer_type : unsigned_int, 0);
+            } else if (test == 16 || test == 17)
+                mir.insns[test == 16 ? 5 : 12].type = TYPE_CHAR;
+            else if (test == 18) {
+                if (variant == 0)
+                    mir.insns[5].memory_size = 2;
+                else
+                    mir.insns[5].type = unsigned_int;
+            } else if (test == 19) {
+                mir.insns[5].bit_width = 1;
+                mir.insns[5].bit_mask = 1;
+            } else if (test == 20)
+                mir.insns[5].memory_flags = MIR_MEMORY_FLAG_VOLATILE;
+            else if (test == 21) {
+                mir.insns[2].has_pointer_qualifiers = 1;
+                mir.insns[2].pointee_volatile_mask = 1;
+            } else if (test == 22)
+                mir.insns[7].type = TYPE_INT;
+            else if (test == 23) {
+                if (variant == 0)
+                    mir.insns[7].type = TYPE_LONG | TYPE_UNSIGNED;
+                else
+                    mir.insns[7].immediate = '-';
+            } else if (test == 28 || test == 29)
+                memory_proof_barrier(8, test == 28 ? MIR_STORE_INDIRECT : MIR_CALL);
+            else if (test == 30 || test == 31) {
+                mir.insns[9].opcode = MIR_LABEL;
+                mir.insns[9].label = 1;
+                if (test == 31) {
+                    memory_proof_instruction(8, MIR_BRANCH_FALSE, -1, 0, -1, TYPE_INT, 0);
+                    mir.insns[8].label = 1;
+                }
+            } else if (test == 32) {
+                mir.insns[3].immediate = 1;
+                mir.insns[10].immediate = 0;
+            } else if (test == 33)
+                mir.insns[17].type = TYPE_INT;
+            else if (test == 34)
+                mir.insns[17].type = TYPE_LONG | TYPE_UNSIGNED;
+            original_low = mir.insns[5];
+            original_high = mir.insns[12];
+            verified = memory_proof_verify();
+            ok = verified && ok;
+            if (accepted) {
+                if (mir.insns[5].opcode != MIR_LOAD_INDIRECT ||
+                    mir.insns[5].type != unsigned_int ||
+                    mir.insns[5].memory_size != 2 ||
+                    mir.insns[5].memory_flags != 0 ||
+                    mir.insns[17].opcode != MIR_NOP ||
+                    mir.insns[24].src1 != 4 ||
+                    mir_definition(14) != NULL ||
+                    mir_definition(6) != NULL ||
+                    mir_value_use_count(14) != 0 ||
+                    mir_value_use_count(6) != 0 ||
+                    mir.insns[4].opcode != MIR_INDEX_ADDRESS ||
+                    mir.insns[5].src1 != original_low.src1)
+                    ok = 0;
+                if (mir.insns[12].opcode !=
+                    (test == 13 || test == 14 ? MIR_LOAD_INDIRECT : MIR_NOP))
+                    ok = 0;
+                if (mir.insns[16].opcode != (test == 14 ? MIR_BINARY : MIR_NOP))
+                    ok = 0;
+                if (test == 13 || test == 14) {
+                    if (mir_definition(9) != &mir.insns[12] ||
+                        mir.insns[12].type != original_high.type ||
+                        mir.insns[12].memory_size != original_high.memory_size ||
+                        mir.insns[12].memory_flags != original_high.memory_flags)
+                        ok = 0;
+                } else if (mir_definition(9) != NULL || mir_value_use_count(9) != 0)
+                    ok = 0;
+                if (test == 15 && (mir.insns[11].opcode != MIR_INDEX_ADDRESS ||
+                                   mir.insns[20].src1 != 8))
+                    ok = 0;
+                if (test == 13 && mir.insns[20].src1 != 9)
+                    ok = 0;
+                if (test == 14 && mir.insns[20].src1 != 13)
+                    ok = 0;
+            } else if (mir.insns[5].opcode != MIR_LOAD_INDIRECT ||
+                       mir.insns[12].opcode != MIR_LOAD_INDIRECT ||
+                       mir.insns[17].opcode != MIR_BINARY ||
+                       mir.insns[24].src1 != 14 ||
+                       mir.insns[5].type != original_low.type ||
+                       mir.insns[5].memory_size != original_low.memory_size ||
+                       mir.insns[5].memory_flags != original_low.memory_flags ||
+                       mir.insns[12].type != original_high.type ||
+                       mir.insns[12].memory_size != original_high.memory_size ||
+                       mir.insns[12].memory_flags != original_high.memory_flags)
+                ok = 0;
+            ok = memory_proof_idempotent() && ok;
+        }
+        memory_proof_result(names[test], ok);
+    }
+}
+
+static void verify_preprocessor_characters(void)
+{
+    static const struct {
+        const char *name;
+        const char *literal;
+        int value;
+    } cases[] = {
+        { "plain", "'A'", 65 }, { "newline", "'\\n'", 10 },
+        { "return", "'\\r'", 13 }, { "tab", "'\\t'", 9 },
+        { "alarm", "'\\a'", 7 }, { "backspace", "'\\b'", 8 },
+        { "formfeed", "'\\f'", 12 }, { "vertical-tab", "'\\v'", 11 },
+        { "backslash", "'\\\\'", 92 }, { "quote", "'\\''", 39 },
+        { "double-quote", "'\\\"'", 34 }, { "question", "'\\?'", 63 },
+        { "nul", "'\\0'", 0 }, { "octal-one", "'\\7'", 7 },
+        { "octal-two", "'\\77'", 63 }, { "octal-three", "'\\101'", 65 },
+        { "octal-byte", "'\\377'", 255 }, { "hex-digit", "'\\x7'", 7 },
+        { "hex-upper", "'\\x4A'", 74 }, { "hex-lower", "'\\x4a'", 74 },
+        { "hex-letter", "'\\xa'", 10 }, { "hex-byte", "'\\xff'", 255 }
+    };
+    size_t test;
+
+    for (test = 0; test < sizeof(cases) / sizeof(cases[0]); ++test) {
+        char expression[128];
+        long value = -1;
+        int ok;
+
+        snprintf(expression, sizeof(expression), "%s == %d && %s != %d",
+                 cases[test].literal, cases[test].value,
+                 cases[test].literal, cases[test].value + 1);
+        ok = pp_eval_simple_expr(expression) &&
+             parse_charlit_string_value(cases[test].literal, &value) &&
+             value == cases[test].value;
+        snprintf(expression, sizeof(expression), "%s == %d",
+                 cases[test].literal, cases[test].value + 1);
+        if (pp_eval_simple_expr(expression))
+            ok = 0;
+        if (!ok) {
+            fprintf(stderr, "FAIL preprocessor character %s\n", cases[test].name);
+            ++failures;
+        }
+    }
+}
+
+static void verify_frontend_token_paths(void)
+{
+    LexState saved_lex = lex_save();
+    DeclState saved_decl = g_decl;
+    char *saved_src = src;
+    long saved_len = src_len;
+    int saved_active = pp_active;
+    int saved_sp = if_sp;
+    int saved_long = g_tok_long_suffix;
+    int saved_unsigned = g_tok_unsigned_suffix;
+    int saved_defs = ndefs;
+    struct Def *saved_macros = xmalloc(sizeof(defs));
+    int saved_stack[4][MAX_IFSTACK];
+    int *metadata[] = {
+        &g_typedef_array_len, &g_typedef_array_dim_count, &g_typedef_base_type,
+        &g_typedef_is_func, &g_typedef_has_proto, &g_typedef_funcptr_return_type,
+        &g_typedef_proto_nargs, &g_typedef_proto_variadic,
+        &g_funcptr_decl_array_len, &g_funcptr_is_funcret_decl,
+        &g_funcptr_has_proto, &g_funcptr_return_type,
+        &g_funcptr_proto_nargs, &g_funcptr_proto_variadic,
+        &g_proto_has, &g_proto_nargs, &g_proto_variadic
+    };
+    int saved_metadata[sizeof(metadata) / sizeof(metadata[0])];
+    int saved_dims[MAX_ARRAY_DIMS];
+    int saved_prototypes[3][MAX_PROTO_PARAMS];
+    struct Sym *saved_typedef_result = g_typedef_funcptr_result_prototype;
+    struct Sym *saved_funcptr_result = g_funcptr_result_prototype;
+    const char *tokens[] = { "outer", "inner", "after", "defined", "absent" };
+    int depths[] = { 1, 2, 0, 1, 1 };
+    const char *suffixes[] = {
+        "int f(int (*callback)(int), long) tail",
+        "int f(int (*callback)(int)"
+    };
+    int index;
+    int ok = 1;
+
+    for (index = 0; index < (int)(sizeof(metadata) / sizeof(metadata[0])); ++index)
+        saved_metadata[index] = *metadata[index];
+    memcpy(saved_dims, g_typedef_array_dims, sizeof(saved_dims));
+    memcpy(saved_prototypes[0], g_typedef_proto_types, sizeof(g_typedef_proto_types));
+    memcpy(saved_prototypes[1], g_funcptr_proto_types, sizeof(g_funcptr_proto_types));
+    memcpy(saved_prototypes[2], g_proto_types, sizeof(g_proto_types));
+    memcpy(saved_macros, defs, sizeof(defs));
+    memcpy(saved_stack[0], if_parent_active, sizeof(if_parent_active));
+    memcpy(saved_stack[1], if_this_active, sizeof(if_this_active));
+    memcpy(saved_stack[2], if_seen_else, sizeof(if_seen_else));
+    memcpy(saved_stack[3], if_branch_taken, sizeof(if_branch_taken));
+    add_define("VERIFY_CONDITIONAL", "1");
+    src = "#if 1\nouter\n#if 0\nskipped\n#else\ninner\n#endif\n"
+          "#elif 1\nskipped_again\n#else\nskipped_else\n#endif\nafter\n"
+          "#ifdef VERIFY_CONDITIONAL\ndefined\n#endif\n"
+          "#ifndef VERIFY_ABSENT\nabsent\n#endif\n";
+    src_len = (long)strlen(src);
+    memset(&g_lex, 0, sizeof(g_lex));
+    g_lex.line_no = 1;
+    if_sp = 0;
+    pp_active = 1;
+    for (index = 0; index < 5; ++index) {
+        next_token();
+        if (g_lex.tok.kind != TOK_ID ||
+            strcmp(g_lex.tok.text, tokens[index]) ||
+            if_sp != depths[index] || !pp_active)
+            ok = 0;
+    }
+    next_token();
+    if (g_lex.tok.kind != TOK_EOF || if_sp != 0 || !pp_active)
+        ok = 0;
+    for (index = 0; index < 2; ++index) {
+        int type = 0;
+        int size = 0;
+
+        src = (char *)suffixes[index];
+        src_len = (long)strlen(src);
+        memset(&g_lex, 0, sizeof(g_lex));
+        g_lex.line_no = 1;
+        next_token();
+        /* Concrete-name compatibility parsing, not sizeof(function type). */
+        if (!parse_type_name_decl(&type, &size) ||
+            type != TYPE_INT || size != 2 ||
+            (index == 0 && (g_lex.tok.kind != TOK_ID ||
+                           strcmp(g_lex.tok.text, "tail"))) ||
+            (index == 1 && (g_lex.tok.kind != TOK_EOF ||
+                           g_lex.posi != src_len)))
+            ok = 0;
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL lexer conditional and type-name suffix paths\n");
+        ++failures;
+    }
+    memcpy(defs, saved_macros, sizeof(defs));
+    free(saved_macros);
+    ndefs = saved_defs;
+    memcpy(if_parent_active, saved_stack[0], sizeof(if_parent_active));
+    memcpy(if_this_active, saved_stack[1], sizeof(if_this_active));
+    memcpy(if_seen_else, saved_stack[2], sizeof(if_seen_else));
+    memcpy(if_branch_taken, saved_stack[3], sizeof(if_branch_taken));
+    if_sp = saved_sp;
+    pp_active = saved_active;
+    src = saved_src;
+    src_len = saved_len;
+    lex_restore(&saved_lex);
+    g_decl = saved_decl;
+    g_tok_long_suffix = saved_long;
+    g_tok_unsigned_suffix = saved_unsigned;
+    for (index = 0; index < (int)(sizeof(metadata) / sizeof(metadata[0])); ++index)
+        *metadata[index] = saved_metadata[index];
+    memcpy(g_typedef_array_dims, saved_dims, sizeof(saved_dims));
+    memcpy(g_typedef_proto_types, saved_prototypes[0], sizeof(g_typedef_proto_types));
+    memcpy(g_funcptr_proto_types, saved_prototypes[1], sizeof(g_funcptr_proto_types));
+    memcpy(g_proto_types, saved_prototypes[2], sizeof(g_proto_types));
+    g_typedef_funcptr_result_prototype = saved_typedef_result;
+    g_funcptr_result_prototype = saved_funcptr_result;
+}
+
+static void verify_global_pointer_write_ownership(void)
+{
+    struct AstNode nodes[9];
+    struct AstNode *statements[1];
+    const struct AstNode *member;
+    struct Sym *global;
+    struct FieldDef *field;
+    int saved_globals = nglobals;
+    int saved_structs = nstruct_defs;
+    int saved_fields = nfield_defs;
+    char saved_function[sizeof(g_current_compiling_func)];
+    const char *names[] = {
+        "verify_hoist_external", "verify_hoist_self",
+        "verify_hoist_unwritten", "verify_hoist_twice"
+    };
+    const char *sources[] = {
+        "void writer() { verify_hoist_external = 0; }\n",
+        "void reader() { verify_hoist_self = 0; }\n",
+        "",
+        "void writer() { verify_hoist_twice = 0; verify_hoist_twice = 0; }\n"
+    };
+    int sid = add_struct_def("verify_hoist_record");
+    int index;
+    int ok = 1;
+
+    memcpy(saved_function, g_current_compiling_func, sizeof(saved_function));
+    if (nfield_defs >= MAX_FIELDS)
+        fatal("field capacity in global ownership test");
+    field = &field_defs[nfield_defs++];
+    memset(field, 0, sizeof(*field));
+    strcpy(field->name, "bytes");
+    field->parent_struct_id = sid;
+    field->type = TYPE_CHAR | TYPE_PTR;
+    memset(nodes, 0, sizeof(nodes));
+    nodes[0].kind = AST_FOR;
+    nodes[0].d = &nodes[1];
+    nodes[1].kind = AST_COMPOUND;
+    nodes[1].list = statements;
+    nodes[1].list_len = 1;
+    nodes[1].list_cap = 1;
+    statements[0] = &nodes[2];
+    nodes[2].kind = AST_EXPR_STMT;
+    nodes[2].a = &nodes[3];
+    nodes[3].kind = AST_ASSIGN;
+    nodes[3].op = '=';
+    nodes[3].type = TYPE_CHAR | TYPE_PTR;
+    nodes[3].a = &nodes[4];
+    nodes[3].b = &nodes[5];
+    nodes[4].kind = AST_IDENT;
+    nodes[4].sval = "cursor";
+    nodes[4].type = TYPE_CHAR | TYPE_PTR;
+    nodes[5].kind = AST_UNARY;
+    nodes[5].op = '&';
+    nodes[5].type = TYPE_CHAR | TYPE_PTR;
+    nodes[5].a = &nodes[6];
+    nodes[6].kind = AST_INDEX;
+    nodes[6].a = &nodes[7];
+    nodes[6].b = &nodes[8];
+    nodes[6].type = TYPE_CHAR;
+    nodes[7].kind = AST_MEMBER;
+    nodes[7].op = TOK_ARROW;
+    nodes[7].sval = field->name;
+    nodes[7].type = TYPE_CHAR | TYPE_PTR;
+    nodes[8].kind = AST_IDENT;
+    nodes[8].sval = "index";
+    nodes[8].type = TYPE_INT;
+    {
+        struct AstNode base;
+        memset(&base, 0, sizeof(base));
+        base.kind = AST_IDENT;
+        nodes[7].a = &base;
+        strcpy(g_current_compiling_func, "reader");
+        for (index = 0; index < 4; ++index) {
+            int type = 0;
+            int accepted;
+
+            global = add_global(names[index],
+                                type_add_ptr(make_struct_type(sid)), SC_GLOBAL);
+            global->is_static = 1;
+            base.sval = global->name;
+            base.type = global->type;
+            scan_global_write_info_for_source(sources[index]);
+            member = NULL;
+            accepted = ast_for_hoist_global_member_value_supported(
+                &nodes[0], &member, &type);
+            if (global_text_write_count(global->name) !=
+                    (index == 2 ? 0 : index == 3 ? 2 : 1) ||
+                accepted != (index == 0) ||
+                (accepted && (member != &nodes[7] ||
+                              type != (TYPE_CHAR | TYPE_PTR))))
+                ok = 0;
+        }
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL global pointer single-write ownership\n");
+        ++failures;
+    }
+    memcpy(g_current_compiling_func, saved_function, sizeof(saved_function));
+    nglobals = saved_globals;
+    nstruct_defs = saved_structs;
+    nfield_defs = saved_fields;
 }
 
 static void setup_phi_indirect_call(
@@ -1673,6 +2451,50 @@ static void verify_call_argument_liveness(void)
     clear_liveness();
 }
 
+static void verify_bitset_word_boundaries(void)
+{
+    static const int sizes[] = { 1, 2, 63, 64, 65, 127, 128, 129 };
+    int sample;
+
+    for (sample = 0; sample < (int)(sizeof(sizes) / sizeof(sizes[0])); ++sample) {
+        int values = sizes[sample];
+        size_t words = ((size_t)values + 63) / 64;
+        int highest = values - 1;
+        int instruction;
+        int ok;
+
+        setup(4, values, 1);
+        mir.insns[1].opcode = MIR_NOP;
+        mir.insns[1].dst = -1;
+        mir.insns[2].opcode = MIR_CONST;
+        mir.insns[2].dst = highest;
+        mir.insns[2].immediate = 37;
+        mir.insns[3].src1 = highest;
+        ok = memory_proof_verify();
+        if (ok) {
+            for (instruction = 0; instruction < mir.count; ++instruction) {
+                size_t word;
+                for (word = 0; word < words; ++word) {
+                    unsigned long long live =
+                        word == (size_t)highest / 64 ? 1ULL << (highest % 64) : 0;
+                    if (mir.live_in[(size_t)instruction * words + word] !=
+                            (instruction == 3 ? live : 0) ||
+                        mir.live_out[(size_t)instruction * words + word] !=
+                            (instruction == 2 ? live : 0))
+                        ok = 0;
+                }
+            }
+        }
+        if (!ok) {
+            fprintf(stderr, "FAIL MIR bitset word boundary values=%d\n", values);
+            ++failures;
+        }
+        fprintf(stderr, "; MIR bitset-proof values=%d outcome=%s\n",
+                values, ok ? "passed" : "failed");
+        clear_liveness();
+    }
+}
+
 static void verify_mir_stream_io(void)
 {
     static const char input[] = "abcdef";
@@ -2146,6 +2968,83 @@ static void verify_member_metadata_and_address(void)
         ++failures;
     }
     clear_liveness();
+
+    {
+        const char *writes[] = {
+            "int writer() { verify_record_call_external.value = 1; return 0; }\n",
+            "int reader() { verify_record_call_self.value = 1; return 0; }\n",
+            "",
+            ("int writer() { verify_record_call_twice.value = 1;"
+             " verify_record_call_twice.value = 2; return 0; }\n")
+        };
+        const char *names[] = {
+            "verify_record_call_external", "verify_record_call_self",
+            "verify_record_call_unwritten", "verify_record_call_twice"
+        };
+        char saved_function[sizeof(g_current_compiling_func)];
+        int index;
+
+        memcpy(saved_function, g_current_compiling_func, sizeof(saved_function));
+        strcpy(g_current_compiling_func, "reader");
+        for (index = 0; index < 4; ++index) {
+            int expected = index == 0 || index == 2;
+            int verified;
+            int replaced;
+
+            unsafe_global = add_global(names[index], make_struct_type(sid),
+                                       SC_GLOBAL);
+            unsafe_global->is_static = 1;
+            scan_global_write_info_for_source(writes[index]);
+            setup(8, 5, 1);
+            mir.next_call_id = 1;
+            mir.insns[1].opcode = MIR_ADDRESS;
+            mir.insns[1].type = type_add_ptr(unsafe_global->type);
+            strcpy(mir.insns[1].name, unsafe_global->name);
+            mir.insns[2].opcode = MIR_MEMBER_ADDRESS;
+            mir.insns[2].dst = 1;
+            mir.insns[2].src1 = 0;
+            mir.insns[2].type = TYPE_INT | TYPE_PTR;
+            mir.insns[2].immediate = field->offset;
+            strcpy(mir.insns[2].name, field->name);
+            mir.insns[3].opcode = MIR_LOAD_INDIRECT;
+            mir.insns[3].dst = 2;
+            mir.insns[3].src1 = 1;
+            mir.insns[3].memory_size = 2;
+            mir.insns[4].opcode = MIR_CALL;
+            mir.insns[4].type = TYPE_VOID;
+            strcpy(mir.insns[4].name, callee->name);
+            mir.insns[5].opcode = MIR_LOAD_INDIRECT;
+            mir.insns[5].dst = 3;
+            mir.insns[5].src1 = 1;
+            mir.insns[5].memory_size = 2;
+            mir.insns[6].opcode = MIR_BINARY;
+            mir.insns[6].dst = 4;
+            mir.insns[6].src1 = 2;
+            mir.insns[6].src2 = 3;
+            mir.insns[6].immediate = '+';
+            mir.insns[6].secondary_offset = TYPE_INT;
+            mir.insns[7].src1 = 4;
+            verified = mir_verify_and_dump();
+            replaced = mir_value_number_global_field_loads();
+            if (global_text_field_write_count(unsafe_global->name, field->name) !=
+                    (index == 2 ? 0 : index == 3 ? 2 : 1) ||
+                !verified || replaced != expected ||
+                mir.insns[5].opcode !=
+                    (expected ? MIR_NOP : MIR_LOAD_INDIRECT) ||
+                mir.insns[6].src2 != (expected ? 2 : 3) ||
+                !mir_verify_and_dump()) {
+                fprintf(stderr, "FAIL global field single-write ownership %d "
+                        "verified=%d replaced=%d opcode=%d src2=%d writes=%d\n",
+                        index, verified, replaced, mir.insns[5].opcode,
+                        mir.insns[6].src2,
+                        global_text_field_write_count(unsafe_global->name,
+                                                      field->name));
+                ++failures;
+            }
+            clear_liveness();
+        }
+        memcpy(g_current_compiling_func, saved_function, sizeof(saved_function));
+    }
 
     setup(7, 5, 1);
     mir.insns[1].opcode = MIR_ADDRESS;
@@ -7307,6 +8206,285 @@ static void diamond(void)
     mir.insns[10].src1 = 3;
 }
 
+static void verify_target_constraints(void)
+{
+    struct MirInsn insn;
+    struct MirTargetConstraint constraint;
+    unsigned narrow = (1u << MIR_COLOR_HL) | (1u << MIR_COLOR_DE) |
+                      (1u << MIR_COLOR_BC) | (1u << MIR_COLOR_IY);
+    unsigned wide = (1u << MIR_COLOR_HL_DE) | (1u << MIR_COLOR_BC_IY);
+    int types[] = { TYPE_CHAR, TYPE_INT, TYPE_LONG, TYPE_FLOAT };
+    int index;
+    int ok = 1;
+
+    setup(4, 2, 1);
+    mir.insns[1].type = TYPE_LONG;
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 1;
+    mir.insns[2].type = TYPE_INT | TYPE_PTR;
+    memset(&insn, 0, sizeof(insn));
+    insn.src1 = 0;
+    insn.src2 = 1;
+    for (index = 0; index < 4; ++index) {
+        int width = type_size(types[index]);
+        insn.opcode = types[index] == TYPE_FLOAT ? MIR_FLOAT_CONST : MIR_CONST;
+        insn.type = types[index];
+        if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+            constraint.template_kind != MIR_TARGET_MATERIALIZE ||
+            constraint.allowed_colors != (width == 4 ? wide : narrow) ||
+            constraint.required_output !=
+                (width == 4 ? MIR_Z80_DE | MIR_Z80_HL : MIR_Z80_HL) ||
+            !(constraint.flags & MIR_TARGET_FLAG_REMATERIALIZABLE) ||
+            !!(constraint.flags & MIR_TARGET_FLAG_BYTE) != (width == 1) ||
+            !!(constraint.flags & MIR_TARGET_FLAG_WIDE) != (width == 4))
+            ok = 0;
+    }
+    insn.opcode = MIR_INDEX_ADDRESS;
+    insn.type = TYPE_INT | TYPE_PTR;
+    if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.template_kind != MIR_TARGET_ADDRESS ||
+        constraint.required_input1 != MIR_Z80_HL ||
+        constraint.required_input2 != MIR_Z80_DE ||
+        constraint.required_output != MIR_Z80_HL ||
+        constraint.clobbers != MIR_Z80_FLAGS)
+        ok = 0;
+    insn.opcode = MIR_LOAD_INDIRECT;
+    insn.memory_size = 1;
+    if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.template_kind != MIR_TARGET_LOAD ||
+        !(constraint.flags & MIR_TARGET_FLAG_MEMORY) ||
+        !(constraint.flags & MIR_TARGET_FLAG_BYTE) ||
+        constraint.required_input1 != MIR_Z80_HL)
+        ok = 0;
+    insn.memory_size = 0;
+    insn.opcode = MIR_STORE;
+    if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.required_input1 != (MIR_Z80_DE | MIR_Z80_HL))
+        ok = 0;
+    insn.opcode = MIR_STORE_INDIRECT;
+    insn.src1 = 1;
+    insn.src2 = 0;
+    if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.required_input1 != MIR_Z80_BC ||
+        constraint.required_input2 != (MIR_Z80_DE | MIR_Z80_HL))
+        ok = 0;
+    insn.src1 = 0;
+    insn.src2 = 1;
+    insn.opcode = MIR_UNARY;
+    insn.type = TYPE_LONG;
+    if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.required_input1 != (MIR_Z80_DE | MIR_Z80_HL) ||
+        constraint.required_output != (MIR_Z80_DE | MIR_Z80_HL))
+        ok = 0;
+    insn.opcode = MIR_BINARY;
+    insn.immediate = '+';
+    insn.secondary_offset = TYPE_LONG;
+    if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.template_kind != MIR_TARGET_BINARY ||
+        constraint.required_input2 != (MIR_Z80_BC | MIR_Z80_IY) ||
+        (constraint.flags & MIR_TARGET_FLAG_CALL))
+        ok = 0;
+    for (index = 0; index < 2; ++index) {
+        insn.type = index == 0 ? TYPE_LONG : TYPE_FLOAT;
+        insn.secondary_offset = insn.type;
+        insn.immediate = index == 0 ? '*' : '+';
+        if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+            constraint.template_kind != MIR_TARGET_CALL ||
+            !(constraint.flags & MIR_TARGET_FLAG_CALL) ||
+            constraint.clobbers != MIR_Z80_CALLER_CLOBBERS ||
+            (constraint.clobbers & MIR_Z80_IY))
+            ok = 0;
+    }
+    insn.opcode = MIR_CALL;
+    if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.minimum_tstates != 17 || constraint.minimum_bytes != 3 ||
+        constraint.clobbers != MIR_Z80_CALLER_CLOBBERS)
+        ok = 0;
+    insn.opcode = MIR_BRANCH_FALSE;
+    if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.required_input1 != (MIR_Z80_DE | MIR_Z80_HL) ||
+        !(constraint.flags & MIR_TARGET_FLAG_EDGE))
+        ok = 0;
+    insn.opcode = MIR_RETURN;
+    if (!mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.required_input1 != (MIR_Z80_DE | MIR_Z80_HL))
+        ok = 0;
+    insn.opcode = MIR_OPAQUE;
+    if (mir_target_constraint_for_insn(&insn, &constraint) ||
+        constraint.template_kind != MIR_TARGET_UNSUPPORTED ||
+        mir_target_constraint_for_insn(NULL, &constraint) ||
+        mir_target_constraint_for_insn(&insn, NULL))
+        ok = 0;
+    if (!ok) {
+        fprintf(stderr, "FAIL diagnostic target constraint contracts\n");
+        ++failures;
+    }
+}
+
+static void check_shadow_schedule(
+    const char *name, int blocks, int edges, int phi_uses, int calls,
+    int pressure, int spills)
+{
+    struct MirScheduleSummary summary;
+    struct MirScheduleSummary repeated;
+    struct MirFunction *saved;
+    struct MirInsn *instructions;
+    MirLiveWord *live_in;
+    MirLiveWord *live_out;
+    size_t bytes;
+    int labels = label_id;
+    EmitSink saved_sink = g_emit_sink;
+    FILE *output = tmpfile();
+    int ok;
+
+    if (output == NULL)
+        fatal("tmpfile in shadow schedule test");
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL shadow fixture verification %s\n", name);
+        ++failures;
+        clear_liveness();
+        fclose(output);
+        return;
+    }
+    bytes = MIR_LIVE_MATRIX_WORDS(mir.count, mir.next_value) * sizeof(*live_in);
+    saved = xmalloc(sizeof(*saved));
+    instructions = xmalloc((size_t)mir.count * sizeof(*instructions));
+    live_in = xmalloc(bytes);
+    live_out = xmalloc(bytes);
+    memcpy(saved, &mir, sizeof(*saved));
+    memcpy(instructions, mir.insns, (size_t)mir.count * sizeof(*instructions));
+    memcpy(live_in, mir.live_in, bytes);
+    memcpy(live_out, mir.live_out, bytes);
+    g_emit_sink.purpose = EMIT_SINK_FINAL;
+    g_emit_sink.stream = output;
+    ok = mir_build_shadow_schedule(&summary) &&
+         mir_build_shadow_schedule(&repeated);
+    ok = ok && summary.blocks == blocks && summary.cfg_edges == edges &&
+         summary.phi_edge_uses == phi_uses && summary.call_splits == calls &&
+         summary.maximum_pressure == pressure &&
+         (spills ? summary.spilled_segments > 0 : summary.spilled_segments == 0) &&
+         summary.segments == summary.colored_segments +
+             summary.rematerialized_segments + summary.spilled_segments &&
+         summary.unsupported == 0 &&
+         memcmp(&summary, &repeated, sizeof(summary)) == 0;
+    if (calls)
+        ok = ok && summary.iy_segments > 0 &&
+             summary.split_moves > 0 && summary.boundary_moves > 0;
+    ok = ok && memcmp(saved, &mir, sizeof(mir)) == 0 &&
+         memcmp(instructions, mir.insns,
+                (size_t)mir.count * sizeof(*instructions)) == 0 &&
+         memcmp(live_in, mir.live_in, bytes) == 0 &&
+         memcmp(live_out, mir.live_out, bytes) == 0 &&
+         label_id == labels && ftell(output) == 0;
+    if (!ok) {
+        fprintf(stderr,
+                "FAIL shadow schedule %s blocks=%d edges=%d phi=%d calls=%d "
+                "pressure=%d colored=%d remat=%d spills=%d iy=%d split=%d "
+                "boundary=%d\n",
+                name, summary.blocks, summary.cfg_edges, summary.phi_edge_uses,
+                summary.call_splits, summary.maximum_pressure,
+                summary.colored_segments, summary.rematerialized_segments,
+                summary.spilled_segments, summary.iy_segments,
+                summary.split_moves, summary.boundary_moves);
+        ++failures;
+    }
+    free(live_out);
+    free(live_in);
+    free(instructions);
+    free(saved);
+    clear_liveness();
+    g_emit_sink = saved_sink;
+    fclose(output);
+}
+
+static void verify_shadow_schedules(void)
+{
+    struct MirScheduleSummary summary;
+    struct Sym *callee;
+    int index;
+    int width;
+
+    setup(3, 1, 1);
+    check_shadow_schedule("constant", 1, 0, 0, 0, 1, 0);
+    diamond();
+    check_shadow_schedule("diamond", 4, 4, 2, 0, 1, 0);
+    setup(12, 4, 4);
+    mir.insns[1].opcode = MIR_PARAM;
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].label = 1;
+    mir.insns[4].opcode = MIR_PHI;
+    mir.insns[4].dst = 1;
+    mir.insns[4].src1 = 0;
+    mir.insns[4].src2 = 2;
+    mir.insns[4].phi_pred1 = 0;
+    mir.insns[4].phi_pred2 = 2;
+    mir.insns[5].opcode = MIR_BRANCH_FALSE;
+    mir.insns[5].src1 = 1;
+    mir.insns[5].label = 3;
+    mir.insns[6].opcode = MIR_LABEL;
+    mir.insns[6].label = 2;
+    mir.insns[7].opcode = MIR_CONST;
+    mir.insns[7].dst = 3;
+    mir.insns[7].immediate = 1;
+    mir.insns[8].opcode = MIR_BINARY;
+    mir.insns[8].dst = 2;
+    mir.insns[8].src1 = 1;
+    mir.insns[8].src2 = 3;
+    mir.insns[8].immediate = '+';
+    mir.insns[8].secondary_offset = TYPE_INT;
+    mir.insns[9].opcode = MIR_JUMP;
+    mir.insns[9].label = 1;
+    mir.insns[10].opcode = MIR_LABEL;
+    mir.insns[10].label = 3;
+    mir.insns[11].src1 = 1;
+    check_shadow_schedule("loop PHI", 4, 4, 2, 0, 3, 0);
+    callee = add_global("verify_shadow_call", TYPE_VOID, SC_FUNC);
+    callee->has_proto = 1;
+    callee->proto_nargs = 0;
+    for (width = 0; width < 2; ++width) {
+        setup(14, 11, 1);
+        mir.next_call_id = 1;
+        for (index = 0; index < 6; ++index) {
+            mir.insns[index + 1].opcode = MIR_PARAM;
+            mir.insns[index + 1].dst = index;
+            mir.insns[index + 1].type = width ? TYPE_LONG : TYPE_INT;
+            mir.insns[index + 1].immediate = 4 + index * (width ? 4 : 2);
+        }
+        mir.insns[7].opcode = MIR_CALL;
+        mir.insns[7].type = TYPE_VOID;
+        strcpy(mir.insns[7].name, callee->name);
+        for (index = 0; index < 5; ++index) {
+            mir.insns[index + 8].opcode = MIR_BINARY;
+            mir.insns[index + 8].dst = index + 6;
+            mir.insns[index + 8].src1 = index ? index + 5 : 0;
+            mir.insns[index + 8].src2 = index + 1;
+            mir.insns[index + 8].type = width ? TYPE_LONG : TYPE_INT;
+            mir.insns[index + 8].secondary_offset = mir.insns[index + 8].type;
+            mir.insns[index + 8].immediate = '+';
+        }
+        mir.insns[13].src1 = 10;
+        mir.insns[13].type = width ? TYPE_LONG : TYPE_INT;
+        check_shadow_schedule(width ? "wide call pressure" : "word call pressure",
+                              3, 2, 0, 1, 7, 1);
+    }
+    setup(3, 1, 1);
+    mir.count = 0;
+    if (!mir_build_shadow_schedule(&summary) ||
+        summary.blocks != 0 || summary.segments != 0 ||
+        mir_build_shadow_schedule(NULL)) {
+        fprintf(stderr, "FAIL empty/null shadow schedule\n");
+        ++failures;
+    }
+    setup(3, 1, 1);
+    mir.insns[1].opcode = MIR_OPAQUE;
+    if (mir_build_shadow_schedule(&summary) || summary.unsupported != 1) {
+        fprintf(stderr, "FAIL unsupported shadow schedule\n");
+        ++failures;
+    }
+}
+
 static void promotion_loop(int initialized)
 {
     setup(12, 3, 4);
@@ -7789,10 +8967,38 @@ static void verify_frontend_initializer_capture_only(void)
     fclose(output);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct Sym *callee;
     int mutation;
+    if (argc == 2 && !strcmp(argv[1], "--bitset-proof")) {
+        set_test_environment("DCC_MIR_LIVENESS_VERIFY", "1");
+        verify_bitset_word_boundaries();
+        printf("MIR bitset layout checks=8 failures=%d\n", failures);
+        return failures != 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--shadow-schedule-require-invalid")) {
+        setup(4, 1, 1);
+        strcpy(mir.name, "coverage_unsupported");
+        mir.insns[2].opcode = MIR_OPAQUE;
+        mir.insns[2].type = TYPE_VOID;
+        if (!mir_verify_and_dump()) {
+            fprintf(stderr, "FAIL unsupported shadow fixture verification\n");
+            return 1;
+        }
+        mir_schedule_report_shadow_plan();
+        clear_liveness();
+        return 0;
+    }
+    if (argc != 1) {
+        fprintf(stderr, "unknown MIR verifier test arguments\n");
+        return 2;
+    }
+    verify_frontend_token_paths();
+    verify_preprocessor_characters();
+    verify_global_pointer_write_ownership();
+    verify_target_constraints();
+    verify_shadow_schedules();
     verify_frontend_initializer_capture_only();
     setup(3, 1, 1);
     mir.count = 0;
@@ -7813,6 +9019,8 @@ int main(void)
     verify_diamond_mutations();
     verify_ast_binary_folds();
     verify_use_cache_capacity_reset_across_functions();
+    verify_dominated_memory_rewrites();
+    verify_endian_memory_rewrites();
     verify_conditional_callable_prototypes();
     verify_ast_assignment_support();
     verify_call_lowering_preflight();

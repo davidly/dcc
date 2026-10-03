@@ -39,6 +39,13 @@ Other optional properties retain their existing runner meanings:
   default `[true, false]`).
 - `DebugModes` (distinct `"true"`/`"lines"` strings): additional configurations
   alongside the normal non-debug build.
+- `MirExpectations`: nonempty array of function-scoped MIR access assertions.
+  Each object requires `Function`, nonnegative integer `Loads` and `Volatile`;
+  optional positive `Width`, `ByteVolatile`, and `Opcode` (`loadind`/`storeind`)
+  constrain all accesses. `FullDebugLoads`/`FullDebugWidth` explicitly describe
+  intentional full `-g` differences, never release or `-gline` relaxations.
+  The build enables MIR reporting and checks exactly one matching function
+  body and summary in every configured mode before executing the target.
 
 Both peep modes always run. All JSON case assertions, arguments, fixtures,
 mutations, and stack settings also apply to the additional debug configurations

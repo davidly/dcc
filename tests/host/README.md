@@ -8,6 +8,119 @@ cmake --build build/mir-tests --target mir-verify-test --parallel
 ctest --test-dir build/mir-tests --output-on-failure
 ```
 
+## Whole-compiler source-function coverage
+
+The coverage collector additionally runs
+`scripts/test-compiler-entrypoints.py` with the checkpoint compiler and this
+existing verifier harness before writing its collection success stamp. Driver
+probes assert exact version/help/usage status and output, isolated `-I` search
+and values, and diagnostic-only shadow schedule/target reports. They compare
+assembly and embedded debug metadata off/on across release, `-g`, and `-gline`,
+with and without stack checks. Every subprocess has a timeout and private
+environment/paths; inherited `LLVM_PROFILE_FILE` is preserved.
+
+Frontend host assertions use the real lexer for nested conditional active-state
+transitions and the real type-name parser for nested suffix/token advancement
+and bounded EOF behavior. Global-text ownership tests exercise same/different
+function writes, absent/multiple writes, and live AST classifier/value-numbering
+acceptance or rejection; shared state is restored afterward.
+
+Character assertions exercise the preprocessing evaluator and shared literal
+decoder against 22 fixed byte-value oracles, including simple, octal and
+hexadecimal escapes and false equality controls. The compiler entrypoint runner
+checks all 66 corresponding `#if`, `#elif` and conditional-include contracts.
+The branch-proof pilot manifest requires these and all eight bitset cases;
+two restoration mutants challenge the character fix without replacing any of
+the 41 retained compiler mutants.
+
+Target/scheduler host fixtures verify straight-line, diamond/PHI, loop/PHI, and
+narrow/wide call-pressure graphs, asserting constraints, CFG/liveness summaries,
+legal colors/rematerialization/spills, call splits, and movements. Snapshots
+ensure this diagnostic analysis does not alter production state.
+
+The verifier's `--shadow-schedule-require-invalid` subprocess mode builds the
+unsupported fixture named `coverage_unsupported` and invokes the schedule
+report entry point. REPORT-only diagnoses `valid=0` without terminating;
+REQUIRE terminates through the existing fatal path, isolated from normal host
+tests. Ordinary driver `#asm` compilation is not an unsupported-MIR oracle.
+
+The five host objects remain identical across JSON, native, and HTML reporting.
+`main` and the unexecuted `dcc_driver_main` alias share a source function; do not
+call the alias just to raise instantiation coverage. Normal reporting gates
+exact nonempty whole-compiler **source-function** totals, not instantiations or
+rounded percentages. Existing all-metric selected AST/MIR completeness controls
+retain their meaning. See [compiler coverage](../../docs/compiler-coverage.md)
+for artifact names, configuration-aware inventory checks, and immutable
+checkpoint/report-only provenance.
+
+## Bitset liveness and cache controls
+
+The existing verifier's `--bitset-proof` mode enables
+`DCC_MIR_LIVENESS_VERIFY` and checks eight independently constructed live-word
+oracles at 1, 2, 63, 64, 65, 127, 128, and 129 values. It compares raw words,
+not the compiler's indexing macros, including zero padding and definition/return
+boundaries. Each named case and the final zero-failure summary are mandatory.
+CTest runs this mode as `mir-bitset-layout`; there are still only five
+compiler-linked host binaries.
+
+The liveness diagnostic compares the optimized matrices with the independent
+byte fixed point through the existing packed-reference helper. Complete-word
+comparison also checks unused tail bits; it does not bypass verifier preflights
+or change default allocation/emission policy. Shadow-schedule snapshots use the
+actual word-matrix allocation size, not the obsolete instruction-by-value byte
+size. The latter caused both incomplete snapshots and an ASan-detected overread
+after the upstream storage change.
+
+Compiler entrypoint probes enable each cache/liveness verification control
+individually and together, require clean success, and compare assembly/debug
+metadata with the controls disabled in all six debug/stack modes. Defined
+volatile unsigned increments also provide a small valid control and exact
+ordinary/strict oversized-function rejection diagnostics, without a partial
+function body or successful assembly footer.
+
+The retained `phi-edge-liveness` and `call-argument-liveness` mutants target the
+shipping optimized transfer function. Mutating only the now-diagnostic byte
+reference would not challenge ordinary production liveness. Their original
+intended assertions and clean-failure classification are unchanged.
+
+## Live memory rewrite proofs
+
+The existing verifier contains 36 dominated-load and 35 little-endian cases,
+all invoked through `mir_verify_and_dump`, not newly exposed static helpers.
+Original CFG dominance is checked independently before rewriting. Assertions
+cover positive reuse, profitability boundaries, alternate predecessors,
+one-path stores/calls, backedge writes, every memory barrier opcode, qualifiers
+and PHIs, address/type/width/bitfield differences, shared uses, and bounded
+address trees. Final load identities, access metadata, retired definitions and
+uses, still-live subtrees, and idempotence are checked under the real cache
+verifier across fresh functions.
+
+Thirteen dedicated isolated compiler mutants challenge barriers, path stability,
+access types/widths/bitfields, inherited volatility, address equality, adjacency,
+shift count, low-load/conversion uses, shared-tree retirement, and byte signedness.
+They supplement, rather than replace, the previous 28 mutants. The runner's
+optional `-Names` selector always includes the healthy baseline; default runs
+still execute the entire registry. A removed pass-tail invalidation alone is
+masked by the next pipeline invalidation, so it is not advertised as a killed
+cache mutant.
+
+`tests/mir-clobber/memproof.c` supplies defined two-byte target oracles with
+asymmetric `0x00`, `0x7f`, `0x80`, and `0xff` data, explicit arithmetic expectations,
+alias/join/backedge writes and inherited volatility. The `memory-rewrite`
+clobber group checks exact function-scoped access evidence in all 12
+release/full-debug/line-debug, stack/no-stack, peep/nopeep configurations.
+Full `-g` intentionally retains named parameter loads and therefore has explicit
+uncombined/unreused expectations; release and `-gline` retain their optimizations.
+No forced generic emitter is treated as an independent rewrite oracle.
+
+Generated frozen inventories and evidence stay under
+`build/memory-rewrite-proof/`. `scripts/audit-mir-memory-proof.py` checks the
+named healthy cases, both outcomes of every frozen feasible guard, the intact
+old/new mutant inventory, and each new mutant's exact failing case and clean
+assertion exit. Missing/wrong-function evidence, duplicate cases, survivors,
+invalid results, or missing outcomes fail closed; raw branch percentages are
+not acceptance criteria.
+
 For Clang/GCC sanitizer coverage, configure with
 `-DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer'` and run
 CTest with `ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1`.

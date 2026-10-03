@@ -10,8 +10,37 @@ function Get-MirCompilerMutations {
         @{ Name = "call-arity"; Before = '(!prototype.variadic &&'; After = '(0 && !prototype.variadic &&'; ExpectedFailure = 'FAIL nonvariadic call rejects extra argument' },
         @{ Name = "indirect-callee"; Before = '!strcmp(insn->name, "<indirect>") && insn->src1 < 0'; After = '0 && !strcmp(insn->name, "<indirect>") && insn->src1 < 0'; ExpectedFailure = 'FAIL indirect call requires a callee value' },
         @{ Name = "callback-identity"; Before = 'if (declared >= 0) {'; After = 'if (0 && declared >= 0) {'; ExpectedFailure = 'FAIL unprototyped local callback ignores same-named global prototype' },
-        @{ Name = "phi-edge-liveness"; Before = 'value == phi->src1'; After = 'value == phi->src2'; ExpectedFailure = 'FAIL PHI values must be live only on their own edges' },
-        @{ Name = "call-argument-liveness"; Before = 'insn_is_call && mir_call_uses_value(insn, value)'; After = '0 && insn_is_call && mir_call_uses_value(insn, value)'; ExpectedFailure = 'FAIL argument must remain live through its matching call' },
+        @{ Name = "phi-edge-liveness"; Before = 'phi_row[phi->src1 / 64] |= 1ULL << (phi->src1 % 64);'; After = 'phi_row[phi->src2 / 64] |= 1ULL << (phi->src2 % 64);'; ExpectedFailure = 'FAIL PHI values must be live only on their own edges' },
+        @{ Name = "call-argument-liveness"; Before = 'if (mir.insns[use].opcode != MIR_PHI)'; After = "if (mir.insns[use].opcode != MIR_PHI &&`n                !((mir.insns[use].opcode == MIR_CALL ||`n                   mir.insns[use].opcode == MIR_CALL_AGGREGATE) &&`n                  mir.insns[use].src1 != value && mir.insns[use].src2 != value &&`n                  mir_call_uses_value(&mir.insns[use], value)))"; ExpectedFailure = 'FAIL argument must remain live through its matching call' },
+        @{
+            Name = "preprocessor-character-escape"
+            Source = "src/dcc/dcc_pp_expr.c"
+            Before = '    v = parse_escape_string_char(&pp_expr_p);'
+            After = @'
+    if (*pp_expr_p == '\\') {
+        int c;
+        pp_expr_p++;
+        c = (unsigned char)*pp_expr_p;
+        if (c == 'n') v = '\n';
+        else if (c == 'r') v = '\r';
+        else if (c == 't') v = '\t';
+        else if (c == '0') v = 0;
+        else v = c;
+        if (*pp_expr_p) pp_expr_p++;
+    } else {
+        v = (unsigned char)*pp_expr_p;
+        if (*pp_expr_p) pp_expr_p++;
+    }
+'@
+            ExpectedFailure = "FAIL preprocessor character alarm"
+        },
+        @{
+            Name = "preprocessor-character-hex"
+            Source = "src/dcc/dcc_preproc.c"
+            Before = "    if (c == 'x') {`n        int v;`n        v = 0;"
+            After = "    if (0 && c == 'x') {`n        int v;`n        v = 0;"
+            ExpectedFailure = "FAIL preprocessor character hex-digit"
+        },
         @{ Name = "phi-consumer-value"; Before = 'phi_value = phi->dst;'; After = 'phi_value = -1;'; ExpectedFailure = 'FAIL immediate PHI consumer forwarding' },
         @{ Name = "promotion-cache"; CompileProbe = $true },
         @{ Name = "global-field-vn-cache"; Before = "    mir_global_field_vn_count = replaced;`n    mir_invalidate_use_cache();"; After = "    mir_global_field_vn_count = replaced;`n    (void)replaced;"; CacheVerifier = $true; ExpectedFailure = 'FAIL global field value-numbering cache invalidation' },
@@ -50,6 +79,84 @@ function Get-MirCompilerMutations {
             MatcherReject = "large-writes"
             ExpectedFailure =
                 "FAIL allocation matcher accepted mutated store width"
+        },
+        @{
+            Name = "memory-dominated-barrier"
+            Before = "static int mir_dominated_load_memory_barrier(const struct MirInsn *insn)`n{`n    switch (insn->opcode) {"
+            After = "static int mir_dominated_load_memory_barrier(const struct MirInsn *insn)`n{`n    (void)insn;`n    switch (MIR_NOP) {"
+            ExpectedFailure = "FAIL memory rewrite dom-path-store"
+        },
+        @{
+            Name = "memory-dominated-path"
+            Before = "    memset(visited, 0, (size_t)mir.count);`n    worklist[work_count++] = instruction;"
+            After = "    return 1;`n    memset(visited, 0, (size_t)mir.count);`n    worklist[work_count++] = instruction;"
+            ExpectedFailure = "FAIL memory rewrite dom-bypass"
+        },
+        @{
+            Name = "memory-dominated-type"
+            Before = "                next->type != first->type ||`n                next->memory_size != first->memory_size ||`n                !mir_dominated_load_pure_value_equal("
+            After = "                0 && next->type != first->type ||`n                next->memory_size != first->memory_size ||`n                !mir_dominated_load_pure_value_equal("
+            ExpectedFailure = "FAIL memory rewrite dom-type"
+        },
+        @{
+            Name = "memory-dominated-width"
+            Before = "                next->memory_size != first->memory_size ||`n                !mir_dominated_load_pure_value_equal(`n                    first->src1, next->src1, 0) ||"
+            After = "                0 && next->memory_size != first->memory_size ||`n                !mir_dominated_load_pure_value_equal(`n                    first->src1, next->src1, 0) ||"
+            ExpectedFailure = "FAIL memory rewrite dom-width"
+        },
+        @{
+            Name = "memory-dominated-bitfield"
+            Before = "            struct MirInsn *next = &mir.insns[instruction];`n            int address;`n`n            if (next->opcode != MIR_LOAD_INDIRECT ||`n                next->memory_flags != 0 || next->bit_width != 0 ||"
+            After = "            struct MirInsn *next = &mir.insns[instruction];`n            int address;`n`n            if (next->opcode != MIR_LOAD_INDIRECT ||`n                next->memory_flags != 0 || 0 && next->bit_width != 0 ||"
+            ExpectedFailure = "FAIL memory rewrite dom-bitfield"
+        },
+        @{
+            Name = "memory-inherited-volatility"
+            Before = "return (mir_pointer_volatile_mask(value, depth) & 1U) != 0;"
+            After = "return (mir_pointer_volatile_mask(value, depth) & 0U) != 0;"
+            ExpectedFailure = "FAIL memory rewrite dom-inherited-volatile"
+        },
+        @{
+            Name = "memory-address-equality"
+            Before = "    if (left_value == right_value)"
+            After = "    if (1 || left_value == right_value)"
+            ExpectedFailure = "FAIL memory rewrite dom-base"
+        },
+        @{
+            Name = "memory-endian-adjacency"
+            Before = "           high_index->immediate == low_index->immediate + 1;"
+            After = "           1;"
+            ExpectedFailure = "FAIL memory rewrite end-nonadjacent"
+        },
+        @{
+            Name = "memory-endian-shift"
+            Before = "            shift_amount->immediate != 8 ||"
+            After = "            0 && shift_amount->immediate != 8 ||"
+            ExpectedFailure = "FAIL memory rewrite end-shift-seven"
+        },
+        @{
+            Name = "memory-endian-low-use"
+            Before = "            mir_value_use_count(low_load->dst) != 1 ||"
+            After = "            0 && mir_value_use_count(low_load->dst) != 1 ||"
+            ExpectedFailure = "FAIL memory rewrite end-low-extra-use"
+        },
+        @{
+            Name = "memory-endian-conversion-use"
+            Before = "            mir_value_use_count(low_conversion->dst) != 1 ||"
+            After = "            0 && mir_value_use_count(low_conversion->dst) != 1 ||"
+            ExpectedFailure = "FAIL memory rewrite end-conversion-extra-use"
+        },
+        @{
+            Name = "memory-endian-retirement"
+            Before = "static void mir_retire_dead_endian_tree(int value)`n{`n    struct MirInsn *definition;`n    int src1;`n    int src2;`n`n    if (value < 0 || mir_value_use_count(value) != 0)"
+            After = "static void mir_retire_dead_endian_tree(int value)`n{`n    struct MirInsn *definition;`n    int src1;`n    int src2;`n`n    if (value < 0)"
+            ExpectedFailure = "FAIL memory rewrite end-high-shared"
+        },
+        @{
+            Name = "memory-endian-signed-byte"
+            Before = "        (!explicit_byte_conversion && (load->type & TYPE_UNSIGNED) == 0))"
+            After = "        (0 && !explicit_byte_conversion && (load->type & TYPE_UNSIGNED) == 0))"
+            ExpectedFailure = "FAIL memory rewrite end-low-signed"
         }
     )
 }
