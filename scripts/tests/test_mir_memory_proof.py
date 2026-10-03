@@ -47,6 +47,23 @@ class MemoryProofTests(unittest.TestCase):
     def test_positive(self):
         self.assertEqual(self.run_audit()["cases"], 2)
 
+    def test_additional_manifest_preserves_every_prior_and_memory_mutant(self):
+        self.results.append({"mutation": "frontend", "outcome": "killed", "exitCode": 1})
+        self.logs["frontend"] = "FAIL frontend oracle\n"
+        def audit(additional):
+            return PROOF.audit(self.inventory, self.report, self.source, self.log,
+                               self.results, self.prior, self.logs, additional)
+        self.assertEqual(audit({"frontend": "FAIL frontend oracle"})["additional_mutants"], 1)
+        for additional in ({}, {"old": "FAIL old"}, {"new": "FAIL new"},
+                           {"frontend": ""}, {"frontend": "FAIL wrong"}, []):
+            with self.subTest(additional=additional), self.assertRaises(ValueError):
+                audit(additional)
+        for index in range(len(self.results)):
+            saved = self.results.pop(index)
+            with self.subTest(missing=saved["mutation"]), self.assertRaises(ValueError):
+                audit({"frontend": "FAIL frontend oracle"})
+            self.results.insert(index, saved)
+
     def test_missing_duplicate_wrong_or_failed_case(self):
         original = self.log
         for bad in ("", original + original, original.replace("dom", "other"),

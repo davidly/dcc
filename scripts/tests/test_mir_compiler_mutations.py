@@ -66,6 +66,27 @@ struct MirAllocationSummary
             path.write_text("\n".join(fragments))
         self.configure_fixture()
 
+    def test_liveness_mutants_target_the_shipping_bitset_transfer(self):
+        source = (ROOT / "src/dcc/dcc_mir.c").read_text()
+        begin = source.index("static int mir_compute_liveness_bitsets(")
+        end = source.index("\nint mir_verify_and_dump(", begin)
+        bitsets = source[begin:end]
+        for name in ("phi-edge-liveness", "call-argument-liveness"):
+            mutation = next(item for item in self.mutations if item["Name"] == name)
+            with self.subTest(name=name):
+                self.assertEqual(source.count(mutation["Before"]), 1)
+                self.assertIn(mutation["Before"], bitsets)
+                self.assertNotIn(mutation["Before"], source[:begin])
+
+    def test_branch_manifest_mutants_restore_unique_production_guards(self):
+        manifest = json.loads((ROOT / "scripts/compiler-branch-proof.json").read_text())
+        for name, label in manifest["mutant_assertions"].items():
+            mutation = next(item for item in self.mutations if item["Name"] == name)
+            with self.subTest(name=name):
+                self.assertEqual(mutation["ExpectedFailure"], label)
+                self.assertEqual((ROOT / mutation["Source"]).read_text().count(
+                    mutation["Before"]), 1)
+
     def tearDown(self):
         shutil.rmtree(self.workspace)
 
@@ -324,6 +345,8 @@ int main(int argc, char **argv) {
             "call-arity": "invalid", "indirect-callee": "invalid",
             "callback-identity": "invalid", "phi-edge-liveness": "invalid",
             "call-argument-liveness": "killed", "phi-consumer-value": "invalid",
+            "preprocessor-character-escape": "killed",
+            "preprocessor-character-hex": "killed",
             "promotion-cache": "killed",
             "global-field-vn-cache": "killed",
             "global-field-vn-call-barrier": "killed",

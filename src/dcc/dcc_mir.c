@@ -8986,7 +8986,7 @@ static int mir_first_phi_or_block_end_uncached(int successor)
  * mir_eliminate_common_block_expressions,
  * mir_eliminate_common_region_expressions,
  * mir_simplify_boolean_phi_branches, and mir_forward_immediate_phi_returns
- * all look like early/construction helpers by file position but are invoked
+ * all look like early/construction helpers by file position but were invoked
  * from dcc_mir_select.c during selection (the last one only found after the
  * first four already fixed the listed failures, by tracing every caller of
  * the mutator primitives mir_make_nop/mir_replace_value_uses/
@@ -8998,11 +8998,14 @@ static int mir_first_phi_or_block_end_uncached(int successor)
  * even invalidating at their return wouldn't have been enough. Each now
  * suspends mir_use_cache_scope_active for its own duration and invalidates
  * on the way out (see each one's own
- * comment). With those four isolated, the "immutable after promotion"
- * argument below is what actually holds, and this scope has a clean,
+ * comment). With those mutation scopes isolated, the "immutable after
+ * promotion" argument below is what actually holds, and this scope has a clean,
  * full-suite-verified pass (0 failures, 0 codegen regressions) to show for
  * it at each of the last two states - the narrow one first, standing alone,
- * and this wider one after. If a future change reintroduces a
+ * and this wider one after. In the current checkout only the Boolean PHI
+ * pass retains a production selection caller; the field-VN, common-expression
+ * and immediate-PHI passes remain host proof contracts. If a future change
+ * reintroduces a
  * miscompilation shaped like the ones above, suspect a fifth function with
  * this same shape before suspecting this cache's core logic, which hasn't
  * changed since the narrow scope's clean run.
@@ -13070,27 +13073,28 @@ static int mir_compute_liveness_bitsets(MirLiveWord *live_in,
     free(next_out);
 
     if (mir_liveness_verify_enabled()) {
-        size_t size = (size_t)count * values;
-        unsigned char *reference_in = (unsigned char *)calloc(size, 1);
-        unsigned char *reference_out = (unsigned char *)calloc(size, 1);
+        size_t size = MIR_LIVE_MATRIX_WORDS(count, values);
+        MirLiveWord *reference_in = (MirLiveWord *)calloc(size, sizeof(*reference_in));
+        MirLiveWord *reference_out = (MirLiveWord *)calloc(size, sizeof(*reference_out));
+        size_t cell;
 
         if (reference_in == NULL || reference_out == NULL)
             fatal("out of memory verifying MIR liveness");
-        mir_compute_liveness_bytes(reference_in, reference_out);
-        for (i = 0; i < count; ++i)
-            for (value = 0; value < values; ++value) {
-                size_t cell = (size_t)i * values + value;
-                if ((reference_in[cell] != 0) !=
-                        MIR_LIVE_TEST(live_in, i, value) ||
-                    (reference_out[cell] != 0) !=
-                        MIR_LIVE_TEST(live_out, i, value)) {
-                    fprintf(stderr,
-                            "; MIR LIVENESS MISMATCH function=%s "
-                            "instruction=%d value=%d\n",
-                            mir.name, i, value);
-                    fatal("MIR liveness mismatch");
-                }
+        if (mir_compute_liveness_packed(reference_in, reference_out) != 0)
+            fatal("MIR liveness reference rejected verified successors");
+        /* Compare complete words, including unused tail bits. The packed
+         * reference still computes the independent byte fixed point. */
+        for (cell = 0; cell < size; ++cell) {
+            if (live_in[cell] != reference_in[cell] ||
+                live_out[cell] != reference_out[cell]) {
+                fprintf(stderr,
+                        "; MIR LIVENESS MISMATCH function=%s "
+                        "instruction=%d word=%lu\n",
+                        mir.name, (int)(cell / words),
+                        (unsigned long)(cell % words));
+                fatal("MIR liveness mismatch");
             }
+        }
         free(reference_in);
         free(reference_out);
     }
@@ -13230,30 +13234,12 @@ int mir_verify_and_dump(void)
         mir_allocate_registers(
             live_in, live_out, &allocation, 0, NULL, 0);
     }
-    /* Left active on purpose past this point, through register allocation,
-     * backend slot preparation, instruction selection, and emission - i.e.
-     * for the rest of this attempt. This was tried once already on the
-     * strength of a grep across every .c file in this directory showing no
-     * assignment to opcode/src1/src2/secondary_offset/dst outside dcc_mir.c;
-     * that grep was accurate but the conclusion was wrong, because it only
-     * ruled out OTHER files mutating instructions - it didn't rule out
-     * functions defined in dcc_mir.c itself (so invisible to a
-     * "which file" grep) being called from those other files during
-     * selection. Four passes had exactly that shape - defined early in
-     * dcc_mir.c looking like construction helpers, but actually invoked from
-     * dcc_mir_select.c mid-selection: mir_value_number_global_field_loads,
-     * mir_eliminate_common_block_expressions,
-     * mir_eliminate_common_region_expressions, and
-     * mir_simplify_boolean_phi_branches. Each also reads use/definition data
-     * for instructions it hasn't reached yet in the very same scan where it
-     * mutates earlier ones, so even invalidating at their return wouldn't
-     * have been enough - they now suspend mir_use_cache_scope_active for
-     * their own duration and invalidate on the way out (see each one's own
-     * comment). With those four isolated, mir.insns's opcode/src1/src2/
-     * secondary_offset/dst fields really are immutable from here to the end
-     * of mir_end_function, and this scope has a clean, full-suite-verified
-     * pass to show for it (0 failures, 0 codegen regressions) at each of
-     * the last two states: liveness-loop-only, and this wider one. */
+    /* Keep the cache active through allocation and candidate emission.
+     * The production Boolean PHI rewrite and host-only field-VN/common-
+     * expression/immediate-PHI passes suspend it during interleaved mutation
+     * and queries, then invalidate on return. Candidate rollback also
+     * invalidates before reverification. New graph mutators must preserve
+     * these contracts; absence of writes in emitter files is not enough. */
 
     if (getenv("DCC_MIR_ALLOCATION_REPORT") != NULL)
         fprintf(stderr,

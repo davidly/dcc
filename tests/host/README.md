@@ -25,6 +25,14 @@ and bounded EOF behavior. Global-text ownership tests exercise same/different
 function writes, absent/multiple writes, and live AST classifier/value-numbering
 acceptance or rejection; shared state is restored afterward.
 
+Character assertions exercise the preprocessing evaluator and shared literal
+decoder against 22 fixed byte-value oracles, including simple, octal and
+hexadecimal escapes and false equality controls. The compiler entrypoint runner
+checks all 66 corresponding `#if`, `#elif` and conditional-include contracts.
+The branch-proof pilot manifest requires these and all eight bitset cases;
+two restoration mutants challenge the character fix without replacing any of
+the 41 retained compiler mutants.
+
 Target/scheduler host fixtures verify straight-line, diamond/PHI, loop/PHI, and
 narrow/wide call-pressure graphs, asserting constraints, CFG/liveness summaries,
 legal colors/rematerialization/spills, call splits, and movements. Snapshots
@@ -44,6 +52,36 @@ rounded percentages. Existing all-metric selected AST/MIR completeness controls
 retain their meaning. See [compiler coverage](../../docs/compiler-coverage.md)
 for artifact names, configuration-aware inventory checks, and immutable
 checkpoint/report-only provenance.
+
+## Bitset liveness and cache controls
+
+The existing verifier's `--bitset-proof` mode enables
+`DCC_MIR_LIVENESS_VERIFY` and checks eight independently constructed live-word
+oracles at 1, 2, 63, 64, 65, 127, 128, and 129 values. It compares raw words,
+not the compiler's indexing macros, including zero padding and definition/return
+boundaries. Each named case and the final zero-failure summary are mandatory.
+CTest runs this mode as `mir-bitset-layout`; there are still only five
+compiler-linked host binaries.
+
+The liveness diagnostic compares the optimized matrices with the independent
+byte fixed point through the existing packed-reference helper. Complete-word
+comparison also checks unused tail bits; it does not bypass verifier preflights
+or change default allocation/emission policy. Shadow-schedule snapshots use the
+actual word-matrix allocation size, not the obsolete instruction-by-value byte
+size. The latter caused both incomplete snapshots and an ASan-detected overread
+after the upstream storage change.
+
+Compiler entrypoint probes enable each cache/liveness verification control
+individually and together, require clean success, and compare assembly/debug
+metadata with the controls disabled in all six debug/stack modes. Defined
+volatile unsigned increments also provide a small valid control and exact
+ordinary/strict oversized-function rejection diagnostics, without a partial
+function body or successful assembly footer.
+
+The retained `phi-edge-liveness` and `call-argument-liveness` mutants target the
+shipping optimized transfer function. Mutating only the now-diagnostic byte
+reference would not challenge ordinary production liveness. Their original
+intended assertions and clean-failure classification are unchanged.
 
 ## Live memory rewrite proofs
 

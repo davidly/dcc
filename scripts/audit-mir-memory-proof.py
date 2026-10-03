@@ -21,7 +21,8 @@ def branch_expression(lines, branch):
                       parts[-1][:end_column - 1]])
 
 
-def audit(inventory, coverage, source, host_log, mutations, previous, mutation_logs):
+def audit(inventory, coverage, source, host_log, mutations, previous, mutation_logs,
+          additional_assertions=None):
     cases = inventory["dominated_cases"] + inventory["endian_cases"]
     if not cases or len(cases) != len(set(cases)):
         raise ValueError("empty or duplicate case inventory")
@@ -70,16 +71,23 @@ def audit(inventory, coverage, source, host_log, mutations, previous, mutation_l
         raise ValueError("invalid mutant-to-assertion inventory")
     results = {result["mutation"]: result for result in mutations}
     prior = {result["mutation"]: result for result in previous}
+    additional = {} if additional_assertions is None else additional_assertions
+    if (not isinstance(additional, dict) or
+            any(not isinstance(name, str) or not name or
+                not isinstance(label, str) or not label.startswith("FAIL ")
+                for name, label in additional.items()) or
+            additional.keys() & (prior.keys() | mapping.keys())):
+        raise ValueError("invalid additional compiler mutant inventory")
     if (len(results) != len(mutations) or len(prior) != len(previous) or
             not prior or "baseline" not in prior or
-            set(results) != set(prior) | set(mapping)):
+            set(results) != set(prior) | set(mapping) | set(additional)):
         raise ValueError("changed or incomplete compiler mutant inventory")
     for name, result in results.items():
         expected = "passed" if name == "baseline" else "killed"
         if (result["outcome"] != expected or
                 result["exitCode"] != (0 if name == "baseline" else 1)):
             raise ValueError("failed compiler mutant control: " + name)
-    if mutation_logs.keys() != mapping.keys():
+    if mutation_logs.keys() != mapping.keys() | additional.keys():
         raise ValueError("missing intended mutant assertion logs")
     for name, case in mapping.items():
         log = mutation_logs[name]
@@ -88,8 +96,12 @@ def audit(inventory, coverage, source, host_log, mutations, previous, mutation_l
                               r" outcome=failed\r?$", log, re.M) or
                 not re.search(r"^MIR verifier failures=[1-9]\d*\r?$", log, re.M)):
             raise ValueError("missing intended mutant assertion: " + name)
+    for name, label in additional.items():
+        if not re.search(r"(?m)^" + re.escape(label) + r"\r?$", mutation_logs[name]):
+            raise ValueError("missing intended additional mutant assertion: " + name)
     return dict(cases=len(cases), guards=guards, new_mutants=len(mapping),
-                existing_mutants=len(prior) - 1, outcome="passed")
+                existing_mutants=len(prior) - 1, additional_mutants=len(additional),
+                outcome="passed")
 
 
 def main():
@@ -99,6 +111,7 @@ def main():
     parser.add_argument("--host-log", type=Path, required=True)
     parser.add_argument("--mutations", type=Path, required=True)
     parser.add_argument("--previous-mutations", type=Path, required=True)
+    parser.add_argument("--additional-proof", type=Path)
     parser.add_argument("--source", type=Path, default=ROOT / "src/dcc/dcc_mir.c")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -106,11 +119,13 @@ def main():
         read = lambda path: json.loads(path.read_text(encoding="utf-8-sig"))
         args.output.unlink(missing_ok=True)
         inventory = read(args.inventory)
+        additional = (read(args.additional_proof)["mutant_assertions"]
+                      if args.additional_proof else {})
         logs = {name: (args.mutations.parent / name / "test.log").read_text()
-                for name in inventory["mutant_assertions"]}
+                for name in inventory["mutant_assertions"].keys() | additional.keys()}
         result = audit(inventory, read(args.coverage), args.source,
                        args.host_log.read_text(), read(args.mutations),
-                       read(args.previous_mutations), logs)
+                       read(args.previous_mutations), logs, additional)
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(1, f"memory-proof: {error}\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)

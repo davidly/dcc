@@ -38,6 +38,30 @@ type-name suffix parser, and global-write ownership/value-numbering consumers,
 plus verified straight-line, diamond/PHI, loop/PHI, and narrow/wide call-pressure
 fixtures with production-state snapshots.
 
+The branch-proof pilot manifest, `scripts/compiler-branch-proof.json`, freezes
+22 character-literal oracles across direct `#if`, `#elif`, and conditional
+include routes, plus eight bitset word-boundary cases. Entry-point collection
+requires exact named evidence (74 cases when the host is supplied), rejecting
+missing, duplicate, failed, unexpected or changed inventories before writing
+`proof-evidence.json`. This is a bounded pilot contract, not a claim that the
+70% portfolio is complete.
+
+Character preprocessing now reuses the literal decoder, including standard
+simple escapes, up to three octal digits, and hexadecimal escapes with the
+existing target byte-value convention. The preserved original compiler failed
+39 of the 66 preprocessing contracts; independent preprocessing confirmed the
+expected values. `tppreg` also rejects incorrect decoding at compile time without
+changing its runtime workload or baselines. Two new compiler restoration
+controls challenge this fix; all 41 prior mutants remain required.
+
+When auditing the retained memory proof against a campaign containing the
+additional controls, pass
+`--additional-proof scripts/compiler-branch-proof.json` to
+`audit-mir-memory-proof.py`. Its exact inventory becomes the prior controls,
+the original memory controls, and these explicitly declared additional
+controls. Unknown, missing, surviving or invalid controls still fail; no
+campaign results are silently filtered.
+
 All unfiltered exports/native reports/HTML use the same compiler and five host
 objects. New artifacts under the checkpoint's `compiler-coverage/report/` are:
 
@@ -56,6 +80,55 @@ export against unchanged inputs/tools/binaries, execution manifest, and raw
 profiles. Coverage gaps return nonzero after writing diagnostic artifacts.
 Do not alter, resume, or mix the historical
 `build/mir-proof-suite-20261002-{130430-410603,175420-1564947}` checkpoints.
+
+### Exact whole-source branch accounting
+
+`scripts/compiler-branch-coverage.py` reconciles the independently compiled
+function-body inventory, unfiltered LLVM function/file records, macro expansion
+paths, and native `summary.txt`. Its standalone gate requires
+`10 * covered >= 7 * count`; rounded percentages cannot pass it.
+The historical 115,898/170,672 checkpoint therefore needs 119,471 covered
+outcomes, not 119,470. The gate is not yet wired into normal reporting:
+correctness-backed branch proofs must establish readiness first.
+
+```sh
+python3 scripts/compiler-branch-coverage.py \
+  --inventory build/compiler-coverage/report/compiler-function-inventory.json \
+  --coverage build/compiler-coverage/report/compiler-coverage.json \
+  --native-report build/compiler-coverage/report/summary.txt \
+  --output-dir build/compiler-coverage/report
+```
+
+Use `--allow-below-target` only for development diagnostics. Both modes write
+`compiler-branch-coverage.json`, including exact totals, deficit, per-source
+counts, aliases, excluded folded file regions, and individually identified
+true/false outcomes. `--baseline` compares compatible source mappings and
+reports new and lost outcomes separately; changed mappings fail instead of
+masquerading as execution gains. Existing checkpoint validation still owns
+input/tool/binary/profile and workload-completion identity; an offline branch
+report alone does not certify those contracts.
+
+LLVM file arrays contain alias duplicates and folded conditions. Function
+arrays exclude folded conditions and include header/nested macro branches.
+Repeated invocations need their complete expansion path, not just a header
+line. Native alias-group branch coverage takes the maximum instantiation
+coverage, not the union of complementary outcomes. Unattributable alias maxima
+and file/function/native disagreements fail closed; host code is excluded.
+
+The October 3 upstream merge adds 25 source functions and changes compiler
+branch mappings. Historical complete function coverage remains historical:
+the merged compiler needs fresh profiles and complete coverage of its expanded
+inventory. Never merge the old checkpoint's profiles into new objects.
+
+Normal entrypoint collection additionally checks all seven cache/liveness
+verification controls individually and together, exact oversized-function
+diagnostics, and the verifier's eight named bitset-layout cases. The packed
+reference is exercised through the existing liveness diagnostic on verified
+graphs, not a private-helper or preflight-bypass test. These controls restore
+proofs for new upstream diagnostic bodies without deleting uncovered code.
+Broad cache/reference corpus runs can be much slower than ordinary compilation:
+timeouts are invalid evidence, not compiler defects or mutation kills. Keep
+their profiles separate from assertion-passing batches.
 
 ### Completed checkpoint: 2026-10-02
 

@@ -651,6 +651,49 @@ static void verify_endian_memory_rewrites(void)
     }
 }
 
+static void verify_preprocessor_characters(void)
+{
+    static const struct {
+        const char *name;
+        const char *literal;
+        int value;
+    } cases[] = {
+        { "plain", "'A'", 65 }, { "newline", "'\\n'", 10 },
+        { "return", "'\\r'", 13 }, { "tab", "'\\t'", 9 },
+        { "alarm", "'\\a'", 7 }, { "backspace", "'\\b'", 8 },
+        { "formfeed", "'\\f'", 12 }, { "vertical-tab", "'\\v'", 11 },
+        { "backslash", "'\\\\'", 92 }, { "quote", "'\\''", 39 },
+        { "double-quote", "'\\\"'", 34 }, { "question", "'\\?'", 63 },
+        { "nul", "'\\0'", 0 }, { "octal-one", "'\\7'", 7 },
+        { "octal-two", "'\\77'", 63 }, { "octal-three", "'\\101'", 65 },
+        { "octal-byte", "'\\377'", 255 }, { "hex-digit", "'\\x7'", 7 },
+        { "hex-upper", "'\\x4A'", 74 }, { "hex-lower", "'\\x4a'", 74 },
+        { "hex-letter", "'\\xa'", 10 }, { "hex-byte", "'\\xff'", 255 }
+    };
+    size_t test;
+
+    for (test = 0; test < sizeof(cases) / sizeof(cases[0]); ++test) {
+        char expression[128];
+        long value = -1;
+        int ok;
+
+        snprintf(expression, sizeof(expression), "%s == %d && %s != %d",
+                 cases[test].literal, cases[test].value,
+                 cases[test].literal, cases[test].value + 1);
+        ok = pp_eval_simple_expr(expression) &&
+             parse_charlit_string_value(cases[test].literal, &value) &&
+             value == cases[test].value;
+        snprintf(expression, sizeof(expression), "%s == %d",
+                 cases[test].literal, cases[test].value + 1);
+        if (pp_eval_simple_expr(expression))
+            ok = 0;
+        if (!ok) {
+            fprintf(stderr, "FAIL preprocessor character %s\n", cases[test].name);
+            ++failures;
+        }
+    }
+}
+
 static void verify_frontend_token_paths(void)
 {
     LexState saved_lex = lex_save();
@@ -2406,6 +2449,50 @@ static void verify_call_argument_liveness(void)
         ++failures;
     }
     clear_liveness();
+}
+
+static void verify_bitset_word_boundaries(void)
+{
+    static const int sizes[] = { 1, 2, 63, 64, 65, 127, 128, 129 };
+    int sample;
+
+    for (sample = 0; sample < (int)(sizeof(sizes) / sizeof(sizes[0])); ++sample) {
+        int values = sizes[sample];
+        size_t words = ((size_t)values + 63) / 64;
+        int highest = values - 1;
+        int instruction;
+        int ok;
+
+        setup(4, values, 1);
+        mir.insns[1].opcode = MIR_NOP;
+        mir.insns[1].dst = -1;
+        mir.insns[2].opcode = MIR_CONST;
+        mir.insns[2].dst = highest;
+        mir.insns[2].immediate = 37;
+        mir.insns[3].src1 = highest;
+        ok = memory_proof_verify();
+        if (ok) {
+            for (instruction = 0; instruction < mir.count; ++instruction) {
+                size_t word;
+                for (word = 0; word < words; ++word) {
+                    unsigned long long live =
+                        word == (size_t)highest / 64 ? 1ULL << (highest % 64) : 0;
+                    if (mir.live_in[(size_t)instruction * words + word] !=
+                            (instruction == 3 ? live : 0) ||
+                        mir.live_out[(size_t)instruction * words + word] !=
+                            (instruction == 2 ? live : 0))
+                        ok = 0;
+                }
+            }
+        }
+        if (!ok) {
+            fprintf(stderr, "FAIL MIR bitset word boundary values=%d\n", values);
+            ++failures;
+        }
+        fprintf(stderr, "; MIR bitset-proof values=%d outcome=%s\n",
+                values, ok ? "passed" : "failed");
+        clear_liveness();
+    }
 }
 
 static void verify_mir_stream_io(void)
@@ -8242,8 +8329,8 @@ static void check_shadow_schedule(
     struct MirScheduleSummary repeated;
     struct MirFunction *saved;
     struct MirInsn *instructions;
-    unsigned char *live_in;
-    unsigned char *live_out;
+    MirLiveWord *live_in;
+    MirLiveWord *live_out;
     size_t bytes;
     int labels = label_id;
     EmitSink saved_sink = g_emit_sink;
@@ -8259,7 +8346,7 @@ static void check_shadow_schedule(
         fclose(output);
         return;
     }
-    bytes = (size_t)mir.count * mir.next_value;
+    bytes = MIR_LIVE_MATRIX_WORDS(mir.count, mir.next_value) * sizeof(*live_in);
     saved = xmalloc(sizeof(*saved));
     instructions = xmalloc((size_t)mir.count * sizeof(*instructions));
     live_in = xmalloc(bytes);
@@ -8884,6 +8971,12 @@ int main(int argc, char **argv)
 {
     struct Sym *callee;
     int mutation;
+    if (argc == 2 && !strcmp(argv[1], "--bitset-proof")) {
+        set_test_environment("DCC_MIR_LIVENESS_VERIFY", "1");
+        verify_bitset_word_boundaries();
+        printf("MIR bitset layout checks=8 failures=%d\n", failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--shadow-schedule-require-invalid")) {
         setup(4, 1, 1);
         strcpy(mir.name, "coverage_unsupported");
@@ -8902,6 +8995,7 @@ int main(int argc, char **argv)
         return 2;
     }
     verify_frontend_token_paths();
+    verify_preprocessor_characters();
     verify_global_pointer_write_ownership();
     verify_target_constraints();
     verify_shadow_schedules();

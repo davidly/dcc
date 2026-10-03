@@ -11,7 +11,8 @@
  * pp_eval_simple_expr().
  *
  * @par Boundary
- * Macro-table lookup is provided by dcc_preproc.c. This evaluator implements
+ * Macro-table lookup and character escape decoding are provided by
+ * dcc_preproc.c. This evaluator implements
  * preprocessing arithmetic, not the typed C constant semantics in dcc_fold.c.
  */
 
@@ -82,7 +83,6 @@ static long pp_expr_number(void)
 
 static long pp_expr_charlit(void)
 {
-    int c;
     long v;
 
     pp_expr_skip_ws();
@@ -90,21 +90,7 @@ static long pp_expr_charlit(void)
         return 0;
     pp_expr_p++;
 
-    if (*pp_expr_p == '\\') {
-        pp_expr_p++;
-        c = (unsigned char)*pp_expr_p;
-        if (c == 'n') v = '\n';
-        else if (c == 'r') v = '\r';
-        else if (c == 't') v = '\t';
-        else if (c == '0') v = 0;
-        else v = c;
-        if (*pp_expr_p)
-            pp_expr_p++;
-    } else {
-        v = (unsigned char)*pp_expr_p;
-        if (*pp_expr_p)
-            pp_expr_p++;
-    }
+    v = parse_escape_string_char(&pp_expr_p);
 
     while (*pp_expr_p && *pp_expr_p != '\'')
         pp_expr_p++;

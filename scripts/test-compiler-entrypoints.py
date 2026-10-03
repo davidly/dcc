@@ -58,6 +58,66 @@ TARGET_FIELDS = {
     "wide", "byte", "pseudo", "materialize", "address", "load", "store",
     "unary", "binary", "unsupported",
 }
+CACHE_CONTROLS = (
+    "DCC_MIR_CACHE_VERIFY",
+    "DCC_MIR_LABEL_CACHE_VERIFY",
+    "DCC_MIR_RETURN_SUFFIX_CACHE_VERIFY",
+    "DCC_MIR_FUSED_BYTE_CACHE_VERIFY",
+    "DCC_MIR_WIDEN_CACHE_VERIFY",
+    "DCC_MIR_NOT_BRANCH_CACHE_VERIFY",
+    "DCC_MIR_LIVENESS_VERIFY",
+)
+BITSET_SIZES = (1, 2, 63, 64, 65, 127, 128, 129)
+PP_CHARACTERS = (
+    ("plain", "'A'", 65),
+    ("newline", r"'\n'", 10),
+    ("return", r"'\r'", 13),
+    ("tab", r"'\t'", 9),
+    ("alarm", r"'\a'", 7),
+    ("backspace", r"'\b'", 8),
+    ("formfeed", r"'\f'", 12),
+    ("vertical-tab", r"'\v'", 11),
+    ("backslash", r"'\\'", 92),
+    ("quote", r"'\''", 39),
+    ("double-quote", r"'\"'", 34),
+    ("question", r"'\?'", 63),
+    ("nul", r"'\0'", 0),
+    ("octal-one", r"'\7'", 7),
+    ("octal-two", r"'\77'", 63),
+    ("octal-three", r"'\101'", 65),
+    ("octal-byte", r"'\377'", 255),
+    ("hex-digit", r"'\x7'", 7),
+    ("hex-upper", r"'\x4A'", 74),
+    ("hex-lower", r"'\x4a'", 74),
+    ("hex-letter", r"'\xa'", 10),
+    ("hex-byte", r"'\xff'", 255),
+)
+
+def validate_proof_manifest(manifest, executions, with_host):
+    expect(manifest["version"] == 1, "unsupported branch proof manifest")
+    expect(manifest["character_cases"] == [list(case) for case in PP_CHARACTERS],
+           "changed/incomplete character proof inventory")
+    expect(manifest["character_routes"] == ["if", "elif", "include"],
+           "changed/incomplete character entry routes")
+    expect(manifest["bitset_sizes"] == list(BITSET_SIZES),
+           "changed/incomplete bitset proof inventory")
+    expected = {"pp-character-" + name + "-" + route
+                for name, _, _ in PP_CHARACTERS
+                for route in manifest["character_routes"]}
+    if with_host:
+        expected |= {"bitset-values-" + str(size) for size in BITSET_SIZES}
+    observed = []
+    for execution in executions:
+        cases = execution.get("cases", [execution["case"]] if "case" in execution else [])
+        expect(isinstance(cases, list) and all(isinstance(case, str) for case in cases),
+               "invalid named proof evidence")
+        if cases:
+            expect(execution["status"] == 0, "failed named proof evidence")
+            observed.extend(cases)
+    expect(len(observed) == len(set(observed)), "duplicate named proof evidence")
+    expect(set(observed) == expected, "missing/unexpected named proof evidence")
+    return dict(cases=len(observed), complete=with_host,
+                scope="characters-and-bitsets" if with_host else "characters")
 
 
 def expect(condition, message):
@@ -215,6 +275,83 @@ class Runner:
                     "DCC_MIR_SCHEDULE_REQUIRE": "1", "DCC_MIR_SCHEDULE_FUNCTION": "probe"})
                 expect(actual == baseline, "require-only changed output")
 
+    def preprocessor_characters(self):
+        text = "int probe(void) { return 137; }\n"
+        baseline, _ = self.compile(text)
+        header = self.directory / "pp-character.h"
+        header.write_text(text)
+        for name, literal, value in PP_CHARACTERS:
+            for route in ("if", "elif", "include"):
+                condition = f"{literal} == {value} && {literal} != {value + 1}"
+                opening = "#if " if route != "elif" else "#if 0\n#elif "
+                body = text if route != "include" else '#include "pp-character.h"\n'
+                wrong = ("#error wrong character value\n" if route != "include" else
+                         '#include "missing-pp-character.h"\n')
+                actual, _ = self.compile(
+                    opening + condition + "\n" + body + "#else\n" + wrong + "#endif\n")
+                self.executions[-1]["case"] = "pp-character-" + name + "-" + route
+                expect(actual == baseline,
+                       f"preprocessor character value changed output: {name}/{route}")
+
+    def cache_controls(self):
+        text = (
+            "int byte_lt(signed char *p) { return *p < 9; }\n"
+            "int byte_gt(unsigned char *p) { return *p > 127; }\n"
+            "int c_suffix(int f) { return f ? -3 : 9; }\n"
+            "int b_suffix(_Bool a, _Bool b) { return !(a || !b); }\n"
+            "int joined(unsigned int a, int f) {\n"
+            "  unsigned int x;\n"
+            "  if (f) x = a + 1U; else x = a - 1U;\n"
+            "  while (a) { x ^= a; --a; }\n"
+            "  return x;\n"
+            "}\n"
+        )
+        strict = {"DCC_MIR_REQUIRE_COMPLETE": "1", "DCC_MIR_REQUIRE_EMIT": "1"}
+        for debug in ([], ["-g"], ["-gline"]):
+            for stack in ([], ["-fstack-check"]):
+                options = debug + stack
+                baseline, _ = self.compile(text, options, strict)
+                for controls in (
+                        *({name: "1"} for name in CACHE_CONTROLS),
+                        {name: "1" for name in CACHE_CONTROLS}):
+                    actual, _ = self.compile(text, options, {**strict, **controls})
+                    expect(actual == baseline,
+                           "cache/liveness verification changed assembly/debug metadata")
+
+    def analysis_limits(self):
+        prefix = "unsigned int over(volatile unsigned int *p)\n{\n"
+        suffix = "  return *p;\n}\n"
+        increment = "  *p += 1U;\n"
+        self.compile(prefix + increment * 4 + suffix)
+        self.source.write_text(prefix + increment * 4096 + suffix)
+        args = ["-c", self.source, "-o", self.output]
+        process = self.run(args, status=1, stderr=None)
+        match = re.fullmatch(
+            r"dcc: fatal: function 'over' is too large to compile: "
+            r"([1-9]\d*) MIR instructions x ([1-9]\d*) values exceeds the "
+            r"analysis limit \(536870912 cells, 8192 values\); "
+            r"split it into smaller functions\n", process.stderr)
+        expect(match is not None, "missing precise oversized-function diagnostic")
+        instructions, values = map(int, match.groups())
+        expect(values * values > 64 * 1024 * 1024 or
+               instructions * values > 8 * 64 * 1024 * 1024,
+               "oversized diagnostic does not describe an exceeded limit")
+        expect(self.output.is_file() and self.output.read_text().rstrip().endswith("_over:"),
+               "oversized failure emitted a partial function body or successful footer")
+        self.run(args, status=1, stderr=(
+            "MIR emission failed for function over: no generated candidate (reason=oversized)\n"
+            "dcc: fatal: DCC_MIR_REQUIRE_EMIT requires MIR emission\n"), env={
+                "DCC_MIR_REQUIRE_COMPLETE": "1", "DCC_MIR_REQUIRE_EMIT": "1"})
+        expect(self.output.is_file() and self.output.read_text().rstrip().endswith("_over:"),
+               "strict oversized failure emitted a partial function body or successful footer")
+
+    def bitset_layout(self, host):
+        expected = "".join(f"; MIR bitset-proof values={size} outcome=passed\n"
+                           for size in BITSET_SIZES)
+        self.run(["--bitset-proof"], compiler=str(host.resolve()),
+                 stdout="MIR bitset layout checks=8 failures=0\n", stderr=expected)
+        self.executions[-1]["cases"] = ["bitset-values-" + str(size) for size in BITSET_SIZES]
+
     def invalid_shadow(self, host):
         process = self.run(["--shadow-schedule-require-invalid"], compiler=str(host.resolve()),
                            stderr=None, env={
@@ -250,12 +387,21 @@ def main():
     try:
         runner.cli()
         runner.includes()
+        runner.preprocessor_characters()
         runner.diagnostics()
+        runner.cache_controls()
+        runner.analysis_limits()
         if args.host:
+            runner.bitset_layout(args.host)
             runner.invalid_shadow(args.host)
+        proof = validate_proof_manifest(
+            json.loads((ROOT / "scripts/compiler-branch-proof.json").read_text()),
+            runner.executions, with_host=bool(args.host))
+        (runner.directory / "proof-evidence.json").write_text(json.dumps(proof, indent=2) + "\n")
         (runner.directory / "executions.json").write_text(
             json.dumps(runner.executions, indent=2) + "\n")
-    except (AssertionError, OSError, subprocess.SubprocessError) as error:
+    except (AssertionError, OSError, ValueError, KeyError, TypeError,
+            subprocess.SubprocessError) as error:
         print("compiler-entrypoints: " + str(error), file=sys.stderr)
         return 1
     print(f"Compiler entrypoint assertions: {len(runner.executions)} subprocesses; "

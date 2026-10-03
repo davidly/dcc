@@ -10,8 +10,37 @@ function Get-MirCompilerMutations {
         @{ Name = "call-arity"; Before = '(!prototype.variadic &&'; After = '(0 && !prototype.variadic &&'; ExpectedFailure = 'FAIL nonvariadic call rejects extra argument' },
         @{ Name = "indirect-callee"; Before = '!strcmp(insn->name, "<indirect>") && insn->src1 < 0'; After = '0 && !strcmp(insn->name, "<indirect>") && insn->src1 < 0'; ExpectedFailure = 'FAIL indirect call requires a callee value' },
         @{ Name = "callback-identity"; Before = 'if (declared >= 0) {'; After = 'if (0 && declared >= 0) {'; ExpectedFailure = 'FAIL unprototyped local callback ignores same-named global prototype' },
-        @{ Name = "phi-edge-liveness"; Before = 'value == phi->src1'; After = 'value == phi->src2'; ExpectedFailure = 'FAIL PHI values must be live only on their own edges' },
-        @{ Name = "call-argument-liveness"; Before = 'insn_is_call && mir_call_uses_value(insn, value)'; After = '0 && insn_is_call && mir_call_uses_value(insn, value)'; ExpectedFailure = 'FAIL argument must remain live through its matching call' },
+        @{ Name = "phi-edge-liveness"; Before = 'phi_row[phi->src1 / 64] |= 1ULL << (phi->src1 % 64);'; After = 'phi_row[phi->src2 / 64] |= 1ULL << (phi->src2 % 64);'; ExpectedFailure = 'FAIL PHI values must be live only on their own edges' },
+        @{ Name = "call-argument-liveness"; Before = 'if (mir.insns[use].opcode != MIR_PHI)'; After = "if (mir.insns[use].opcode != MIR_PHI &&`n                !((mir.insns[use].opcode == MIR_CALL ||`n                   mir.insns[use].opcode == MIR_CALL_AGGREGATE) &&`n                  mir.insns[use].src1 != value && mir.insns[use].src2 != value &&`n                  mir_call_uses_value(&mir.insns[use], value)))"; ExpectedFailure = 'FAIL argument must remain live through its matching call' },
+        @{
+            Name = "preprocessor-character-escape"
+            Source = "src/dcc/dcc_pp_expr.c"
+            Before = '    v = parse_escape_string_char(&pp_expr_p);'
+            After = @'
+    if (*pp_expr_p == '\\') {
+        int c;
+        pp_expr_p++;
+        c = (unsigned char)*pp_expr_p;
+        if (c == 'n') v = '\n';
+        else if (c == 'r') v = '\r';
+        else if (c == 't') v = '\t';
+        else if (c == '0') v = 0;
+        else v = c;
+        if (*pp_expr_p) pp_expr_p++;
+    } else {
+        v = (unsigned char)*pp_expr_p;
+        if (*pp_expr_p) pp_expr_p++;
+    }
+'@
+            ExpectedFailure = "FAIL preprocessor character alarm"
+        },
+        @{
+            Name = "preprocessor-character-hex"
+            Source = "src/dcc/dcc_preproc.c"
+            Before = "    if (c == 'x') {`n        int v;`n        v = 0;"
+            After = "    if (0 && c == 'x') {`n        int v;`n        v = 0;"
+            ExpectedFailure = "FAIL preprocessor character hex-digit"
+        },
         @{ Name = "phi-consumer-value"; Before = 'phi_value = phi->dst;'; After = 'phi_value = -1;'; ExpectedFailure = 'FAIL immediate PHI consumer forwarding' },
         @{ Name = "promotion-cache"; CompileProbe = $true },
         @{ Name = "global-field-vn-cache"; Before = "    mir_global_field_vn_count = replaced;`n    mir_invalidate_use_cache();"; After = "    mir_global_field_vn_count = replaced;`n    (void)replaced;"; CacheVerifier = $true; ExpectedFailure = 'FAIL global field value-numbering cache invalidation' },

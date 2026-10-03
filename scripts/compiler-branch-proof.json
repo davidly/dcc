@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "character_cases": [
+    ["plain", "'A'", 65],
+    ["newline", "'\\n'", 10],
+    ["return", "'\\r'", 13],
+    ["tab", "'\\t'", 9],
+    ["alarm", "'\\a'", 7],
+    ["backspace", "'\\b'", 8],
+    ["formfeed", "'\\f'", 12],
+    ["vertical-tab", "'\\v'", 11],
+    ["backslash", "'\\\\'", 92],
+    ["quote", "'\\''", 39],
+    ["double-quote", "'\\\"'", 34],
+    ["question", "'\\?'", 63],
+    ["nul", "'\\0'", 0],
+    ["octal-one", "'\\7'", 7],
+    ["octal-two", "'\\77'", 63],
+    ["octal-three", "'\\101'", 65],
+    ["octal-byte", "'\\377'", 255],
+    ["hex-digit", "'\\x7'", 7],
+    ["hex-upper", "'\\x4A'", 74],
+    ["hex-lower", "'\\x4a'", 74],
+    ["hex-letter", "'\\xa'", 10],
+    ["hex-byte", "'\\xff'", 255]
+  ],
+  "character_routes": ["if", "elif", "include"],
+  "bitset_sizes": [1, 2, 63, 64, 65, 127, 128, 129],
+  "mutant_assertions": {
+    "preprocessor-character-escape": "FAIL preprocessor character alarm",
+    "preprocessor-character-hex": "FAIL preprocessor character hex-digit"
+  }
+}

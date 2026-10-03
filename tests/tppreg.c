@@ -80,6 +80,12 @@ static void cki(const char *name, int got, int exp)
 #define R_CHAR 0
 #endif
 
+#if '\a' != 7 || '\b' != 8 || '\f' != 12 || '\v' != 11 || \
+    '\7' != 7 || '\77' != 63 || '\101' != 65 || '\377' != 255 || \
+    '\x7' != 7 || '\x4A' != 74 || '\x4a' != 74 || '\xa' != 10 || '\xff' != 255
+#error incorrect preprocessor character escape
+#endif
+
 #if 0
 #define R_ELIF 0
 #elif A * B == 15

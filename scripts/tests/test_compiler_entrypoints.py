@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -78,6 +79,122 @@ class EntrypointTests(unittest.TestCase):
             self.assertNotIn("DCC_MIR_SCHEDULE_REQUIRE", report_env)
             self.assertEqual(require_env["DCC_MIR_SCHEDULE_REQUIRE"], "1")
             self.assertEqual(require_env["DCC_MIR_SCHEDULE_FUNCTION"], "coverage_unsupported")
+
+    def test_cache_controls_cover_individual_joint_and_debug_stack_modes(self):
+        with patch.object(self.runner, "compile", return_value=(b"same", "")) as compile:
+            self.runner.cache_controls()
+        self.assertEqual(compile.call_count, 6 * (len(entrypoints.CACHE_CONTROLS) + 2))
+        for debug in ([], ["-g"], ["-gline"]):
+            for stack in ([], ["-fstack-check"]):
+                calls = [call for call in compile.call_args_list
+                         if call.args[1] == debug + stack]
+                self.assertEqual(len(calls), len(entrypoints.CACHE_CONTROLS) + 2)
+                environments = [call.args[2] for call in calls]
+                self.assertTrue(all(env["DCC_MIR_REQUIRE_EMIT"] == "1" and
+                                    env["DCC_MIR_REQUIRE_COMPLETE"] == "1"
+                                    for env in environments))
+                for control in entrypoints.CACHE_CONTROLS:
+                    self.assertTrue(any(
+                        {key for key in env if key in entrypoints.CACHE_CONTROLS} == {control}
+                        for env in environments))
+                self.assertTrue(any(
+                    all(env.get(control) == "1" for control in entrypoints.CACHE_CONTROLS)
+                    for env in environments))
+        with patch.object(self.runner, "compile", side_effect=[
+                (b"baseline", ""), (b"changed", "")]):
+            with self.assertRaisesRegex(AssertionError, "cache/liveness verification changed"):
+                self.runner.cache_controls()
+
+    def test_character_contracts_require_every_literal_and_entry_route(self):
+        def compile(text, *args, **kwargs):
+            self.runner.executions.append({})
+            return b"same", ""
+        with patch.object(self.runner, "compile", side_effect=compile) as calls:
+            self.runner.preprocessor_characters()
+        self.assertEqual(calls.call_count, 1 + 3 * len(entrypoints.PP_CHARACTERS))
+        self.assertEqual(
+            {record["case"] for record in self.runner.executions if "case" in record},
+            {"pp-character-" + name + "-" + route
+             for name, _, _ in entrypoints.PP_CHARACTERS
+             for route in ("if", "elif", "include")})
+        for call in calls.call_args_list[1:]:
+            self.assertIn("#else\n", call.args[0])
+            self.assertIn("#endif\n", call.args[0])
+        def drift(text, *args, **kwargs):
+            self.runner.executions.append({})
+            return (b"same" if text.startswith("int probe") else b"changed"), ""
+        with patch.object(self.runner, "compile", side_effect=drift):
+            with self.assertRaisesRegex(AssertionError, "character value changed"):
+                self.runner.preprocessor_characters()
+
+    def test_proof_manifest_rejects_partial_duplicate_failed_or_changed_evidence(self):
+        manifest = json.loads((ROOT / "scripts/compiler-branch-proof.json").read_text())
+        records = [{"case": "pp-character-" + name + "-" + route, "status": 0}
+                   for name, _, _ in entrypoints.PP_CHARACTERS
+                   for route in manifest["character_routes"]]
+        records += [{"cases": ["bitset-values-" + str(size)
+                               for size in entrypoints.BITSET_SIZES], "status": 0}]
+        result = entrypoints.validate_proof_manifest(manifest, records, True)
+        self.assertEqual(result, dict(cases=74, complete=True, scope="characters-and-bitsets"))
+        for bad in ([], records[:-1], records + [records[0]],
+                    [{"case": "unexpected", "status": 0}], [{"cases": "wrong", "status": 0}],
+                    [dict(records[0], status=1), *records[1:]]):
+            with self.subTest(records=bad), self.assertRaises(AssertionError):
+                entrypoints.validate_proof_manifest(manifest, bad, True)
+        for field, value in (("version", 2), ("character_cases", []),
+                             ("character_routes", ["if"]), ("bitset_sizes", [1])):
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                entrypoints.validate_proof_manifest({**manifest, field: value}, records, True)
+
+    def test_analysis_limit_diagnostic_and_partial_output_contracts(self):
+        diagnostic = (
+            "dcc: fatal: function 'over' is too large to compile: "
+            "20485 MIR instructions x 16387 values exceeds the analysis limit "
+            "(536870912 cells, 8192 values); split it into smaller functions\n")
+
+        def run(args, **kwargs):
+            self.runner.output.write_text("_over:\n")
+            return subprocess.CompletedProcess([], 1, "", diagnostic)
+
+        with patch.object(self.runner, "compile", return_value=(b"same", "")), \
+                patch.object(self.runner, "run", side_effect=run) as calls:
+            self.runner.analysis_limits()
+        self.assertEqual(calls.call_count, 2)
+        self.assertEqual(calls.call_args_list[1].kwargs["env"], {
+            "DCC_MIR_REQUIRE_COMPLETE": "1", "DCC_MIR_REQUIRE_EMIT": "1"})
+        self.assertEqual(self.runner.source.read_text().count("*p += 1U;"), 4096)
+        for stderr, body in (
+                ("generic rejection\n", "_over:\n"),
+                (diagnostic.replace("20485", "1").replace("16387", "1"), "_over:\n"),
+                (diagnostic, "_over:\nret\n"),
+                (diagnostic, "_over:\nend\n")):
+            def bad(args, **kwargs):
+                self.runner.output.write_text(body)
+                return subprocess.CompletedProcess([], 1, "", stderr)
+            with self.subTest(stderr=stderr, body=body), \
+                    patch.object(self.runner, "compile", return_value=(b"same", "")), \
+                    patch.object(self.runner, "run", side_effect=bad):
+                with self.assertRaises(AssertionError):
+                    self.runner.analysis_limits()
+
+    def test_bitset_proof_requires_all_named_cases_and_completion(self):
+        stderr = "".join(f"; MIR bitset-proof values={size} outcome=passed\n"
+                         for size in entrypoints.BITSET_SIZES)
+        stdout = "MIR bitset layout checks=8 failures=0\n"
+        with patch.object(entrypoints.subprocess, "run", return_value=
+                          subprocess.CompletedProcess([], 0, stdout, stderr)):
+            self.runner.bitset_layout(ROOT / "host")
+        for result in (
+                subprocess.CompletedProcess([], 1, stdout, stderr),
+                subprocess.CompletedProcess([], 0, "", stderr),
+                subprocess.CompletedProcess([], 0, stdout, stderr + stderr),
+                subprocess.CompletedProcess([], 0, stdout, stderr.replace("values=64", "values=66")),
+                subprocess.CompletedProcess([], 0, stdout, stderr.replace("outcome=passed",
+                                                                         "outcome=failed"))):
+            with self.subTest(result=result), \
+                    patch.object(entrypoints.subprocess, "run", return_value=result):
+                with self.assertRaises(AssertionError):
+                    self.runner.bitset_layout(ROOT / "host")
 
     def test_collection_runner_failure_prevents_stamp(self):
         shell = (ROOT / "scripts/compiler-coverage.sh").read_text()
