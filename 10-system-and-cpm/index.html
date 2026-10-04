@@ -1,0 +1,2035 @@
+<!DOCTYPE html><html lang="en" class="no-js"><head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="MkDocs documentation for DCC C Compiler, its runtime, and dccrtlstrip size analysis.">
+      
+      
+        <meta name="author" content="David Lee">
+      
+      
+      
+        <link rel="prev" href="../standard-lib/15-time/">
+      
+      
+        <link rel="next" href="../11-limitations/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>System and CP/M services - DCC C Compiler Reference</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <link href="../assets/stylesheets/glightbox.min.css" rel="stylesheet"><script src="../assets/javascripts/glightbox.min.js"></script><style id="glightbox-style">
+            html.glightbox-open { overflow: initial; height: 100%; }
+            .gslide-title { margin-top: 0px; user-select: text; }
+            .gslide-desc { color: #666; user-select: text; }
+            .gslide-image img { background: white; }
+            .gscrollbar-fixer { padding-right: 15px; }
+            .gdesc-inner { font-size: 0.75rem; }
+            body[data-md-color-scheme="slate"] .gdesc-inner { background: var(--md-default-bg-color); }
+            body[data-md-color-scheme="slate"] .gslide-title { color: var(--md-default-fg-color); }
+            body[data-md-color-scheme="slate"] .gslide-desc { color: var(--md-default-fg-color); }
+        </style></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#system-and-cpm-services" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="DCC C Compiler Reference" class="md-header__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DCC C Compiler Reference
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              System and CP/M services
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink" aria-label="Switch to dark mode" type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 2c-1.82 0-3.53.5-5 1.35C8 5.08 10 8.3 10 12s-2 6.92-5 8.65C6.47 21.5 8.18 22 10 22a10 10 0 0 0 10-10A10 10 0 0 0 10 2"></path></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="cyan" aria-label="Switch to light mode" type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"></path></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required="">
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix="">
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="DCC C Compiler Reference" class="md-nav__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    DCC C Compiler Reference
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix="">
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-setup-toolchain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The toolchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-vscode-debugging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code debugging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-debug-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugger host and I/O adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-agent-skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agentic skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-c-conformance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C conformance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../02-build-and-link/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building and linking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-types-and-conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Types and conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../04-operators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operators
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10" checked="">
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Library reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/01-assert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    assert.h: Diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/07-ctype/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ctype.h: Character handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/02-errno/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    errno.h: Error reporting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/03-float/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    float.h: Floating-point limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/04-limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    limits.h: Integer limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/17-locale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    locale.h: Localization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/08-math/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    math.h: Floating point math
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/09-setjmp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    setjmp.h: Non-local jumps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/16-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    signal.h: Signal handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/10-stdarg/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdarg.h: Variadic arguments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/11-stdbool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdbool.h: Boolean type
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/12-stddef/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stddef.h: Common definitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/13-stdint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdint.h: Fixed-width integers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/05-stdio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdio.h: Console and file I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/06-stdlib/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdlib.h: Memory and utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/14-string/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    string.h: String handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/15-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    time.h: Date and time
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System and CP/M services
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System and CP/M services
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#unistdh-fcntlh-low-level-file-io" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        unistd.h / fcntl.h — low-level file I/O
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dirent-directory-enumeration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dirent.h — directory enumeration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#standard-diagnostics-and-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard diagnostics and errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-io-and-cpm-bdos-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File I/O and CP/M BDOS conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cpm-extensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CP/M extensions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../11-limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../12-examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worked examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13">
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/00-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compiler architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/01-dccrtlstrip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/02-runtime-sizes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime function sizes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/03-utilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/05-building-project-docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building project docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#unistdh-fcntlh-low-level-file-io" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        unistd.h / fcntl.h — low-level file I/O
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dirent-directory-enumeration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        dirent.h — directory enumeration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#standard-diagnostics-and-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standard diagnostics and errors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#file-io-and-cpm-bdos-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        File I/O and CP/M BDOS conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cpm-extensions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CP/M extensions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="system-and-cpm-services">System and CP/M services<a class="headerlink" href="#system-and-cpm-services" title="Permanent link">¶</a></h1>
+<p>This page covers low-level file descriptors, directory enumeration, error
+reporting, assertions, and the CP/M-specific extensions.</p>
+<h2 id="unistdh-fcntlh-low-level-file-io"><code>unistd.h</code> / <code>fcntl.h</code> — low-level file I/O<a class="headerlink" href="#unistdh-fcntlh-low-level-file-io" title="Permanent link">¶</a></h2>
+<p>These map onto CP/M file operations and operate on small integer file
+descriptors. Include <code>unistd.h</code> and <code>fcntl.h</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Summary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>int open(const char *path, int flags, ...)</code></td>
+<td>Open/create a file, returns a descriptor.</td>
+</tr>
+<tr>
+<td><code>int read(int fd, void *buf, unsigned n)</code></td>
+<td>Read up to <code>n</code> bytes.</td>
+</tr>
+<tr>
+<td><code>int write(int fd, const void *buf, unsigned n)</code></td>
+<td>Write up to <code>n</code> bytes.</td>
+</tr>
+<tr>
+<td><code>int close(int fd)</code></td>
+<td>Close a descriptor.</td>
+</tr>
+<tr>
+<td><code>long lseek(int fd, long off, int whence)</code></td>
+<td>Reposition the descriptor.</td>
+</tr>
+<tr>
+<td><code>int unlink(const char *path)</code></td>
+<td>Delete a file.</td>
+</tr>
+<tr>
+<td><code>int fsync(int fd)</code></td>
+<td>Flush file data to disk.</td>
+</tr>
+<tr>
+<td><code>int fdatasync(int fd)</code></td>
+<td>Flush file data to disk.</td>
+</tr>
+</tbody>
+</table>
+<p><code>fcntl.h</code> also declares <code>open</code> in K&amp;R form (<code>int open();</code>) for compatibility.
+<code>off_t</code> from <code>unistd.h</code> is <code>long</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Constant</th>
+<th style="text-align: right;">Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>O_RDONLY</code></td>
+<td style="text-align: right;">0</td>
+<td>open for reading</td>
+</tr>
+<tr>
+<td><code>O_WRONLY</code></td>
+<td style="text-align: right;">1</td>
+<td>open for writing</td>
+</tr>
+<tr>
+<td><code>O_RDWR</code></td>
+<td style="text-align: right;">2</td>
+<td>open for reading and writing</td>
+</tr>
+<tr>
+<td><code>O_CREAT</code></td>
+<td style="text-align: right;">0100</td>
+<td>create the file if needed</td>
+</tr>
+<tr>
+<td><code>O_TRUNC</code></td>
+<td style="text-align: right;">01000</td>
+<td>truncate an existing file</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><span class="kt">int</span><span class="w"> </span><span class="n">fd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">open</span><span class="p">(</span><span class="s">"OUT.BIN"</span><span class="p">,</span><span class="w"> </span><span class="n">O_WRONLY</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">O_CREAT</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">O_TRUNC</span><span class="p">);</span>
+<span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">fd</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">write</span><span class="p">(</span><span class="n">fd</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="p">,</span><span class="w"> </span><span class="n">len</span><span class="p">);</span>
+<span class="w">    </span><span class="n">close</span><span class="p">(</span><span class="n">fd</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Access modes are enforced: <code>read()</code> on an <code>O_WRONLY</code> descriptor and <code>write()</code>
+on an <code>O_RDONLY</code> descriptor fail with <code>EBADF</code>. <code>O_CREAT</code> alone preserves an
+existing file and starts at offset zero; <code>O_TRUNC</code> truncates only an existing
+file unless <code>O_CREAT</code> is also present. <code>O_RDONLY | O_TRUNC</code> is rejected with
+<code>EINVAL</code>. A zero-length write never changes the file position or tracked
+length.</p>
+<p>Because both <code>int</code> and the low-level return type are 16-bit signed values, one
+<code>read()</code> or <code>write()</code> reports at most <code>INT_MAX</code> (32,767) bytes. A larger request
+is performed as a legal short transfer of at most 32,767 bytes; loop until the
+requested total is complete. This avoids successful counts becoming
+indistinguishable from <code>-1</code>.</p>
+<p><code>lseek()</code> rejects a negative final position, signed arithmetic overflow, and a
+nonzero high byte in <code>whence</code>, leaving the old position unchanged. Successful
+<code>lseek()</code> and <code>close()</code> operations discard any pending <code>ungetc()</code> pushback.</p>
+<div class="admonition tip">
+<p class="admonition-title">Single file I/O core</p>
+<p><code>open</code>/<code>read</code>/<code>write</code>/<code>close</code>/<code>lseek</code>/<code>unlink</code>/<code>fsync</code>/<code>fdatasync</code> share one
+FCB/DMA core. The first file call links that core; additional file calls are
+nearly free. See the <a href="../appendix/01-dccrtlstrip/">appendix</a>.</p>
+</div>
+<h2 id="dirent-directory-enumeration"><code>dirent.h</code> — directory enumeration<a class="headerlink" href="#dirent-directory-enumeration" title="Permanent link">¶</a></h2>
+<p>Include <code>dirent.h</code>. CP/M has no subdirectories, so this enumerates files on the
+selected drive.</p>
+<table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Summary</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DIR *opendir(const char *path)</code></td>
+<td>Begin a scan. <code>"."</code>, <code>"*.*"</code>, and a bare <code>"A:"</code> enumerate every file; a specific pattern (<code>"*.C"</code>, <code>"T?.TMP"</code>) filters the scan the same way <code>unlink()</code> does.</td>
+</tr>
+<tr>
+<td><code>struct dirent *readdir(DIR *dirp)</code></td>
+<td>Next matching entry, or <code>NULL</code> at the end.</td>
+</tr>
+<tr>
+<td><code>int closedir(DIR *dirp)</code></td>
+<td>End the scan.</td>
+</tr>
+</tbody>
+</table>
+<p><code>struct dirent</code> has a single member, <code>char d_name[13]</code>, holding the 8.3 name.
+The public API uses POSIX-like names through macros:</p>
+<table>
+<thead>
+<tr>
+<th>Public name</th>
+<th>Runtime entry name</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>opendir</code></td>
+<td><code>dopn</code></td>
+</tr>
+<tr>
+<td><code>readdir</code></td>
+<td><code>drd</code></td>
+</tr>
+<tr>
+<td><code>closedir</code></td>
+<td><code>dcls</code></td>
+</tr>
+</tbody>
+</table>
+<p>Call the public names. The short runtime names exist to avoid
+external-symbol collisions on the M80/L80 toolchain.</p>
+<div class="highlight"><pre><span></span><code><span class="kt">DIR</span><span class="w"> </span><span class="o">*</span><span class="n">d</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">opendir</span><span class="p">(</span><span class="s">"*.*"</span><span class="p">);</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">dirent</span><span class="w"> </span><span class="o">*</span><span class="n">e</span><span class="p">;</span>
+
+<span class="k">while</span><span class="w"> </span><span class="p">((</span><span class="n">e</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">readdir</span><span class="p">(</span><span class="n">d</span><span class="p">))</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nb">NULL</span><span class="p">)</span>
+<span class="w">    </span><span class="n">puts</span><span class="p">(</span><span class="n">e</span><span class="o">-&gt;</span><span class="n">d_name</span><span class="p">);</span>
+<span class="n">closedir</span><span class="p">(</span><span class="n">d</span><span class="p">);</span>
+</code></pre></div>
+<h2 id="standard-diagnostics-and-errors">Standard diagnostics and errors<a class="headerlink" href="#standard-diagnostics-and-errors" title="Permanent link">¶</a></h2>
+<p>The standard-library reference now has dedicated pages for
+<a href="../standard-lib/02-errno/">error reporting</a> and
+<a href="../standard-lib/01-assert/">assertions</a>. The CP/M file runtime uses <code>errno</code> for
+file-related failures, and <code>assert</code> writes its diagnostic to the console before
+terminating with <code>abort()</code>.</p>
+<h2 id="file-io-and-cpm-bdos-conventions">File I/O and CP/M BDOS conventions<a class="headerlink" href="#file-io-and-cpm-bdos-conventions" title="Permanent link">¶</a></h2>
+<p>CP/M 2.2's BDOS file model is much simpler than POSIX/C89 assume, and DCCRTL's
+<code>fopen</code>/<code>read</code>/<code>write</code>/etc. are built directly on it rather than emulating a
+richer filesystem underneath. The differences below aren't DCCRTL bugs — they
+follow from what BDOS itself can express — but they can surprise code ported
+from a hosted C library. Every point here has been cross-checked against
+several independent CP/M emulators (ntvcm, tnylpo, cpmemu, zxcc, iz-cpm,
+z88dk's cpm, RunCPM, and Takeda Toshiya's cpm.exe) and, where noted, differs
+between them.</p>
+<h3 id="file-length-is-tracked-in-128-byte-records-not-bytes">File length is tracked in 128-byte records, not bytes<a class="headerlink" href="#file-length-is-tracked-in-128-byte-records-not-bytes" title="Permanent link">¶</a></h3>
+<p>CP/M has no byte-granular length field; a directory entry only knows how many
+128-byte records a file occupies. A file whose true length isn't a multiple of
+128 is still stored as a whole number of records, and the untouched tail of the
+last record — the padding between the real data and the record boundary — is
+written as Ctrl-Z (0x1A) bytes when that record is first created (there's no
+"old data" to merge a partial write with). That padding is genuine, readable,
+on-disk data: a large-enough <code>fread()</code> on a short file can return the trailing
+0x1A padding right along with the real bytes. <code>ftell()</code> reports the current
+byte position, not the file length. Seeking to the end of an ordinary reopened
+file uses its record-rounded directory length. This is deliberately left as
+documented behavior rather than "fixed" by trimming the tracked length at the
+runtime level — doing that breaks the classic CP/M convention (used by real
+programs, and by this repo's own <code>fileops.c</code> test) of writing a single
+trailing Ctrl-Z as the real end-of-text-file marker, which is indistinguishable
+on disk from unwritten padding. See <code>tests/tpadread.c</code> for a worked repro and
+<code>tests/tctrlz.c</code> for the Ctrl-Z-as-text-EOF convention in <code>fgets</code>/<code>fread</code>.</p>
+<p>Practical implications:</p>
+<ul>
+<li>Don't assume <code>fread(buf, 1, sizeof(buf), f)</code> stops exactly at a text file's
+  logical end; check for the file's own EOF convention (Ctrl-Z) if you rely on
+  padding not leaking into the buffer.</li>
+<li>Ordinary streams initially use the record-rounded directory length for
+  <code>fseek(f, 0, SEEK_END)</code>. An append stream replaces that value with its
+  trimmed logical end so later append writes can restore it after a seek.</li>
+<li><code>fopen(path, "a")</code> computes the logical end by scanning the last record
+  backward for a run of trailing Ctrl-Z bytes. Every nonempty write restores
+  that stream's tracked logical end first, so an intervening <code>fseek()</code> cannot
+  redirect an append write into the middle of the file. A pre-existing
+  trailing Ctrl-Z written as real text-EOF data can still shift where "end" is
+  judged to be, as described above.</li>
+</ul>
+<h3 id="record-count-overflow-at-exactly-8-mb">Record-count overflow at exactly 8 MB<a class="headerlink" href="#record-count-overflow-at-exactly-8-mb" title="Permanent link">¶</a></h3>
+<p>BDOS function 35 (compute file size) writes the record count to the FCB's
+three-byte random-record field. DCC's ordinary file-length initialization
+currently reads only its low 16 bits. CP/M 2.2's maximum file size, 8 MB, is
+exactly 65536 records, so that truncated count is zero and can look like an
+empty file. This is a runtime accounting limitation, not a 16-bit BDOS return
+contract.
+DCCRTL treats this as the one legitimate reason <code>__fdlen</code> can be genuinely
+larger than what a raw record-count register pair reported; see <code>tests/tbig.c</code>
+for sequential and random I/O across that boundary.</p>
+<h3 id="only-search-fn-1718-and-delete-fn-19-officially-support-wildcards">Only search (fn 17/18) and delete (fn 19) officially support wildcards<a class="headerlink" href="#only-search-fn-1718-and-delete-fn-19-officially-support-wildcards" title="Permanent link">¶</a></h3>
+<p>Per the documented CP/M 2.2 Interface Guide, <code>?</code> in an FCB byte means "match
+any character in this position" — but only for <code>opendir</code>/<code>readdir</code> (BDOS 17/18,
+search first/next) and <code>unlink</code> (BDOS 19, delete). <code>fopen</code>/<code>open</code> (BDOS 15,
+open), <code>fopen(path, "w")</code>/<code>fopen(path, "a")</code>-on-a-new-file (BDOS 22, make), and
+<code>rename</code> (BDOS 23) are silent on the subject — the spec never promises
+anything for an ambiguous FCB passed to them, and behavior there is either
+implementation-defined or deliberately blocked at the DCCRTL level (see below).</p>
+<p><code>__mkfcb</code> passes a <code>?</code> through unchanged, matching real BDOS wildcard
+semantics: <code>unlink("WA?.TMP")</code> deletes <strong>every</strong> file the pattern matches, not
+just one (<code>WA1.TMP</code>, <code>WA2.TMP</code>, and <code>WA3.TMP</code> all at once, for example), and
+<code>opendir("T?.TMP")</code>/<code>readdir()</code> filters to exactly the files that match. There
+is no way to single out one file once a wildcard character is present. See
+<code>tests/twild.c</code> and <code>tests/tdirpat.c</code>.</p>
+<p>A literal <code>*</code>, unlike <code>?</code>, has no meaning to BDOS itself — only <code>?</code> is a real
+wildcard at the BDOS level. The familiar shell-glob convention where <code>*</code>
+matches any run of characters is implemented by the CCP's own command-line
+parser (and by virtually every historic CP/M C runtime library), which expands
+<code>*</code> by filling the rest of the current field with <code>?</code> before the FCB ever
+reaches BDOS. <code>__mkfcb</code> does the same: a <code>*</code> in the name or extension fills
+the remainder of that field with <code>?</code>, so <code>unlink("*.BAK")</code>,
+<code>opendir("*.C")</code>, etc. behave the way C code typically expects, consistently
+across every DCCRTL target rather than only on hosts whose emulator happens to
+do its own glob expansion. See <code>tests/tstar.c</code>.</p>
+<p><code>rename()</code> with an ambiguous FCB (either the old or new name) is rejected
+outright (<code>-1</code>, <code>errno = EINVAL</code>, nothing renamed) — this is correct,
+spec-compliant behavior, not a limitation worth working around. Cross-drive
+renames are also rejected before BDOS (<code>-1</code>, <code>errno = EXDEV</code>); a missing drive
+prefix is resolved through the current CP/M drive before comparison. (CP/M
+2.2's own BDOS source
+technically loops over ambiguous <em>old</em>-name matches the same way delete does,
+but that's undocumented, and it would just copy the new name's bytes verbatim
+— <code>?</code> and all — into every match, producing garbage entries rather than any
+kind of sensible template substitution; no tested BDOS implementation actually
+does this.) See <code>tests/trenwild.c</code>.</p>
+<h3 id="low-level-read-errors-versus-eof">Low-level read errors versus EOF<a class="headerlink" href="#low-level-read-errors-versus-eof" title="Permanent link">¶</a></h3>
+<p>BDOS random-read statuses 1 and 4 mean unwritten data/extent and remain the
+runtime's EOF-or-hole result. Unambiguous failures such as an invalid FCB,
+media change, verification failure, hardware error, or out-of-range record set
+<code>errno</code> and the stream error indicator instead. If earlier records were
+transferred, <code>read()</code> returns that positive partial count; otherwise it returns
+<code>-1</code>.</p>
+<h3 id="fsync-and-fdatasync-on-cpm"><code>fsync()</code> and <code>fdatasync()</code> on CP/M<a class="headerlink" href="#fsync-and-fdatasync-on-cpm" title="Permanent link">¶</a></h3>
+<p>Both functions first require a currently open real-file descriptor. They then
+issue BDOS function 48 with <code>E = 0</code> and report its documented hardware-error
+return as <code>EIO</code>. CP/M 2.2 itself has no function 48: some emulators implement
+or safely ignore it, while others terminate the guest on the unsupported call.
+On implementations that support it, the call flushes global disk buffers. It
+cannot force still-pending FCB
+allocation/extent metadata to the directory without closing the file, so
+<code>close()</code> remains the operation that finalizes that metadata.</p>
+<p><code>fopen()</code>/<code>open()</code> for <strong>reading</strong> an ambiguous name is genuinely
+implementation-defined: real BDOS's open call happens to reuse the same
+directory-search primitive delete uses internally, with no explicit check
+against an ambiguous FCB, so on some implementations it silently opens
+whatever the first matching directory entry happens to be, while others
+reject it outright. Don't rely on this either way. See <code>tests/tfopenw.c</code>.</p>
+<p><code>fopen()</code>/<code>open()</code> for <strong>creating</strong> a file (<code>"w"</code>, or <code>"a"</code> on a file that
+doesn't exist yet) is different: DCCRTL explicitly rejects a <code>?</code> or <code>*</code> in the
+parsed name/ext before making any BDOS call at all, returning failure (<code>NULL</code>
+from <code>fopen</code>, <code>-1</code> from <code>open</code>, <code>errno = EINVAL</code>). BDOS's make call never
+validates the FCB it's given — it just copies it into an empty directory slot
+— so letting a wildcard through would silently create a real, permanent file
+whose name contains that literal character, and such a file can never again be
+matched by a wildcard-aware <code>unlink()</code>/<code>opendir()</code> scan (which correctly treat
+<code>?</code>/<code>*</code> as pattern characters, not literal ones). Rejecting it up front avoids
+creating a file with no portable way to clean it back up. See
+<code>tests/tmakewc.c</code>.</p>
+<h3 id="rename-onto-an-existing-unambiguous-destination-name"><code>rename()</code> onto an existing (unambiguous) destination name<a class="headerlink" href="#rename-onto-an-existing-unambiguous-destination-name" title="Permanent link">¶</a></h3>
+<p>This is a separate case from the ambiguous-FCB one above: both names are
+ordinary, unambiguous filenames, but the destination already exists as its
+own file. Real BDOS (confirmed against its own source) doesn't check for
+this at all — it just overwrites the matched entry's name/extension bytes
+with the new name, with no awareness that another directory entry already
+has that name. On real hardware that leaves <strong>two</strong> directory entries
+sharing one name, and which one a later <code>open()</code> finds is undefined.</p>
+<p>No emulator that maps CP/M files onto real host files can reproduce that:
+POSIX and Windows filesystems both refuse two directory entries with the
+same name, so every emulator is forced to collapse this into a single
+winner, one way or the other — there's no hardware-faithful option
+available at all, on any host. Emulators split on which winner they pick:
+ntvcm, cpmemu, zxcc, and z88dk's cpm overwrite the destination (nonzero
+return means failure — 0 means the destination now holds the source's old
+content and the source name is gone); tnylpo and cpm.exe reject the rename
+outright instead (nonzero return, original name and content untouched).
+Neither is "more correct." If your program cares which way this goes, check
+<code>rename()</code>'s return value and/or <code>unlink()</code> the destination first rather
+than relying on either outcome. See <code>tests/trenamex.c</code>.</p>
+<h3 id="drive-letter-prefixes">Drive-letter prefixes<a class="headerlink" href="#drive-letter-prefixes" title="Permanent link">¶</a></h3>
+<p><code>fopen("A:FILE.TXT", ...)</code> and similar are supported: a leading <code>A</code>-<code>P</code>
+(case-insensitive) followed by <code>:</code> is parsed into the FCB's drive byte, and the
+rest of the name follows normal 8.3 rules. There is no directory/path concept
+beyond this single-letter drive prefix — CP/M has no subdirectories at all (see
+<a href="#dirent-directory-enumeration"><code>dirent.h</code></a> above).</p>
+<h3 id="83-filenames-and-truncation-collisions">8.3 filenames and truncation collisions<a class="headerlink" href="#83-filenames-and-truncation-collisions" title="Permanent link">¶</a></h3>
+<p>Every filename is 8 characters plus a 3-character extension, uppercased, with
+no further validation. A longer host-supplied or generated name is silently
+truncated to fit; two different names that happen to truncate to the same 8.3
+form collide and refer to the same underlying CP/M file, with no error raised
+at creation time. See <code>tests/tlongfn.c</code>.</p>
+<h3 id="no-atomic-append-no-o_append-style-write-positioning">No atomic append, no <code>O_APPEND</code>-style write positioning<a class="headerlink" href="#no-atomic-append-no-o_append-style-write-positioning" title="Permanent link">¶</a></h3>
+<p>BDOS has no equivalent of POSIX's <code>O_APPEND</code> (every write goes to wherever the
+FCB's current record pointer is, and nothing serializes that against other
+processes). <code>fopen(path, "a")</code> computes the append position once, at open
+time; it does not re-seek to end before every subsequent write the way a true
+<code>O_APPEND</code> descriptor would if another process extended the file in between.
+Programs that share or alternate writes to the same file across processes must
+coordinate at a higher level.</p>
+<h2 id="cpm-extensions">CP/M extensions<a class="headerlink" href="#cpm-extensions" title="Permanent link">¶</a></h2>
+<p>The runtime exposes the raw CP/M BDOS entry point for things the standard
+library doesn't cover (console status, direct disk calls, and so on). It is
+declared in <code>stdlib.h</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="kt">int</span><span class="w"> </span><span class="nf">bdos</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">fn</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">dearg</span><span class="p">);</span>
+<span class="kt">int</span><span class="w"> </span><span class="nf">bdoshl</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">fn</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">dearg</span><span class="p">);</span>
+</code></pre></div>
+<p><code>fn</code> is the BDOS function number and <code>dearg</code> is the value passed in <code>DE</code>; the
+byte result comes back in the low byte of the returned <code>int</code>. Calls whose useful
+result is an FCB/DMA region (directory and file operations) return their data
+through the memory <code>dearg</code> points at, not in the return value. Use <code>bdoshl</code>
+when the BDOS function returns a full word in <code>HL</code>, such as function 12
+(version), instead of the byte result from <code>A</code>.</p>
+<p>The BIOS jump table is also available when an application genuinely needs
+machine-specific services:</p>
+<div class="highlight"><pre><span></span><code><span class="kt">int</span><span class="w"> </span><span class="nf">bios</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">fn</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">arg</span><span class="p">);</span><span class="w">                    </span><span class="cm">/* byte result from A */</span>
+<span class="kt">int</span><span class="w"> </span><span class="nf">bioshl</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">fn</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">arg</span><span class="p">);</span><span class="w">                  </span><span class="cm">/* full result from HL */</span>
+<span class="kt">int</span><span class="w"> </span><span class="nf">biosreg</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">fn</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">bcarg</span><span class="p">,</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">dearg</span><span class="p">);</span><span class="w">    </span><span class="cm">/* independent BC/DE, result HL */</span>
+</code></pre></div>
+<p><code>bios()</code> and <code>bioshl()</code> are the source-compatible convenience forms: <code>arg</code> is
+copied into <code>BC</code> and <code>DE</code>, and its low byte is therefore also in <code>C</code>. That
+covers the ordinary no-argument, character-in-<code>C</code>, and one-word-in-<code>BC</code> CP/M
+2.2 calls. Use <code>biosreg()</code> only when the BIOS contract needs two different
+register values, notably <code>SECTRAN</code> (logical sector in <code>BC</code>, translation-table
+address in <code>DE</code>) or CP/M 3 <code>SELDSK</code> (drive in <code>C</code>, login flag in <code>E</code>).
+<code>biosreg()</code> returns the full <code>HL</code> result used by those calls.</p>
+<p>BIOS disk services are hardware- and emulator-specific. In particular, ntvcm
+provides the standard 17-entry jump table but implements console functions
+only; its disk BIOS entries diagnose an unhandled call. Prefer BDOS file APIs
+for portable CP/M programs, and use BIOS disk calls only where the target BIOS
+is known.</p>
+<h3 id="non-blocking-console-input">Non-blocking console input<a class="headerlink" href="#non-blocking-console-input" title="Permanent link">¶</a></h3>
+<p>The standard input calls (<code>getchar</code>, <code>getc</code>, <code>fgets</code>, <code>scanf</code>) are blocking
+C-style input. For games, menus, terminal UIs, and other polling loops, use the
+runtime's <code>kbhit()</code> and <code>getch()</code> (declared in <code>stdio.h</code>):</p>
+<ul>
+<li><code>int kbhit(void)</code> returns nonzero when a key is waiting and <code>0</code> otherwise. It
+  never blocks and does not consume the character.</li>
+<li><code>int getch(void)</code> reads one key without echo. It blocks until a key is ready,
+  so it is normally guarded by <code>kbhit()</code>.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stdio.h&gt;</span>
+
+<span class="kt">int</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">ch</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">kbhit</span><span class="p">())</span><span class="w"> </span><span class="p">{</span><span class="w">          </span><span class="cm">/* non-blocking test */</span>
+<span class="w">        </span><span class="n">ch</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">getch</span><span class="p">();</span><span class="w">       </span><span class="cm">/* safe: a key is already waiting */</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">ch</span><span class="p">)</span>
+<span class="w">            </span><span class="n">handle_key</span><span class="p">(</span><span class="n">ch</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Under the hood <code>kbhit()</code> is CP/M BDOS function 11 (console status) and <code>getch()</code>
+is BDOS function 6 (direct console input, <code>E = 0xff</code>). Raw calls can be made
+through <code>bdos()</code>, but the named functions are clearer and also flush pending
+buffered output before blocking:</p>
+<div class="highlight"><pre><span></span><code><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stdlib.h&gt;</span>
+
+<span class="kt">int</span><span class="w"> </span><span class="nf">raw_kbhit</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">bdos</span><span class="p">(</span><span class="mi">11</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="kt">int</span><span class="w"> </span><span class="nf">raw_getch_nonblock</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">bdos</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="mh">0xff</span><span class="p">);</span><span class="w"> </span><span class="p">}</span><span class="w">  </span><span class="cm">/* 0 = no key ready */</span>
+</code></pre></div>
+<p>BDOS function 6 uses <code>0</code> as the "no character" sentinel, so it is best for
+keyboard-style console input rather than protocols where NUL is meaningful.
+Do not mix raw <code>bdos()</code> console I/O with buffered console functions in the same
+code path; direct BDOS calls bypass the console output buffer used by
+<code>printf</code>/<code>puts</code>.</p>
+<h3 id="direct-port-io">Direct port I/O<a class="headerlink" href="#direct-port-io" title="Permanent link">¶</a></h3>
+<p>For talking to hardware or an emulator's virtual devices, the runtime also
+provides 8-bit port I/O, declared alongside <code>bdos</code> in <code>stdlib.h</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="kt">int</span><span class="w">  </span><span class="nf">inp</span><span class="p">(</span><span class="kt">unsigned</span><span class="w"> </span><span class="n">port</span><span class="p">);</span><span class="w">                 </span><span class="cm">/* IN  A,(port) -&gt; 0..255 */</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">outp</span><span class="p">(</span><span class="kt">unsigned</span><span class="w"> </span><span class="n">port</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="n">val</span><span class="p">);</span><span class="w">  </span><span class="cm">/* OUT (port),A           */</span>
+</code></pre></div>
+<p><code>inp</code> runs the Z80 <code>IN A,(port)</code> instruction and returns the byte read,
+zero-extended to <code>int</code> (so the result is always 0..255). <code>outp</code> runs
+<code>OUT (port),A</code>, sending the low byte of <code>val</code> to the port. Only the low 8 bits
+of <code>port</code> are significant. Neither is part of C89.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer">
+        
+          
+          <a href="../standard-lib/15-time/" class="md-footer__link md-footer__link--prev" aria-label="Previous: time.h: Date and time">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                time.h: Date and time
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../11-limitations/" class="md-footer__link md-footer__link--next" aria-label="Next: Limitations">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Limitations
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"></path></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright © 2026 David Lee
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.footer", "content.code.copy", "navigation.tabs.sticky", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  
+<script id="init-glightbox">const lightbox = GLightbox({"touchNavigation": true, "loop": false, "zoomable": true, "draggable": true, "openEffect": "zoom", "closeEffect": "zoom", "slideEffect": "slide"});
+document$.subscribe(()=>{ lightbox.reload(); });
+</script></body></html>
