@@ -1,0 +1,2491 @@
+<!DOCTYPE html><html lang="en" class="no-js"><head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="MkDocs documentation for DCC C Compiler, its runtime, and dccrtlstrip size analysis.">
+      
+      
+        <meta name="author" content="David Lee">
+      
+      
+      
+        <link rel="prev" href="../00-setup-toolchain/">
+      
+      
+        <link rel="next" href="../00-debug-host/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>VS Code debugging - DCC C Compiler Reference</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <link href="../assets/stylesheets/glightbox.min.css" rel="stylesheet"><script src="../assets/javascripts/glightbox.min.js"></script><style id="glightbox-style">
+            html.glightbox-open { overflow: initial; height: 100%; }
+            .gslide-title { margin-top: 0px; user-select: text; }
+            .gslide-desc { color: #666; user-select: text; }
+            .gslide-image img { background: white; }
+            .gscrollbar-fixer { padding-right: 15px; }
+            .gdesc-inner { font-size: 0.75rem; }
+            body[data-md-color-scheme="slate"] .gdesc-inner { background: var(--md-default-bg-color); }
+            body[data-md-color-scheme="slate"] .gslide-title { color: var(--md-default-fg-color); }
+            body[data-md-color-scheme="slate"] .gslide-desc { color: var(--md-default-fg-color); }
+        </style></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#vs-code-debugging" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="DCC C Compiler Reference" class="md-header__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DCC C Compiler Reference
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              VS Code debugging
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink" aria-label="Switch to dark mode" type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 2c-1.82 0-3.53.5-5 1.35C8 5.08 10 8.3 10 12s-2 6.92-5 8.65C6.47 21.5 8.18 22 10 22a10 10 0 0 0 10-10A10 10 0 0 0 10 2"></path></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="cyan" aria-label="Switch to light mode" type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"></path></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required="">
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix="">
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="DCC C Compiler Reference" class="md-nav__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    DCC C Compiler Reference
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix="">
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-setup-toolchain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The toolchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code debugging
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code debugging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#how-debugging-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How debugging works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#add-debugging-to-a-project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add debugging to a project
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configure-the-project-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure the project build
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#add-the-build-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add the build task
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keep-the-com-and-dbg-files-paired" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep the COM and DBG files paired
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#add-the-launch-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add the launch configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#required-debug-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required debug metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#start-a-debugging-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Start a debugging session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#provide-data-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provide data files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#provide-interactive-cpm-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provide interactive CP/M input
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-the-disassembly-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use the disassembly view
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#debugger-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debugger coverage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#no-peep-debug-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No-peep debug builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#optimized-debug-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optimized debug builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#full-debug-peephole-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Full-debug peephole builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-debug-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugger host and I/O adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-agent-skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agentic skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-c-conformance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C conformance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../02-build-and-link/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building and linking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-types-and-conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Types and conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../04-operators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operators
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10">
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Library reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/01-assert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    assert.h: Diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/07-ctype/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ctype.h: Character handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/02-errno/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    errno.h: Error reporting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/03-float/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    float.h: Floating-point limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/04-limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    limits.h: Integer limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/17-locale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    locale.h: Localization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/08-math/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    math.h: Floating point math
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/09-setjmp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    setjmp.h: Non-local jumps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/16-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    signal.h: Signal handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/10-stdarg/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdarg.h: Variadic arguments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/11-stdbool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdbool.h: Boolean type
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/12-stddef/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stddef.h: Common definitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/13-stdint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdint.h: Fixed-width integers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/05-stdio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdio.h: Console and file I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/06-stdlib/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdlib.h: Memory and utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/14-string/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    string.h: String handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../standard-lib/15-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    time.h: Date and time
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../10-system-and-cpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System and CP/M services
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../11-limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../12-examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worked examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13">
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/00-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compiler architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/01-dccrtlstrip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/02-runtime-sizes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime function sizes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/03-utilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../appendix/05-building-project-docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building project docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#how-debugging-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How debugging works
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#add-debugging-to-a-project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add debugging to a project
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configure-the-project-build" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure the project build
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#add-the-build-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add the build task
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keep-the-com-and-dbg-files-paired" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keep the COM and DBG files paired
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#add-the-launch-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Add the launch configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#required-debug-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required debug metadata
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#start-a-debugging-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Start a debugging session
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#provide-data-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provide data files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#provide-interactive-cpm-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provide interactive CP/M input
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-the-disassembly-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use the disassembly view
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#debugger-coverage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debugger coverage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#no-peep-debug-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No-peep debug builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#optimized-debug-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optimized debug builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#full-debug-peephole-builds" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Full-debug peephole builds
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="vs-code-debugging">VS Code debugging<a class="headerlink" href="#vs-code-debugging" title="Permanent link">¶</a></h1>
+<p>DCC source debugging is available in Visual Studio Code through the Microsoft
+C/C++ extension and <code>dcc-debug-host</code>'s GDB/MI interface. A debug build produces
+a CP/M <code>.COM</code> program and a matching <code>.DBG</code> metadata file. <code>dcc-debug-host</code>
+boots CP/M, runs the program, and presents source, stack, variables, memory,
+and Z80 instructions to VS Code.</p>
+<p>For the most accurate source-level experience, use the default no-peep debug
+build. Optimized debug builds are also available for defects that reproduce
+only after peephole optimization, with the limitations described below.</p>
+<p>See <a href="../00-debug-host/">Debugger host and I/O adapters</a> for the full-system
+architecture, target terminal, dynamic I/O adapter, and terminal pipeline.</p>
+<p><a class="glightbox" data-type="image" data-width="auto" data-height="auto" href="../images/source-debugging.png" data-desc-position="bottom"><img alt="DCC source debugging in VS Code with a breakpoint, local variables, Z80 registers, call stack, and debug controls" src="../images/source-debugging.png"></a></p>
+<h2 id="how-debugging-works">How debugging works<a class="headerlink" href="#how-debugging-works" title="Permanent link">¶</a></h2>
+<p>The debugger uses four cooperating pieces:</p>
+<ol>
+<li><code>dccmake -g</code> invokes DCC with debug metadata enabled for every C source in
+   the program. DCC writes source, function, variable, type, and scope markers
+   into the generated assembly.</li>
+<li>Native <code>m80c</code> assembles each module and records those markers as
+   segment-relative metadata in a per-module <code>.DBG</code> file.</li>
+<li><code>dccmake</code> links the program and writes one final <code>DCCDBG 2</code> file whose
+   addresses match the linked <code>.COM</code> image.</li>
+<li><code>dcc-debug-host</code> boots CP/M, loads the <code>.COM</code> and adjacent <code>.DBG</code>, exposes
+  them through GDB/MI, and the VS Code C/C++ extension presents that
+  information as source breakpoints, stepping, stack frames, variables,
+  watches, memory, and Z80 disassembly.</li>
+</ol>
+<p>The project does <strong>not</strong> need a hand-written <code>.DBG</code> file. It may need a
+<code>dccmake.txt</code> file to describe how the program is built; the debug metadata
+itself is generated automatically.</p>
+<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">¶</a></h2>
+<p>Before configuring a project:</p>
+<ol>
+<li><a href="../00-setup-toolchain/">Build and configure the DCC toolchain</a>. The normal
+  <code>scripts/build-dcc.ps1</code> build includes <code>dcc-debug-host</code>.</li>
+<li>Install the <a href="https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpp-devtools" target="_blank">Microsoft C/C++ extensions for VS Code</a>.</li>
+<li>Make <code>dccmake</code> available on <code>PATH</code>, or use its absolute path in the build
+   task.</li>
+<li>Make sure <code>dccmake</code> can find <code>dcc</code>, <code>dccpeep</code>, <code>dccrtlstrip</code>,
+   <a href="../appendix/03-utilities/#native-assembler-m80c"><code>m80c</code></a>,
+   <code>DCCRTL.MAC</code>, and the configured linker as described on
+   <a href="../00-setup-toolchain/">The toolchain</a>.</li>
+</ol>
+<p>Debug metadata requires the native
+<a href="../appendix/03-utilities/#native-assembler-m80c"><code>m80c</code></a> assembler. Do not set
+<code>dcc-use-emulated-m80=true</code> for a debug build.</p>
+<p>Source and output names must also satisfy CP/M 8.3 naming rules. In particular,
+<code>dcc-output</code> is at most eight characters and has no extension.</p>
+<h2 id="add-debugging-to-a-project">Add debugging to a project<a class="headerlink" href="#add-debugging-to-a-project" title="Permanent link">¶</a></h2>
+<p>A project needs three configuration files in addition to its C sources:</p>
+<div class="highlight"><pre><span></span><code>my-project/
+├── .vscode/
+│   ├── launch.json
+│   └── tasks.json
+├── dccmake.txt
+├── main.c
+└── module.c
+</code></pre></div>
+<p>Build DCC once with <code>scripts/build-dcc.ps1</code>, then set <code>DCC_DIR</code> in the
+environment inherited by VS Code to the DCC repository directory. For example,
+on macOS or Linux:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">DCC_DIR</span><span class="o">=</span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/GitHub/dcc"</span>
+code<span class="w"> </span>my-project
+</code></pre></div>
+<p>In PowerShell on Windows:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">$env:DCC_DIR</span> <span class="p">=</span> <span class="s2">"C:\GitHub\dcc"</span>
+<span class="n">code</span> <span class="n">my-project</span>
+</code></pre></div>
+<h3 id="add-dccmaketxt">Add <code>dccmake.txt</code><a class="headerlink" href="#add-dccmaketxt" title="Permanent link">¶</a></h3>
+<p>This example builds two translation units as <code>build/PROGRAM.COM</code> and writes the
+matching metadata as <code>build/PROGRAM.DBG</code>:</p>
+<div class="highlight"><pre><span></span><code>dcc-input=main.c,module.c
+dcc-output=PROGRAM
+dcc-build-dir=build
+dcc-stack-bytes=1024
+dcc-runtime=${DCC_DIR}/DCCRTL.MAC
+dcc-include-directory=${DCC_DIR}
+dcc-tool=${DCC_DIR}/dcc
+dccpeep-tool=${DCC_DIR}/dccpeep
+dccrtlstrip-tool=${DCC_DIR}/dccrtlstrip
+m80c-tool=${DCC_DIR}/m80c
+l80c-tool=${DCC_DIR}/l80c
+</code></pre></div>
+<p>Replace the source list, output name, and stack size with the project's actual
+values. The output name must fit CP/M's eight-character basename limit. On
+Windows, append <code>.exe</code> to the five host-tool paths. These paths make an
+external project independent of the shell's tool search path; setting only
+the task's <code>dccmake</code> path does not locate the runtime or headers.</p>
+<h3 id="add-vscodetasksjson">Add <code>.vscode/tasks.json</code><a class="headerlink" href="#add-vscodetasksjson" title="Permanent link">¶</a></h3>
+<p>The build task runs <code>dccmake -g</code> from the project root. <code>dccmake</code> reads the
+adjacent <code>dccmake.txt</code> and generates both required debug artifacts:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2.0.0"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"tasks"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Build DCC program for debugging"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"shell"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${env:DCC_DIR}/dccmake"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"-g"</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">"options"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"cwd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${workspaceFolder}"</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">"problemMatcher"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="add-vscodelaunchjson">Add <code>.vscode/launch.json</code><a class="headerlink" href="#add-vscodelaunchjson" title="Permanent link">¶</a></h3>
+<p>The launch configuration points VS Code at the <code>.COM</code> file and uses
+<code>dcc-debug-host</code> as its GDB/MI executable. Keep <code>program</code> synchronized with
+<code>dcc-output</code> in <code>dccmake.txt</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.2.0"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"configurations"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"DCC CP/M: Debug PROGRAM"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"cppdbg"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"request"</span><span class="p">:</span><span class="w"> </span><span class="s2">"launch"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"preLaunchTask"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Build DCC program for debugging"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"program"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${workspaceFolder}/build/PROGRAM.COM"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"cwd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${workspaceFolder}/build"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"MIMode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gdb"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"miDebuggerPath"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${env:DCC_DIR}/dcc-debug-host"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"miDebuggerArgs"</span><span class="p">:</span><span class="w"> </span><span class="s2">"--interpreter=mi"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"windows"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"miDebuggerPath"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${env:DCC_DIR}/dcc-debug-host.exe"</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">"targetArchitecture"</span><span class="p">:</span><span class="w"> </span><span class="s2">"x86"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"sourceFileMap"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"${workspaceFolder}/build"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${workspaceFolder}"</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">"launchCompleteCommand"</span><span class="p">:</span><span class="w"> </span><span class="s2">"exec-continue"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"externalConsole"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>sourceFileMap</code> maps paths reported relative to the <code>.COM</code> directory back to
+the project root. It also handles source subdirectories: a recorded <code>src/foo.c</code>
+resolves through <code>build/src/foo.c</code> and maps to <code>src/foo.c</code> in the project.</p>
+<p>Select <strong>DCC CP/M: Debug PROGRAM</strong> in <strong>Run and Debug</strong>, set a source
+breakpoint, and press <strong>F5</strong>.</p>
+<h3 id="what-happens-after-f5">What happens after F5<a class="headerlink" href="#what-happens-after-f5" title="Permanent link">¶</a></h3>
+<ol>
+<li>VS Code runs the pre-launch task, and <code>dccmake -g</code> creates a matched <code>.COM</code>
+   and <code>.DBG</code> pair.</li>
+<li>The C/C++ extension starts <code>dcc-debug-host</code> and communicates with it using
+   GDB/MI. No separate GDB installation is used.</li>
+<li>The host boots its CP/M 2.2 system, stages the selected program on its
+   disposable B: drive, and launches it at the normal CP/M transient-program
+   address.</li>
+<li>The host translates VS Code breakpoints, stepping, variable requests,
+   memory access, and disassembly requests through the linked <code>.DBG</code> metadata.</li>
+<li>Program output appears in the Debug Console. On normal exit, the program
+   returns to CP/M and the debug session reports completion.</li>
+</ol>
+<p>The <code>.COM</code> contains the executable Z80 program; the <code>.DBG</code> sidecar is debugger
+metadata and is not copied to CP/M hardware. Both files must remain adjacent
+and come from the same build.</p>
+<h3 id="use-an-io-adapter">Use an I/O adapter<a class="headerlink" href="#use-an-io-adapter" title="Permanent link">¶</a></h3>
+<p>An I/O adapter is optional. It supplies machine-specific ports, terminal
+translation, or interrupt sources that are not part of generic CP/M. The normal
+DCC build publishes an example adapter beside <code>dcc-debug-host</code>. Replace the
+launch configuration's <code>miDebuggerArgs</code> and Windows override with:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">"miDebuggerArgs"</span><span class="p">:</span><span class="w"> </span><span class="s2">"--interpreter=mi --io-adapter \"${env:DCC_DIR}/libdcc-debug-io-adapter-example.dylib\""</span><span class="p">,</span>
+<span class="nt">"linux"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"miDebuggerArgs"</span><span class="p">:</span><span class="w"> </span><span class="s2">"--interpreter=mi --io-adapter \"${env:DCC_DIR}/libdcc-debug-io-adapter-example.so\""</span>
+<span class="p">},</span>
+<span class="nt">"windows"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"miDebuggerPath"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${env:DCC_DIR}/dcc-debug-host.exe"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"miDebuggerArgs"</span><span class="p">:</span><span class="w"> </span><span class="s2">"--interpreter=mi --io-adapter \"${env:DCC_DIR}/dcc-debug-io-adapter-example.dll\""</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The example adapter provides polling timers and a periodic interrupt source;
+see the <a href="../12-examples/#waiting-for-an-io-adapter-timer">timer</a> and
+<a href="../12-examples/#handling-periodic-io-adapter-interrupts">interrupt</a> programs.
+For a custom adapter, substitute its shared-library path and add <code>--env-file</code>
+if that adapter consumes project configuration. See
+<a href="../00-debug-host/">Debugger host and I/O adapters</a> for the adapter contract.</p>
+<h2 id="configure-the-project-build">Configure the project build<a class="headerlink" href="#configure-the-project-build" title="Permanent link">¶</a></h2>
+<p><code>dccmake.txt</code> is optional for a standalone source file, but recommended for a
+real application. Use it whenever the debug build needs information that cannot
+be inferred from the active file, including:</p>
+<ul>
+<li>more than one C translation unit;</li>
+<li>an output name different from the source basename;</li>
+<li>a non-default stack size;</li>
+<li>compiler definitions, include directories, or floating-point I/O options;</li>
+<li>explicit runtime or tool paths; or</li>
+<li>other application-specific <code>dccmake</code> settings.</li>
+</ul>
+<p><code>dccmake</code> reads <code>dccmake.txt</code> from its current working directory. A typical
+project file is:</p>
+<div class="highlight"><pre><span></span><code>dcc-input=main.c,module.c
+dcc-output=PROGRAM
+dcc-build-dir=build
+dcc-stack-bytes=1024
+dcc-peep=true
+</code></pre></div>
+<p><code>dcc-input</code> must list every C translation unit needed by the link. <code>dcc-output</code>
+controls the basename of both final artifacts:</p>
+<div class="highlight"><pre><span></span><code>build/PROGRAM.COM
+build/PROGRAM.DBG
+</code></pre></div>
+<p>Command-line values override file values. The VS Code task passes <code>-g</code>; the
+project file does not need a separate debug setting. Although a normal build
+may set <code>dcc-peep=true</code>, <code>dccmake -g</code> skips <code>dccpeep</code> unless
+<code>dcc-peep-debug=true</code> is explicitly requested.</p>
+<p>For a program whose full no-peep debug image is too large, set:</p>
+<div class="highlight"><pre><span></span><code>dcc-debug=lines
+</code></pre></div>
+<p>This project setting refines the generic <code>-g</code> supplied by the VS Code task. It
+uses normal optimized compiler and peephole output while emitting line,
+function, type, scope, global, and ranged variable-location metadata. The
+resulting <code>.COM</code> is byte-identical to the corresponding release build. Values
+that cannot be recovered are shown as <code>&lt;optimized out&gt;</code>; see
+<a href="#optimized-debug-builds">Optimized debug builds</a> for the available locations.</p>
+<h2 id="add-the-build-task">Add the build task<a class="headerlink" href="#add-the-build-task" title="Permanent link">¶</a></h2>
+<p>For a project with <code>dccmake.txt</code>, create <code>.vscode/tasks.json</code> and run
+<code>dccmake</code> from the active source directory so it finds that file:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"2.0.0"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"tasks"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Build active DCC C file for debugging"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"shell"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"dccmake"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"-g"</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">"options"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"cwd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${fileDirname}"</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">"problemMatcher"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Replace <code>dccmake</code> with an absolute path if it is not on <code>PATH</code>. For a standalone
+file with no <code>dccmake.txt</code>, pass the active source and output explicitly:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="s2">"-g"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"dcc-input=${file}"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"dcc-output=${fileBasenameNoExtension}"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"dcc-build-dir=build"</span>
+<span class="p">]</span>
+</code></pre></div>
+<p>The active editor file is not necessarily the program's main module. When a
+<code>dccmake.txt</code> file exists, its <code>dcc-input</code> list remains authoritative.</p>
+<h2 id="keep-the-com-and-dbg-files-paired">Keep the COM and DBG files paired<a class="headerlink" href="#keep-the-com-and-dbg-files-paired" title="Permanent link">¶</a></h2>
+<p><code>dcc-debug-host</code> derives the metadata filename from the program filename. If
+VS Code loads <code>PROGRAM.COM</code>, the host looks for <code>PROGRAM.DBG</code> in the same
+directory. The files must:</p>
+<ul>
+<li>have identical basenames;</li>
+<li>be adjacent;</li>
+<li>come from the same debug build; and</li>
+<li>not be mixed with stale output from an earlier link.</li>
+</ul>
+<p>The launch configuration may load the pair directly from the build directory.
+If a shared active-file launch configuration instead expects the source
+basename, copy or rename <strong>both</strong> files. For example, if <code>CHATC11.C</code> has
+<code>dcc-output=CHAT</code>:</p>
+<div class="highlight"><pre><span></span><code>cp<span class="w"> </span>build/CHAT.COM<span class="w"> </span>CHATC11.COM
+cp<span class="w"> </span>build/CHAT.DBG<span class="w"> </span>CHATC11.DBG
+</code></pre></div>
+<p>Copying only the <code>.COM</code>, or assuming that <code>dcc-output</code> always equals the active
+source basename, causes the pre-launch task or metadata load to fail.</p>
+<p>For the active-file launch configuration below, add a copy task and a compound
+pre-launch task. This macOS/Linux example assumes <code>dcc-output=PROGRAM</code>; use
+PowerShell <code>Copy-Item</code> commands for the equivalent Windows task:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Copy DCC debug outputs beside source"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"shell"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"cp -f \"${fileDirname}/build/PROGRAM.COM\" \"${fileDirname}/${fileBasenameNoExtension}.COM\" &amp;&amp; cp -f \"${fileDirname}/build/PROGRAM.DBG\" \"${fileDirname}/${fileBasenameNoExtension}.DBG\""</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"options"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"cwd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${fileDirname}"</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"problemMatcher"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="p">},</span>
+<span class="p">{</span>
+<span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Build and copy DCC program for debugging"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"dependsOrder"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sequence"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"dependsOn"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">"Build active DCC C file for debugging"</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">"Copy DCC debug outputs beside source"</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"problemMatcher"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Replace <code>PROGRAM</code> with the <code>dcc-output</code> value. In a workspace containing many
+applications, the copy task may read <code>dcc-output</code> from each directory's
+<code>dccmake.txt</code> instead of hard-coding it.</p>
+<p>Build the debugger host and add it to the compound pre-launch task:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Build DCC debugger host"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"shell"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pwsh ./scripts/build-dcc.ps1"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"options"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"cwd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${workspaceFolder}"</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"problemMatcher"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"$gcc"</span><span class="p">]</span>
+<span class="p">},</span>
+<span class="p">{</span>
+<span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Prepare active DCC program for debugging"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"dependsOrder"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sequence"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"dependsOn"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">"Build and copy DCC program for debugging"</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">"Build DCC debugger host"</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"problemMatcher"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h2 id="add-the-launch-configuration">Add the launch configuration<a class="headerlink" href="#add-the-launch-configuration" title="Permanent link">¶</a></h2>
+<p>Create <code>.vscode/launch.json</code> with the following configuration. On Windows, use
+<code>${workspaceFolder}/dcc-debug-host.exe</code> for <code>miDebuggerPath</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"0.2.0"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"configurations"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"DCC CP/M: Debug active C file"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"cppdbg"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"request"</span><span class="p">:</span><span class="w"> </span><span class="s2">"launch"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"preLaunchTask"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Prepare active DCC program for debugging"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"program"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${fileDirname}/${fileBasenameNoExtension}.COM"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"cwd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${fileDirname}"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"MIMode"</span><span class="p">:</span><span class="w"> </span><span class="s2">"gdb"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"miDebuggerPath"</span><span class="p">:</span><span class="w"> </span><span class="s2">"${workspaceFolder}/dcc-debug-host"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"miDebuggerArgs"</span><span class="p">:</span><span class="w"> </span><span class="s2">"--interpreter=mi"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"targetArchitecture"</span><span class="p">:</span><span class="w"> </span><span class="s2">"x86"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"launchCompleteCommand"</span><span class="p">:</span><span class="w"> </span><span class="s2">"exec-continue"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"externalConsole"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This example assumes the build task copies both final artifacts beside the
+active source under the active source basename, as described above. To launch
+directly from the build directory instead, replace both program paths with
+<code>${fileDirname}/build/PROGRAM.COM</code>, where <code>PROGRAM</code> is the uppercase
+<code>dcc-output</code> value, and map relative source paths from the build directory back
+to the source directory with <code>sourceFileMap</code>.</p>
+<p><code>targetArchitecture</code> satisfies the C/C++ debug adapter's launch schema;
+<code>dcc-debug-host</code> still executes Z80 code. <code>exec-continue</code> resumes from the
+initial CP/M entry stop after VS Code has installed source breakpoints.</p>
+<p>Adjust <code>sourceFileMap</code> when metadata contains source paths that differ from the
+workspace layout. Add one entry for each source root that needs remapping, or
+remove the property when the recorded paths already resolve correctly.</p>
+<h2 id="required-debug-metadata">Required debug metadata<a class="headerlink" href="#required-debug-metadata" title="Permanent link">¶</a></h2>
+<p>The final linked sidecar starts with <code>DCCDBG 2</code>. The supported record classes
+are:</p>
+<table>
+<thead>
+<tr>
+<th>Record</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>line</code></td>
+<td>Maps an executable C source line to a linked address. Required for source breakpoints and stepping.</td>
+</tr>
+<tr>
+<td><code>function-begin</code>, <code>function-end</code></td>
+<td>Defines function ranges and source names for stack frames, function breakpoints, and stepping.</td>
+</tr>
+<tr>
+<td><code>variable</code>, <code>variable-end</code></td>
+<td>Describes parameters and locals, including type, storage, frame offset, array/VLA shape, and lexical lifetime.</td>
+</tr>
+<tr>
+<td><code>location</code></td>
+<td>Selects an optimized variable's frame, register, constant, or optimized-out location at a linked address.</td>
+</tr>
+<tr>
+<td><code>global</code></td>
+<td>Describes linked global storage and types.</td>
+</tr>
+<tr>
+<td><code>struct</code>, <code>field</code></td>
+<td>Describes structures, unions, arrays, and bit-fields used by locals, globals, and watches.</td>
+</tr>
+<tr>
+<td><code>symbol</code></td>
+<td>Supplies linked assembly symbols used by disassembly and symbol lookup.</td>
+</tr>
+</tbody>
+</table>
+<p>Users do not write these records. Missing or inconsistent records indicate a
+toolchain/build mismatch or a compiler/assembler defect. A minimal line-only
+file can support breakpoints, but variables, stack frames, structures, and
+watches require their corresponding records.</p>
+<p>Relative source paths are allowed. <code>dcc-debug-host</code> reports an absolute GDB/MI
+<code>fullname</code>; on Windows and macOS it also matches source filename case according
+to normal host filesystem behavior. Use <code>sourceFileMap</code> when a relative path
+is resolved from the build directory but the source lives in its parent or
+another source root.</p>
+<h2 id="start-a-debugging-session">Start a debugging session<a class="headerlink" href="#start-a-debugging-session" title="Permanent link">¶</a></h2>
+<ol>
+<li>Open the C source file to build.</li>
+<li>Set breakpoints in the editor gutter.</li>
+<li>Open <strong>Run and Debug</strong> and select <strong>DCC CP/M: Debug active C file</strong>.</li>
+<li>Press <strong>F5</strong>. VS Code runs the build task, launches <code>dcc-debug-host</code>, and
+  stops at the first breakpoint.</li>
+<li>Use <strong>Step Over</strong>, <strong>Step Into</strong>, <strong>Step Out</strong>, or <strong>Continue</strong> as with a
+   native program.</li>
+</ol>
+<h2 id="provide-data-files">Provide data files<a class="headerlink" href="#provide-data-files" title="Permanent link">¶</a></h2>
+<p>The debugger starts with a disposable, memory-backed B: drive. Place data files
+in <code>fixtures/</code> beside the selected <code>.COM</code>, for example
+<code>build/fixtures/DATA.DAT</code> for <code>build/PROGRAM.COM</code>. Every non-hidden regular
+file is staged before boot; subdirectories are ignored and filenames must be
+unique CP/M 8.3 names. The host does not expose the working directory as a live
+filesystem.</p>
+<p>Add <code>--fixture FILE</code> to <code>miDebuggerArgs</code> for an explicit binary input, or
+<code>--text-fixture FILE</code> to convert host LF text to CRLF and append Ctrl-Z.
+These are debugger inputs, independent of the regression runner's
+<code>tests/_test_overrides.json</code>.</p>
+<p>Writes are discarded by default. A generator can use <code>--save-fixtures DIR</code> to
+publish final B: contents after normal target exit, excluding the launched
+<code>.COM</code>. This <strong>replaces the destination directory</strong>, so use a dedicated output
+directory. Abort, debugger quit, CPU halt, or staging failure leaves an existing
+destination unchanged. Saved files retain CP/M 128-byte record padding.</p>
+<h2 id="provide-interactive-cpm-input">Provide interactive CP/M input<a class="headerlink" href="#provide-interactive-cpm-input" title="Permanent link">¶</a></h2>
+<p>The VS Code Debug Console normally evaluates expressions and debugger commands;
+plain text typed there is not target stdin. <code>dcc-debug-host</code> provides an
+explicit line-input command for interactive CP/M applications.</p>
+<p>When the application requests keyboard input through a blocking BDOS read or a
+BDOS 6 polling loop, <code>dcc-debug-host</code> reports a debugger stop. At that stop:</p>
+<ol>
+<li>Select a frame in the <strong>Call Stack</strong> if VS Code has not selected one.</li>
+<li>Enter this in the <strong>Debug Console</strong>:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>-exec input 10*3
+</code></pre></div>
+<p><code>dcc-debug-host</code> queues the text plus a CP/M Return character, resumes the
+pending input request, and sends the application's echo and output back to the
+Debug Console. No separate <strong>Continue</strong> is required. For example, CALC receives
+<code>10*3</code>, runs until the next breakpoint or input request, and prints
+<code>Result: 30</code>. Use <code>-exec input</code> with no following text to submit a blank line.</p>
+<p>The command is line-oriented. It does not currently encode individual control
+keys or terminal escape sequences. Input can also be queued at an ordinary
+breakpoint before the application reaches its next keyboard read; the command
+resumes execution immediately.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">¶</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The pre-launch task exits with code 1</td>
+<td>Open the task output and find the first failed stage. Confirm that <code>dccmake.txt</code> is in the task's working directory and that <code>dcc-input</code> lists every module.</td>
+</tr>
+<tr>
+<td>The build succeeds but the copy task fails</td>
+<td>Compare <code>dcc-output</code> with the active source basename. Copy <code>build/&lt;dcc-output&gt;.COM</code> and <code>.DBG</code>, not files guessed from the source name.</td>
+</tr>
+<tr>
+<td>A breakpoint is unverified or reports no executable location</td>
+<td>Confirm that the <code>.COM</code> and <code>.DBG</code> are from the same build, the source path matches the metadata, and the source line generates code. Plain declarations without initialization have no executable address.</td>
+</tr>
+<tr>
+<td>VS Code reports <code>SourceRequest not supported</code></td>
+<td>Rebuild <code>dcc-debug-host</code> from the current DCC source, or configure <code>sourceFileMap</code> for the recorded source root.</td>
+</tr>
+<tr>
+<td>Typing application text reports that the process is running</td>
+<td>Wait for <code>dcc-debug-host</code>'s automatic input stop, then use <code>-exec input &lt;text&gt;</code> rather than entering plain text as a debugger expression. Select a call-stack frame if VS Code requests one.</td>
+</tr>
+<tr>
+<td>A breakpoint or step moves to a nearby line</td>
+<td>The requested line may generate no instruction. For an optimized debug build, peephole transformations may also move or remove source markers. Rebuild with plain <code>dccmake -g</code>.</td>
+</tr>
+<tr>
+<td>Execution runs past a valid breakpoint</td>
+<td>Check for a stale or mismatched <code>.DBG</code>, omitted translation units, or a final metadata file whose linked addresses do not match the <code>.COM</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>When diagnosing a copied active-file pair, compare timestamps and sizes for
+both the build-directory pair and copied pair. Rebuild and copy both files
+together before restarting the debug session.</p>
+<h2 id="use-the-disassembly-view">Use the disassembly view<a class="headerlink" href="#use-the-disassembly-view" title="Permanent link">¶</a></h2>
+<p>While the program is stopped, open the Z80 disassembly in either of these ways:</p>
+<ul>
+<li>open the Command Palette and run <strong>Debug: Open Disassembly View</strong>; or</li>
+<li>right-click the selected frame in <strong>Call Stack</strong> and choose <strong>Open
+  Disassembly View</strong>.</li>
+</ul>
+<p>The view opens around the current program counter and shows each instruction's
+address, machine-code bytes, and decoded Z80 assembly. The current instruction
+is highlighted. When debug metadata provides a source location, the view also
+associates the instruction with its C source line.</p>
+<p><a class="glightbox" data-type="image" data-width="auto" data-height="auto" href="../images/disassembly-debugging.png" data-desc-position="bottom"><img alt="VS Code debugging a DCC program with the Z80 Disassembly View, CPU registers, call stack, and source breakpoints" src="../images/disassembly-debugging.png"></a></p>
+<p>To step through assembly code one instruction at a time:</p>
+<ol>
+<li>Click inside the Disassembly View so it is the active editor.</li>
+<li>Use <strong>Step Over</strong> (<strong>F10</strong>) to execute the highlighted instruction and stop
+  at the next instruction in the current call frame. A <code>call</code> is executed
+  without entering the called function.</li>
+<li>Use <strong>Step Into</strong> (<strong>F11</strong>) when the highlighted instruction is a <code>call</code> and
+  you want to stop at the first instruction in the called function. For other
+  instructions it advances by one instruction.</li>
+<li>Use <strong>Step Out</strong> (<strong>Shift+F11</strong>) to run until the current function returns,
+  or <strong>Continue</strong> (<strong>F5</strong>) to run to the next breakpoint.</li>
+</ol>
+<p>After a jump, call, or return, use <strong>Debug: Open Disassembly View</strong> again if the
+current instruction has moved outside the visible range. The view recenters on
+the current program counter. Select a source frame in <strong>Call Stack</strong> or open the
+corresponding C file to move back to source-level debugging; both views remain
+synchronized with the same stopped program.</p>
+<p>Instruction stepping is especially useful for:</p>
+<ul>
+<li>checking the exact branch taken by a condition;</li>
+<li>following register and stack changes around calls and returns;</li>
+<li>correlating source expressions with generated Z80 instructions; and</li>
+<li>debugging a <code>dcc-peep-debug=true</code> build when optimized instructions no
+  longer align exactly with source-line markers.</li>
+</ul>
+<p>The Disassembly View reflects the linked <code>.COM</code> image that <code>dcc-debug-host</code> is
+executing, so addresses and instruction bytes are authoritative for both
+no-peep and peep debug builds.</p>
+<h2 id="debugger-coverage">Debugger coverage<a class="headerlink" href="#debugger-coverage" title="Permanent link">¶</a></h2>
+<p>The DCC metadata and <code>dcc-debug-host</code> GDB/MI implementation support the main
+VS Code C/C++ debugging workflows:</p>
+<ul>
+<li>source breakpoints, temporary breakpoints, conditions, ignore counts, and
+  repeated breakpoint hits;</li>
+<li>source-level Step Into, Step Over, Step Out, Continue, and pause;</li>
+<li>instruction-level stepping and Z80 disassembly with instruction bytes;</li>
+<li>call stacks, recursive frames, frame selection, function names, source files,
+  and source lines;</li>
+<li>function parameters, local variables, globals, lexical scopes, and shadowed
+  names;</li>
+<li>scalar integer types, <code>_Bool</code>, pointers, function pointers, arrays,
+  variable-length arrays, structures, unions, and bit-fields;</li>
+<li>watch expressions including integer arithmetic, comparisons, casts,
+  dereference, address-of, array subscripts, and structure member access;</li>
+<li>memory reads and writes, variable assignment, and register values;</li>
+<li>linked programs built from multiple C source modules; and</li>
+<li>normal program output in the VS Code Debug Console.</li>
+</ul>
+<p>The expression evaluator implements a practical target-C subset rather than a
+complete C compiler. In particular, floating-point expression evaluation and
+function calls from the Watch or Debug Console are not supported. The target is
+single-threaded CP/M, so thread-oriented VS Code controls do not represent
+multiple application threads.</p>
+<h2 id="no-peep-debug-builds">No-peep debug builds<a class="headerlink" href="#no-peep-debug-builds" title="Permanent link">¶</a></h2>
+<p>No-peep is the default and recommended mode for source debugging. <code>dccmake -g</code>
+keeps every <code>;@dcc-line</code> marker where DCC emitted it, and
+<a href="../appendix/03-utilities/#native-assembler-m80c"><code>m80c</code></a> records those
+locations in the <code>.DBG</code> file before linking relocates them to final addresses.</p>
+<p>In this mode, source breakpoints and source stepping have strong coverage across
+ordinary declarations and expressions, calls and returns, nested blocks,
+<code>if</code>/<code>else</code>, loops, <code>break</code>, <code>continue</code>, <code>goto</code>, and <code>switch</code>. Closing braces
+are represented for blocks that fall through, which makes skipped branches and
+loop transitions easier to follow. A source line can still contain several
+machine instructions, so instruction stepping remains useful when inspecting
+the exact Z80 execution sequence.</p>
+<p>Use this mode unless the behavior being investigated occurs only in an
+optimized binary.</p>
+<h2 id="optimized-debug-builds">Optimized debug builds<a class="headerlink" href="#optimized-debug-builds" title="Permanent link">¶</a></h2>
+<p>Use <code>dcc-debug=lines</code> in <code>dccmake.txt</code> when the program must retain its normal
+optimized size or behavior:</p>
+<div class="highlight"><pre><span></span><code>dcc-debug=lines
+</code></pre></div>
+<p>DCC emits line, function, type, scope, and ranged variable-location events
+without selecting conservative debug codegen. <code>dccpeep</code> carries those records separately from mutable assembly,
+moves records from deleted instructions to the next executable address, and
+re-emits them for <code>m80c</code>. Optimized emitters with instruction provenance retain
+statement-level mappings. Specialized kernels without such provenance expose
+their function-entry location rather than inventing inaccurate statement
+addresses.</p>
+<p>This mode supports source breakpoints, source stepping, function names, stack
+frames, locals, arguments, globals, structures, fields, registers, memory, and
+disassembly. Locations can be frame slots, Z80 register pairs, four-byte
+register pairs, constants, or explicitly optimized out. Top-frame register
+scalars are editable. Dead values and caller-frame register values that were
+not saved are shown as <code>&lt;optimized out&gt;</code> rather than guessed.</p>
+<h2 id="full-debug-peephole-builds">Full-debug peephole builds<a class="headerlink" href="#full-debug-peephole-builds" title="Permanent link">¶</a></h2>
+<p>To debug a problem that appears only after peephole optimization, add
+<code>dcc-peep-debug=true</code> to the task arguments:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="s2">"-g"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"${file}"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"dcc-output=DCCDEBUG"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"dcc-peep-debug=true"</span>
+<span class="p">]</span>
+</code></pre></div>
+<p>This is an explicit opt-in for conservative full-debug compiler output.
+<code>dccpeep</code> preserves metadata and remaps records from deleted instructions, but
+the compiler still uses its larger debug-oriented code generation. Use
+<code>dcc-debug=lines</code> when the executable must match release code or size.</p>
+<p>Typical minor source-level effects include a breakpoint moving to a neighboring
+executable line, a source line being skipped, or an extra/repeated source step
+around optimized control flow. Variables, call stacks, memory, registers, and
+the generated program remain useful, but source-line attribution is less exact.</p>
+<p>For an optimized build, treat the Disassembly View and instruction stepping as
+authoritative: they always show the instructions <code>dcc-debug-host</code> is actually
+executing. Set an initial source breakpoint near the area of interest, then
+switch to instruction stepping when source movement no longer matches the
+optimized control flow.</p>
+<p>To return to no-peep full source debugging, remove <code>dcc-peep-debug=true</code> and
+start a new session. Setting only <code>dcc-peep=true</code> does not enable peephole
+optimization for a full <code>-g</code> build.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer">
+        
+          
+          <a href="../00-setup-toolchain/" class="md-footer__link md-footer__link--prev" aria-label="Previous: The toolchain">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                The toolchain
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../00-debug-host/" class="md-footer__link md-footer__link--next" aria-label="Next: Debugger host and I/O adapters">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Debugger host and I/O adapters
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"></path></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright © 2026 David Lee
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.footer", "content.code.copy", "navigation.tabs.sticky", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  
+<script id="init-glightbox">const lightbox = GLightbox({"touchNavigation": true, "loop": false, "zoomable": true, "draggable": true, "openEffect": "zoom", "closeEffect": "zoom", "slideEffect": "slide"});
+document$.subscribe(()=>{ lightbox.reload(); });
+</script></body></html>
