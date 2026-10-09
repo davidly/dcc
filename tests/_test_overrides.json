@@ -49,6 +49,7 @@
         { "suffix": "6502fun", "args": "-x -a:400 6502FUN.HEX", "fixtures": ["6502FUN.HEX"] }
       ] },
     { "name": "texfile", "fixtures": ["DATA.TXT"] },
+    { "name": "tfilero", "fixtures": [{ "name": "READONLY.TXT", "read_only": true }] },
     { "name": "wumpus", "args": "-c" },
     { "name": "tchess", "args": "-c -p:1" },
     { "name": "targs", "args": "a bb ccc dddd eeeee", "host": true },

@@ -263,15 +263,16 @@ if [ -f "$overrides" ]; then
             my @fix_lines;
             if (ref($entry->{fixtures}) eq "ARRAY") {
                 for my $fixture (@{$entry->{fixtures}}) {
-                    my ($fname, $fsource) = ("", "");
+                    my ($fname, $fsource, $readonly) = ("", "", "false");
                     if (!ref($fixture)) { $fname = defined($fixture) ? "$fixture" : ""; }
                     elsif (ref($fixture) eq "HASH") {
                         $fname = defined($fixture->{name}) ? "$fixture->{name}" : "";
                         $fsource = defined($fixture->{source}) ? "$fixture->{source}" : "";
+                        $readonly = bool_str($fixture->{read_only}, 0);
                     }
                     $fname =~ s/[\t\r\n]/ /g;
                     $fsource =~ s/[\t\r\n]/ /g;
-                    push @fix_lines, "$fname\t$fsource" if length($fname);
+                    push @fix_lines, "$fname\t$readonly\t$fsource" if length($fname);
                 }
             }
             print "$entry->{name}\n";
@@ -407,13 +408,13 @@ run_group_with_timeout() {
 }
 
 copy_fixtures() {
-    # fixtures_tsv is pre-extracted by load_app_config (one "name<TAB>source"
-    # line per fixture) - no perl call needed here anymore.
+    # Keep the optional source last: bash read collapses empty tab fields.
+    # Each pre-extracted line is "name<TAB>read_only<TAB>source".
     local tsv=$1 destination=$2
     [ -n "$tsv" ] || return 0
 
     printf '%s\n' "$tsv" |
-    while IFS=$'\t' read -r fixture_name fixture_source; do
+    while IFS=$'\t' read -r fixture_name fixture_readonly fixture_source; do
         [ -n "$fixture_name" ] || continue
         local source=''
         if [ -n "$fixture_source" ] && [ -f "$fixture_source" ]; then
@@ -422,9 +423,19 @@ copy_fixtures() {
             source=$(find tests . -maxdepth 1 -type f -iname "$fixture_name" -print -quit 2>/dev/null || true)
         fi
         if [ -n "$source" ]; then
-            cp -f -- "$source" "$destination/$(printf '%s' "$fixture_name" | tr '[:lower:]' '[:upper:]')"
+            local dest="$destination/$(printf '%s' "$fixture_name" | tr '[:lower:]' '[:upper:]')"
+            if [ "$fixture_readonly" = true ] && [ -f "$dest" ]; then
+                chmod u+w "$dest" || return 1
+            fi
+            cp -f -- "$source" "$dest" || return 1
+            # Git does not preserve read-only permissions; apply them to
+            # the staged copy, matching runall.ps1 on Unix hosts.
+            if [ "$fixture_readonly" = true ]; then
+                chmod a-w "$dest" || return 1
+            fi
         else
             echo "    WARNING: fixture not found: $fixture_name"
+            [ "$fixture_readonly" != true ] || return 1
         fi
     done
 }
@@ -545,7 +556,11 @@ run_one_app() {
     for build_mode in "${build_modes[@]}"; do
         app_dir="$run_dir/$app-$build_mode"
         mkdir -p "$app_dir"
-        copy_fixtures "$fixtures_tsv" "$app_dir"
+        if ! copy_fixtures "$fixtures_tsv" "$app_dir"; then
+            echo "    FAIL: fixture staging failed"
+            app_ok=0
+            continue
+        fi
 
         if [ -n "$stack_size" ]; then
             echo "  Building $app ($build_mode, stack=$stack_size)..."

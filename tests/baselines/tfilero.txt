@@ -1,0 +1,16 @@
+PASS open O_RDONLY
+PASS read contents
+PASS close
+PASS snapshot fixture
+PASS open O_RDWR
+PASS write rejected
+PASS write errno
+PASS close after rejected write
+PASS fopen r
+PASS fread contents
+PASS fclose
+PASS fopen r+
+PASS stdio write rejected
+PASS stdio write errno
+PASS stdio error indicator
+PASS fixture unchanged

@@ -220,7 +220,9 @@ speed:
       copied into its build dir under their UPPERCASE name before it runs -
       e.g. cobint needs E.COB, but no other app does, so only cobint
       declares it. Most apps read/write only their own scratch files and
-      need no fixtures at all (the default, an empty list).
+      need no fixtures at all (the default, an empty list). Use an object
+      { "name": "READONLY.TXT", "read_only": true } to make the staged copy
+      read-only on the host OS (Git does not preserve read-only permissions).
     - ignore: set to true to skip building/running this app
     - perf_ignore: set to true to exclude this app from the cycle-count
       regression check entirely (never a regression, improvement, or new
@@ -911,15 +913,28 @@ function Copy-FixtureUpper {
     param([object]$Fixture, [string]$DestDir)
     $name = if ($Fixture -is [string]) { $Fixture } else { $Fixture.Name }
     $source = if ($Fixture -is [string]) { $null } else { $Fixture.Source }
+    $readOnly = ($Fixture -isnot [string]) -and $Fixture.read_only
     if (-not $name) { return }
 
-    if (-not $source -or -not [System.IO.File]::Exists([string]$source)) { return }
+    if (-not $source -or -not [System.IO.File]::Exists([string]$source)) {
+        if ($readOnly) { throw "Read-only fixture source not found: $name" }
+        return
+    }
     try {
         [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($DestDir)) | Out-Null
         $dest = [System.IO.Path]::Combine([System.IO.Path]::GetFullPath($DestDir), $name.ToUpperInvariant())
+        # A serial rerun may overwrite a previously staged read-only copy.
+        if ($readOnly -and [System.IO.File]::Exists($dest)) {
+            [System.IO.FileInfo]::new($dest).IsReadOnly = $false
+        }
         [System.IO.File]::Copy([string]$source, $dest, $true)
+        if ($readOnly) {
+            [System.IO.FileInfo]::new($dest).IsReadOnly = $true
+        }
     }
-    catch { }
+    catch {
+        if ($readOnly) { throw }
+    }
 }
 
 # Run one already-built COM once with a given set of args/stdin, strip the
@@ -1535,7 +1550,8 @@ function Resolve-FixtureSpec {
     } elseif ($name -and $fixtureSourceIndex.ContainsKey($name)) {
         $fixtureSourceIndex[$name]
     } else { $null }
-    return [pscustomobject]@{ Name = $name; Source = $source }
+    $readOnly = ($Fixture -isnot [string]) -and $Fixture.read_only
+    return [pscustomobject]@{ Name = $name; Source = $source; read_only = $readOnly }
 }
 
 $workItems = [System.Collections.Generic.List[object]]::new()
