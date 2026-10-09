@@ -87,3 +87,42 @@ jobs:
       - name: Run main regression suite in both optimization modes
         shell: pwsh
         run: ./scripts/runall.ps1 -Mode full -RunTimeout 60
+
+  no-powershell-build:
+    name: Host build without PowerShell (m-posix.sh)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout dcc
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout ntvcm emulator
+        uses: actions/checkout@v4
+        with:
+          repository: davidly/ntvcm
+          path: ntvcm
+
+      - name: Build ntvcm emulator
+        run: |
+          chmod +x ./m.sh
+          ./m.sh
+        working-directory: ntvcm
+
+      - name: Add tool directories to PATH
+        run: |
+          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ntvcm" >> "$GITHUB_PATH"
+
+      # Ubuntu's /bin/sh is dash, as on Debian and Raspberry Pi OS.
+      # Exercise the build path used on platforms without PowerShell.
+      - name: Build dcc host tools with m-posix.sh
+        run: sh m-posix.sh
+
+      # Exercise ma.sh and shell fixture staging as well as the built tools.
+      # The standard regression job covers both optimization modes; this
+      # job checks the independent shell runner in fast mode.
+      - name: Run test suite with runall.sh
+        run: bash scripts/runall.sh -mode fast
