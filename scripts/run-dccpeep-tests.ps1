@@ -1,7 +1,10 @@
 #Requires -Version 7
 param(
     [string]$DccPeep,
-    [string]$FixtureDir
+    [string]$FixtureDir,
+    [switch]$FailuresOnly,
+    [ValidateRange(1, 1024)]
+    [int]$ThrottleLimit = [Environment]::ProcessorCount
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,45 +12,61 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
 if (-not $DccPeep) { $DccPeep = Join-Path $repoRoot "dccpeep" }
 if (-not $FixtureDir) { $FixtureDir = Join-Path $repoRoot "tests/dccpeep" }
 
-function Get-NormalizedText([string]$Path) {
-    return ([System.IO.File]::ReadAllText($Path) -replace "`r`n", "`n")
-}
-
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("dccpeep-tests-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 $failed = 0
 $passed = 0
 
 try {
-    foreach ($input in Get-ChildItem -Path $FixtureDir -Filter "*.in.mac" | Sort-Object Name) {
-        $stem = $input.Name.Substring(0, $input.Name.Length - ".in.mac".Length)
-        $expected = Join-Path $FixtureDir "$stem.expected.mac"
-        $actual = Join-Path $tempRoot "$stem.actual.mac"
-        $again = Join-Path $tempRoot "$stem.again.mac"
-        $options = @()
-        if ($stem.EndsWith(".os")) { $options += "-Os" }
-
-        & $DccPeep @options $input.FullName $actual
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $actual)) {
-            Write-Host "FAIL $stem (optimizer exit)" -ForegroundColor Red
-            $failed++
-            continue
+    $fixtureResults = @(Get-ChildItem -Path $FixtureDir -Filter "*.in.mac" -File |
+        ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+            $fixture = $_
+            $stem = $fixture.Name.Substring(0, $fixture.Name.Length - ".in.mac".Length)
+            $expected = Join-Path $using:FixtureDir "$stem.expected.mac"
+            $actual = Join-Path $using:tempRoot "$stem.actual.mac"
+            $again = Join-Path $using:tempRoot "$stem.again.mac"
+            $options = @()
+            if ($stem.EndsWith(".os")) { $options += "-Os" }
+            $detail = $null
+            try {
+                if (-not [System.IO.File]::Exists($expected)) {
+                    $detail = "expected output missing"
+                }
+                else {
+                    $null = & $using:DccPeep @options $fixture.FullName $actual 2>&1
+                    if ($LASTEXITCODE -ne 0 -or -not [System.IO.File]::Exists($actual)) {
+                        $detail = "optimizer exit"
+                    }
+                    else {
+                        $actualText = [System.IO.File]::ReadAllText($actual) -replace "`r`n", "`n"
+                        $expectedText = [System.IO.File]::ReadAllText($expected) -replace "`r`n", "`n"
+                        if ($actualText -ne $expectedText) {
+                            $detail = "output mismatch"
+                        }
+                        else {
+                            $null = & $using:DccPeep @options $actual $again 2>&1
+                            if ($LASTEXITCODE -ne 0 -or -not [System.IO.File]::Exists($again)) {
+                                $detail = "optimizer exit on second pass"
+                            }
+                            elseif (([System.IO.File]::ReadAllText($again) -replace "`r`n", "`n") -ne $actualText) {
+                                $detail = "not idempotent"
+                            }
+                        }
+                    }
+                }
+            }
+            catch { $detail = $_.ToString() }
+            [pscustomobject]@{ Name = $stem; Passed = ($null -eq $detail); Detail = $detail }
+        })
+    foreach ($result in ($fixtureResults | Sort-Object Name)) {
+        if ($result.Passed) {
+            if (-not $FailuresOnly) { Write-Host "PASS $($result.Name)" -ForegroundColor Green }
+            $passed++
         }
-        if ((Get-NormalizedText $actual) -ne (Get-NormalizedText $expected)) {
-            Write-Host "FAIL $stem (output mismatch)" -ForegroundColor Red
+        else {
+            Write-Host "FAIL $($result.Name) ($($result.Detail))" -ForegroundColor Red
             $failed++
-            continue
         }
-
-        & $DccPeep @options $actual $again
-        if ($LASTEXITCODE -ne 0 -or
-            (Get-NormalizedText $again) -ne (Get-NormalizedText $actual)) {
-            Write-Host "FAIL $stem (not idempotent)" -ForegroundColor Red
-            $failed++
-            continue
-        }
-        Write-Host "PASS $stem" -ForegroundColor Green
-        $passed++
     }
 
     $longInput = Join-Path $tempRoot "long.in.mac"
@@ -59,7 +78,7 @@ try {
         Write-Host "FAIL long-line" -ForegroundColor Red
         $failed++
     } else {
-        Write-Host "PASS long-line" -ForegroundColor Green
+        if (-not $FailuresOnly) { Write-Host "PASS long-line" -ForegroundColor Green }
         $passed++
     }
 } finally {

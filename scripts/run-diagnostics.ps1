@@ -24,6 +24,7 @@ param(
     [string]$BuildDir = "build/diagnostics",
     [switch]$Update,
     [switch]$Serial,
+    [switch]$FailuresOnly,
     [int]$ThrottleLimit = [Environment]::ProcessorCount,
     [switch]$Help
 )
@@ -199,7 +200,7 @@ function Show-DiagnosticResult {
         return
     }
     if ($Result.Passed) {
-        Write-Host "$counter PASS $($Result.Name).c" -ForegroundColor Green
+        if (-not $FailuresOnly) { Write-Host "$counter PASS $($Result.Name).c" -ForegroundColor Green }
         return
     }
     Write-Host "$counter FAIL $($Result.Name).c: $($Result.Detail)" -ForegroundColor Red
