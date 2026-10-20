@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -193,6 +194,7 @@ def fixture_sources(fixtures):
 
 
 def stage(fixtures, destination: Path, sources):
+    """Copy fixtures under CP/M names, applying read_only only to staged copies."""
     destination.mkdir(parents=True, exist_ok=True)
     missing = []
     for item in fixtures:
@@ -202,7 +204,14 @@ def stage(fixtures, destination: Path, sources):
         if source and not source.is_absolute():
             source = ROOT / source
         if name and source and source.is_file():
-            shutil.copyfile(source, destination / name.upper())
+            target = destination / name.upper()
+            # A repeat staging operation may replace a read-only fixture.
+            if target.exists():
+                target.chmod(target.stat().st_mode | stat.S_IWUSR)
+            shutil.copyfile(source, target)
+            if isinstance(item, dict) and item.get("read_only"):
+                target.chmod(target.stat().st_mode &
+                             ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
         elif name:
             missing.append(name)
     return missing

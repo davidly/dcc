@@ -1,0 +1,37 @@
+; dcc stage-1d output
+ld l,c
+ld h,b
+ld (ix-2),l
+ld (ix-1),h
+ld hl,_temp
+ex de,hl
+ld l,(ix-2)
+ld h,(ix-1)
+ld bc,13
+ldir
+ld hl,(_left)
+ld (ix-2),l
+ld (ix-1),h
+ld hl,(_left)
+ld de,13
+add hl,de
+ld (ix-4),l
+ld (ix-3),h
+ld l,(ix-2)
+ld h,(ix-1)
+ex de,hl
+ld l,(ix-4)
+ld h,(ix-3)
+ld bc,13
+ldir
+ld hl,(_left)
+ld de,13
+add hl,de
+ld (ix-2),l
+ld (ix-1),h
+ex de,hl
+ld hl,_temp
+ld bc,13
+ldir
+ret
+end

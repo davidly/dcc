@@ -23,6 +23,14 @@ It supports the normal runner controls, including `--mode`, `--extended`,
 PowerShell-style single-dash spellings (for example `-mode full -extended`)
 are also accepted.
 
+Fixtures use `tests/_test_overrides.json`, including explicit `source` paths
+and `read_only: true`. They are staged with uppercase CP/M filenames; read-only
+permissions apply only to the staged copies, never to the source files.
+Repeat staging replaces existing read-only copies before reapplying permissions.
+The `tfilero` test also requires ntvcm's read-only open fallback (upstream
+commit [`59c0b63`](https://github.com/davidly/ntvcm/commit/59c0b63d5cb1a14b6ee342df9440dee29e67a79f)
+or newer); update and rebuild older emulator installations if read-only opens fail.
+
 ## `mir-migration-census.py`
 
 Measures generated MIR selection across `tests/*.c` and compares two snapshots

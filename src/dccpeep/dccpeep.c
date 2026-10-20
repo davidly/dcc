@@ -3725,6 +3725,9 @@ static int pass_aggregate_swap_ldir(void)
     int first_spill;
     int second_spill;
     int final_spill;
+    int initial_spill;
+    int reload_spill;
+    int tail;
     int third_start;
     char temp[128];
     char pointer[128];
@@ -3734,41 +3737,64 @@ static int pass_aggregate_swap_ldir(void)
 
     for (i = 0; i + 28 < nlines; ++i) {
         if (!input_is_dcc_generated ||
-            !eq(i, "ld l,c") || !eq(i + 1, "ld h,b") ||
-            !eq(i + 2, "ex de,hl") ||
-            !parse_ld_hl_imm(lines[i + 3], temp, sizeof(temp)) ||
-            temp[0] == '(' || !eq(i + 4, "ex de,hl") ||
-            !parse_ld_bc_positive_byte(lines[i + 5], &size) ||
-            !eq(i + 6, "ldir") ||
-            !parse_ld_hl_imm(lines[i + 7], pointer, sizeof(pointer)) ||
+            !eq(i, "ld l,c") || !eq(i + 1, "ld h,b"))
+            continue;
+        initial_spill = 0;
+        if (eq(i + 2, "ex de,hl") &&
+            parse_ld_hl_imm(lines[i + 3], temp, sizeof(temp)) &&
+            temp[0] != '(' && eq(i + 4, "ex de,hl") &&
+            parse_ld_bc_positive_byte(lines[i + 5], &size) &&
+            eq(i + 6, "ldir")) {
+            tail = i + 7;
+        } else if (parse_store_ix_pair(lines[i + 2], lines[i + 3],
+                                       &initial_spill) &&
+                   parse_ld_hl_imm(lines[i + 4], temp, sizeof(temp)) &&
+                   temp[0] != '(' && eq(i + 5, "ex de,hl") &&
+                   parse_load_ix_pair(lines[i + 6], lines[i + 7],
+                                      &reload_spill) &&
+                   reload_spill == initial_spill &&
+                   parse_ld_bc_positive_byte(lines[i + 8], &size) &&
+                   eq(i + 9, "ldir")) {
+            tail = i + 10;
+        } else {
+            continue;
+        }
+        if (tail + 21 >= nlines ||
+            !parse_ld_hl_imm(lines[tail], pointer, sizeof(pointer)) ||
             pointer[0] != '(' ||
-            !parse_store_ix_pair(lines[i + 8], lines[i + 9], &first_spill) ||
-            !parse_ld_hl_imm(lines[i + 10], repeated_pointer,
+            !parse_store_ix_pair(lines[tail + 1], lines[tail + 2],
+                                 &first_spill) ||
+            !parse_ld_hl_imm(lines[tail + 3], repeated_pointer,
                              sizeof(repeated_pointer)) ||
             strcmp(pointer, repeated_pointer) != 0)
             continue;
+        /* The newer emitter spills the first source too. Its slot must be
+         * overwritten by the second copy before any subsequent observation. */
+        if (tail == i + 10 && initial_spill != first_spill)
+            continue;
         sprintf(line, "ld de,%d", size);
-        if (!eq(i + 11, line) || !eq(i + 12, "add hl,de") ||
-            !parse_store_ix_pair(lines[i + 13], lines[i + 14], &second_spill))
+        if (!eq(tail + 4, line) || !eq(tail + 5, "add hl,de") ||
+            !parse_store_ix_pair(lines[tail + 6], lines[tail + 7],
+                                 &second_spill))
             continue;
         sprintf(line, "ld l,(ix%+d)", first_spill);
-        if (!eq(i + 15, line)) continue;
+        if (!eq(tail + 8, line)) continue;
         sprintf(line, "ld h,(ix%+d)", first_spill + 1);
-        if (!eq(i + 16, line) || !eq(i + 17, "ex de,hl")) continue;
+        if (!eq(tail + 9, line) || !eq(tail + 10, "ex de,hl")) continue;
         sprintf(line, "ld l,(ix%+d)", second_spill);
-        if (!eq(i + 18, line)) continue;
+        if (!eq(tail + 11, line)) continue;
         sprintf(line, "ld h,(ix%+d)", second_spill + 1);
-        if (!eq(i + 19, line) ||
-            !parse_ld_bc_positive_byte(lines[i + 20], &second_size) ||
-            second_size != size || !eq(i + 21, "ldir") ||
-            !parse_ld_hl_imm(lines[i + 22], repeated_pointer,
+        if (!eq(tail + 12, line) ||
+            !parse_ld_bc_positive_byte(lines[tail + 13], &second_size) ||
+            second_size != size || !eq(tail + 14, "ldir") ||
+            !parse_ld_hl_imm(lines[tail + 15], repeated_pointer,
                              sizeof(repeated_pointer)) ||
             strcmp(pointer, repeated_pointer) != 0)
             continue;
         sprintf(line, "ld de,%d", size);
-        if (!eq(i + 23, line) || !eq(i + 24, "add hl,de"))
+        if (!eq(tail + 16, line) || !eq(tail + 17, "add hl,de"))
             continue;
-        third_start = i + 25;
+        third_start = tail + 18;
         if (third_start + 1 < nlines &&
             parse_store_ix_pair(lines[third_start], lines[third_start + 1],
                                 &final_spill)) {
@@ -3776,7 +3802,8 @@ static int pass_aggregate_swap_ldir(void)
                 continue;
             third_start += 2;
         }
-        if (!eq(third_start, "ex de,hl") ||
+        if (third_start + 3 >= nlines ||
+            !eq(third_start, "ex de,hl") ||
             !parse_ld_hl_imm(lines[third_start + 1], repeated_pointer,
                              sizeof(repeated_pointer)) ||
             strcmp(temp, repeated_pointer) != 0 ||

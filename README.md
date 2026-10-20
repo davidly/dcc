@@ -105,6 +105,12 @@ Linux typically is configured to have case-sensitive filenames. CP/M files are u
     * -Ot | -Os. Optimize for time or size. Default is -Ot. 
     * -o output file name of optimized M80 assembly
 
+The aggregate-swap optimization recognizes both register-only and spilled
+first-copy sequences emitted by dcc. Run `pwsh scripts/run-dccpeep-tests.ps1`
+to check its matching guards and
+`pwsh scripts/runall.ps1 -Apps tszswap -Mode full` to exercise stable sorting
+of 13-byte records with unsigned 16-bit keys in both optimization modes.
+
 ### usage: dccrtlstrip [-k symbol ...] -r dccrtl.mac -o rtlmin.mac app.mac [app2.mac ...]
 
     * -k symbol tells dccrtlstrip to keep the public symbol with that name and all symbols it references
