@@ -1,0 +1,18 @@
+; dcc stage-1d output
+	push bc ; peep: aggregate_swap_ldir
+	pop de
+	ld hl,13
+	add hl,de
+	ex de,hl
+	ld b,13
+Laswap_1:
+	ld c,(hl)
+	ld a,(de)
+	ld (hl),a
+	ld a,c
+	ld (de),a
+	inc hl
+	inc de
+	djnz Laswap_1
+	ret
+	end
