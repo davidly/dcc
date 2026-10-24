@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="400" viewBox="0 0 1440 400" role="img" aria-labelledby="title description">
+  <title id="title">DCC C Compiler</title>
+  <desc id="description">Modern C tools for classic Z80 machines. Build on Windows, macOS or Linux. Target CP/M on the Z80. C source compiles to M80 assembly, then M80 and L80 produce a CP/M COM program. The Z80 CPU logo marks the target processor.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#102237"/>
+      <stop offset="1" stop-color="#183c4c"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="16" cy="16" r="1" fill="#75bdb9" opacity=".13"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 10 5 0 10Z" fill="#68ddcf"/>
+    </marker>
+  </defs>
+  <rect width="1440" height="400" rx="24" fill="url(#background)"/>
+  <rect width="1440" height="400" rx="24" fill="url(#grid)"/>
+  <path d="M0 376h1440" stroke="#41cfbd" stroke-width="3" opacity=".55"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="64" y="83" fill="#68ddcf" font-size="17" font-weight="700" letter-spacing="3.5">MODERN C TOOLS. CLASSIC Z80 MACHINES.</text>
+    <text x="60" y="167" fill="#fff" font-size="72" font-weight="700" letter-spacing="-2">DCC <tspan fill="#68ddcf">C Compiler</tspan></text>
+    <text x="64" y="212" fill="#d2e3ed" font-size="28">Write C. Target the Z80.</text>
+    <text x="64" y="244" fill="#d2e3ed" font-size="24">Optimised for speed and code size.</text>
+    <path d="M64 263h626" stroke="#557d8d"/>
+    <text x="64" y="300" fill="#b8d0df" font-size="21">Z80 machine code for CP/M</text>
+    <text x="64" y="342" fill="#8cacbe" font-size="18">C89 + selected C99/C11 · Windows, macOS + Linux hosts</text>
+    <!-- Source-to-program motif follows the actual DCC / M80 / L80 toolchain. -->
+    <path d="M824 113h99l27 27v150H824Z" fill="#153342" stroke="#5a929d" stroke-width="2"/>
+    <path d="M923 113v27h27" fill="none" stroke="#5a929d" stroke-width="2"/>
+    <text x="886" y="198" text-anchor="middle" fill="#68ddcf" font-family="Menlo, Consolas, monospace" font-size="35" font-weight="700">{ C }</text>
+    <text x="886" y="255" text-anchor="middle" fill="#b8d0df" font-size="18">source.c</text>
+    <path d="M968 201h63" fill="none" stroke="#68ddcf" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="999" y="175" text-anchor="middle" fill="#b8d0df" font-size="16">DCC</text>
+    <text x="1090" y="195" text-anchor="middle" fill="#fff" font-family="Menlo, Consolas, monospace" font-size="28" font-weight="700">.MAC</text>
+    <text x="1090" y="226" text-anchor="middle" fill="#8cacbe" font-size="17">Z80 assembly</text>
+    <path d="M1153 201h58" fill="none" stroke="#68ddcf" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="1180" y="175" text-anchor="middle" fill="#b8d0df" font-size="15">M80 / L80</text>
+    <!-- Reuse the Z80 ROMless SBC chip mark as the compiler target. -->
+    <g transform="translate(1223 121)">
+  <rect x="24" y="24" width="112" height="112" rx="22" fill="#172c46"/>
+  <g fill="none" stroke="#008f87" stroke-width="8" stroke-linecap="round">
+    <path d="M8 52h16M8 80h16M8 108h16M136 52h16M136 80h16M136 108h16M52 8v16M80 8v16M108 8v16M52 136v16M80 136v16M108 136v16"/>
+  </g>
+  <text x="80" y="86" text-anchor="middle" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="43" font-weight="700" letter-spacing="-2">Z80</text>
+  <path d="M44 109h17V97h18v12h18V97h19" fill="none" stroke="#5ce0cd" stroke-width="4" stroke-linejoin="round"/>
+    </g>
+    <text x="1303" y="307" text-anchor="middle" fill="#b8d0df" font-family="Menlo, Consolas, monospace" font-size="20">CP/M .COM</text>
+    <text x="1100" y="342" text-anchor="middle" fill="#8cacbe" font-size="17">Optimizing compiler + tailored runtime</text>
+  </g>
+</svg>
