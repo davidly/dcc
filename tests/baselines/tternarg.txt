@@ -1,0 +1,1 @@
+ternary argument clamp: 0 failures
