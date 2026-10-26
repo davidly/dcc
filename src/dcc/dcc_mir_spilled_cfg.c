@@ -15648,7 +15648,13 @@ void mir_emit_virtual_load(MirStream *out, int value)
     }
     if (mir_register_iy_slot >= 0 &&
         mir.backend_slots != NULL &&
-        mir.backend_slots[value] == mir_register_iy_slot) {
+        mir.backend_slots[value] == mir_register_iy_slot &&
+        !mir_value_has_direct_named_home(value)) {
+        /* PHI planning can reserve a slot for a parameter/load whose
+         * authoritative value stays in its named home. Its definition
+         * does not initialize that slot, even when the slot is later
+         * reused by a loop PHI and promoted to IY. Read the named home
+         * below instead, as for an ordinary memory-backed slot. */
         if (!mir_register_iy_frame_shift) {
             fatal("MIR IY slot load without register frame");
         }
