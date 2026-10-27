@@ -622,6 +622,8 @@ void mir_emit_scalar_compare(MirStream *out, int operation, int is_unsigned);
 void mir_emit_scalar_compare_biased_right(MirStream *out, int operation);
 void mir_emit_signed_byte_extend(MirStream *out);
 void mir_emit_scalar_truth_test(MirStream *out, int value);
+int mir_bool_branch_load_supported(int instruction);
+void mir_emit_bool_branch_load(MirStream *out, int instruction);
 int mir_binary_is_byte_unit_update(const struct MirInsn *insn);
 void mir_emit_byte_arithmetic_result(MirStream *out,
                                      const struct MirInsn *insn,
