@@ -458,6 +458,62 @@ void mir_emit_signed_byte_extend(MirStream *out)
     mir_stream_puts("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
 }
 
+/* A sole, adjacent branch consumer (optionally through !) needs only a
+ * bool byte's truth value. Defer the load across only the optional pure !.
+ * Keep volatile/bitfield accesses and full-debug emission on their existing
+ * paths; value consumers still receive canonical 0/1 representations. */
+int mir_bool_branch_load_supported(int instruction)
+{
+    const struct MirInsn *load;
+    const struct MirInsn *branch;
+    int value;
+    int type, storage, offset;
+
+    if (opt_debug || instruction < 0 || instruction + 1 >= mir.count)
+        return 0;
+    load = &mir.insns[instruction];
+    branch = &mir.insns[instruction + 1];
+    value = load->dst;
+    if (branch->opcode == MIR_UNARY && branch->immediate == '!' &&
+        branch->src1 == value && mir_value_use_count(branch->dst) == 1 &&
+        instruction + 2 < mir.count) {
+        value = branch->dst;
+        branch = &mir.insns[instruction + 2];
+    }
+    if (load->opcode != MIR_LOAD || !type_is_bool(load->type) ||
+        load->memory_flags != 0 || load->bit_width != 0 ||
+        mir_value_use_count(load->dst) != 1 ||
+        branch->opcode != MIR_BRANCH_FALSE || branch->src1 != value ||
+        !mir_scalar_memory_location(load, &type, &storage, &offset) ||
+        !type_is_bool(type))
+        return 0;
+    /* Parameter offsets can include a selector-specific saved-IY bias. */
+    return storage == SC_GLOBAL || storage == SC_EXTERN ||
+        (storage == SC_LOCAL && offset >= -128 && offset <= 127);
+}
+
+void mir_emit_bool_branch_load(MirStream *out, int instruction)
+{
+    const struct MirInsn *load = &mir.insns[instruction];
+    int type, storage, offset;
+
+    if (!mir_scalar_memory_location(load, &type, &storage, &offset))
+        fatal("missing bool branch load location");
+    if (storage == SC_GLOBAL || storage == SC_EXTERN) {
+        struct Sym *global = find_global(load->name);
+        const char *name = asm_name_for(global != NULL
+            ? sym_asm_name(global) : mir_declared_link_name(load->name));
+
+        if ((storage == SC_EXTERN || (global != NULL && global->needs_extrn)) &&
+            mir_extrn_should_emit(global))
+            mir_stream_printf(out, "\textrn %s\n", name);
+        mir_stream_printf(out, "\tld a,(%s)\n", name);
+    } else {
+        mir_stream_printf(out, "\tld a,(ix%+d)\n", offset);
+    }
+    mir_stream_puts("\tor a\n", out);
+}
+
 /* Test a scalar already loaded into HL. Byte arithmetic can leave carry or
  * sign debris in H; a truth test must use the stored byte value without
  * inserting a conversion into the MIR increment/store pattern. */

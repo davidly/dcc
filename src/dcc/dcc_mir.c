@@ -7946,8 +7946,33 @@ scoped_type_repair_done:
 
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_ARG && mir.insns[i].src1 >= 0) {
+            int call_id = mir.insns[i].secondary_offset;
+            long position = mir.insns[i].immediate;
+            int target_type = 0;
+            int source_value = mir.insns[i].src1;
             struct MirInsn *source =
-                mir_mutable_definition(mir.insns[i].src1);
+                mir_mutable_definition(source_value);
+
+            /* Declaration replay can refine an array load into its real
+             * element pointer type.  That must not replace a fixed call
+             * pointer parameter's ABI type (including for indirect calls).
+             * Pointer-to-pointer conversion preserves the target address
+             * representation, so retain it on MIR_ARG without inserting
+             * an identity cast that would obstruct backend matchers.
+             * Leave scalar promotion/width repair on its existing path. */
+            if (call_id >= 0 && call_id < mir.call_signature_capacity &&
+                mir.call_signatures[call_id].present &&
+                mir.call_signatures[call_id].has_proto && position >= 0 &&
+                position < mir.call_signatures[call_id].parameter_count)
+                target_type =
+                    mir.call_signatures[call_id].parameter_types[position];
+            if (target_type != 0 && source != NULL &&
+                type_ptr_depth(source->type) > 0 &&
+                type_ptr_depth(target_type) > 0 &&
+                !type_is_struct_object(mir.insns[i].type)) {
+                mir.insns[i].type = target_type;
+                continue;
+            }
             if (source != NULL && source->type != 0 &&
                 !type_is_struct_object(mir.insns[i].type))
                 mir.insns[i].type = source->type;

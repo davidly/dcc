@@ -33437,6 +33437,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             break;
         case MIR_PARAM:
         case MIR_LOAD:
+            if (mir_bool_branch_load_supported(i) &&
+                (mir.insns[i + 1].opcode == MIR_BRANCH_FALSE ||
+                 mir_unary_is_fusable_not_branch(i + 1)))
+                break;
             {
             int memory_type;
             int memory_storage;
@@ -34547,8 +34551,12 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 target = mir_find_label(branch->label);
                 if (target < 0)
                     goto done;
-                mir_emit_virtual_load(out, insn->src1);
-                mir_stream_puts("\tld a,h\n\tor l\n", out);
+                if (mir_bool_branch_load_supported(i - 1)) {
+                    mir_emit_bool_branch_load(out, i - 1);
+                } else {
+                    mir_emit_virtual_load(out, insn->src1);
+                    mir_stream_puts("\tld a,h\n\tor l\n", out);
+                }
                 mir_spilled_cfg_used_unary_not_branch_fusion = 1;
                 if (!mir_emit_conditional_branch_with_phi_copies(
                         out, labels, "z", i + 1, target, branch->label))
@@ -36214,7 +36222,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 if (mir_match_constant_return_suffix(i, &suffix)) {
                     int done_label = new_label();
 
-                    if (mir_value_is_wide(insn->src1)) {
+                    if (mir_bool_branch_load_supported(i - 1)) {
+                        mir_emit_bool_branch_load(out, i - 1);
+                    } else if (mir_value_is_wide(insn->src1)) {
                         mir_emit_virtual_load_wide(out, insn->src1);
                         if (condition != NULL &&
                             type_is_float(condition->type))
@@ -36245,8 +36255,12 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     int done_label = new_label();
                     int true_label = new_label();
 
-                    mir_emit_virtual_load(out, suffix.left_value);
-                    mir_emit_scalar_truth_test(out, suffix.left_value);
+                    if (mir_bool_branch_load_supported(i - 1)) {
+                        mir_emit_bool_branch_load(out, i - 1);
+                    } else {
+                        mir_emit_virtual_load(out, suffix.left_value);
+                        mir_emit_scalar_truth_test(out, suffix.left_value);
+                    }
                     mir_stream_printf(out, "\tjp z, L%d\n", true_label);
                     mir_emit_virtual_load(out, suffix.right_value);
                     mir_emit_scalar_truth_test(out, suffix.right_value);
@@ -36275,7 +36289,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                                 labels[insn->label]);
                     break;
                 }
-                if (mir_value_is_wide(insn->src1)) {
+                if (mir_bool_branch_load_supported(i - 1)) {
+                    mir_emit_bool_branch_load(out, i - 1);
+                } else if (mir_value_is_wide(insn->src1)) {
                     mir_emit_virtual_load_wide(out, insn->src1);
                     if (condition != NULL && type_is_float(condition->type))
                         mir_stream_puts("\tld a,d\n\tand 127\n\tor e\n\tor h\n\tor l\n",

@@ -261,6 +261,143 @@ static void check_varargs_and_ternary(void)
     check_int(ternary_bool(0), 0, "ternary false arm");
 }
 
+/* Keep these mutable and out of the initial-value checks above. */
+static bool edge_left, edge_right;
+
+static int branch_pair(void)
+{
+    int result = 0;
+    if (edge_left) result += 1;
+    if (!edge_left) result += 2;
+    if (edge_right) result += 4;
+    if (!edge_right) result += 8;
+    if (edge_left && edge_right) result += 16;
+    if (edge_left || edge_right) result += 32;
+    if (!(edge_left && edge_right)) result += 64;
+    if (!!edge_right) result += 128;
+    return result;
+}
+
+static void check_branch_truth_table(void)
+{
+    int left, right, expected;
+    for (left = 0; left < 2; ++left) {
+        for (right = 0; right < 2; ++right) {
+            edge_left = left;
+            edge_right = right;
+            expected = (left ? 1 : 2) + (right ? 4 : 8);
+            if (left && right) expected += 16;
+            if (left || right) expected += 32;
+            if (!(left && right)) expected += 64;
+            if (right) expected += 128;
+            check_int(branch_pair(), expected, "global branch truth table");
+        }
+    }
+}
+
+static void check_branch_side_effects(void)
+{
+    bool saved;
+    int hits = 0;
+
+    edge_left = false;
+    short_trace = 0;
+    if (edge_left && trace_bool(3)) hits += 10;
+    if (!edge_left || trace_bool(5)) hits++;
+    check_int(short_trace, 0, "bool branches skip calls");
+    check_int(hits, 1, "bool branches skip results");
+
+    edge_left = true;
+    short_trace = 0;
+    if (edge_left && trace_bool(3)) hits += 2;
+    if (!edge_left || trace_bool(5)) hits += 4;
+    check_int(short_trace, 35, "bool branches call order");
+    check_int(hits, 7, "bool branches call results");
+
+    saved = edge_left;
+    set_bool(&edge_left, 0);
+    if (saved) hits += 8;
+    if (edge_left) hits += 100;
+    check_int(hits, 15, "saved bool survives alias write");
+    check_int(saved + saved, 2, "branched bool remains normalized");
+
+    set_bool(&saved, 0);
+    if (!saved) hits += 16;
+    set_bool(&saved, -17);
+    if (saved) hits += 32;
+    check_int(hits, 63, "local alias changes branch direction");
+    check_int(saved, 1, "local alias store normalizes");
+}
+
+static void check_branch_loops(void)
+{
+    int count = 0, sum = 0;
+    bool running = true;
+
+    edge_left = true;
+    while (edge_left) {
+        ++count;
+        if (count == 2) continue;
+        sum += count;
+        if (count == 4) edge_left = false;
+        if (count > 5) break; /* Bound execution if an exit test regresses. */
+    }
+    check_int(count, 4, "global bool loop exit");
+    check_int(sum, 8, "bool loop continue");
+
+    count = 0;
+    do {
+        ++count;
+        if (count == 3) running = false;
+    } while (running && count < 5);
+    check_int(count, 3, "local bool do loop exit");
+
+    edge_right = false;
+    for (count = 0; !edge_right && count < 5; ++count) {
+        if (count == 2) edge_right = true;
+    }
+    check_int(count, 3, "negated bool for loop exit");
+}
+
+static void check_branch_merges(void)
+{
+    int i, selected, live;
+    bool value;
+    volatile bool observed;
+    struct { bool first : 1; bool second : 1; } bits;
+
+    for (i = 0; i < 4; ++i) {
+        edge_left = i & 1;
+        edge_right = i & 2;
+        live = 1000 + i * 13;
+        if (edge_left) selected = live + 7;
+        else selected = live - 9;
+        check_int(selected, 1000 + i * 13 + ((i & 1) ? 7 : -9),
+                  "live word across bool branch and merge");
+        value = edge_left ? edge_right : !edge_right;
+        check_int(value, (i & 1) ? !!(i & 2) : !(i & 2),
+                  "bool ternary merge");
+        selected = value ? 37 : 91;
+        check_int(selected, (((i & 1) ? !!(i & 2) : !(i & 2)) ? 37 : 91),
+                  "branch on merged bool");
+
+        observed = i;
+        selected = 0;
+        if (observed) selected++;
+        observed = 0;
+        if (!observed) selected += 2;
+        check_int(selected, i ? 3 : 2, "volatile bool changes between branches");
+
+        bits.first = i & 1;
+        bits.second = i & 2;
+        selected = 0;
+        if (bits.first) selected++;
+        if (!bits.second) selected += 2;
+        check_int(selected, (i & 1) + ((i & 2) ? 0 : 2),
+                  "bool bitfield branch directions");
+    }
+}
+
 int main(void)
 {
     check_locals();
@@ -272,6 +409,10 @@ int main(void)
     check_compound_ops();
     check_varargs_and_ternary();
     check_short_circuit_phi();
+    check_branch_truth_table();
+    check_branch_side_effects();
+    check_branch_loops();
+    check_branch_merges();
     if (failures == 0)
         printf("test tbool completed with great success\n");
     return failures;

@@ -517,7 +517,12 @@ static int mir_emit_homed_condition_jump(
     MirStream *out, int value, int instruction, int label, int jump_if_true)
 {
     const struct MirInsn *condition = mir_definition(value);
-    if (condition != NULL && type_size(condition->type) == 4) {
+    if (condition != NULL &&
+        mir_bool_branch_load_supported((int)(condition - mir.insns)) &&
+        ((int)(condition - mir.insns) + 1 == instruction ||
+         (int)(condition - mir.insns) + 2 == instruction)) {
+        mir_emit_bool_branch_load(out, (int)(condition - mir.insns));
+    } else if (condition != NULL && type_size(condition->type) == 4) {
         int preserve_hl_de =
             mir_home_color_live_across(
                 instruction, MIR_COLOR_HL_DE) ||
@@ -2759,6 +2764,8 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
             }
             break;
         case MIR_LOAD:
+            if (mir_bool_branch_load_supported(i))
+                break;
             {
                 int memory_type, memory_storage, memory_offset;
                 int instruction = (int)(insn - mir.insns);
