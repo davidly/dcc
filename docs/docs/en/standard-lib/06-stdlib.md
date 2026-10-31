@@ -112,6 +112,11 @@ assume a fixed TPA ceiling or bank address. The snapshot structure stays local
 to its caller's bank, not in the cross-bank contract. Programs that only inspect
 memory do not pull in the allocator; unused `meminfo` code is stripped.
 
+The `tmeminfo` target regression checks snapshot bounds, stack reserve, `errno`,
+allocation growth, interior free-block reuse, and tail trimming in both compiler
+pipelines. The variable-stack Python test reuses that source for 256-, 512-, and
+2,048-byte reserves, so the runtime source-coverage audit sees the same calls.
+
 ## Conversion
 
 `atoi`/`atol` skip the full C whitespace set (space and bytes `\t` through
