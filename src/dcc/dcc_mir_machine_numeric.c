@@ -13622,17 +13622,28 @@ static void mir_emit_word_constant_shift_schedule(
             plan->parameter_stack_offset +
                 (plan->operation == TOK_SHR ? 1 : 0));
     if (plan->operation == TOK_SHL) {
+        while (remaining-- > 0)
+            mir_stream_puts("\tadd a,a\n", out);
         mir_stream_puts("\tld h,a\n\tld l,0\n", out);
-        while (remaining-- > 0)
-            mir_stream_puts("\tsla h\n", out);
     } else if (plan->is_unsigned) {
-        mir_stream_puts("\tld l,a\n\tld h,0\n", out);
-        while (remaining-- > 0)
-            mir_stream_puts("\tsrl l\n", out);
+        if (remaining >= 4) {
+            int rotations = 8 - remaining;
+
+            while (rotations-- > 0)
+                mir_stream_puts("\trlca\n", out);
+            mir_stream_printf(out, "\tand %u\n", 0xffU >> remaining);
+            mir_stream_puts("\tld l,a\n\tld h,0\n", out);
+        } else {
+            mir_stream_puts("\tld l,a\n\tld h,0\n", out);
+            while (remaining-- > 0)
+                mir_stream_puts("\tsrl l\n", out);
+        }
+    } else if (remaining == 7) {
+        mir_stream_puts("\trlca\n\tsbc a,a\n\tld l,a\n\tld h,a\n", out);
     } else {
-        mir_stream_puts("\tld l,a\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
         while (remaining-- > 0)
-            mir_stream_puts("\tsra h\n\trr l\n", out);
+            mir_stream_puts("\tsra a\n", out);
+        mir_stream_puts("\tld l,a\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
     }
     mir_stream_puts("\tret\n", out);
 }

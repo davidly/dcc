@@ -1196,15 +1196,51 @@ int mir_homed_cfg_depends_on_dynamic_index(void)
     return 0;
 }
 
+/* Keep index-only stores on their incumbent path, which peephole can fuse
+ * with a preceding bulk operation. */
+static int mir_homed_byte_member_address_is_disposable(int value)
+{
+    int has_member_offset = 0;
+    int budget = 64;
+
+    while (budget-- > 0) {
+        const struct MirInsn *address = mir_definition(value);
+
+        if (address == NULL || mir_value_use_count(value) != 1)
+            return 0;
+        if (address->opcode == MIR_ADDRESS)
+            return has_member_offset;
+        if (address->opcode == MIR_MEMBER_ADDRESS) {
+            has_member_offset |=
+                ((unsigned long)address->immediate & 0xffffUL) != 0;
+        } else if (address->opcode == MIR_INDEX_ADDRESS) {
+            const struct MirInsn *index = mir_definition(address->src2);
+
+            if (index == NULL || index->opcode != MIR_CONST)
+                return 0;
+        } else {
+            return 0;
+        }
+        value = address->src1;
+    }
+    return 0;
+}
+
 static int mir_homed_constant_absolute_access_supported(
     const struct MirInsn *insn)
 {
+    const struct MirInsn *source;
+
     if (!mir_constant_absolute_access_supported(insn))
         return 0;
     if (insn->memory_size != 1)
         return 1;
-    return insn->opcode == MIR_STORE_INDIRECT &&
-        mir_cfg_block_count() == 1;
+    if (insn->opcode != MIR_STORE_INDIRECT)
+        return 0;
+    source = mir_definition(insn->src2);
+    return mir_cfg_block_count() == 1 ||
+        (source != NULL && source->opcode == MIR_CONST &&
+         mir_homed_byte_member_address_is_disposable(insn->src1));
 }
 
 int mir_homed_cfg_depends_on_constant_absolute(void)
@@ -1852,6 +1888,7 @@ static int mir_emit_homed_constant_absolute_store(
     MirStream *out, const struct MirInsn *insn)
 {
     char operand[160];
+    const struct MirInsn *source = mir_definition(insn->src2);
     int instruction = (int)(insn - mir.insns);
     int preserve_hl_de = mir_home_color_live_across(
         instruction, MIR_COLOR_HL_DE);
@@ -1862,6 +1899,15 @@ static int mir_emit_homed_constant_absolute_store(
     if (!mir_prepare_constant_absolute_operand(
             out, insn->src1, operand, sizeof(operand)))
         return 0;
+    if (insn->memory_size == 1 && source != NULL &&
+        source->opcode == MIR_CONST) {
+        if ((source->immediate & 255L) == 0)
+            mir_stream_puts("\txor a\n", out);
+        else
+            mir_stream_printf(out, "\tld a,%ld\n", source->immediate & 255L);
+        mir_stream_printf(out, "\tld (%s),a\n", operand);
+        return 1;
+    }
     if (preserve_hl_de)
         mir_stream_puts("\tpush de\n\tpush hl\n", out);
     if (preserve_hl)
@@ -2307,7 +2353,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
         case MIR_ADDRESS:
             if (mir_value_only_used_by_absolute_access(
                     insn->dst,
-                    mir_homed_constant_absolute_access_supported))
+                    mir_homed_constant_absolute_access_supported, 0))
                 break;
             {
                 /* Item 16 (mir-migration-plan-to-100pct.md): address-of a
@@ -2949,7 +2995,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                 break;
             if (mir_value_only_used_by_absolute_access(
                     insn->dst,
-                    mir_homed_constant_absolute_access_supported))
+                    mir_homed_constant_absolute_access_supported, 0))
                 break;
             if (!mir_emit_pointer_offset_address_to_home(
                     out, insn->dst, insn->src1, insn->immediate))
@@ -2962,7 +3008,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                 long byte_offset;
                 if (mir_value_only_used_by_absolute_access(
                         insn->dst,
-                        mir_homed_constant_absolute_access_supported))
+                        mir_homed_constant_absolute_access_supported, 0))
                     break;
                 if (index_definition != NULL &&
                     index_definition->opcode == MIR_CONST) {
@@ -3732,6 +3778,18 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                         goto done;
                     mir_stream_puts("\tpop bc\n\tpop hl\n\tpop de\n", out);
                     mir_emit_runtime_call(out, "__mcf");
+                    {
+                        int target = mir_memcpy_end_pointer_target(i);
+
+                        if (target >= 0) {
+                            mir_stream_puts("\tex de,hl\n", out);
+                            if (!mir_emit_hl_to_home(
+                                    out, mir.insns[target].dst))
+                                goto done;
+                            i = target;
+                            break;
+                        }
+                    }
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
                     break;

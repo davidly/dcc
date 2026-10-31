@@ -247,6 +247,17 @@ static void pp_pop_macro(const char *name)
 
 static void handle_pragma_line(const char *line)
 {
+    while (isspace((unsigned char)*line)) ++line;
+    if (bank_api_file && !strncmp(line, "dcc bank_buffer", 15) &&
+        isspace((unsigned char)line[15])) {
+        fprintf(bank_api_file, "B %s\n", line + 16);
+        return;
+    }
+    if (bank_api_file && !strncmp(line, "dcc bank_record", 15) &&
+        isspace((unsigned char)line[15])) {
+        fprintf(bank_api_file, "T %s\n", line + 16);
+        return;
+    }
     char name[64];
     int stack_check_enabled;
 

@@ -15,14 +15,9 @@ _load_a_live:
 	ld de,0
 	ret
 _load_de_live:
-	push ix
-	pop hl
+	ld l,(ix-14) ; peep: ix_offset_word_load_direct
+	ld h,(ix-13)
 	ld de,-14
-	add hl,de
-	ld a,(hl)
-	inc hl
-	ld h,(hl)
-	ld l,a
 	xor a
 	ld a,0
 	ld c,e

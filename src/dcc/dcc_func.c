@@ -1546,6 +1546,8 @@ void parse_param_list(void)
     int typedef_array_len;
     int typedef_array_decay_depth;
     int typedef_array_elem_size;
+    int bank_base_const;
+    int bank_function_parameter;
 
     g_frame.nlocals = 0;
     g_frame.local_size = 0;
@@ -1576,6 +1578,8 @@ void parse_param_list(void)
         }
 
         type = parse_type();
+        bank_base_const = g_decl.is_const || g_decl.bank_typedef_const;
+        bank_function_parameter = 0;
         direct_funcptr = 0;
         typedef_array_len = g_typedef_array_len;
         {
@@ -1634,6 +1638,7 @@ void parse_param_list(void)
         if (g_lex.tok.kind == '(') {
             skip_prototype_function_suffix();
             type = type_add_ptr(type);
+            bank_function_parameter = 1;
         }
 
         remember_proto_param_type(type);
@@ -1643,6 +1648,8 @@ void parse_param_list(void)
             add_param_alloc(name, type);
             ps = find_local(name);
             if (ps != NULL) {
+                ps->bank_pointee_const = bank_base_const;
+                ps->bank_function_parameter = bank_function_parameter;
                 ps->is_register = g_decl.is_register;
                 ps->is_volatile = g_decl.is_volatile;
                 ps->pointee_is_volatile = g_decl.pointee_is_volatile;
@@ -2983,6 +2990,7 @@ void scan_function_body(void)
 void parse_typedef_decl(void)
 {
     int base_type;
+    int bank_base_const;
     int base_is_volatile;
     int base_pointee_is_volatile;
     unsigned int base_volatile_mask;
@@ -2996,6 +3004,7 @@ void parse_typedef_decl(void)
      *     typedef int A4[4], FN(int), (*PF)(int);
      */
     base_type = parse_base_type();
+    bank_base_const = g_decl.is_const || g_decl.bank_typedef_const;
     base_is_volatile = g_decl.is_volatile;
     base_pointee_is_volatile = g_decl.pointee_is_volatile;
     base_volatile_mask = g_decl.pointee_volatile_mask;
@@ -3090,6 +3099,7 @@ void parse_typedef_decl(void)
                     is_volatile, pointee_is_volatile);
             ti = find_typedef(name);
             if (ti >= 0) {
+                typedefs[ti].bank_is_const = bank_base_const;
                 typedefs[ti].pointee_volatile_mask = volatile_mask;
                 typedefs[ti].dim_count = typedef_dim_count;
                 for (di = 0; di < MAX_ARRAY_DIMS; ++di)
@@ -3102,6 +3112,127 @@ void parse_typedef_decl(void)
             continue;
         expect(';');
         done = 1;
+    }
+}
+
+static const char *bank_scalar_type(int type)
+{
+    if (type_ptr_depth(type) || (type & TYPE_STRUCT))
+        return "unsupported";
+    switch (type & 15) {
+    case TYPE_VOID: return "void";
+    case TYPE_CHAR: return (type & TYPE_UNSIGNED) ? "u8" : "i8";
+    case TYPE_INT: return (type & TYPE_UNSIGNED) ? "u16" : "i16";
+    case TYPE_LONG: return (type & TYPE_UNSIGNED) ? "u32" : "i32";
+    default: return "unsupported";
+    }
+}
+
+static unsigned char bank_record_used[MAX_STRUCTS];
+
+void bank_api_records(void)
+{
+    int sid, i;
+    for (sid = 1; sid <= nstruct_defs; ++sid) {
+        struct StructDef *record = &struct_defs[sid - 1];
+        int flat = !record->is_union && record->size > 0;
+        int count = 0, offset = 0;
+        if (!bank_record_used[sid - 1])
+            continue;
+        for (i = 0; i < nfield_defs; ++i) {
+            struct FieldDef *field = &field_defs[i];
+            int elements;
+            if (field->parent_struct_id != sid || field->is_promoted)
+                continue;
+            ++count;
+            elements = field->is_array ? field->array_len : 1;
+            if (field->is_anonymous || field->bit_width || field->is_const || field->is_volatile ||
+                field->funcptr_prototype || field->dim_count > 1 ||
+                elements <= 0 || !strcmp(bank_scalar_type(field->type), "unsupported") ||
+                type_size(field->type) <= 0 ||
+                field->size != elements * type_size(field->type) ||
+                field->offset != offset)
+                flat = 0;
+            offset += field->size;
+        }
+        if (offset != record->size || !count)
+            flat = 0;
+        fprintf(bank_api_file, "R %s %d %d %d\n",
+                record->name, record->size, count, flat);
+        for (i = 0; i < nfield_defs; ++i) {
+            struct FieldDef *field = &field_defs[i];
+            if (field->parent_struct_id != sid || field->is_promoted)
+                continue;
+            fprintf(bank_api_file, "M %s %s %d %d\n",
+                    field->name[0] ? field->name : "_",
+                    bank_scalar_type(field->type), field->offset,
+                    field->is_array ? field->array_len : 0);
+        }
+    }
+}
+
+void bank_api_record(struct Sym *s, int definition)
+{
+    int i, j;
+    if (!bank_api_file || s->is_static)
+        return;
+    fprintf(bank_api_file, "F %s %d %s %d %d", s->name, definition,
+            s->funcptr_result_prototype ? "unsupported" : bank_scalar_type(s->type),
+            s->proto_nargs, s->proto_variadic || !s->has_proto);
+    for (i = 0; i < s->proto_nargs; ++i) {
+        int t = s->proto_types[i];
+        int ordinal = 0;
+        struct Sym *param = NULL;
+        const char *kind = bank_scalar_type(t);
+        if (type_ptr_depth(t) == 1 && !(t & TYPE_STRUCT) &&
+            (t & 15) == TYPE_CHAR)
+            kind = (t & TYPE_UNSIGNED) ? "pu8" : "pi8";
+        for (j = 0; j < g_frame.nlocals; ++j) {
+            if (locals[j].storage == SC_PARAM && ordinal++ == i) {
+                param = &locals[j];
+                break;
+            }
+        }
+        if (param && (param->is_funcptr || param->bank_function_parameter ||
+                      param->dim_count || param->pointee_dim_count))
+            kind = "unsupported";
+        else if (param && param->bank_pointee_const && type_ptr_depth(t) == 1 &&
+                 (t & 15) == TYPE_CHAR && !(t & TYPE_STRUCT))
+            kind = (t & TYPE_UNSIGNED) ? "pcu8" : "pci8";
+        if (type_ptr_depth(t) == 1 && (t & TYPE_STRUCT) &&
+            !(param && (param->is_funcptr || param->bank_function_parameter ||
+                        param->dim_count || param->pointee_dim_count ||
+                        param->pointee_is_volatile || param->pointee_volatile_mask))) {
+            int sid = type_struct_id(t);
+            if (sid > 0 && sid <= nstruct_defs &&
+                strncmp(struct_defs[sid - 1].name, "__anon_", 7)) {
+                bank_record_used[sid - 1] = 1;
+                fprintf(bank_api_file, " %s:%s",
+                        param && param->bank_pointee_const ? "pcr" : "pr",
+                        struct_defs[sid - 1].name);
+                continue;
+            }
+        }
+        fprintf(bank_api_file, " %s", kind);
+    }
+    fputc('\n', bank_api_file);
+    if (definition) {
+        fprintf(bank_api_file, "N %s", s->name);
+        for (i = 0; i < s->proto_nargs; ++i) {
+            int ordinal = 0;
+            const char *name = NULL;
+            for (j = 0; j < g_frame.nlocals; ++j) {
+                if (locals[j].storage == SC_PARAM && ordinal++ == i) {
+                    name = locals[j].name;
+                    break;
+                }
+            }
+            if (name && name[0])
+                fprintf(bank_api_file, " %s", name);
+            else
+                fprintf(bank_api_file, " arg%d", i + 1);
+        }
+        fputc('\n', bank_api_file);
     }
 }
 
@@ -3273,6 +3404,7 @@ void parse_function_or_global(int base_type)
             if (!g_proto_has && g_lex.tok.kind != '{' && g_lex.tok.kind != ';' && g_lex.tok.kind != ',')
                 parse_old_style_param_declarations();
 
+            bank_api_record(s, g_lex.tok.kind == '{');
             if (g_lex.tok.kind == '{') {
                 /* Phase 1 of __fastcall: dcc does not yet generate a
                  * register-argument-aware prologue for a compiled C body, so

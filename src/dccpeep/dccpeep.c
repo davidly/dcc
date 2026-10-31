@@ -3417,6 +3417,67 @@ static int pass_collapse_word_shift_right_byte_boundary(void)
     return changed;
 }
 
+/* XOR with a byte-shifted copy changes only one byte of the original HL.
+ * Preserve temporary DE unless CFG liveness proves it dead. */
+static int pass_fold_xor_byte_shift(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 10 < nlines; ++i) {
+        int right;
+        int shifts = 0;
+        int tail;
+        int end;
+        int output;
+        int keep_de;
+        int j;
+
+        if (!eq(i, "push hl"))
+            continue;
+        right = eq(i + 1, "ld l,h") && eq(i + 2, "ld h,0");
+        if (!right && !(eq(i + 1, "ld h,l") && eq(i + 2, "ld l,0")))
+            continue;
+        if (right)
+            while (shifts < 7 && eq(i + 3 + shifts, "srl l"))
+                ++shifts;
+        tail = i + 3 + shifts;
+        end = tail + 7;
+        if (end >= nlines ||
+            !eq(tail, "ex de,hl") || !eq(tail + 1, "pop hl") ||
+            !eq(tail + 2, "ld a,h") || !eq(tail + 3, "xor d") ||
+            !eq(tail + 4, "ld h,a") || !eq(tail + 5, "ld a,l") ||
+            !eq(tail + 6, "xor e") || !eq(end, "ld l,a"))
+            continue;
+
+        keep_de = !peep_registers_dead_after(end, PEEP_REG_DE);
+        replace1_tagged(i, keep_de ? (right ? "ld e,h" : "ld d,l") :
+                       "ld a,h", "fold_xor_byte_shift");
+        output = i + 1;
+        if (keep_de)
+            replace1(output++, right ? "ld d,0" : "ld e,0");
+        if (right) {
+            for (j = 0; j < shifts; ++j)
+                replace1(output++, keep_de ? "srl e" : "srl a");
+            if (keep_de)
+                replace1(output++, "ld a,l");
+            replace1(output++, keep_de ? "xor e" : "xor l");
+            replace1(output++, "ld l,a");
+        } else {
+            if (keep_de)
+                replace1(output++, "ld a,h");
+            replace1(output++, keep_de ? "xor d" : "xor l");
+            replace1(output++, "ld h,a");
+            /* The original final XOR uses E=0: preserve A and flags too. */
+            replace1(output++, "ld a,l");
+            replace1(output++, "or a");
+        }
+        delete_n(output, end - output + 1);
+        changed = 1;
+    }
+    return changed;
+}
+
 /*
  * pass_narrow_ix_byte_sub_via_stack:
  *
@@ -3963,11 +4024,11 @@ static int pass_aggregate_swap_ldir(void)
  */
 
 /*
- * Zero-extended byte load into DE via HL push/pop roundtrip:
+ * Byte load into DE via HL push/pop roundtrip:
  *
  *   push hl
  *   ld l,(ix+N)
- *   ld h,0
+ *   ld h,0              ; optional
  *   ex de,hl
  *   pop hl
  *
@@ -3975,24 +4036,36 @@ static int pass_aggregate_swap_ldir(void)
  * into DE without touching HL or the stack:
  *
  *   ld e,(ix+N)
- *   ld d,0
+ *   ld d,0              ; or original H when extension is absent and D is live
  */
 static int pass_ix_byte_load_to_de(void)
 {
     int i, changed = 0;
     char off[32], new_lo[64];
 
-    for (i = 0; i + 4 < nlines; i++) {
+    for (i = 0; i + 3 < nlines; i++) {
+        int zero_extend;
+        int restore;
+        int keep_d;
+
         if (!eq(i, "push hl")) continue;
         if (!peep_parse_ld_l_ix(lines[i + 1], off)) continue;
-        if (!eq(i + 2, "ld h,0")) continue;
-        if (!eq(i + 3, "ex de,hl")) continue;
-        if (!eq(i + 4, "pop hl")) continue;
+        zero_extend = eq(i + 2, "ld h,0");
+        restore = i + 3 + zero_extend;
+        if (restore >= nlines || !eq(restore - 1, "ex de,hl") ||
+            !eq(restore, "pop hl"))
+            continue;
+        keep_d = zero_extend ||
+                 !peep_registers_dead_after(restore, PEEP_REG_D);
 
         sprintf(new_lo, "ld e,(ix%s)", off);
         replace1_tagged(i, new_lo, "ix_byte_load_to_de");
-        replace1(i + 1, "ld d,0");
-        delete_n(i + 2, 3);
+        if (keep_d) {
+            replace1(i + 1, zero_extend ? "ld d,0" : "ld d,h");
+            delete_n(i + 2, restore - i - 1);
+        } else {
+            delete_n(i + 1, restore - i);
+        }
 
         changed = 1;
         if (i > 0) i--;
@@ -9355,16 +9428,28 @@ static int pass_narrow_indirect_byte_store(void)
     int i;
     int changed = 0;
 
-    for (i = 0; i + 7 < nlines; ++i) {
-        if (!eq(i, "ld a,l") || !eq(i + 1, "rlca") ||
-            !eq(i + 2, "sbc a,a") || !eq(i + 3, "ld h,a") ||
-            !eq(i + 4, "push hl") || !eq(i + 5, "pop de") ||
-            !eq(i + 6, "pop hl") || !eq(i + 7, "ld (hl),e") ||
-            !peep_flags_dead_after(i + 7, flags) ||
-            !peep_registers_dead_after(i + 7, PEEP_REG_D))
+    for (i = 0; i + 3 < nlines; ++i) {
+        int prefix = 0;
+        int transfer;
+
+        if (i + 7 < nlines && eq(i, "ld a,l") &&
+            eq(i + 1, "rlca") && eq(i + 2, "sbc a,a") &&
+            eq(i + 3, "ld h,a"))
+            prefix = 4;
+        else if (eq(i, "ld h,0"))
+            prefix = 1;
+        transfer = i + prefix;
+        if (transfer + 3 >= nlines ||
+            !eq(transfer, "push hl") || !eq(transfer + 1, "pop de") ||
+            !eq(transfer + 2, "pop hl") ||
+            !eq(transfer + 3, "ld (hl),e") ||
+            !peep_registers_dead_after(transfer + 3, PEEP_REG_D) ||
+            (prefix == 4 &&
+             (!peep_flags_dead_after(transfer + 3, flags) ||
+              !peep_registers_dead_after(transfer + 3, PEEP_REG_A))))
             continue;
         replace1_tagged(i, "ld e,l", "narrow_indirect_byte_store");
-        delete_n(i + 1, 5);
+        delete_n(i + 1, prefix + 1);
         changed = 1;
     }
     return changed;
@@ -9377,16 +9462,23 @@ static int pass_narrow_indirect_byte_store_after_exchange(void)
     int i;
     int changed = 0;
 
-    for (i = 0; i + 6 < nlines; ++i) {
+    for (i = 0; i + 2 < nlines; ++i) {
         unsigned pending_hl = PEEP_REG_H | PEEP_REG_L;
         int store = -1;
+        int prefix = 0;
+        int exchange;
         int j;
 
-        if (!eq(i, "ld a,l") || !eq(i + 1, "rlca") ||
-            !eq(i + 2, "sbc a,a") || !eq(i + 3, "ld h,a") ||
-            !eq(i + 4, "ex de,hl"))
+        if (i + 4 < nlines && eq(i, "ld a,l") &&
+            eq(i + 1, "rlca") && eq(i + 2, "sbc a,a") &&
+            eq(i + 3, "ld h,a"))
+            prefix = 4;
+        else if (eq(i, "ld h,0"))
+            prefix = 1;
+        exchange = i + prefix;
+        if (exchange >= nlines || !eq(exchange, "ex de,hl"))
             continue;
-        for (j = i + 5; j < nlines && j <= i + 10; ++j) {
+        for (j = exchange + 1; j < nlines && j <= exchange + 6; ++j) {
             const PeepLineInfo *info;
 
             if (eq(j, "ld (hl),e")) {
@@ -9404,12 +9496,16 @@ static int pass_narrow_indirect_byte_store_after_exchange(void)
                 break;
             pending_hl &= ~info->effects.writes;
         }
-        if (store < 0 || !peep_flags_dead_after(store, flags) ||
+        if (store < 0 ||
+            (prefix == 4 &&
+             (!peep_flags_dead_after(store, flags) ||
+              !peep_registers_dead_after(store, PEEP_REG_A))) ||
             !peep_registers_dead_after(store, PEEP_REG_D))
             continue;
         replace1_tagged(
             i, "ld e,l", "narrow_indirect_byte_store_after_exchange");
-        delete_n(i + 1, 4);
+        if (prefix > 0)
+            delete_n(i + 1, prefix);
         changed = 1;
     }
     return changed;
@@ -11503,6 +11599,7 @@ int main(int argc, char **argv)
         { "pass_narrow_byte_and_mask_to_bool", pass_narrow_byte_and_mask_to_bool, 0 },
         { "pass_narrow_byte_not_to_bool", pass_narrow_byte_not_to_bool, 0 },
         { "pass_collapse_word_shift_right_byte_boundary", pass_collapse_word_shift_right_byte_boundary, 0 },
+        { "pass_fold_xor_byte_shift", pass_fold_xor_byte_shift, 0 },
         { "pass_narrow_ix_byte_sub_via_stack", pass_narrow_ix_byte_sub_via_stack, 0 },
         { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
         { "pass_elim_redundant_ld_a_reg", pass_elim_redundant_ld_a_reg, 0 },

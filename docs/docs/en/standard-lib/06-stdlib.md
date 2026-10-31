@@ -15,9 +15,9 @@ process control, and pseudo-random numbers.
 ## Runtime model
 
 The standard functions in this header are runtime-backed. DCC C Compiler also declares a
-small set of CP/M and Z80 extensions here (BDOS/BIOS wrappers, port I/O, and
-program replacement); those are
-documented with the CP/M services rather than treated as portable C APIs.
+small set of runtime, CP/M and Z80 extensions here (memory snapshots, BDOS/BIOS
+wrappers, port I/O, and program replacement). These are not portable C APIs;
+hardware-facing calls are documented with the CP/M services.
 
 ## Dynamic memory
 
@@ -67,6 +67,55 @@ not guarantee that `errno` is set.
     `calloc` uses checked size multiplication and zero-filling in addition to
     allocation. `strdup` also requires the allocator. See the
     [appendix](../appendix/01-dccrtlstrip.md).
+
+### Memory layout snapshot (DCC extension)
+
+`void meminfo(meminfo_t *info)` fills a caller-owned structure without allocating
+memory, walking the allocator or changing `errno`. Pass a non-NULL pointer to a
+valid `meminfo_t`. All seven fields are 16-bit `unsigned int` values:
+
+| Field | Meaning |
+| --- | --- |
+| `heap_start` | Linked heap base, after the image, BSS and any startup scratch |
+| `heap_limit` | Initialized exclusive heap ceiling |
+| `heap_break` | Current exclusive end of the committed heap |
+| `stack_size` | Configured stack reserve in bytes, not measured stack usage |
+| `heap_capacity` | `heap_limit - heap_start` |
+| `heap_committed` | `heap_break - heap_start` |
+| `heap_growth` | `heap_limit - heap_break` |
+
+```c
+#include <stdlib.h>
+#include <stdio.h>
+
+int main(void)
+{
+    meminfo_t info;
+    meminfo(&info);
+    printf("Heap: %u capacity, %u committed, %u growth; stack: %u\n",
+           info.heap_capacity, info.heap_committed,
+           info.heap_growth, info.stack_size);
+    return 0;
+}
+```
+
+Committed space is **not live allocated payload**: it includes allocation
+headers/footers and free blocks below the break. Freeing an interior block can
+make it reusable without moving the break, whereas freeing/coalescing the tail
+can reduce committed space. Growth space excludes those reusable interior
+blocks, and allocation overhead means it is not a guaranteed maximum `malloc`
+request. `heap_committed + heap_growth == heap_capacity`.
+
+The API reads the existing linker/runtime symbols in the current address space.
+It works for ordinary COM programs and loader-initialized libraries; it does not
+assume a fixed TPA ceiling or bank address. The snapshot structure stays local
+to its caller's bank, not in the cross-bank contract. Programs that only inspect
+memory do not pull in the allocator; unused `meminfo` code is stripped.
+
+The `tmeminfo` target regression checks snapshot bounds, stack reserve, `errno`,
+allocation growth, interior free-block reuse, and tail trimming in both compiler
+pipelines. The variable-stack Python test reuses that source for 256-, 512-, and
+2,048-byte reserves, so the runtime source-coverage audit sees the same calls.
 
 ## Conversion
 

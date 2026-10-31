@@ -1,0 +1,104 @@
+_byte_store_transfer:
+	push hl
+	pop de
+	pop hl
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_zero_extend:
+	ld h,0
+	push hl
+	pop de
+	pop hl
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_a_live:
+	ld a,l
+	rlca
+	sbc a,a
+	ld h,a
+	push hl
+	pop de
+	pop hl
+	ld (hl),e
+	ld (hl),a
+	ld de,0
+	ret
+
+_byte_store_flags_live:
+	ld a,l
+	rlca
+	sbc a,a
+	ld h,a
+	push hl
+	pop de
+	pop hl
+	ld (hl),e
+	adc a,0
+	ld de,0
+	ret
+
+_byte_store_d_live:
+	push hl
+	pop de
+	pop hl
+	ld (hl),e
+	ld a,d
+	ret
+
+_byte_store_barrier:
+	push hl
+	call _unknown
+	pop de
+	pop hl
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_exchange:
+	ex de,hl
+	push iy
+	pop hl
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_zero_exchange_flags_live:
+	ld h,0
+	ex de,hl
+	push iy
+	pop hl
+	ld (hl),e
+	adc a,0
+	ld de,0
+	ret
+
+_byte_store_exchange_d_live:
+	ld h,0
+	ex de,hl
+	push iy
+	pop hl
+	ld (hl),e
+	ld a,d
+	ret
+
+_byte_store_ix_load:
+	push hl
+	ld l,(ix+10)
+	ex de,hl
+	pop hl
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_ix_load_d_live:
+	push hl
+	ld l,(ix+10)
+	ex de,hl
+	pop hl
+	ld (hl),e
+	ld a,d
+	ret

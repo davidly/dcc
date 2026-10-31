@@ -29,6 +29,17 @@ typedef struct {
     long rem;
 } ldiv_t;
 
+/** DCC memory snapshot: 16-bit addresses and byte counts in the current address space. */
+typedef struct {
+    unsigned int heap_start;
+    unsigned int heap_limit;
+    unsigned int heap_break;
+    unsigned int stack_size;
+    unsigned int heap_capacity;
+    unsigned int heap_committed;
+    unsigned int heap_growth;
+} meminfo_t;
+
 /** Terminate the program after flushing runtime output. */
 _Noreturn void exit( int code );
 /** Terminate the program abnormally; does not call atexit handlers. */
@@ -80,6 +91,11 @@ void *calloc( size_t num, size_t size );
 void *realloc( void *ptr, size_t size );
 /** Release a heap allocation. */
 void free( void *ptr );
+
+/** DCC extension: fill a non-NULL caller-owned snapshot without allocating.
+ *  Committed bytes include allocator metadata and reusable free blocks below
+ *  the break; growth is limit minus break, not total malloc-available space. */
+void meminfo(meminfo_t *info);
 
 /** Search the environment for name; always returns NULL on CP/M 2.2. */
 char *getenv(const char *name);

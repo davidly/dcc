@@ -129,6 +129,11 @@
 #define SC_EXTERN      5
 #define SC_REGISTER    6   /* unused; reserved */
 
+extern FILE *bank_api_file;
+struct Sym;
+void bank_api_record(struct Sym *s, int definition);
+void bank_api_records(void);
+
 #define MIR_EXACT_KERNEL_MARKER ";@dcc.mir exact-kernel"
 #define MIR_PHI_SLOT_MARKER ";@dcc.mir phi-slot"
 
@@ -278,6 +283,7 @@ typedef struct DeclState {
     int is_noreturn;
     int is_fastcall;
     int is_const;
+    int bank_typedef_const;
     int is_volatile;
     int pointee_is_volatile;
     unsigned int pointee_volatile_mask;
@@ -339,6 +345,8 @@ struct Sym {
                       * mir_allocate_registers to bias profitable
                       * register-backed values ahead of otherwise equivalent
                       * candidates - see mir_value_backs_declared_register_object. */
+    int bank_pointee_const; /* source qualifier retained for generated API definitions */
+    int bank_function_parameter;
     int is_narrowed_for_counter; /* source int represented as an unsigned byte
                                   * after a counting-loop range proof */
     int is_inline;   /* function declared with inline specifier */
@@ -416,6 +424,7 @@ struct AsmName {
 struct TypeDef {
     char name[64];
     int type;
+    int bank_is_const;
     int is_volatile;
     int pointee_is_volatile;
     unsigned int pointee_volatile_mask;
@@ -435,6 +444,7 @@ struct FieldDef {
     char name[64];
     int type;
     struct Sym *funcptr_prototype;
+    int is_const;
     int is_volatile;
     unsigned int pointee_volatile_mask;
     int offset;

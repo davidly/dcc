@@ -477,6 +477,245 @@ static void setup_endian_memory_proof(void)
     mir.insns[24].src1 = 14;
 }
 
+static void setup_endian_store_proof(void)
+{
+    int byte = TYPE_CHAR | TYPE_UNSIGNED;
+    int word = TYPE_INT | TYPE_UNSIGNED;
+    int pointer = type_add_ptr(TYPE_CHAR);
+
+    setup(24, 40, 4);
+    memory_proof_instruction(2, MIR_ADDRESS, 1, -1, -1, pointer, 0);
+    strcpy(mir.insns[2].name, "memory_proof_bytes");
+    memory_proof_instruction(3, MIR_CONST, 2, -1, -1, TYPE_INT, 0);
+    memory_proof_instruction(4, MIR_INDEX_ADDRESS, 3, 1, 2, pointer, 1);
+    memory_proof_instruction(5, MIR_CONST, 4, -1, -1, word, 42369);
+    memory_proof_instruction(6, MIR_UNARY, 5, 4, -1, byte, 0);
+    memory_proof_instruction(7, MIR_UNARY, 6, 5, -1, TYPE_CHAR, 0);
+    memory_proof_instruction(8, MIR_STORE_INDIRECT, -1, 3, 6, TYPE_CHAR, 0);
+    mir.insns[8].memory_size = 1;
+    memory_proof_instruction(10, MIR_CONST, 7, -1, -1, TYPE_INT, 1);
+    memory_proof_instruction(11, MIR_INDEX_ADDRESS, 8, 1, 7, pointer, 1);
+    memory_proof_instruction(12, MIR_CONST, 9, -1, -1, TYPE_INT, 8);
+    memory_proof_instruction(13, MIR_BINARY, 10, 4, 9, word, TOK_SHR);
+    mir.insns[13].secondary_offset = word;
+    memory_proof_instruction(14, MIR_UNARY, 11, 10, -1, byte, 0);
+    memory_proof_instruction(15, MIR_UNARY, 12, 11, -1, TYPE_CHAR, 0);
+    memory_proof_instruction(16, MIR_STORE_INDIRECT, -1, 8, 12, TYPE_CHAR, 0);
+    mir.insns[16].memory_size = 1;
+}
+
+static void verify_word_value_proofs(void)
+{
+    int variant;
+
+    for (variant = 0; variant < 23; ++variant) {
+        int pair_expected = variant == 0 || variant >= 15;
+        int early_expected = variant == 0 || variant == 22;
+        int i;
+
+        setup(10, 7, 2);
+        mir.object_count = 2;
+        memset(mir.objects, 0, 2 * sizeof(mir.objects[0]));
+        for (i = 0; i < 2; ++i) {
+            mir.objects[i].type = TYPE_INT;
+            mir.objects[i].storage = i == 0 ? SC_PARAM : SC_LOCAL;
+            mir.objects[i].offset = i == 0 ? 6 : -2;
+            mir.objects[i].entry_value = -1;
+            strcpy(mir.objects[i].name, i == 0 ? "proof_word" : "proof_other");
+        }
+        mir.insns[1].immediate = 10;
+        for (i = 2; i <= 5; i += 3) {
+            mir.insns[i].opcode = MIR_LOAD;
+            mir.insns[i].dst = i == 2 ? 1 : 3;
+            mir.insns[i].object = 0;
+            mir.insns[i].memory_size = 2;
+            strcpy(mir.insns[i].name, "proof_word");
+        }
+        mir.insns[3].opcode = mir.insns[7].opcode = MIR_BINARY;
+        mir.insns[3].dst = 2;
+        mir.insns[3].src1 = 1;
+        mir.insns[3].src2 = 0;
+        mir.insns[3].secondary_offset = TYPE_INT;
+        mir.insns[3].immediate = '%';
+        mir.insns[4].opcode = MIR_STORE;
+        mir.insns[4].src1 = 2;
+        mir.insns[4].object = 1;
+        mir.insns[4].memory_size = 2;
+        strcpy(mir.insns[4].name, "proof_other");
+        mir.insns[6].opcode = MIR_CONST;
+        mir.insns[6].dst = 4;
+        mir.insns[6].immediate = 10;
+        mir.insns[7].dst = 5;
+        mir.insns[7].src1 = 3;
+        mir.insns[7].src2 = 4;
+        mir.insns[7].secondary_offset = TYPE_INT;
+        mir.insns[7].immediate = '/';
+        mir.insns[8].opcode = MIR_STORE;
+        mir.insns[8].src1 = 5;
+        mir.insns[8].object = 0;
+        mir.insns[8].memory_size = 2;
+        strcpy(mir.insns[8].name, "proof_word");
+        switch (variant) {
+        case 1: mir.insns[6].immediate = 11; break;
+        case 2: mir.insns[5].memory_flags = MIR_MEMORY_FLAG_VOLATILE; break;
+        case 3: mir.insns[4].opcode = MIR_ADDRESS; mir.insns[4].object = 0; break;
+        case 4: mir.objects[0].storage = SC_GLOBAL; break;
+        case 5: mir.insns[4].object = 0; break;
+        case 6: mir.insns[4].opcode = MIR_LABEL; break;
+        case 7: mir.insns[4].opcode = MIR_CALL; break;
+        case 8: mir.insns[4].opcode = MIR_OPAQUE; break;
+        case 9: mir.insns[4].opcode = MIR_VLA_SAVE; break;
+        case 10: mir.insns[7].secondary_offset |= TYPE_UNSIGNED; break;
+        case 11: mir.insns[5].type = TYPE_LONG; break;
+        case 12: mir.insns[5].immediate = 2; break;
+        case 13: mir.insns[4].opcode = MIR_VA_ARG; break;
+        case 14: mir.insns[4].opcode = MIR_BRANCH_FALSE; break;
+        case 15: mir.insns[9].src1 = 3; break;
+        case 16:
+            mir.insns[4] = mir.insns[2];
+            mir.insns[4].dst = 6;
+            mir.insns[9].src1 = 6;
+            break;
+        case 17: mir.insns[8].memory_flags = MIR_MEMORY_FLAG_VOLATILE; break;
+        case 18: mir.insns[8].memory_size = 1; break;
+        case 19: mir.insns[8].bit_width = 3; break;
+        case 20: mir.insns[8].object = 1; strcpy(mir.insns[8].name, "proof_other"); break;
+        case 21: mir.objects[0].storage = SC_EXTERN; pair_expected = 0; break;
+        case 22:
+            mir.insns[4].opcode = MIR_STORE_INDIRECT;
+            mir.insns[4].src1 = 0;
+            mir.insns[4].src2 = 2;
+            mir.insns[4].object = -1;
+            mir.insns[4].name[0] = 0;
+            break;
+        }
+        mir_invalidate_use_cache();
+        if ((mir_canonicalize_divmod_operands() != 0) != pair_expected ||
+            (mir_divmod_early_store(7) == 8) != early_expected ||
+            mir_canonicalize_divmod_operands() != 0 ||
+            mir.insns[7].src1 != 3 || mir.insns[7].src2 != 4) {
+            fprintf(stderr, "FAIL word value proof variant %d\n", variant);
+            ++failures;
+        }
+    }
+}
+
+static void verify_endian_store_rewrites(void)
+{
+    static const char *names[] = {
+        "est-positive", "est-signed", "est-mask", "est-shared-shift",
+        "est-shared-address", "est-nonadjacent", "est-base", "est-stride",
+        "est-shift-seven", "est-shift-nine", "est-source", "est-bool",
+        "est-low-volatile", "est-high-volatile", "est-inherited-volatile",
+        "est-bitfield", "est-width", "est-load-observer", "est-indirect-observer",
+        "est-label", "est-branch", "est-store", "est-storeind", "est-copy",
+        "est-call", "est-callagg", "est-vlasave", "est-vlaalloc",
+        "est-vlarestore", "est-vastart", "est-vaend", "est-vaarg", "est-opaque"
+    };
+    static const enum MirOpcode barriers[] = {
+        MIR_STORE, MIR_STORE_INDIRECT, MIR_COPY_AGGREGATE, MIR_CALL,
+        MIR_CALL_AGGREGATE, MIR_VLA_SAVE, MIR_VLA_ALLOC, MIR_VLA_RESTORE,
+        MIR_VA_START, MIR_VA_END, MIR_VA_ARG, MIR_OPAQUE
+    };
+    int test;
+
+    for (test = 0; test < (int)(sizeof(names) / sizeof(names[0])); ++test) {
+        int accepted = test <= 4;
+        int changed;
+        int ok;
+        struct MirInsn first;
+        struct MirInsn second;
+
+        setup_endian_store_proof();
+        strcpy(mir.name, names[test]);
+        if (test == 1) {
+            mir.insns[5].type = TYPE_INT;
+            mir.insns[13].type = TYPE_INT;
+            mir.insns[13].secondary_offset = TYPE_INT;
+        } else if (test == 2) {
+            memory_proof_instruction(6, MIR_CONST, 30, -1, -1, TYPE_INT, 255);
+            memory_proof_instruction(7, MIR_BINARY, 6, 4, 30, TYPE_INT, '&');
+            mir.insns[7].secondary_offset = TYPE_INT;
+            memory_proof_instruction(14, MIR_BINARY, 11, 10, 30, TYPE_INT, '&');
+            mir.insns[14].secondary_offset = TYPE_INT;
+        } else if (test == 3)
+            mir.insns[23].src1 = 10;
+        else if (test == 4) {
+            memory_proof_instruction(20, MIR_STORE_INDIRECT, -1, 8, 0, TYPE_CHAR, 0);
+            mir.insns[20].memory_size = 1;
+        } else if (test == 5)
+            mir.insns[10].immediate = 2;
+        else if (test == 6) {
+            memory_proof_instruction(9, MIR_ADDRESS, 31, -1, -1,
+                                     type_add_ptr(TYPE_CHAR), 0);
+            strcpy(mir.insns[9].name, "different_memory_proof_bytes");
+            mir.insns[11].src1 = 31;
+        } else if (test == 7)
+            mir.insns[11].immediate = 2;
+        else if (test == 8 || test == 9)
+            mir.insns[12].immediate = test == 8 ? 7 : 9;
+        else if (test == 10)
+            mir.insns[13].src1 = 0;
+        else if (test == 11)
+            mir.insns[7].type = TYPE_BOOL;
+        else if (test == 12 || test == 13)
+            mir.insns[test == 12 ? 8 : 16].memory_flags = MIR_MEMORY_FLAG_VOLATILE;
+        else if (test == 14) {
+            mir.insns[2].has_pointer_qualifiers = 1;
+            mir.insns[2].pointee_volatile_mask = 1;
+        } else if (test == 15) {
+            mir.insns[8].bit_width = 1;
+            mir.insns[8].bit_mask = 1;
+        } else if (test == 16)
+            mir.insns[16].memory_size = 2;
+        else if (test == 17) {
+            memory_proof_instruction(9, MIR_LOAD, 31, -1, -1, TYPE_INT, 0);
+            strcpy(mir.insns[9].name, "memory_proof_observed");
+        } else if (test == 18) {
+            memory_proof_instruction(9, MIR_LOAD_INDIRECT, 31, 1, -1, TYPE_CHAR, 0);
+            mir.insns[9].memory_size = 1;
+        } else if (test == 19 || test == 20) {
+            memory_proof_instruction(10, MIR_LABEL, -1, -1, -1, TYPE_INT, 0);
+            mir.insns[10].label = 1;
+            memory_proof_instruction(11, MIR_CONST, 7, -1, -1, TYPE_INT, 1);
+            memory_proof_instruction(12, MIR_INDEX_ADDRESS, 8, 1, 7,
+                                     type_add_ptr(TYPE_CHAR), 1);
+            memory_proof_instruction(13, MIR_CONST, 9, -1, -1, TYPE_INT, 8);
+            memory_proof_instruction(14, MIR_BINARY, 10, 4, 9, TYPE_INT, TOK_SHR);
+            mir.insns[14].secondary_offset = TYPE_INT;
+            mir.insns[15].src1 = 10;
+            if (test == 20) {
+                memory_proof_instruction(9, MIR_BRANCH_FALSE, -1, 0, -1, TYPE_INT, 0);
+                mir.insns[9].label = 1;
+            }
+        } else if (test >= 21)
+            memory_proof_barrier(9, barriers[test - 21]);
+        ok = !accepted || memory_proof_verify();
+        first = mir.insns[8];
+        second = mir.insns[16];
+        mir_invalidate_use_cache();
+        changed = mir_combine_little_endian_byte_stores();
+        ok = changed == accepted && ok;
+        if (accepted) {
+            ok = ok && mir.insns[8].opcode == MIR_NOP &&
+                mir.insns[16].opcode == MIR_STORE_INDIRECT &&
+                mir.insns[16].src1 == 3 && mir.insns[16].src2 == 4 &&
+                mir.insns[16].memory_size == 2 &&
+                mir_definition(6) == NULL && mir_value_use_count(6) == 0;
+            if (test == 3)
+                ok = ok && mir_definition(10) == &mir.insns[13];
+            if (test == 4)
+                ok = ok && mir_definition(8) == &mir.insns[11];
+        } else
+            ok = ok && !memcmp(&first, &mir.insns[8], sizeof(first)) &&
+                !memcmp(&second, &mir.insns[16], sizeof(second));
+        ok = mir_combine_little_endian_byte_stores() == 0 && ok;
+        if (accepted)
+            ok = memory_proof_verify() && ok;
+        memory_proof_result(names[test], ok);
+    }
+}
+
 static void verify_endian_memory_rewrites(void)
 {
     static const char *names[] = {
@@ -9021,6 +9260,8 @@ int main(int argc, char **argv)
     verify_use_cache_capacity_reset_across_functions();
     verify_dominated_memory_rewrites();
     verify_endian_memory_rewrites();
+    verify_endian_store_rewrites();
+    verify_word_value_proofs();
     verify_conditional_callable_prototypes();
     verify_ast_assignment_support();
     verify_call_lowering_preflight();

@@ -4029,6 +4029,23 @@ static int mir_boolean_alternative_substantially_dominates(
                incumbent_cost.helper_tstates + 0.001;
 }
 
+static int mir_normalized_alternative_dominates(
+    MirStream *candidate, MirStream *incumbent)
+{
+    struct MirCostComponents candidate_cost;
+    struct MirCostComponents incumbent_cost;
+
+    mir_estimate_stream_cost(candidate, &candidate_cost);
+    mir_estimate_stream_cost(incumbent, &incumbent_cost);
+    return candidate_cost.bytes <= incumbent_cost.bytes &&
+           mir_stream_instruction_count(candidate) <=
+               mir_stream_instruction_count(incumbent) &&
+           candidate_cost.tstates <= incumbent_cost.tstates + 0.001 &&
+           candidate_cost.helper_calls <= incumbent_cost.helper_calls &&
+           candidate_cost.helper_tstates <=
+               incumbent_cost.helper_tstates + 0.001;
+}
+
 static int mir_boolean_candidate_is_validated(void)
 {
     return mir.sink_purpose == EMIT_SINK_DEFERRED &&
@@ -4054,6 +4071,7 @@ void mir_end_function(void)
     int candidate_label_base;
     int selected_label_id;
     int verified;
+    int normalization_pass;
 
     if (!mir.active)
         return;
@@ -4116,7 +4134,11 @@ void mir_end_function(void)
             &generated, &selector_name, &candidate_name,
             &selected_label_id, candidate_label_base, NULL)) {
         failure_reason = "selector";
-    } else if (!opt_debug) {
+    }
+    for (normalization_pass = 0;
+         failure_reason == NULL && generated != NULL && !opt_debug &&
+             normalization_pass < 4;
+         ++normalization_pass) {
         struct MirInsn *original_insns = NULL;
         MirStream *alternative = NULL;
         const char *alternative_selector = "none";
@@ -4139,28 +4161,42 @@ void mir_end_function(void)
             (getenv("DCC_MIR_SELECT_CANDIDATE") != NULL &&
                 diagnostic_function != NULL &&
              !strcmp(diagnostic_function, mir.name));
-        int boolean_phi_changed;
+        int boolean_phi_changed = 0;
+        int integer_changed = 0;
+        int stores_changed = 0;
+        int divmod_changed = 0;
         int use_alternative = 0;
 
         if (original_count > 0) {
             original_insns = (struct MirInsn *)malloc(
                 (size_t)original_count * sizeof(*original_insns));
             if (original_insns == NULL)
-                fatal("out of memory saving MIR boolean candidate");
+                fatal("out of memory saving MIR normalization candidate");
             memcpy(original_insns, mir.insns,
                    (size_t)original_count * sizeof(*original_insns));
         }
-        mir_reset_boolean_phi_branch_simplification_count();
-        mir_simplify_boolean_phi_branches();
-        boolean_phi_changed =
-            mir_boolean_phi_branch_simplification_count() > 0;
-        if (boolean_phi_changed &&
+        if (normalization_pass == 0) {
+            mir_reset_boolean_phi_branch_simplification_count();
+            mir_simplify_boolean_phi_branches();
+            boolean_phi_changed =
+                mir_boolean_phi_branch_simplification_count() > 0;
+        } else if (normalization_pass == 1) {
+            integer_changed = mir_optimize_integer_expressions();
+        } else if (normalization_pass == 2) {
+            stores_changed = mir_combine_little_endian_byte_stores();
+        } else {
+            divmod_changed = mir_canonicalize_divmod_operands();
+        }
+        if ((boolean_phi_changed || integer_changed || stores_changed ||
+             divmod_changed) &&
             mir_verify_and_dump() &&
             mir_try_generated_candidate(
                 &alternative, &alternative_selector,
                 &alternative_candidate, &alternative_label_id,
                 candidate_label_base, strict_candidate) &&
-            (validated_general_alternative ||
+            (!(integer_changed || stores_changed || divmod_changed) ||
+             mir_normalized_alternative_dominates(alternative, generated)) &&
+            (!boolean_phi_changed || validated_general_alternative ||
              mir_boolean_alternative_substantially_dominates(
                  alternative, generated) ||
              !strcmp(alternative_selector,
@@ -4185,11 +4221,14 @@ void mir_end_function(void)
         } else {
             if (alternative != NULL)
                 mir_stream_close(alternative);
-            if (boolean_phi_changed) {
+            if (boolean_phi_changed || integer_changed || stores_changed ||
+                divmod_changed) {
                 mir.count = original_count;
                 if (original_count > 0)
                     memcpy(mir.insns, original_insns,
                            (size_t)original_count * sizeof(*original_insns));
+                if (boolean_phi_changed)
+                    mir_reset_boolean_phi_branch_simplification_count();
                 if (!mir_verify_and_dump())
                     fatal("restored MIR failed verification");
             }
