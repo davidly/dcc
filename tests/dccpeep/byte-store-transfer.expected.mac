@@ -1,0 +1,91 @@
+_byte_store_transfer:
+	ld e,l ; peep: narrow_indirect_byte_store
+	pop hl
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_zero_extend:
+	ld e,l ; peep: narrow_indirect_byte_store
+	pop hl
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_a_live:
+	ld a,l
+	rlca
+	sbc a,a
+	ld e,l ; peep: narrow_indirect_byte_store
+	pop hl
+	ld (hl),e
+	ld (hl),a
+	ld de,0
+	ret
+
+_byte_store_flags_live:
+	ld a,l
+	rlca
+	sbc a,a
+	ld e,l ; peep: narrow_indirect_byte_store
+	pop hl
+	ld (hl),e
+	adc a,0
+	ld de,0
+	ret
+
+_byte_store_d_live:
+	push hl
+	pop de
+	pop hl
+	ld (hl),e
+	ld a,d
+	ret
+
+_byte_store_barrier:
+	push hl
+	call _unknown
+	pop de
+	pop hl
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_exchange:
+	ld e,l ; peep: narrow_indirect_byte_store_after_exchange
+	push iy
+	pop hl
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_zero_exchange_flags_live:
+	ld e,l ; peep: narrow_indirect_byte_store_after_exchange
+	push iy
+	pop hl
+	ld (hl),e
+	adc a,0
+	ld de,0
+	ret
+
+_byte_store_exchange_d_live:
+	ld h,0
+	ex de,hl
+	push iy
+	pop hl
+	ld (hl),e
+	ld a,d
+	ret
+
+_byte_store_ix_load:
+	ld e,(ix+10) ; peep: ix_byte_load_to_de
+	ld (hl),e
+	ld de,0
+	ret
+
+_byte_store_ix_load_d_live:
+	ld e,(ix+10) ; peep: ix_byte_load_to_de
+	ld d,h
+	ld (hl),e
+	ld a,d
+	ret

@@ -71,7 +71,7 @@ enabled and cause a nonzero exit status.
 consumes the LINK-80-compatible `.REL` files produced by
 [`m80c`](#native-assembler-m80c), resolves
 PUBLIC/EXTRN symbols, relocates CSEG and DSEG values, and writes a CP/M `.COM`
-image plus a linked `.SYM` file. Unlike `L80.COM`, it uses host memory rather
+image or a fixed-address bank-1 `.LIB`, plus a linked `.SYM` file. Unlike `L80.COM`, it uses host memory rather
 than CP/M's 64K address space, so large links do not exhaust the linker's own
 workspace.
 
@@ -79,6 +79,7 @@ workspace.
 
 ```text
 l80c [/P:origin,]module1,module2,...,output/N/E/Y [-o output[.COM]] [-v]
+l80c /P:100,module1,module2,... --lib --export NAME=SYMBOL --signature NAME=SYMBOL ... [-o output[.LIB]]
 ```
 
 Module and output names conventionally use CP/M uppercase spelling. `.REL` is
@@ -89,8 +90,22 @@ as in a Microsoft LINK-80 command, does not link it twice.
 | ------ | ------- | ------- |
 | `/P:<hex-address>` | `100` | Set the linked program origin. The address must fit in 16 bits. |
 | `output/N/E/Y` | Last module | Select the output basename using conventional LINK-80 syntax. `/N`, `/E`, and `/Y` do not otherwise change native non-interactive linking. |
-| `-o <name>` | Output marker or last module | Select the output basename explicitly. Either `APP` or `APP.COM` produces `APP.COM` and `APP.SYM`. |
+| `-o <name>` | Output marker or last module | Select the output basename explicitly. Either `APP` or `APP.COM` produces `APP.COM` and `APP.SYM`; with `--lib`, either `APP` or `APP.LIB` produces `APP.LIB` and `APP.SYM`. Matching suffixes are recognized case-insensitively. |
 | `-v` | off | Print loaded modules, origin, linked size, and output path. |
+| `--lib` | off | Emit a checked fixed-address bank-1 `.LIB` instead of a `.COM`; requires origin `0100H` and 1-8 exports. |
+| `--export NAME[=SYMBOL]` | none | Add a library export; names are at most eight characters and default to the linked symbol. |
+| `--signature NAME=SYMBOL` | none | Associate an export with its NUL-terminated canonical signature string (1-255 printable ASCII characters); every `--export` requires exactly one matching `--signature`. |
+| `--stack-bytes <bytes>` | `2048` | Record the library stack reserve; accepts only 256-2,048 bytes in 256-byte units, matching the bank-1 loader and `dccmake`. |
+
+Both COM and LIB output use the same DCC linker. Library mode writes library
+format version 1 (ABI 1.0, call revision 1): a 26-byte header and one 12-byte
+entry per export (name, adapter offset, signature offset), followed by the
+image without a CP/M startup wrapper. Header bytes 14-15 are reserved and zero.
+The image and BSS must end below the heap limit, `C800H` minus the stack reserve. Library metadata, exports and signatures
+are validated before opening the output; rejected metadata leaves an existing
+library and symbol map untouched and does not create an empty output file.
+See [Fixed-address bank-1 libraries](../02-build-and-link.md#fixed-address-bank-1-libraries)
+for runtime, heap and generated-contract requirements.
 
 The normal DCC command is:
 
@@ -239,10 +254,21 @@ dccmake dcc-peep=false
 
 ### dccmake Settings
 
+`dccmake -help` (`-h`, `--help`, `/?`) prints configuration syntax, defaults,
+exit-status semantics and complete contract/composite integration workflows.
+Help needs no valid project configuration and never invokes build tools.
+
 | Setting | Default | Purpose |
 | ------- | ------- | ------- |
-| `dcc-input` | (required) | Comma-separated C sources; positional `.c` arguments are also accepted |
+| `dcc-input` | (required for leaf projects) | Comma-separated C sources; positional `.c` arguments are also accepted |
+| `dcc-projects` | none | Ordered child project directories in a composite root config, e.g. `lib,host`; no `dcc-input` in that config |
 | `dcc-output` | First input base name | CP/M 8-character output base name |
+| `dcc-output-format` | `com` | `com` application or fixed-address `lib`; both use DCC's native `l80c`, with `--lib` selecting library output |
+| `dcc-exports` | none | Must be `auto` for `lib` and is not allowed for `com`: discovers 1–8 public C definitions and links each with its canonical signature; names are at most eight characters |
+| `dcc-library-api` | none | `auto` generates API.H from public definitions; a header path validates a handwritten contract. Required for `lib`; see [Automatic typed libraries](../02-build-and-link.md#automatic-typed-libraries) |
+| `dcc-library-host-dir` | none | Generated client directory, created with missing parents; required for `lib`. Receives `B1HOST.C` and, with auto API, `API.H` |
+| `dcc-contract-only` | `false` | Generate typed LIB contracts without assembly/linking or replacing an existing LIB; composite runs skip COM children |
+| `dcc-library-linker` | none | Native library-linker override for LIB projects only, including composite children; COM linkers remain unchanged |
 | `dcc-floatio` | `false` | Force `%f` support on every `printf`-family call when true; literal formats are normally detected per call |
 | `dcc-no-floatio` | `false` | Force `%f` support off even for matching literals or the non-literal fallback |
 | `dcc-flongio` | `false` | Force long-format support on every `printf`-family call when true; literal formats are normally detected per call |
@@ -251,7 +277,7 @@ dccmake dcc-peep=false
 | `dcc-no-hexio` | `false` | Force `%x`/`%X` support off, even for matching formats |
 | `dcc-octio` | `false` | Force `%o` support on every `printf`-family call |
 | `dcc-no-octio` | `false` | Force `%o` support off, even for matching formats |
-| `dcc-stack-bytes` | `512` | Stack reserve passed to `dcc` with `-stack` |
+| `dcc-stack-bytes` | `512` | Stack reserve passed to `dcc` with `-stack`; fixed-address libraries require 256–2,048 in 256-byte units, also recorded in the library header |
 | `dcc-stack-check` | Environment/default | Pass `-fstack-check` to `dcc` |
 | `dcc-no-narrow` | `false` | Pass `-fno-narrow` to disable byte-narrowing passes |
 | `dcc-debug` | `false` | `true` emits full conservative debug metadata; `lines` emits release-identical optimized metadata with ranged variable locations. Both require native [`m80c`](#native-assembler-m80c) |
@@ -260,7 +286,7 @@ dccmake dcc-peep=false
 | `dcc-undefine` | none | Comma-separated names passed to `dcc` as `-U`; `dcc-undefines` is an alias |
 | `dcc-peep` | `true` | Run `dccpeep` after compiling each `.MAC` file |
 | `dcc-peep-debug` | `false` | Run `dccpeep` over full conservative `-g` output; use `dcc-debug=lines` for release-identical optimized code |
-| `dcc-strip-unused` | `true` | Remove application functions and objects unreachable across all input modules. Set `false` when producing a module intended for a separate later link |
+| `dcc-strip-unused` | `true` | Remove application functions and objects unreachable across all input modules. Set `false` for a separate later link. Library output retains all app functions so exported entries cannot be removed |
 | `dcc-build-dir` | `build` | Artifact directory |
 | `dcc-runtime` | `DCC_RUNTIME`, local `DCCRTL.MAC`, or `DCCRTL.MAC` | Runtime source passed to `dccrtlstrip` |
 | `dcc-tool` | `DCC`, local `dcc`, or `dcc` | DCC compiler command |

@@ -1539,6 +1539,8 @@ void add_cmdline_define(const char *arg)
 
 #define DCC_VERSION "dcc (DCC C89->Z80 compiler) 1.0"
 
+FILE *bank_api_file;
+
 void print_version(void)
 {
     printf("%s\n", DCC_VERSION);
@@ -1558,6 +1560,7 @@ void print_help(void)
     printf("options:\n");
     printf("  -o <file>        write M80 assembly to <file> ('-' for stdout)\n");
     printf("  -c, -module      emit a linkable helper module (not a final program)\n");
+    printf("  -bank-api <file> emit resolved public function type/definition metadata\n");
     printf("  -f, -ffloatio    force every printf-family call to support %%f, even\n");
     printf("                   ones whose literal format string doesn't use it\n");
     printf("                   (normally auto-detected per call; only needed for a\n");
@@ -1589,6 +1592,7 @@ void print_help(void)
 int main(int argc, char **argv)
 {
     int i;
+    const char *bank_api_path = NULL;
 
     input_name = NULL;
     output_name = NULL;
@@ -1697,6 +1701,9 @@ int main(int argc, char **argv)
             add_include_dir(argv[i]);
         } else if (!strncmp(argv[i], "-I", 2)) {
             add_include_dir(argv[i] + 2);
+        } else if (!strcmp(argv[i], "-bank-api")) {
+            if (++i >= argc) usage();
+            bank_api_path = argv[i];
         } else if (!strcmp(argv[i], "-o")) {
             if (++i >= argc) usage();
             output_name = argv[i];
@@ -1806,7 +1813,17 @@ int main(int argc, char **argv)
     if (find_define("EOF") < 0)
         add_define("EOF", "-1");
 
+    if (bank_api_path) {
+        bank_api_file = fopen(bank_api_path, "w");
+        if (!bank_api_file) fatal("cannot open bank API metadata");
+        fprintf(bank_api_file, "DCCBANK 2\n");
+    }
     parse_translation_unit();
+    if (bank_api_file) {
+        bank_api_records();
+        if (fclose(bank_api_file)) fatal("cannot write bank API metadata");
+        bank_api_file = NULL;
+    }
     emit_needed_deferred_bodies();
     mir_finish_translation_unit();
     emit_data();

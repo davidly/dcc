@@ -6,7 +6,8 @@
  * Implements home/register moves, prologues and epilogues, address
  * resolution, casts, arithmetic, comparisons, PHI copies, and other reusable
  * scalar operations. It also owns the straight-line scalar DAG candidates.
- * Also holds a handful of exact-schedule proof helpers (and their plan
+ * Also holds declaration-independent type identities for exact-schedule
+ * fingerprints and a handful of exact-schedule proof helpers (and their plan
  * types) that are used by more than one dcc_mir_machine_*.c family, moved
  * here from dcc_mir_machine_emit.c during the family split so they have one
  * shared, non-static home instead of being duplicated per family.
@@ -32,6 +33,23 @@ enum MirMachineFormKind {
     MIR_MACHINE_FORM_INTEGER = 1,
     MIR_MACHINE_FORM_POINTER = 2
 };
+
+int mir_shape_type(int type, struct MirShapeTypes *types)
+{
+    int id;
+
+    if (!(type & TYPE_STRUCT))
+        return type;
+    id = type_struct_id(type);
+    if (id <= 0 || id > nstruct_defs)
+        return type;
+    if (types->ids[id] == 0)
+        types->ids[id] = ++types->count;
+    /* Preserve aggregate identity relationships, not the ordinal assigned
+     * while parsing unrelated declarations (including library headers). */
+    return (type & ((1 << STRUCT_SHIFT) - 1)) |
+           (types->ids[id] << STRUCT_SHIFT);
+}
 
 /* Shared plan-descriptor types used by the exact-schedule
  * helpers above; moved here verbatim from dcc_mir_machine_emit.c
@@ -247,14 +265,12 @@ int mir_value_is_constant_absolute_address(int value)
  * and emission remove the complete dead address chain, not just optimize the
  * final dereference while retaining its frame traffic.
  *
- * A MEMBER_ADDRESS/INDEX_ADDRESS consumer whose own value is itself a
- * resolved constant absolute address is accepted unconditionally, not only
- * when its further uses recursively qualify: mir_emit_constant_absolute_-
- * address_value fires for such a consumer regardless of how its result is
- * later used (dereferenced, stored as data, or passed as an argument), so
- * this value's base is provably never read at emission time either way. */
+ * The spilled emitter rematerializes constant address consumers independently
+ * of their bases. The homed emitter instead computes those addresses from
+ * their homes, so it may retire a base only when all further uses qualify. */
 int mir_value_only_used_by_absolute_access(
-    int value, int (*access_supported)(const struct MirInsn *))
+    int value, int (*access_supported)(const struct MirInsn *),
+    int rematerializes_constant_addresses)
 {
     int instruction;
     int found_use = 0;
@@ -270,9 +286,11 @@ int mir_value_only_used_by_absolute_access(
         found_use = 1;
         if ((insn->opcode == MIR_MEMBER_ADDRESS ||
              insn->opcode == MIR_INDEX_ADDRESS) &&
-            (mir_value_is_constant_absolute_address(insn->dst) ||
+            ((rematerializes_constant_addresses &&
+              mir_value_is_constant_absolute_address(insn->dst)) ||
              mir_value_only_used_by_absolute_access(
-                 insn->dst, access_supported)))
+                 insn->dst, access_supported,
+                 rematerializes_constant_addresses)))
             continue;
         if (access_supported(insn))
             continue;
@@ -284,7 +302,7 @@ int mir_value_only_used_by_absolute_access(
 int mir_value_only_used_by_constant_absolute_address(int value)
 {
     return mir_value_only_used_by_absolute_access(
-        value, mir_constant_absolute_access_supported);
+        value, mir_constant_absolute_access_supported, 1);
 }
 
 int mir_prepare_constant_absolute_operand(
@@ -640,35 +658,8 @@ void mir_emit_scalar_compare_biased_right(MirStream *out, int operation)
             end_label, true_label, end_label);
 }
 
-/* Item T44 (mir-text-size-plan.md): a shift whose amount operand is a
- * compile-time constant previously still went through the same runtime
- * bit-at-a-time loop as a variable shift count (`ld b,e / ld a,b / or a /
- * jp z,Lend / Lloop: srl h/rr l (or add hl,hl) / djnz Lloop / Lend:`),
- * even though the exact iteration count is already known at code-
- * generation time. Found via tests/tarray.c's aHexWord(), where legacy
- * recognizes `(val >> 8) & 0xff` as nothing more than a byte move (the
- * high byte of a 16-bit value moved into the low byte, high byte
- * zeroed) while the MIR path paid for the full generic loop (6-byte
- * setup plus one djnz-guarded iteration) for every shift whose count
- * happens to be a literal in the source.
- *
- * For any shift count known to be in [0,15] (the only meaningful range
- * for a 16-bit value - counts >= 16 are undefined behavior in C and are
- * left on the unmodified runtime-loop path below, matching prior
- * behavior exactly), unrolling into that many straight-line shift
- * instructions is *always* smaller AND faster than the loop: the loop
- * costs a 6-byte/~22-T-state setup plus count * (shift-body + 2-byte/
- * ~13-T-state djnz), while unrolling costs only count * shift-body with
- * no setup or per-iteration branch overhead at all. A shift by exactly
- * 8 is further special-cased as a single register move (plus zero/sign
- * extension of the vacated byte), mirroring legacy's recognition of
- * this exact shape. Not static: also called directly by Item T49's
- * scalar unsigned div/mod-by-power-of-2 fast path (both in this file's
- * mir_emit_scalar_value and dcc_mir_spilled_cfg.c's scalar binary-
- * operation caller), which computes the shift count as log2 of the
- * divisor rather than receiving a MIR value ID to inspect, so it calls
- * this helper directly instead of going through mir_emit_scalar_shift's
- * MIR_CONST-detection wrapper. */
+/* Counts are proven to be in [0,15] by the caller. Once eight bits have
+ * shifted out, only one original byte contributes to the result. */
 void mir_emit_scalar_shift_by_constant(MirStream *out, int operation,
                                        int is_unsigned, long count)
 {
@@ -676,14 +667,32 @@ void mir_emit_scalar_shift_by_constant(MirStream *out, int operation,
 
     if (count == 0)
         return;
-    if (count == 8) {
+    if (count >= 8) {
         if (operation == TOK_SHL) {
-            mir_stream_puts("\tld h,l\n\tld l,0\n", out);
-        } else if (is_unsigned) {
-            mir_stream_puts("\tld l,h\n\tld h,0\n", out);
+            if (count == 8)
+                mir_stream_puts("\tld h,l\n\tld l,0\n", out);
+            else {
+                mir_stream_puts("\tld a,l\n", out);
+                for (i = 8; i < count; ++i)
+                    mir_stream_puts("\tadd a,a\n", out);
+                mir_stream_puts("\tld h,a\n\tld l,0\n", out);
+            }
+        } else if (count == 15 && !is_unsigned) {
+            mir_stream_puts("\tld a,h\n\trlca\n\tsbc a,a\n\tld l,a\n\tld h,a\n", out);
+        } else if (count >= 12 && is_unsigned) {
+            mir_stream_puts("\tld a,h\n", out);
+            for (i = count; i < 16; ++i)
+                mir_stream_puts("\trlca\n", out);
+            mir_stream_printf(out, "\tand %u\n\tld l,a\n\tld h,0\n",
+                    0xffU >> (count - 8));
         } else {
             mir_stream_puts("\tld l,h\n", out);
-            mir_emit_signed_byte_extend(out);
+            if (is_unsigned)
+                mir_stream_puts("\tld h,0\n", out);
+            for (i = 8; i < count; ++i)
+                mir_stream_puts(is_unsigned ? "\tsrl l\n" : "\tsra l\n", out);
+            if (!is_unsigned)
+                mir_emit_signed_byte_extend(out);
         }
         return;
     }
@@ -697,16 +706,44 @@ void mir_emit_scalar_shift_by_constant(MirStream *out, int operation,
     }
 }
 
-void mir_emit_scalar_shift(MirStream *out, int operation, int is_unsigned,
-                           int count_value)
+int mir_emit_scalar_bit_window(MirStream *out, const struct MirInsn *insn,
+                               long count)
 {
-    const struct MirInsn *count_definition = mir_definition(count_value);
+    int demand;
+    long i;
+
+    if (opt_debug || insn->opcode != MIR_BINARY ||
+        insn->immediate != TOK_SHR || count < 4 || count > 7 ||
+        type_size(insn->type) != 2 || type_is_float(insn->type) ||
+        type_ptr_depth(insn->type) != 0 ||
+        type_size(insn->secondary_offset) != 2 ||
+        type_is_float(insn->secondary_offset) ||
+        type_ptr_depth(insn->secondary_offset) != 0)
+        return 0;
+    demand = mir_value_low_bit_demand(insn->dst);
+    if (demand <= 0 || demand > 8)
+        return 0;
+    /* The low byte of x >> n is the high byte of x << (8 - n).
+     * Higher result bits are unobserved, including signed fill bits. */
+    for (i = count; i < 8; ++i)
+        mir_stream_puts("\tadd hl,hl\n", out);
+    mir_stream_puts("\tld l,h\n\tld h,0\n", out);
+    return 1;
+}
+
+void mir_emit_scalar_shift(MirStream *out, const struct MirInsn *insn)
+{
+    const struct MirInsn *count_definition = mir_definition(insn->src2);
+    int operation = (int)insn->immediate;
+    int is_unsigned = (insn->secondary_offset & TYPE_UNSIGNED) != 0;
     int loop_label;
     int end_label;
 
     if (count_definition != NULL && count_definition->opcode == MIR_CONST) {
         long count = count_definition->immediate & 0xffffL;
         if (count < 16) {
+            if (mir_emit_scalar_bit_window(out, insn, count))
+                return;
             mir_emit_scalar_shift_by_constant(out, operation, is_unsigned,
                                               count);
             return;
@@ -840,6 +877,8 @@ static int mir_emit_scalar_value(MirStream *out, int value, int depth)
             const struct MirInsn *source =
                 mir_definition(definition->src1);
 
+            if (mir_byte_cast_needs_no_extension(definition))
+                return 1;
             return source != NULL &&
                    mir_emit_cast(out, source->type, definition->type);
         }
@@ -965,10 +1004,7 @@ static int mir_emit_scalar_value(MirStream *out, int value, int depth)
             return 1;
         case TOK_SHL: case TOK_SHR:
             {
-                mir_emit_scalar_shift(out, (int)definition->immediate,
-                                      (definition->secondary_offset &
-                                       TYPE_UNSIGNED) != 0,
-                                      definition->src2);
+                mir_emit_scalar_shift(out, definition);
             }
             return 1;
         default:
@@ -2359,6 +2395,30 @@ void mir_emit_home_epilogue(MirStream *out, int uses_iy)
     mir_stream_puts("\tret\n", out);
 }
 
+int mir_value_needs_only_byte(int value)
+{
+    const struct MirInsn *insn = mir_definition(value);
+    int demand;
+
+    if (opt_debug || insn == NULL || type_size(insn->type) > 2 ||
+        type_is_bool(insn->type) || type_is_float(insn->type) ||
+        type_ptr_depth(insn->type) != 0)
+        return 0;
+    demand = mir_value_low_bit_demand(value);
+    return demand > 0 && demand <= 8;
+}
+
+int mir_byte_cast_needs_no_extension(const struct MirInsn *insn)
+{
+    const struct MirInsn *source = mir_definition(insn->src1);
+
+    if (insn->opcode != MIR_UNARY || insn->immediate != 0 ||
+        source == NULL || type_is_float(source->type) ||
+        type_ptr_depth(source->type) != 0 || type_is_bool(source->type))
+        return 0;
+    return mir_value_needs_only_byte(insn->dst);
+}
+
 int mir_value_is_normalized_byte(int value, int type, int depth)
 {
     const struct MirInsn *definition;
@@ -2490,7 +2550,8 @@ int mir_emit_homed_unary_instruction(MirStream *out,
                          type_is_bool(source_type))
                             ? (TYPE_INT | TYPE_UNSIGNED) : TYPE_INT;
             }
-            if (!mir_emit_cast(out, cast_source_type, insn->type))
+            if (!mir_byte_cast_needs_no_extension(insn) &&
+                !mir_emit_cast(out, cast_source_type, insn->type))
                 return 0;
         } else if (insn->immediate == '+') {
             if (!source_wide || !target_wide)
@@ -2540,7 +2601,9 @@ int mir_emit_homed_unary_instruction(MirStream *out,
          * every _Bool object to hold only 0 or 1). Matches mir_emit_cast's
          * spilled-scalar-cfg handling of the same case (MIR_UNARY op=0
          * with a bool destination and non-bool source). */
-        if (type_is_bool(insn->type) &&
+        if (mir_byte_cast_needs_no_extension(insn)) {
+            /* Only the low byte is observed. */
+        } else if (type_is_bool(insn->type) &&
             !type_is_bool(source != NULL ? source->type : 0)) {
             label = new_label();
             mir_stream_puts("\tld a,h\n\tor l\n\tld hl,0\n", out);
@@ -2741,7 +2804,7 @@ int mir_emit_homed_constant_binary_instruction(MirStream *out,
         return 0;
     if (operation == '*')
         mir_emit_mul_hl_const(out, multiplier);
-    else
+    else if (!mir_emit_scalar_bit_window(out, insn, value))
         mir_emit_scalar_shift_by_constant(
             out, operation,
             source != NULL && (source->type & TYPE_UNSIGNED) != 0, value);

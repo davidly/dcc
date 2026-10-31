@@ -1,11 +1,11 @@
 /**
  * @file dccmake.c
- * @brief Drives complete dcc builds of CP/M applications.
+ * @brief Drives dcc applications, libraries, and ordered composite builds.
  *
  * @par Role
  * Reads dccmake.txt and command-line settings, validates CP/M names, compiles
  * one or more C sources to .MAC, optionally optimizes them, assembles the
- * application and reduced runtime, and links the final .COM plus requested
+ * application and reduced runtime, and links the final .COM or .LIB plus requested
  * listing, symbol, and debug artifacts.
  *
  * @par Key entry points
@@ -95,10 +95,20 @@ static long long now_ms(void)
 #endif
 
 struct Config {
+    char projects[MAX_ITEMS][MAX_PATH_LEN];
+    int project_count;
     char inputs[MAX_ITEMS][MAX_PATH_LEN];
     int input_count;
     char output[MAX_NAME_LEN];
     int output_set;
+    int library_mode;
+    char exports[MAX_ITEMS][MAX_PATH_LEN];
+    int export_count;
+    int auto_exports;
+    int contract_only;
+    char library_api[MAX_PATH_LEN];
+    char library_host_dir[MAX_PATH_LEN];
+    char library_linker[MAX_PATH_LEN];
     int floatio;
     int no_floatio;
     int flongio;
@@ -676,6 +686,16 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
     if (!expand_env_macros(raw_key, value, expanded, sizeof(expanded)))
         return 0;
     value = expanded;
+    if (!strcmp(key, "dcc-projects")) {
+        cfg->project_count = 0;
+        if (!add_list(cfg->projects, &cfg->project_count, value))
+            return 0;
+        if (!cfg->project_count) {
+            fprintf(stderr, "dcc-projects requires at least one child directory\n");
+            return 0;
+        }
+        return 1;
+    }
     if (!strcmp(key, "dcc-input")) {
         cfg->input_count = 0;
         return add_list(cfg->inputs, &cfg->input_count, value);
@@ -684,6 +704,52 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         copy_text(cfg->output, sizeof(cfg->output), value);
         trim(cfg->output);
         cfg->output_set = cfg->output[0] != 0;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-output-format")) {
+        if (!str_ieq(value, "com") && !str_ieq(value, "lib")) {
+            fprintf(stderr, "invalid dcc-output-format: %s (expected com or lib)\n", value);
+            return 0;
+        }
+        cfg->library_mode = str_ieq(value, "lib");
+        return 1;
+    }
+    if (!strcmp(key, "dcc-exports")) {
+        cfg->export_count = 0;
+        cfg->auto_exports = 0;
+        if (!value[0]) return 1;
+        if (!str_ieq(value, "auto")) {
+            fprintf(stderr, "invalid dcc-exports: %s (expected auto; library exports are discovered "
+                            "from C definitions so each one has a typed signature)\n", value);
+            return 0;
+        }
+        cfg->auto_exports = 1;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-library-api")) {
+        copy_text(cfg->library_api, sizeof(cfg->library_api), value);
+        return 1;
+    }
+    if (!strcmp(key, "dcc-contract-only")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->contract_only = b;
+        return 1;
+    }
+    if (!strcmp(key, "dcc-library-host-dir")) {
+        copy_text(cfg->library_host_dir, sizeof(cfg->library_host_dir), value);
+        return 1;
+    }
+    if (!strcmp(key, "dcc-library-linker")) {
+        copy_text(cfg->library_linker, sizeof(cfg->library_linker), value);
+        trim(cfg->library_linker);
+        if (!cfg->library_linker[0]) {
+            fprintf(stderr, "dcc-library-linker requires a native linker command\n");
+            return 0;
+        }
+        make_local_tool_path_absolute(cfg->library_linker, sizeof(cfg->library_linker));
         return 1;
     }
     if (!strcmp(key, "dcc-floatio")) {
@@ -952,6 +1018,7 @@ static int read_config_file(struct Config *cfg, const char *path)
     FILE *f;
     char line[MAX_LINE_LEN];
     int lineno;
+    int leaf_settings = 0;
 
     f = fopen(path, "r");
     if (!f) {
@@ -983,19 +1050,30 @@ static int read_config_file(struct Config *cfg, const char *path)
         *eq = 0;
         trim(line);
         trim(eq + 1);
+        {
+            char key[MAX_NAME_LEN];
+            normalize_key(key, sizeof(key), line);
+            if (strcmp(key, "dcc-projects") && strcmp(key, "dcc-library-linker"))
+                ++leaf_settings;
+        }
         if (!apply_setting(cfg, line, eq + 1)) {
             fclose(f);
             return 0;
         }
     }
     fclose(f);
+    if (cfg->project_count && leaf_settings) {
+        fprintf(stderr, "%s: composite configurations accept only dcc-projects "
+                "and optional dcc-library-linker; keep build settings in children\n", path);
+        return 0;
+    }
     return 1;
 }
 
 static void print_help(void)
 {
-    printf("dccmake - build a dcc CP/M application\n");
-    printf("usage: dccmake [-h|--help]\n");
+    printf("dccmake - build CP/M applications, fixed-address libraries, or composite projects\n");
+    printf("usage: dccmake [-help|-h|--help|/?]\n");
     printf("       dccmake [key=value ...] [dcc-style-options]\n");
     printf("       dccmake --dcc-input main.c,module.c --dcc-output app\n");
     printf("\n");
@@ -1003,6 +1081,38 @@ static void print_help(void)
     printf("command-line settings as overrides. Command-line settings may be written as\n");
     printf("key=value, --key=value, --key value, or positional .c inputs. Common dcc-style options are also\n");
     printf("accepted and forwarded where they make sense.\n");
+    printf("\n");
+    printf("quick start (humans and build agents):\n");
+    printf("  dccmake                         build the current project or ordered composite\n");
+    printf("  dccmake dcc-contract-only=true   generate library/client contracts, without linking\n");
+    printf("  dccmake dcc-stack-bytes=1024      override an option for this invocation\n");
+    printf("  Exit status: 0 = success/help; nonzero = invalid configuration or failed stage.\n");
+    printf("  The first failing child stops a composite; later children are not built.\n");
+    printf("  Relative paths are resolved from each project's directory; tools are not installed\n");
+    printf("  automatically. Help works even if the current dccmake.txt is invalid.\n");
+    printf("\n");
+    printf("automatic library contract workflow:\n");
+    printf("  In the library dccmake.txt set:\n");
+    printf("    dcc-input=LIB.C\n");
+    printf("    dcc-output-format=lib\n");
+    printf("    dcc-exports=auto\n");
+    printf("    dcc-library-api=auto\n");
+    printf("    dcc-library-host-dir=../host/generated\n");
+    printf("  Define public non-static functions in C; no handwritten API.H is needed.\n");
+    printf("  Byte buffers require #pragma dcc bank_buffer FUNCTION ARG in|out|inout COUNT MAX\n");
+    printf("  in library source (1-based indices; a separate unsigned int count; MAX 1..256).\n");
+    printf("  Run dccmake dcc-contract-only=true to emit API.H and B1HOST.C in the host directory.\n");
+    printf("  This compiles sources for metadata, but needs no assembler, linker, or runtime file.\n");
+    printf("  Include generated/API.H in the client and compile generated/B1HOST.C with BANKLIB.C\n");
+    printf("  and BIOSBANK.C; provide BANKLIB.H on the include path. Open the library with blopen\n");
+    printf("  before calling its wrappers, and check blerr for transport/signature failures.\n");
+    printf("  Normal library builds refresh the contract too. Generated files must not be edited.\n");
+    printf("  Use dcc-library-api=path/API.H instead to keep a handwritten authoritative header;\n");
+    printf("  definitions must match it, and exports still receive generated typed signatures.\n");
+    printf("  Contract-only composite runs skip COM children; no COM/LIB is linked or installed.\n");
+    printf("  A root dccmake.txt containing dcc-projects=lib,host builds both in that order.\n");
+    printf("  Limits: 1..8 exports; <=8-character names; integer values and counted byte buffers;\n");
+    printf("  no pointer returns, pointer graphs, structs, callbacks, floats, or varargs.\n");
     printf("\n");
     printf("build pipeline:\n");
     printf("  dcc each .c file to .MAC; files after the first use -module\n");
@@ -1035,7 +1145,17 @@ static void print_help(void)
     printf("\n");
     printf("settings:\n");
     printf("  dcc-input=main.c,module1.c     comma-separated C sources; or pass .c files positionally\n");
+    printf("  dcc-projects=lib,host         ordered child directories; root config only, no dcc-input\n");
+    printf("  dcc-library-linker=l80c      override the native linker for LIB children only\n");
     printf("  dcc-output=main                output base name; default first input base\n");
+    printf("  dcc-output-format=com|lib      default com; lib needs a --lib-capable l80c-tool\n");
+    printf("  dcc-exports=auto               lib only, required: discover 1..8 public C definitions\n");
+    printf("                                 and link each with its typed signature\n");
+    printf("  dcc-library-api=auto|../API.H  generate API.H from definitions, or validate a header\n");
+    printf("  dcc-library-host-dir=../host/generated  receives B1HOST.C and automatic API.H\n");
+    printf("  dcc-contract-only=true        generate typed contracts without assembly/linking\n");
+    printf("                                 lib keeps app functions and omits transient startup\n");
+    printf("                                 lib stack must be 256..2048, in 256-byte units\n");
     printf("  dcc-floatio=false|true|1|0     force %%f support on every printf-family call\n");
     printf("                                 (normally auto-detected per call from its own\n");
     printf("                                 literal format string; only needed when a format\n");
@@ -1131,6 +1251,12 @@ static int is_positional_c_source(const char *arg)
         (arg[len - 1] == 'c' || arg[len - 1] == 'C');
 }
 
+static int is_help_option(const char *arg)
+{
+    return !strcmp(arg, "-help") || !strcmp(arg, "--help") ||
+           !strcmp(arg, "-h") || !strcmp(arg, "/?");
+}
+
 static int parse_args(struct Config *cfg, int argc, char **argv)
 {
     int i;
@@ -1142,7 +1268,7 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
         const char *arg;
 
         arg = argv[i];
-        if (!strcmp(arg, "--help") || !strcmp(arg, "-h") || !strcmp(arg, "/?")) {
+        if (is_help_option(arg)) {
             print_help();
             exit(0);
         }
@@ -1306,6 +1432,14 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
         }
         trim(key);
         trim(value);
+        {
+            char normalized[MAX_NAME_LEN];
+            normalize_key(normalized, sizeof(normalized), key);
+            if (!strcmp(normalized, "dcc-projects")) {
+                fprintf(stderr, "dcc-projects belongs in dccmake.txt, not command-line overrides\n");
+                return 0;
+            }
+        }
         if (!apply_setting(cfg, key, value))
             return 0;
     }
@@ -1635,6 +1769,187 @@ static int copy_file(const char *src, const char *dst)
     }
     fclose(in);
     fclose(out);
+    return 1;
+}
+
+static char *read_text_file(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    char *text;
+    long size;
+    if (!f) {
+        fprintf(stderr, "cannot read %s: %s\n", path, strerror(errno));
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) < 0 ||
+        fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "cannot determine size of %s\n", path);
+        fclose(f);
+        return NULL;
+    }
+    text = (char *)malloc((size_t)size + 1);
+    if (!text) {
+        fprintf(stderr, "out of memory reading %s\n", path);
+        fclose(f);
+        return NULL;
+    }
+    if (fread(text, 1, (size_t)size, f) != (size_t)size) {
+        fprintf(stderr, "read failed for %s\n", path);
+        free(text);
+        fclose(f);
+        return NULL;
+    }
+    text[size] = 0;
+    fclose(f);
+    return text;
+}
+
+static int prepare_library_runtime(const char *source, const char *destination)
+{
+    char *text = read_text_file(source);
+    const char *constants, *cseg, *body, *exit_entry, *exit_state;
+    FILE *out;
+    int ok;
+    if (!text)
+        return 0;
+    constants = strstr(text, "HDRSIZE");
+    cseg = constants ? strstr(constants, "\n        cseg") : NULL;
+    body = cseg ? strstr(cseg, "        public  __wr_hf") : NULL;
+    exit_entry = body ? strstr(body, "\n_exit:") : NULL;
+    exit_state = exit_entry ? strstr(exit_entry, "\n__ae_hook:") : NULL;
+    if (!exit_state) {
+        fprintf(stderr, "unsupported library runtime layout in %s\n", source);
+        free(text);
+        return 0;
+    }
+    out = fopen(destination, "wb");
+    if (!out) {
+        fprintf(stderr, "cannot write %s: %s\n", destination, strerror(errno));
+        free(text);
+        return 0;
+    }
+    ok = fwrite(constants, 1, (size_t)(cseg - constants), out) ==
+         (size_t)(cseg - constants);
+    ok = ok && fputs("\n; Heap bounds are initialized by the bank-1 loader.\n"
+                     "        cseg\n"
+                     "        extrn __hstart\n"
+                     "        extrn __stack_size\n"
+                     "        public __brk\n"
+                     "        public __hlimit\n"
+                     "__brk: dw 0\n"
+                     "__hlimit: dw 0\n", out) >= 0;
+    ok = ok && fwrite(body, 1, (size_t)(exit_entry - body), out) ==
+         (size_t)(exit_entry - body);
+    ok = ok && fputs("\n_exit:\n        ld hl,0\n        ret\n", out) >= 0;
+    ok = ok && fputs(exit_state, out) >= 0;
+    if (fclose(out) != 0)
+        ok = 0;
+    if (!ok)
+        fprintf(stderr, "write failed for %s\n", destination);
+    free(text);
+    return ok;
+}
+
+static int finalize_library_runtime(const char *path)
+{
+    char *text = read_text_file(path);
+    char *end;
+    FILE *out;
+    int ok;
+    if (!text)
+        return 0;
+    end = strstr(text, "\tend\tstart");
+    if (!end || strstr(text, "\nstart:") || strstr(text, "jp      0000h")) {
+        fprintf(stderr, "unsafe or unsupported transient startup in %s\n", path);
+        free(text);
+        return 0;
+    }
+    memmove(end + strlen("\tend"), end + strlen("\tend\tstart"),
+            strlen(end + strlen("\tend\tstart")) + 1);
+    out = fopen(path, "wb");
+    if (!out) {
+        fprintf(stderr, "cannot write %s: %s\n", path, strerror(errno));
+        free(text);
+        return 0;
+    }
+    ok = fwrite(text, 1, strlen(text), out) == strlen(text);
+    if (fclose(out) != 0)
+        ok = 0;
+    if (!ok)
+        fprintf(stderr, "write failed for %s\n", path);
+    free(text);
+    return ok;
+}
+
+static int check_library_stack(const char *path, int stack_bytes)
+{
+    char *text = read_text_file(path);
+    const char *line;
+    int ok = 0;
+    if (!text)
+        return 0;
+    for (line = text; line; line = strchr(line, '\n')) {
+        char symbol[MAX_NAME_LEN], directive[32];
+        long value;
+        if (*line == '\n')
+            ++line;
+        if (sscanf(line, "%127s %31s %ld", symbol, directive, &value) == 3 &&
+            str_ieq(symbol, "__stack_size") && str_ieq(directive, "equ")) {
+            ok = value == stack_bytes;
+            if (!ok)
+                fprintf(stderr, "%s requires stack %ld, not %d; increase "
+                        "dcc-stack-bytes to a 256-byte-aligned value\n",
+                        path, value, stack_bytes);
+            break;
+        }
+    }
+    if (!line)
+        fprintf(stderr, "missing __stack_size definition in %s\n", path);
+    free(text);
+    return ok;
+}
+
+static int library_symbol(const char *name, size_t length)
+{
+    size_t i;
+    if (!length || !(isalpha((unsigned char)name[0]) || name[0] == '_'))
+        return 0;
+    for (i = 1; i < length; ++i)
+        if (!(isalnum((unsigned char)name[i]) || name[i] == '_'))
+            return 0;
+    return 1;
+}
+
+static int validate_library_config(const struct Config *cfg)
+{
+    if (cfg->contract_only && (!cfg->library_mode || !cfg->auto_exports)) {
+        fprintf(stderr, "dcc-contract-only requires lib output and dcc-exports=auto\n");
+        return 0;
+    }
+    if (!cfg->library_mode) {
+        if (cfg->auto_exports) {
+            fprintf(stderr, "dcc-exports requires dcc-output-format=lib\n");
+            return 0;
+        }
+        return 1;
+    }
+    if (cfg->use_emulated_l80 && !cfg->contract_only) {
+        fprintf(stderr, "library output requires a native --lib-capable l80c-tool\n");
+        return 0;
+    }
+    if (cfg->stack_bytes < 256 || cfg->stack_bytes > 2048 ||
+        cfg->stack_bytes % 256) {
+        fprintf(stderr, "library dcc-stack-bytes must be 256..2048 in 256-byte units\n");
+        return 0;
+    }
+    if (!cfg->auto_exports) {
+        fprintf(stderr, "library output requires dcc-exports=auto (every export needs a typed signature)\n");
+        return 0;
+    }
+    if (!cfg->library_api[0] || !cfg->library_host_dir[0]) {
+        fprintf(stderr, "library output requires dcc-library-api and dcc-library-host-dir\n");
+        return 0;
+    }
     return 1;
 }
 
@@ -2008,6 +2323,8 @@ static int add_default_include(struct Config *cfg)
     return 1;
 }
 
+#include "dcc_bank.h"
+
 static int run_build(struct Config *cfg)
 {
     char names[MAX_ITEMS][MAX_NAME_LEN];
@@ -2047,7 +2364,11 @@ static int run_build(struct Config *cfg)
     }
     if (!validate_cpm_83_name("dcc-output", cfg->output, 0))
         return 0;
-    if ((cfg->debug || cfg->debug_lines) && cfg->use_emulated_m80) {
+    if (cfg->library_mode && cfg->library_linker[0])
+        copy_text(cfg->l80c, sizeof(cfg->l80c), cfg->library_linker);
+    if (!validate_library_config(cfg))
+        return 0;
+    if (!cfg->contract_only && (cfg->debug || cfg->debug_lines) && cfg->use_emulated_m80) {
         fprintf(stderr, "dcc debug metadata requires native m80c; disable dcc-use-emulated-m80\n");
         return 0;
     }
@@ -2067,6 +2388,13 @@ static int run_build(struct Config *cfg)
     if (!ensure_dir(cfg->build_dir)) {
         fprintf(stderr, "cannot create build directory: %s\n", cfg->build_dir);
         return 0;
+    }
+    if (cfg->auto_exports && !bank_generate(cfg))
+        return 0;
+    if (cfg->contract_only) {
+        printf("dccmake: generated contract in %s (no assembly or linking)\n",
+               cfg->library_host_dir);
+        return 1;
     }
     if (!file_exists(cfg->runtime)) {
         fprintf(stderr, "runtime not found: %s\n", cfg->runtime);
@@ -2131,11 +2459,13 @@ static int run_build(struct Config *cfg)
     path_join(rtl_rel, sizeof(rtl_rel), cfg->build_dir, "RTLMIN.REL");
     path_join(rtl_prn, sizeof(rtl_prn), cfg->build_dir, "RTLMIN.PRN");
     path_join(rtl_link, sizeof(rtl_link), cfg->build_dir, "RTLMIN.LNK");
-    snprintf(tmp, sizeof(tmp), "%.127s.COM", output_upper);
+    snprintf(tmp, sizeof(tmp), "%.127s.%s", output_upper,
+             cfg->library_mode ? "LIB" : "COM");
     path_join(app_com, sizeof(app_com), cfg->build_dir, tmp);
     snprintf(tmp, sizeof(tmp), "%.127s.DBG", output_upper);
     path_join(app_dbg, sizeof(app_dbg), cfg->build_dir, tmp);
-    snprintf(tmp, sizeof(tmp), "%.127s.com", output_lower);
+    snprintf(tmp, sizeof(tmp), "%.127s.%s", output_lower,
+             cfg->library_mode ? "lib" : "com");
     path_join(lower_com, sizeof(lower_com), cfg->build_dir, tmp);
     remove(rtl_src);
     remove(rtl_min);
@@ -2176,7 +2506,10 @@ static int run_build(struct Config *cfg)
             return 0;
     }
 
-    if (cfg->strip_unused) {
+    if (cfg->library_mode && !check_library_stack(macs[0], cfg->stack_bytes))
+        return 0;
+
+    if (cfg->strip_unused && !cfg->library_mode) {
         cmd_init(cmd, sizeof(cmd));
         if (!cmd_arg(cmd, sizeof(cmd), cfg->dccrtlstrip)) return 0;
         if (!cmd_arg(cmd, sizeof(cmd), "--strip-apps")) return 0;
@@ -2207,11 +2540,22 @@ static int run_build(struct Config *cfg)
         }
     }
 
-    if (!copy_file(cfg->runtime, rtl_src) || !to_crlf(rtl_src))
+    if (cfg->library_mode ?
+        !prepare_library_runtime(cfg->runtime, rtl_src) :
+        !copy_file(cfg->runtime, rtl_src))
+        return 0;
+    if (!to_crlf(rtl_src))
         return 0;
 
     cmd_init(cmd, sizeof(cmd));
     if (!cmd_arg(cmd, sizeof(cmd), cfg->dccrtlstrip)) return 0;
+    if (cfg->library_mode) {
+        /* The loader needs BSS/heap metadata even without malloc calls. */
+        if (!cmd_arg(cmd, sizeof(cmd), "-k")) return 0;
+        if (!cmd_arg(cmd, sizeof(cmd), "__brk")) return 0;
+        if (!cmd_arg(cmd, sizeof(cmd), "-k")) return 0;
+        if (!cmd_arg(cmd, sizeof(cmd), "__hlimit")) return 0;
+    }
     if (cfg->floatio) {
         if (!cmd_arg(cmd, sizeof(cmd), "-k")) return 0;
         if (!cmd_arg(cmd, sizeof(cmd), "_pffio")) return 0;
@@ -2228,7 +2572,11 @@ static int run_build(struct Config *cfg)
         if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
     }
     t0 = now_ms();
-    if (!run_cmd(cmd) || !file_exists(rtl_min) || !to_crlf(rtl_min))
+    if (!run_cmd(cmd) || !file_exists(rtl_min))
+        return 0;
+    if (cfg->library_mode && !finalize_library_runtime(rtl_min))
+        return 0;
+    if (!to_crlf(rtl_min))
         return 0;
     ms_rtlstrip += now_ms() - t0;
 
@@ -2254,9 +2602,11 @@ static int run_build(struct Config *cfg)
     }
     if (!cmd_append_raw(link_arg, sizeof(link_arg), ",")) return 0;
     if (!cmd_append_raw(link_arg, sizeof(link_arg), uppers[0])) return 0;
-    if (!cmd_append_raw(link_arg, sizeof(link_arg), ",")) return 0;
-    if (!cmd_append_raw(link_arg, sizeof(link_arg), output_upper)) return 0;
-    if (!cmd_append_raw(link_arg, sizeof(link_arg), "/N/E/Y")) return 0;
+    if (!cfg->library_mode) {
+        if (!cmd_append_raw(link_arg, sizeof(link_arg), ",")) return 0;
+        if (!cmd_append_raw(link_arg, sizeof(link_arg), output_upper)) return 0;
+        if (!cmd_append_raw(link_arg, sizeof(link_arg), "/N/E/Y")) return 0;
+    }
 
     cmd_init(cmd, sizeof(cmd));
     if (cfg->use_emulated_l80) {
@@ -2266,9 +2616,30 @@ static int run_build(struct Config *cfg)
         if (!cmd_arg(cmd, sizeof(cmd), cfg->l80c)) return 0;
     }
     if (!cmd_arg(cmd, sizeof(cmd), link_arg)) return 0;
+    if (cfg->library_mode) {
+        char stack[32];
+        snprintf(stack, sizeof(stack), "%d", cfg->stack_bytes);
+        if (!cmd_arg(cmd, sizeof(cmd), "--lib")) return 0;
+        if (!cmd_arg(cmd, sizeof(cmd), "--stack-bytes")) return 0;
+        if (!cmd_arg(cmd, sizeof(cmd), stack)) return 0;
+        for (i = 0; i < cfg->export_count; ++i) {
+            if (!cmd_arg(cmd, sizeof(cmd), "--export")) return 0;
+            const char *eq = strchr(cfg->exports[i], '=');
+            char signature[MAX_PATH_LEN];
+            if (!cmd_arg(cmd, sizeof(cmd), cfg->exports[i])) return 0;
+            snprintf(signature, sizeof(signature), "%.*s=_b1s%02d",
+                     (int)(eq - cfg->exports[i]), cfg->exports[i], i);
+            if (!cmd_arg(cmd, sizeof(cmd), "--signature")) return 0;
+            if (!cmd_arg(cmd, sizeof(cmd), signature)) return 0;
+        }
+        if (!cmd_arg(cmd, sizeof(cmd), "-o")) return 0;
+        if (!cmd_arg(cmd, sizeof(cmd), output_upper)) return 0;
+    }
     t0 = now_ms();
     if (!run_cmd_in_dir(cfg->build_dir, cmd) || !file_exists(app_com)) {
         fprintf(stderr, "link failed: %s was not produced\n", app_com);
+        if (cfg->library_mode)
+            remove(app_com);
         return 0;
     }
     ms_link += now_ms() - t0;
@@ -2292,15 +2663,99 @@ static int run_build(struct Config *cfg)
     return 1;
 }
 
+#define MAX_PROJECT_DEPTH 16
+
+static int run_project(struct Config *cfg, int argc, char **argv,
+                       char ancestors[MAX_PROJECT_DEPTH][MAX_PATH_LEN], int depth)
+{
+    char cwd[MAX_PATH_LEN];
+    int i;
+    if (!cfg->project_count && depth && cfg->contract_only && !cfg->library_mode) {
+        printf("dccmake: skipping client build in contract-only mode\n");
+        return 1;
+    }
+    if (!cfg->project_count)
+        return run_build(cfg);
+    if (cfg->input_count || cfg->output_set) {
+        fprintf(stderr, "composite builds cannot override dcc-input or dcc-output\n");
+        return 0;
+    }
+    if (depth >= MAX_PROJECT_DEPTH) {
+        fprintf(stderr, "composite project nesting exceeds %d levels\n", MAX_PROJECT_DEPTH);
+        return 0;
+    }
+    if (!GETCWD(cwd, sizeof(cwd))) {
+        fprintf(stderr, "cannot determine project directory: %s\n", strerror(errno));
+        return 0;
+    }
+    for (i = 0; i < depth; ++i) {
+#ifdef _WIN32
+        int same = str_ieq(cwd, ancestors[i]);
+#else
+        int same = !strcmp(cwd, ancestors[i]);
+#endif
+        if (same) {
+            fprintf(stderr, "composite project cycle at %s\n", cwd);
+            return 0;
+        }
+    }
+    copy_text(ancestors[depth], MAX_PATH_LEN, cwd);
+    for (i = 0; i < cfg->project_count; ++i) {
+        struct Config *child;
+        int ok = 0;
+        if (CHDIR(cfg->projects[i]) != 0) {
+            fprintf(stderr, "cannot enter child project %s: %s\n",
+                    cfg->projects[i], strerror(errno));
+            return 0;
+        }
+        child = (struct Config *)malloc(sizeof(*child));
+        if (!child) {
+            fprintf(stderr, "out of memory loading child project\n");
+        } else if (!file_exists("dccmake.txt")) {
+            fprintf(stderr, "child project %s has no dccmake.txt\n", cfg->projects[i]);
+        } else {
+            init_config(child);
+            if (read_config_file(child, "dccmake.txt") && parse_args(child, argc, argv)) {
+                if (cfg->library_linker[0])
+                    copy_text(child->library_linker, sizeof(child->library_linker),
+                              cfg->library_linker);
+                promote_debug_compiler_arg(child);
+                printf("dccmake: project %d/%d: %s\n", i + 1, cfg->project_count,
+                       cfg->projects[i]);
+                ok = run_project(child, argc, argv, ancestors, depth + 1);
+            }
+        }
+        free(child);
+        if (CHDIR(cwd) != 0) {
+            fprintf(stderr, "cannot restore project directory %s: %s\n", cwd, strerror(errno));
+            return 0;
+        }
+        if (!ok)
+            return 0;
+    }
+    printf("dccmake: %s composite %s (%d projects)\n",
+           cfg->contract_only ? "generated contracts for" : "built",
+           cwd, cfg->project_count);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     struct Config cfg;
+    char ancestors[MAX_PROJECT_DEPTH][MAX_PATH_LEN];
+    int i;
 
+    for (i = 1; i < argc; ++i) {
+        if (is_help_option(argv[i])) {
+            print_help();
+            return 0;
+        }
+    }
     init_config(&cfg);
     if (!read_config_file(&cfg, "dccmake.txt"))
         return 1;
     if (!parse_args(&cfg, argc, argv))
         return 1;
     promote_debug_compiler_arg(&cfg);
-    return run_build(&cfg) ? 0 : 1;
+    return run_project(&cfg, argc, argv, ancestors, 0) ? 0 : 1;
 }

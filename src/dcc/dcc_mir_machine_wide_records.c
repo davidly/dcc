@@ -2573,7 +2573,8 @@ static void mir_flagged_hash_value(
 static int mir_flagged_hash_symbol(
     unsigned long long *first,
     unsigned long long *second,
-    const struct Sym *symbol)
+    const struct Sym *symbol,
+    struct MirShapeTypes *types)
 {
     unsigned long long values[] = {
         (unsigned long long)(uint32_t)symbol->type,
@@ -2617,6 +2618,9 @@ static int mir_flagged_hash_symbol(
         symbol->proto_nargs < 0 ||
         symbol->proto_nargs > MAX_PROTO_PARAMS)
         return 0;
+    values[0] = (uint32_t)mir_shape_type(symbol->type, types);
+    values[29] = (uint32_t)mir_shape_type(
+        symbol->funcptr_return_type, types);
     for (item = 0;
          item < (int)(sizeof(values) / sizeof(values[0]));
          ++item)
@@ -2634,7 +2638,7 @@ static int mir_flagged_hash_symbol(
         mir_flagged_hash_value(
             first, second,
             (unsigned long long)(uint32_t)
-                symbol->proto_types[item]);
+                mir_shape_type(symbol->proto_types[item], types));
     return 1;
 }
 
@@ -2649,6 +2653,7 @@ static int mir_flagged_record_semantic_payload(
     };
     unsigned long long first = 1469598103934665603ULL;
     unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    struct MirShapeTypes types = {0};
     int instruction;
     int object;
     int declared;
@@ -2684,6 +2689,10 @@ static int mir_flagged_record_semantic_payload(
         };
         size_t value;
 
+        values[4] = (uint32_t)mir_shape_type(insn->type, &types);
+        if (insn->opcode == MIR_BINARY)
+            values[20] = (uint32_t)mir_shape_type(
+                insn->secondary_offset, &types);
         for (value = 0;
              value < sizeof(values) / sizeof(values[0]); ++value)
             mir_flagged_hash_value(
@@ -2697,7 +2706,8 @@ static int mir_flagged_record_semantic_payload(
             (unsigned long long)(uint32_t)entry->storage);
         mir_flagged_hash_value(
             &first, &second,
-            (unsigned long long)(uint32_t)entry->type);
+            (unsigned long long)(uint32_t)
+                mir_shape_type(entry->type, &types));
         mir_flagged_hash_value(
             &first, &second,
             (unsigned long long)(uint32_t)entry->offset);
@@ -2762,6 +2772,10 @@ static int mir_flagged_record_semantic_payload(
             mir.declared_proto_nargs[declared] < 0 ||
             mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
             goto mismatch;
+        values[0] = (uint32_t)mir_shape_type(
+            mir.declared_types[declared], &types);
+        values[17] = (uint32_t)mir_shape_type(
+            mir.declared_funcptr_return_types[declared], &types);
         for (value = 0;
              value < sizeof(values) / sizeof(values[0]); ++value)
             mir_flagged_hash_value(
@@ -2779,7 +2793,9 @@ static int mir_flagged_record_semantic_payload(
             mir_flagged_hash_value(
                 &first, &second,
                 (unsigned long long)(uint32_t)
-                    mir.declared_proto_types[declared][parameter]);
+                    mir_shape_type(
+                        mir.declared_proto_types[declared][parameter],
+                        &types));
     }
     mir_flagged_hash_value(
         &first, &second,
@@ -2826,6 +2842,7 @@ static int mir_flagged_record_semantic_payload(
         };
         size_t value;
 
+        values[13] = (uint32_t)mir_shape_type(mir.return_type, &types);
         for (value = 0;
              value < sizeof(values) / sizeof(values[0]); ++value)
             mir_flagged_hash_value(
@@ -2844,12 +2861,12 @@ static int mir_flagged_record_semantic_payload(
                 (unsigned long long)
                     (symbols[item] == symbols[prior]));
         if (!mir_flagged_hash_symbol(
-                &first, &second, symbols[item]))
+                &first, &second, symbols[item], &types))
             goto mismatch;
     }
     /* Production tchess and the dedicated equivalent fixture. */
-    if ((first == 0xb4c8e903560954bbULL &&
-         second == 0x7b9482465eaf67a3ULL) ||
+    if ((first == 0x5909e750304f80bbULL &&
+         second == 0xd89510da21a600a9ULL) ||
         (first == 0x1f9e710c9a096b35ULL &&
          second == 0x7bfdbf61c00f9546ULL))
         return 1;
@@ -8127,6 +8144,7 @@ static int mir_match_variadic_join_report(
     int instruction;
     unsigned long long first = 1469598103934665603ULL;
     unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    struct MirShapeTypes types = {0};
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 63 || mir_cfg_block_count() != 5 ||
@@ -8261,9 +8279,9 @@ static int mir_match_variadic_join_report(
         }
     }
     if (!mir_flagged_hash_symbol(
-            &first, &second, plan->join_function) ||
+            &first, &second, plan->join_function, &types) ||
         !mir_flagged_hash_symbol(
-            &first, &second, plan->print_function) ||
+            &first, &second, plan->print_function, &types) ||
         first != 0x0438777ce1491dcaULL ||
         second != 0x98aaea44b162a913ULL) {
         if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
