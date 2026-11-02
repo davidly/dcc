@@ -10133,6 +10133,52 @@ les_done:
 ; __hstart is the fixed heap base; __brk / __hlimit are set by start:.
 ; ============================================================
 
+        public  _meminfo
+_meminfo:
+        ; stdlib.h meminfo_t: seven consecutive unsigned 16-bit words.
+        ; Read the initialized bounds, not a live-SP estimate or free-list walk.
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        push    hl
+        pop     ix
+        ld      de,__hstart
+        ld      (ix+0),e
+        ld      (ix+1),d
+        ld      bc,(__hlimit)
+        ld      (ix+2),c
+        ld      (ix+3),b
+        ld      hl,(__brk)
+        ld      (ix+4),l
+        ld      (ix+5),h
+        push    hl
+        ld      hl,__stack_size
+        ld      (ix+6),l
+        ld      (ix+7),h
+        ld      h,b
+        ld      l,c
+        or      a
+        sbc     hl,de
+        ld      (ix+8),l
+        ld      (ix+9),h
+        pop     hl
+        or      a
+        sbc     hl,de
+        ld      (ix+10),l
+        ld      (ix+11),h
+        ld      h,b
+        ld      l,c
+        ld      e,(ix+4)
+        ld      d,(ix+5)
+        or      a
+        sbc     hl,de
+        ld      (ix+12),l
+        ld      (ix+13),h
+        pop     ix
+        ret
+
         public  _malloc
 _malloc:
         ; IX-free single-argument wrapper.  Restore the caller-cleanup stack

@@ -1,0 +1,175 @@
+_xor_left8:
+	push hl
+	ld h,l
+	ld l,0
+	ex de,hl
+	pop hl
+	ld a,h
+	xor d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	push af
+	pop bc
+	ld de,0
+	ret
+
+_xor_right9:
+	push hl
+	ld l,h
+	ld h,0
+	srl l
+	ex de,hl
+	pop hl
+	ld a,h
+	xor d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	push af
+	pop bc
+	ld de,0
+	ret
+
+_xor_right15:
+	push hl
+	ld l,h
+	ld h,0
+	srl l
+	srl l
+	srl l
+	srl l
+	srl l
+	srl l
+	srl l
+	ex de,hl
+	pop hl
+	ld a,h
+	xor d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	ld de,0
+	ret
+
+_xor_d_live:
+	push hl
+	ld h,l
+	ld l,0
+	ex de,hl
+	pop hl
+	ld a,h
+	xor d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	ld (hl),d
+	ld de,0
+	ret
+
+_xor_e_live:
+	push hl
+	ld l,h
+	ld h,0
+	srl l
+	ex de,hl
+	pop hl
+	ld a,h
+	xor d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	ld (hl),e
+	ld de,0
+	ret
+
+_xor_live_successor:
+	push hl
+	ld l,h
+	ld h,0
+	ex de,hl
+	pop hl
+	ld a,h
+	xor d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	jp nz,L900
+	ld de,0
+	ret
+L900:
+	ld (hl),e
+	ld de,0
+	ret
+
+_xor_signed_shift:
+	push hl
+	ld l,h
+	ld h,0
+	sra l
+	ex de,hl
+	pop hl
+	ld a,h
+	xor d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	ld de,0
+	ret
+
+_xor_wrong_operation:
+	push hl
+	ld h,l
+	ld l,0
+	ex de,hl
+	pop hl
+	ld a,h
+	or d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	ld de,0
+	ret
+
+_xor_label_barrier:
+	push hl
+	ld h,l
+	ld l,0
+	ex de,hl
+	pop hl
+L901:
+	ld a,h
+	xor d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	ld de,0
+	ret
+
+_xor_other_entry:
+	jp L901
+
+_xor_call_barrier:
+	push hl
+	ld l,h
+	ld h,0
+	call _unknown
+	ex de,hl
+	pop hl
+	ld a,h
+	xor d
+	ld h,a
+	ld a,l
+	xor e
+	ld l,a
+	ld de,0
+	ret

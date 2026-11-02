@@ -140,6 +140,8 @@ struct MirInsn {
     int narrowed_for_counter_update;
     /* Low/high bytes retain direct left/right 32-bit div/mod cast types. */
     int divmod_cast_types;
+    /* Reciprocal instruction index + 1 for a proven word div/mod pair. */
+    int word_divmod_partner;
     char name[64];
     char base_name[64];
 };
@@ -631,8 +633,9 @@ void mir_emit_byte_arithmetic_result(MirStream *out,
 void mir_emit_hl_and_const(MirStream *out, unsigned int mask);
 void mir_emit_hl_or_const(MirStream *out, unsigned int mask);
 void mir_emit_bitfield_extract(MirStream *out, const struct MirInsn *insn);
-void mir_emit_scalar_shift(MirStream *out, int operation, int is_unsigned,
-                           int count_value);
+void mir_emit_scalar_shift(MirStream *out, const struct MirInsn *insn);
+int mir_emit_scalar_bit_window(MirStream *out, const struct MirInsn *insn,
+                               long count);
 void mir_emit_scalar_shift_by_constant(MirStream *out, int operation,
                                        int is_unsigned, long count);
 int mir_emit_stack_word_param_to_home(MirStream *out, int value, int offset);
@@ -679,7 +682,14 @@ int mir_constant_absolute_address_has_index(int value);
 int mir_value_is_constant_absolute_address(int value);
 int mir_value_only_used_by_constant_absolute_address(int value);
 int mir_value_only_used_by_absolute_access(
-    int value, int (*access_supported)(const struct MirInsn *));
+    int value, int (*access_supported)(const struct MirInsn *),
+    int rematerializes_constant_addresses);
+struct MirShapeTypes {
+    int ids[MAX_STRUCTS + 1];
+    int count;
+};
+
+int mir_shape_type(int type, struct MirShapeTypes *types);
 int mir_resolve_named_address(
     int value, struct MirResolvedNamedAddress *out);
 int mir_resolve_isolated_global_field_address(
@@ -726,6 +736,16 @@ void mir_regional_begin_emission(void);
 int mir_regional_before_instruction(MirStream *out, int instruction);
 void mir_regional_after_instruction(int instruction);
 void mir_resolve_deferred_metadata(void);
+int mir_optimize_integer_expressions(void);
+int mir_value_low_bit_demand(int value);
+int mir_word_values_have_same_bits(int left, int right);
+int mir_private_load_can_rematerialize_at(int value, int instruction);
+int mir_canonicalize_divmod_operands(void);
+int mir_divmod_early_store(int instruction);
+int mir_memcpy_end_pointer_target(int call_index);
+int mir_byte_cast_needs_no_extension(const struct MirInsn *insn);
+int mir_value_needs_only_byte(int value);
+int mir_combine_little_endian_byte_stores(void);
 void mir_record_call_signature(int call_id, const struct Sym *prototype);
 int mir_prune_constant_unreachable(void);
 int mir_extended_integer_constant_conversion_folds(void);

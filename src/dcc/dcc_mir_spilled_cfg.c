@@ -161,6 +161,7 @@ static int mir_call_uses_inline_simple_indexed_store(
     int arguments[3]);
 int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
+static int mir_is_redundant_divmod_operand(const struct MirInsn *insn);
 static int mir_call_has_odd_argument_bytes(const struct MirInsn *call);
 static int mir_call_uses_generic_stack_arguments(int instruction);
 static unsigned mir_call_argument_staging_clobbers_before(
@@ -275,10 +276,16 @@ static void mir_numeric_shape_hash_ex(
 {
     unsigned long long h1 = 1469598103934665603ULL;
     unsigned long long h2 = 0x9e3779b97f4a7c15ULL;
+    struct MirShapeTypes types = {0};
     int instruction;
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
+        int shape_type = mir_shape_type(insn->type, &types);
+        int secondary_offset = insn->secondary_offset;
+
+        if (insn->opcode == MIR_BINARY)
+            secondary_offset = mir_shape_type(secondary_offset, &types);
         /* insn->immediate is `long`, whose width is host-dependent (64
          * bits on Linux/macOS, only 32 on MSVC/Windows and 32-bit Linux).
          * A negative wide (32-bit target) constant like -32768 is stored
@@ -301,7 +308,7 @@ static void mir_numeric_shape_hash_ex(
             (unsigned long long)(uint32_t)insn->dst,
             (unsigned long long)(uint32_t)insn->src1,
             (unsigned long long)(uint32_t)insn->src2,
-            (unsigned long long)(uint32_t)insn->type,
+            (unsigned long long)(uint32_t)shape_type,
             immediate,
             (unsigned long long)(uint32_t)insn->label,
             (unsigned long long)(uint32_t)insn->phi_pred1,
@@ -315,7 +322,7 @@ static void mir_numeric_shape_hash_ex(
             (unsigned long long)(uint32_t)insn->bit_width,
             (unsigned long long)(uint32_t)insn->bit_shift,
             (unsigned long long)(uint32_t)insn->bit_mask,
-            (unsigned long long)(uint32_t)insn->secondary_offset,
+            (unsigned long long)(uint32_t)secondary_offset,
             (unsigned long long)(uint32_t)insn->inline_temp_id
         };
         size_t value;
@@ -2567,11 +2574,17 @@ static int mir_value_requires_phi_slot(int value)
 static int mir_value_requires_divmod_slot(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
+    int instruction;
+    int partner;
 
-    return definition != NULL &&
-           definition->opcode == MIR_BINARY &&
-           (definition->immediate == '/' || definition->immediate == '%') &&
-           mir_divmod_partner((int)(definition - mir.insns)) >= 0;
+    if (definition == NULL || definition->opcode != MIR_BINARY ||
+        (definition->immediate != '/' && definition->immediate != '%'))
+        return 0;
+    instruction = (int)(definition - mir.insns);
+    partner = mir_divmod_partner(instruction);
+    return partner >= 0 &&
+           (definition->word_divmod_partner == 0 ||
+            (partner < instruction && mir_divmod_early_store(instruction) < 0));
 }
 
 static int mir_value_requires_odd_call_cleanup_slot(int value)
@@ -2826,6 +2839,12 @@ int mir_address_rematerialization_candidate_count(void)
     return count;
 }
 
+static int64_t mir_signed_constant_bits(unsigned long bits, int bytes)
+{
+    unsigned long sign = bytes == 2 ? 0x8000UL : 0x80000000UL;
+    return (int64_t)(bits ^ sign) - (int64_t)sign;
+}
+
 /* Evaluates a scalar binary arithmetic/bitwise/shift operation over two
  * compile-time constant operands, truncated and sign-extended to match
  * `operand_type` (16-bit int or 32-bit long, per its TYPE_UNSIGNED flag),
@@ -2841,12 +2860,15 @@ int mir_fold_constant_binary(int op, long left, long right,
 {
     int type_bytes = type_size(operand_type);
     int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
-    long value;
+    unsigned long value;
     unsigned long mask;
     unsigned long uleft, uright;
+    int64_t sleft, sright;
 
-    mask = type_bytes == 2 ? 0xffffUL
-         : type_bytes == 4 ? 0xffffffffUL : (unsigned long)-1L;
+    if ((type_bytes != 2 && type_bytes != 4) ||
+        type_is_float(operand_type) || type_ptr_depth(operand_type) != 0)
+        return 0;
+    mask = type_bytes == 2 ? 0xffffUL : 0xffffffffUL;
     /* / , % and >> need is_unsigned dispatched on the OPERANDS, not just
      * the result: on a host where long is only 32 bits (MSVC), an
      * unsigned constant needing the top half of the 32-bit range (e.g.
@@ -2860,45 +2882,45 @@ int mir_fold_constant_binary(int op, long left, long right,
      * (dcc_ast_support.c), which already gets this right. */
     uleft = (unsigned long)left & mask;
     uright = (unsigned long)right & mask;
+    sleft = mir_signed_constant_bits(uleft, type_bytes);
+    sright = mir_signed_constant_bits(uright, type_bytes);
 
     switch (op) {
-    case '+': value = left + right; break;
-    case '-': value = left - right; break;
-    case '*': value = left * right; break;
+    case '+': value = uleft + uright; break;
+    case '-': value = uleft - uright; break;
+    case '*': value = uleft * uright; break;
     case '/':
-        if (right == 0)
+        if (uright == 0)
             return 0;
-        value = is_unsigned ? (long)(uleft / uright) : left / right;
+        value = is_unsigned ? uleft / uright :
+            (unsigned long)(sleft / sright);
         break;
     case '%':
-        if (right == 0)
+        if (uright == 0)
             return 0;
-        value = is_unsigned ? (long)(uleft % uright) : left % right;
+        value = is_unsigned ? uleft % uright :
+            (unsigned long)(sleft % sright);
         break;
-    case '&': value = left & right; break;
-    case '|': value = left | right; break;
-    case '^': value = left ^ right; break;
+    case '&': value = uleft & uright; break;
+    case '|': value = uleft | uright; break;
+    case '^': value = uleft ^ uright; break;
     case TOK_SHL:
         if (right < 0 || right >= type_bytes * 8)
             return 0;
-        value = left << right;
+        value = uleft << right;
         break;
     case TOK_SHR:
         if (right < 0 || right >= type_bytes * 8)
             return 0;
-        value = is_unsigned ? (long)(uleft >> right) : left >> right;
+        value = is_unsigned ? uleft >> right :
+            (unsigned long)(sleft >> right);
         break;
     default:
         return 0;
     }
-    value = (long)((unsigned long)value & mask);
-    if (!is_unsigned) {
-        if (type_bytes == 2 && (value & 0x8000L) != 0)
-            value -= 0x10000L;
-        else if (type_bytes == 4 && (value & 0x80000000L) != 0)
-            value -= 0x100000000L;
-    }
-    *result = value;
+    value &= mask;
+    *result = is_unsigned ? (long)value :
+        (long)mir_signed_constant_bits(value, type_bytes);
     return 1;
 }
 
@@ -2917,6 +2939,9 @@ int mir_fold_constant_compare(int op, long left, long right,
     int is_unsigned = mir_type_uses_unsigned_comparison(operand_type);
     int cmp;
 
+    if ((type_bytes != 2 && type_bytes != 4) ||
+        type_is_float(operand_type))
+        return 0;
     if (is_unsigned) {
         unsigned long mask = type_bytes == 2 ? 0xffffUL
                             : type_bytes == 4 ? 0xffffffffUL
@@ -2925,7 +2950,12 @@ int mir_fold_constant_compare(int op, long left, long right,
         unsigned long uright = (unsigned long)right & mask;
         cmp = uleft < uright ? -1 : uleft > uright ? 1 : 0;
     } else {
-        cmp = left < right ? -1 : left > right ? 1 : 0;
+        unsigned long mask = type_bytes == 2 ? 0xffffUL : 0xffffffffUL;
+        int64_t sleft = mir_signed_constant_bits(
+            (unsigned long)left & mask, type_bytes);
+        int64_t sright = mir_signed_constant_bits(
+            (unsigned long)right & mask, type_bytes);
+        cmp = sleft < sright ? -1 : sleft > sright ? 1 : 0;
     }
     switch (op) {
     case TOK_EQ: *result = cmp == 0; break;
@@ -3874,6 +3904,36 @@ int mir_call_is_memcpy_fastcall(int call_index, int *dst_value,
     *src_value = values[1];
     *n_value = values[2];
     return 1;
+}
+
+int mir_memcpy_end_pointer_target(int call_index)
+{
+    int dest, source, count;
+    int i;
+
+    if (opt_debug ||
+        !mir_call_is_memcpy_fastcall(call_index, &dest, &source, &count) ||
+        mir_value_use_count(mir.insns[call_index].dst) != 0)
+        return -1;
+    for (i = call_index + 1; i < mir.count && i <= call_index + 16; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+
+        if (insn->opcode == MIR_NOP)
+            continue;
+        if (insn->opcode == MIR_BINARY && insn->immediate == '+' &&
+            type_ptr_depth(insn->type) == 1 &&
+            (insn->type & 15) == TYPE_CHAR &&
+            mir_word_values_have_same_bits(dest, insn->src1) &&
+            mir_word_values_have_same_bits(count, insn->src2))
+            return i;
+        if (insn->dst < 0 || mir_value_use_count(insn->dst) != 1 ||
+            insn->memory_flags != 0 || type_size(insn->type) != 2 ||
+            type_is_float(insn->type) || type_is_bool(insn->type) ||
+            (insn->opcode != MIR_LOAD && insn->opcode != MIR_CONST &&
+             !(insn->opcode == MIR_UNARY && insn->immediate == 0)))
+            break;
+    }
+    return -1;
 }
 
 /* Item 18: strcpy(dst,src)->__scf, strstr(haystack,needle)->__ssf,
@@ -6155,6 +6215,13 @@ static int mir_value_has_direct_named_home(int value)
     if (!mir_direct_named_home_location(definition, &home_storage,
                                         &home_offset))
         return 0;
+    if (mir_value_use_count(value) == 1) {
+        int use = mir_next_use(value, (int)(definition - mir.insns));
+
+        if (use >= 0 && mir.insns[use].word_divmod_partner != 0 &&
+            mir_private_load_can_rematerialize_at(value, use))
+            return 1;
+    }
     local_home = home_storage == SC_LOCAL;
     definition_index = (int)(definition - mir.insns);
     if (local_home) {
@@ -8516,8 +8583,8 @@ static int mir_match_struct_sort(struct MirStructSort *plan)
         mir.has_vla || type_size(mir.return_type) != 2)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0x830444c37366320dULL ||
-        second != 0x6fde5bc3bce91c0cULL ||
+    if (first != 0x0108a07184bc4e0dULL ||
+        second != 0xcc825cdbf7bc4008ULL ||
         mir.insns[51].opcode != MIR_ADDRESS)
         return 0;
     plan->compare = find_global(mir.insns[51].name);
@@ -9236,8 +9303,8 @@ static int mir_match_assign_pre(struct MirAssignPre *plan)
         mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (!((first == 0x8ef67be878fb2ba3ULL &&
-           second == 0x630e491b9bc83d89ULL) ||
+    if (!((first == 0xc2e14aaaf447d3a3ULL &&
+           second == 0x0b8ad85da25ef391ULL) ||
           (first == 0xc80ea7be1bc3e9cfULL &&
            second == 0xd67159b3c9cddd3bULL) ||
           (first == 0xd3d10ec4f7e52c88ULL &&
@@ -9391,10 +9458,10 @@ static int mir_match_forth_run(struct MirForthRun *plan)
            second == 0xec59cda46ecc2c05ULL) ||
           (first == 0x295b678c297bd71fULL &&
            second == 0xe798b5336aa2b1a1ULL) ||
-          (first == 0xb28fb17cac25811fULL &&
-           second == 0xd26e127ac8d7dc8dULL) ||
-          (first == 0x9517e46c0d30aec4ULL &&
-           second == 0x15fb2915e373bcc5ULL)))
+          (first == 0xbd205b5bc3ba3b1fULL &&
+           second == 0x04ceb36151dc1f44ULL) ||
+          (first == 0x95c535db236ed0c4ULL &&
+           second == 0x951f4b73bb03c305ULL)))
         return 0;
     /* Unique block-local temporaries retain 17 explicit operations before
        the dispatch body; all later structural landmarks move together. */
@@ -9780,10 +9847,10 @@ static int mir_match_basic_run(struct MirBasicRun *plan)
            second == 0x85e05e5a468f71b0ULL) ||
           (first == 0xc87ea5c14b897c8aULL &&
            second == 0xbbb308088dee151eULL) ||
-          (first == 0x83d62198e5c66e2aULL &&
-           second == 0xba6fa95379bfb215ULL) ||
-          (first == 0xb6c92b8d386a7542ULL &&
-           second == 0xe093b8bf0fbbf598ULL)))
+          (first == 0x9fbb29998e23932aULL &&
+           second == 0xeb91237506ea36ecULL) ||
+          (first == 0x50027d9cd5e55a42ULL &&
+           second == 0x80ea42ecf494b964ULL)))
         return 0;
     symbols[0] = find_global(mir.insns[1].name);
     symbols[1] = find_global(mir.insns[4].name);
@@ -9908,10 +9975,10 @@ static int mir_match_fortran_eval(struct MirFortranEval *plan)
            second == 0xccc039e68a359461ULL) ||
           (first == 0xa57e68b23840f3e2ULL &&
            second == 0xa826c92afc076379ULL) ||
-          (first == 0xbc94eb55d2dcc6b4ULL &&
-           second == 0x3944da5e21f0fe04ULL) ||
-          (first == 0x99ff9778dbce8e5cULL &&
-           second == 0xc9ac7eaed8dce00aULL)))
+          (first == 0x6b1e7fe86c5000b4ULL &&
+           second == 0x2260cd95c36d3541ULL) ||
+          (first == 0xf77f1181e345bc5cULL &&
+           second == 0xaae12ce67ec66a3eULL)))
         return 0;
     if (!mir_scalar_memory_location(
             &mir.insns[1], &memory_type,
@@ -10008,8 +10075,8 @@ static int mir_match_c_run(struct MirCRun *plan)
      * prototypes, offsets, and constants are independently checked below. */
     if (!((first == 0x61bd50a8d93257caULL &&
            second == 0x38aa2257752ad49eULL) ||
-          (first == 0xfd37274d0ea63fdaULL &&
-           second == 0x971983366ec3d0ecULL)))
+          (first == 0x8053eb51ba7403daULL &&
+           second == 0x4a1745af112fdcd6ULL)))
         return 0;
     state = find_global(mir.insns[1].name);
     saved_main = find_global(mir.insns[32].name);
@@ -10094,8 +10161,8 @@ static int mir_match_pascal_run(struct MirPascalRun *plan)
         mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0x69c50cdbcb15f9e2ULL ||
-        second != 0xca3e4b47d7f8e268ULL)
+    if (first != 0x0f2a6e3986c073e2ULL ||
+        second != 0x9a54dfa8bc16b576ULL)
         return 0;
     symbols[0] = find_global(mir.insns[1].name);
     symbols[1] = find_global(mir.insns[1177].name);
@@ -10166,8 +10233,8 @@ static int mir_match_ada_run(struct MirAdaRun *plan)
         mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0x3a3005f24adf7686ULL ||
-        second != 0x3286fc3ee2fcecd9ULL)
+    if (first != 0xf2afa47622395586ULL ||
+        second != 0xfd0a2f5fbfd527b8ULL)
         return 0;
     symbols[0] = find_global(mir.insns[1].name);
     symbols[1] = find_global(mir.insns[1534].name);
@@ -14466,6 +14533,10 @@ static int mir_prepare_backend_slots(void)
     fused_away = (char *)calloc((size_t)mir.next_value, 1);
     if (fused_away == NULL)
         fatal("out of memory computing MIR fused-value set");
+    for (i = 0; i < mir.count; ++i)
+        if (mir_is_redundant_divmod_operand(&mir.insns[i]) ||
+            mir_divmod_early_store(i) >= 0)
+            fused_away[mir.insns[i].dst] = 2;
     if (mir_backend_slots_skip_fused_comparisons) {
         for (i = 0; i < mir.count; ++i) {
             int skip = mir_binary_is_fusable_comparison(i);
@@ -15716,7 +15787,7 @@ void mir_emit_virtual_load(MirStream *out, int value)
             else
                 mir_stream_puts("\tld l,a\n", out);
         }
-        if (value_size == 1) {
+        if (value_size == 1 && !mir_value_needs_only_byte(value)) {
             if (type_is_bool(value_type)) {
                 int bool_label = new_label();
                 mir_stream_puts("\tld a,l\n\tor a\n\tld hl,0\n", out);
@@ -16711,7 +16782,10 @@ static int mir_divmod_partner(int instruction)
     for (partner = 0; partner < mir.count; ++partner) {
         const struct MirInsn *other = &mir.insns[partner];
         if (partner == instruction || other->opcode != MIR_BINARY ||
-            other->src1 != candidate->src1 || other->src2 != candidate->src2 ||
+            ((other->src1 != candidate->src1 ||
+              other->src2 != candidate->src2) &&
+             !(candidate->word_divmod_partner == partner + 1 &&
+               other->word_divmod_partner == instruction + 1)) ||
             other->secondary_offset != candidate->secondary_offset)
             continue;
         /* Eager wide results held across a call increased frame pressure
@@ -16725,6 +16799,22 @@ static int mir_divmod_partner(int instruction)
             return partner;
     }
     return -1;
+}
+
+static int mir_is_redundant_divmod_operand(const struct MirInsn *insn)
+{
+    int use;
+    int partner;
+
+    if (insn->dst < 0 ||
+        (insn->opcode != MIR_LOAD && insn->opcode != MIR_CONST) ||
+        mir_value_use_count(insn->dst) != 1)
+        return 0;
+    use = mir_next_use(insn->dst, (int)(insn - mir.insns));
+    if (use < 0 || mir.insns[use].word_divmod_partner == 0)
+        return 0;
+    partner = mir_divmod_partner(use);
+    return partner >= 0 && partner < (int)(insn - mir.insns);
 }
 
 int mir_spilled_cfg_has_divmod_pair(void)
@@ -24634,10 +24724,7 @@ static int mir_emit_scalar_operation(MirStream *out, const struct MirInsn *insn)
         return 1;
     case TOK_SHL: case TOK_SHR:
         {
-            mir_emit_scalar_shift(out, (int)insn->immediate,
-                                  (insn->secondary_offset &
-                                   TYPE_UNSIGNED) != 0,
-                                  insn->src2);
+            mir_emit_scalar_shift(out, insn);
         }
         return 1;
     default:
@@ -33311,6 +33398,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
 
         mir_emit_debug_events(out, i);
         mir_emit_instruction_index = i;
+        if (mir_is_redundant_divmod_operand(insn))
+            continue;
         if (constant_control_reachable != NULL &&
             !constant_control_reachable[i])
             continue;
@@ -34047,6 +34136,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 struct MirIndexedPredecrementLoad indexed_predecrement;
                 int small_add_amount;
                 int selfstore_store_index;
+                if (mir_divmod_early_store(producer_index) == i)
+                    break;
                 if ((mir_binary_is_narrow_phi_adjust(
                         producer_index, &phi_value,
                         &narrow_phi_store_index) &&
@@ -34605,7 +34696,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                      source->immediate == TOK_LE ||
                      source->immediate == TOK_GE);
 
-                if (!((insn->type & 15) == TYPE_BOOL &&
+                if (!mir_byte_cast_needs_no_extension(insn) &&
+                    !((insn->type & 15) == TYPE_BOOL &&
                       comparison_result) &&
                     !(source != NULL && type_size(source->type) == 1 &&
                       type_size(insn->type) == 2 &&
@@ -34680,6 +34772,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             int narrow_multiply_unsigned;
             int multiply_index;
             int addend_value;
+            if (insn->word_divmod_partner > 0 &&
+                insn->word_divmod_partner - 1 < i)
+                break;
             if (mir_match_indexed_stack_unary_reduction(
                     i, &inline_postincrement_helper, &stack_unary)) {
                 mir_emit_indexed_stack_unary_reduction(
@@ -35191,20 +35286,56 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     int division_value = insn->immediate == '/' ? insn->dst
                                                                  : other->dst;
                     int saved_instruction = mir_emit_instruction_index;
+                    int early_store = mir_divmod_early_store(divmod_partner);
                     if (divmod_partner < i)
                         break;
-                    mir_stream_puts("\tpush hl\n", out);
-                    mir_emit_virtual_load(out, insn->src2);
-                    mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+                    if (right_definition != NULL &&
+                        right_definition->opcode == MIR_CONST) {
+                        mir_stream_printf(out, "\tld de,%lu\n",
+                            (unsigned long)right_definition->immediate & 0xffffUL);
+                    } else {
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_virtual_load(out, insn->src2);
+                        mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+                    }
                     if ((insn->secondary_offset & TYPE_UNSIGNED) != 0)
                         mir_emit_runtime_call(out, "__udivmod");
                     else
                         mir_emit_runtime_call(out, "__sdivmod");
                     mir_emit_instruction_index = -1;
-                    mir_stream_puts("\tpush hl\n\tex de,hl\n", out);
-                    mir_emit_virtual_store(out, modulo_value);
-                    mir_stream_puts("\tpop hl\n", out);
-                    mir_emit_virtual_store(out, division_value);
+                    if (insn->word_divmod_partner != 0 &&
+                        insn->immediate == '%') {
+                        mir_stream_puts("\tpush de\n", out);
+                        if (early_store >= 0) {
+                            int type, storage, offset;
+                            if (!mir_scalar_memory_location(
+                                    &mir.insns[early_store], &type,
+                                    &storage, &offset))
+                                goto done;
+                            mir_emit_frame_word_store(out, offset);
+                        } else {
+                            mir_emit_virtual_store(out, division_value);
+                        }
+                        mir_stream_puts("\tpop hl\n", out);
+                        mir_emit_instruction_index = saved_instruction;
+                        mir_emit_virtual_store(out, modulo_value);
+                    } else {
+                        mir_stream_puts("\tpush hl\n\tex de,hl\n", out);
+                        if (early_store >= 0) {
+                            int type, storage, offset;
+                            if (!mir_scalar_memory_location(
+                                    &mir.insns[early_store], &type,
+                                    &storage, &offset))
+                                goto done;
+                            mir_emit_frame_word_store(out, offset);
+                        } else {
+                            mir_emit_virtual_store(out, modulo_value);
+                        }
+                        mir_stream_puts("\tpop hl\n", out);
+                        if (insn->word_divmod_partner != 0)
+                            mir_emit_instruction_index = saved_instruction;
+                        mir_emit_virtual_store(out, division_value);
+                    }
                     mir_emit_instruction_index = saved_instruction;
                     break;
                 }
@@ -35724,6 +35855,19 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                               out);
                     }
                     mir_emit_runtime_call(out, "__mcf");
+                    {
+                        int target = mir_memcpy_end_pointer_target(i);
+
+                        if (target >= 0) {
+                            /* The guarded copy leaves DE=destination+count,
+                             * including zero, while HL returns destination. */
+                            mir_stream_puts("\tex de,hl\n", out);
+                            mir_emit_instruction_index = target;
+                            mir_emit_virtual_store(out, mir.insns[target].dst);
+                            i = target;
+                            break;
+                        }
+                    }
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
                         if (type_size(insn->type) == 4)

@@ -71,6 +71,19 @@ class DccRtlStripBlockTests(unittest.TestCase):
         self.assertNotIn("___getc_ch:", rtl)
         self.assertNotIn("_read:", rtl)
 
+    def test_memory_snapshot_does_not_keep_allocator(self):
+        rtl = self.strip_root("_meminfo")
+        self.assertIn("_meminfo:", rtl)
+        self.assertNotIn("_malloc:", rtl)
+        self.assertNotIn("_free:", rtl)
+        self.assertNotIn("__mlh:", rtl)
+        self.assertNotIn("__frcoal:", rtl)
+
+        for roots in ((), ("_malloc",), ("_free",), ("_malloc", "_free")):
+            with self.subTest(roots=roots):
+                rtl = self.strip_roots(*roots)
+                self.assertNotIn("_meminfo", rtl.lower())
+
     def test_fgetc_keeps_private_byte_and_shared_pushback(self):
         rtl = self.strip_root("__fgetc")
         self.assertIn("___getc_ch:", rtl)

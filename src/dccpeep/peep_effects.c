@@ -255,6 +255,8 @@ static void classify_instruction(PeepLineInfo *info, const char *line)
                !strcmp(mnemonic, "cp")) {
         info->opcode = PEEP_OPCODE_ALU;
         info->effects.reads = PEEP_REG_A | left_regs;
+        if (!strcmp(mnemonic, "xor") && !strcmp(left, "a") && !right[0])
+            info->effects.reads = 0;
         if (left[0] == '(')
             info->effects.memory_read = operand_memory_class(&info->left);
         if (strcmp(mnemonic, "cp"))

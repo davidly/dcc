@@ -1,12 +1,12 @@
 /**
  * @file l80c.c
- * @brief Links dcc LINK-80 modules into host-produced CP/M .COM images.
+ * @brief Links dcc LINK-80 modules into CP/M .COM images or bank-1 libraries.
  *
  * @par Role
  * Reads M80-compatible .REL bitstreams, lays out each module's CSEG and DSEG,
  * relocates link values, resolves PUBLIC symbols and EXTRN chains, and writes
- * a padded .COM image plus a linked .SYM map. Optional per-module .SYM files
- * contribute relocated local symbols.
+ * a padded .COM image or checked fixed-address .LIB plus a linked .SYM map.
+ * Optional per-module .SYM files contribute relocated local symbols.
  *
  * @par Key entry points
  * main(), load_rel_file(), load_module_syms(), and sym_define().
@@ -39,6 +39,24 @@ typedef unsigned short U16;
 #define MAXNAME 16
 #define MAXMOD 64
 #define MAXORIGIN 0x10000L
+#define MAXEXPORT 8
+
+/* Fixed-address bank-1 library: 26-byte header, then one 12-byte entry per
+ * export (name, adapter offset, signature offset), followed by image bytes.
+ * All multi-byte fields are little-endian. */
+#define LIB_HEADER_BYTES 26
+#define LIB_EXPORT_BYTES 12
+#define LIB_FORMAT_VERSION 1
+#define LIB_ABI_MAJOR 1
+#define LIB_ABI_MINOR 0
+#define LIB_CALL_REVISION 1
+
+static void die(const char *fmt, ...);
+
+static void store_u16(U8 *bytes, unsigned value) {
+    bytes[0] = (U8)(value & 255);
+    bytes[1] = (U8)((value >> 8) & 255);
+}
 
 static const char *g_progname = "l80c";
 
@@ -93,17 +111,13 @@ static void bounded_append(char *dst, size_t dst_size, const char *src) {
     memcpy(dst + used, src, len);
     dst[used + len] = 0;
 }
-static int ends_with_com(const char *s) {
-    size_t n = strlen(s);
-    return n >= 4 &&
-        s[n - 4] == '.' &&
-        toupper((unsigned char)s[n - 3]) == 'C' &&
-        toupper((unsigned char)s[n - 2]) == 'O' &&
-        toupper((unsigned char)s[n - 1]) == 'M';
-}
-static void normalize_output_base(char *name) {
+static void normalize_output_base(char *name, int library_mode) {
+    const char *suffix = library_mode ? ".LIB" : ".COM";
     size_t n = strlen(name);
-    if (ends_with_com(name))
+    if (n >= 4 && name[n - 4] == '.' &&
+        toupper((unsigned char)name[n - 3]) == suffix[1] &&
+        toupper((unsigned char)name[n - 2]) == suffix[2] &&
+        toupper((unsigned char)name[n - 1]) == suffix[3])
         name[n - 4] = 0;
     if (name[0] == 0)
         die("empty output name");
@@ -549,6 +563,14 @@ int main(int argc, char **argv) {
     char outpath[512];
     char sympath[512];
     int verbose = 0;
+    int library_mode = 0;
+    int stack_bytes = 2048;
+    char exports[MAXEXPORT][MAXNAME];
+    char export_symbols[MAXEXPORT][MAXNAME];
+    char signature_names[MAXEXPORT][MAXNAME];
+    char signature_symbols[MAXEXPORT][MAXNAME];
+    int signature_count = 0;
+    int export_count = 0;
 
     if (argc > 0) g_progname = argv[0];
     outname[0] = 0;
@@ -608,8 +630,73 @@ int main(int argc, char **argv) {
             if (strcmp(argv[argi], "-o") == 0 && argi + 1 < argc) {
                 bounded_copy(outname, sizeof(outname), argv[++argi]);
                 have_outname = 1;
+            } else if (strcmp(argv[argi], "--lib") == 0) {
+                library_mode = 1;
+            } else if (strcmp(argv[argi], "--export") == 0 && argi + 1 < argc) {
+                const char *name = argv[++argi];
+                const char *equal = strchr(name, '=');
+                const char *symbol = equal ? equal + 1 : name;
+                char normalized[MAXNAME];
+                char linked_name[MAXNAME];
+                size_t n = equal ? (size_t)(equal - name) : strlen(name);
+                size_t symbol_len = strlen(symbol);
+                size_t j;
+                if (n == 0 || n > 8 || symbol_len == 0 ||
+                    symbol_len >= MAXNAME || export_count >= MAXEXPORT)
+                    die("library export names must be 1..8 characters (maximum %d exports)", MAXEXPORT);
+                for (j = 0; j < n; ++j)
+                    if (!isalnum((unsigned char)name[j]) && name[j] != '_')
+                        die("invalid library export: %s", name);
+                for (j = 0; j < symbol_len; ++j)
+                    if (!isalnum((unsigned char)symbol[j]) && symbol[j] != '_')
+                        die("invalid linked symbol: %s", symbol);
+                for (j = 0; j < n; ++j)
+                    normalized[j] = (char)toupper((unsigned char)name[j]);
+                normalized[n] = 0;
+                for (j = 0; j < symbol_len && j < 6; ++j)
+                    linked_name[j] = (char)toupper((unsigned char)symbol[j]);
+                linked_name[j] = 0;
+                for (i = 0; i < export_count; ++i)
+                    if (strcmp(exports[i], normalized) == 0)
+                        die("duplicate library export: %s", name);
+                bounded_copy(exports[export_count], MAXNAME, normalized);
+                bounded_copy(export_symbols[export_count++], MAXNAME, linked_name);
+            } else if (strcmp(argv[argi], "--signature") == 0 && argi + 1 < argc) {
+                const char *entry = argv[++argi];
+                const char *equal = strchr(entry, '=');
+                size_t n = equal ? (size_t)(equal - entry) : 0;
+                size_t j;
+                if (!n || n > 8 || !equal[1] ||
+                    strlen(equal + 1) > 6 || signature_count >= MAXEXPORT)
+                    die("signature must be NAME=SYMBOL (name <=8, symbol <=6)");
+                for (j = 0; j < n; ++j) {
+                    if (!isalnum((unsigned char)entry[j]) && entry[j] != '_')
+                        die("invalid signature export name: %s", entry);
+                    signature_names[signature_count][j] =
+                        (char)toupper((unsigned char)entry[j]);
+                }
+                signature_names[signature_count][n] = 0;
+                for (j = 0; equal[1 + j]; ++j) {
+                    if (!isalnum((unsigned char)equal[1 + j]) && equal[1 + j] != '_')
+                        die("invalid signature symbol: %s", entry);
+                    signature_symbols[signature_count][j] =
+                        (char)toupper((unsigned char)equal[1 + j]);
+                }
+                signature_symbols[signature_count][j] = 0;
+                for (i = 0; i < signature_count; ++i)
+                    if (!strcmp(signature_names[i], signature_names[signature_count]))
+                        die("duplicate signature: %s", entry);
+                ++signature_count;
+            } else if (strcmp(argv[argi], "--stack-bytes") == 0 && argi + 1 < argc) {
+                char *end;
+                long value = strtol(argv[++argi], &end, 0);
+                if (*end || value < 256 || value > 2048 || (value & 255))
+                    die("library stack must be 256..2048 bytes in 256-byte units");
+                stack_bytes = (int)value;
             } else if (strcmp(argv[argi], "-v") == 0) {
                 verbose = 1;
+            } else {
+                die("unknown option: %s", argv[argi]);
             }
         }
     }
@@ -617,11 +704,33 @@ int main(int argc, char **argv) {
     if (nmodlist == 0) die("no modules given");
     if (origin < 0 || origin >= MAXORIGIN)
         die("origin out of range");
+    if (library_mode && (origin != 0x100 || export_count == 0))
+        die("library mode requires origin 0100h and at least one --export");
+    if (!library_mode && export_count)
+        die("--export requires --lib");
+    if (!library_mode && signature_count)
+        die("--signature requires --lib");
+    for (i = 0; i < export_count; ++i) {
+        int found = 0, k;
+        for (k = 0; k < signature_count; ++k)
+            if (!strcmp(signature_names[k], exports[i]))
+                found = 1;
+        if (!found)
+            die("library export %s has no --signature", exports[i]);
+    }
+    for (i = 0; i < signature_count; ++i) {
+        int found = 0, e;
+        for (e = 0; e < export_count; ++e)
+            if (!strcmp(signature_names[i], exports[e]))
+                found = 1;
+        if (!found)
+            die("signature has no matching export: %s", signature_names[i]);
+    }
 
     if (!have_outname) {
         bounded_copy(outname, sizeof(outname), modlist[nmodlist - 1]);
     }
-    normalize_output_base(outname);
+    normalize_output_base(outname, library_mode);
 
     /* Load every module named on the command line, in order. Module names
        are matched to files by appending .REL (trying both the given case
@@ -727,7 +836,7 @@ int main(int argc, char **argv) {
        special-casing needed between the two. */
     for (mf = g_fixups; mf; mf = mf->next) {
         Module *m = &g_modules[mf->module];
-        long base;
+        long base = 0;
         long slot;
         U16 v;
         if (mf->type == T_CODE) base = m->cseg_base;
@@ -767,6 +876,87 @@ int main(int argc, char **argv) {
             if (old == 0) break;
             addr = old;
         }
+    }
+
+    if (library_mode) {
+        int e, j;
+        U8 header[LIB_HEADER_BYTES + LIB_EXPORT_BYTES * MAXEXPORT];
+        unsigned header_len = LIB_HEADER_BYTES + LIB_EXPORT_BYTES * export_count;
+        SymEntry *brk = sym_lookup("__BRK");
+        SymEntry *hlimit = sym_lookup("__HLIM"); /* M80 public names are six bytes. */
+        SymEntry *hstart = sym_lookup("__HSTA");
+        SymEntry *bss_end = sym_lookup("__BSSE");
+        long heap_start = origin + total_len;
+        if (sym_lookup("START") || sym_lookup("_main") || sym_lookup("_MAIN"))
+            die("library must not link a transient-program startup or main");
+        if ((brk == NULL) != (hlimit == NULL))
+            die("bank-1 runtime must provide both __brk and __hlimit");
+        if (brk && (brk->value < origin || brk->value + 2 > origin + total_len ||
+                    hlimit->value < origin || hlimit->value + 2 > origin + total_len))
+            die("bank-1 runtime heap-state symbols are outside the image");
+        if (brk) {
+            if (!hstart || !bss_end || hstart->value < heap_start ||
+                hstart->value < bss_end->value)
+                die("bank-1 runtime heap must start after the image and BSS");
+            heap_start = hstart->value;
+        }
+        if (heap_start >= 0xC800L - stack_bytes)
+            die("bank-1 heap overlaps the configured stack");
+        memset(header, 0, sizeof(header));
+        memcpy(header, "B1LB", 4);
+        header[4] = LIB_FORMAT_VERSION;
+        header[5] = LIB_ABI_MAJOR;
+        header[6] = LIB_ABI_MINOR;
+        header[7] = LIB_CALL_REVISION;
+        store_u16(header + 8, 0x100);
+        store_u16(header + 10, (unsigned)total_len);
+        store_u16(header + 12, (unsigned)export_count);
+        /* Bytes 14..15 are reserved and remain zero. */
+        store_u16(header + 16, (unsigned)stack_bytes);
+        store_u16(header + 18, header_len);
+        store_u16(header + 20, brk ? (unsigned)(brk->value - origin) : 0xffffu);
+        store_u16(header + 22, hlimit ? (unsigned)(hlimit->value - origin) : 0xffffu);
+        store_u16(header + 24, (unsigned)heap_start);
+        for (e = 0; e < export_count; ++e) {
+            U8 *entry = header + LIB_HEADER_BYTES + e * LIB_EXPORT_BYTES;
+            SymEntry *sym = sym_lookup(export_symbols[e]);
+            SymEntry *signature = NULL;
+            long offset;
+            unsigned length = 0;
+            if (!sym || sym->value < origin || sym->value >= origin + total_len)
+                die("missing or out-of-image library export: %s", exports[e]);
+            for (j = 0; j < 8; ++j)
+                entry[j] = (U8)(j < (int)strlen(exports[e]) ? exports[e][j] : 0);
+            store_u16(entry + 8, (unsigned)(sym->value - origin));
+            for (j = 0; j < signature_count; ++j)
+                if (!strcmp(signature_names[j], exports[e]))
+                    signature = sym_lookup(signature_symbols[j]);
+            if (!signature || signature->value < origin ||
+                signature->value >= origin + total_len)
+                die("missing or out-of-image signature: %s", exports[e]);
+            offset = signature->value - origin;
+            while (offset + length < total_len && image[offset + length] &&
+                   length <= 255) {
+                if (image[offset + length] < 32 || image[offset + length] > 126)
+                    die("non-ASCII library signature: %s", exports[e]);
+                ++length;
+            }
+            if (!length || length > 255 || offset + length >= total_len)
+                die("invalid or unterminated signature: %s", exports[e]);
+            store_u16(entry + 10, (unsigned)offset);
+        }
+        suffix_path(outpath, sizeof(outpath), outname, ".LIB");
+        outf = fopen(outpath, "wb");
+        if (!outf) die("cannot create %s", outpath);
+        if (fwrite(header, 1, header_len, outf) != header_len)
+            die("short library write");
+        if (fwrite(image, 1, (size_t)total_len, outf) != (size_t)total_len)
+            die("short library write");
+        output_len = header_len + total_len;
+        while (output_len++ % 128)
+            if (fputc(0, outf) == EOF) die("short library padding write");
+        if (fclose(outf) != 0) die("cannot finish writing %s", outpath);
+        goto write_symbol_table;
     }
 
     /* Emit a CP/M-loadable image. At or above 0100H, file offsets map
@@ -847,6 +1037,7 @@ int main(int argc, char **argv) {
     if (fclose(outf) != 0)
         die("cannot finish writing %s", outpath);
 
+write_symbol_table:
     /* .SYM: final linked symbol table, ADDR<TAB>NAME pairs, matching the
        format dccprof.py already parses from real L80's output - now with
        local symbols merged in too when a module's .SYM was found (-C),

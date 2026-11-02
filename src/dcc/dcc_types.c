@@ -574,6 +574,7 @@ void parse_struct_definition(int struct_id)
             dcc_copy_str(field_defs[nfield_defs].name, sizeof(field_defs[nfield_defs].name), fname);
             field_defs[nfield_defs].type = ftype;
             field_defs[nfield_defs].funcptr_prototype = capture_funcptr_prototype(ftype, is_funcptr_field);
+            field_defs[nfield_defs].is_const = g_decl.is_const || g_decl.bank_typedef_const;
             field_defs[nfield_defs].is_volatile = g_decl.is_volatile;
             field_defs[nfield_defs].pointee_volatile_mask =
                 g_decl.pointee_volatile_mask |
@@ -728,6 +729,7 @@ int parse_base_type(void)
     memset(g_typedef_proto_types, 0, sizeof(g_typedef_proto_types));
     g_decl.is_register = 0;
     g_decl.is_const = 0;
+    g_decl.bank_typedef_const = 0;
     g_decl.is_volatile = 0;
     g_decl.pointee_is_volatile = 0;
     g_decl.pointee_volatile_mask = 0;
@@ -920,6 +922,7 @@ int parse_base_type(void)
         if (!saw_any && g_lex.tok.kind == TOK_ID && (td = find_typedef(g_lex.tok.text)) >= 0) {
             t = typedefs[td].type;
             g_typedef_base_type = t;
+            g_decl.bank_typedef_const = typedefs[td].bank_is_const;
             g_decl.is_volatile |= typedefs[td].is_volatile;
             g_decl.pointee_is_volatile = typedefs[td].pointee_is_volatile;
             g_decl.pointee_volatile_mask = typedefs[td].pointee_volatile_mask;

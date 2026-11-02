@@ -58,7 +58,7 @@ flowchart TB
 | Reduce application | `dccrtlstrip` | All app `.MAC` files | Rewritten app `.MAC` files | Remove functions, initialized objects, and module BSS objects unreachable from the final program entry |
 | Reduce runtime | `dccrtlstrip` | `DCCRTL.MAC` + app `.MAC` | `RTLMIN.MAC` | Keep only the runtime routines the app references |
 | Assemble | [`m80c`](03-utilities.md#native-assembler-m80c) | `.MAC` | `.REL` | Object code (relocatable); `dccmake` uses native `m80c` by default |
-| Link | [`l80c`](03-utilities.md#native-linker-l80c) | `.REL` files | `.COM` | Resolve symbols into a CP/M executable; `dccmake` uses native `l80c` by default |
+| Link | [`l80c`](03-utilities.md#native-linker-l80c) | `.REL` files | `.COM` or `.LIB` | Resolve symbols into a CP/M executable or fixed-address bank-1 library; `dccmake` uses native `l80c` by default |
 
 The `dccpeep` stage is optional (`dccmake dcc-peep=false` skips it).
 `dccrtlstrip` first
@@ -114,6 +114,70 @@ set represents constants, parameters, loads/stores, address/member/index
 formation, unary/binary operations, call-site-tagged arguments and calls,
 aggregate copies, labels, branches, jumps, edge-specific PHIs, returns, and VLA
 stack save/allocate/restore operations.
+
+Late integer normalization is evaluated after the existing boolean alternatives
+as a separate generated candidate against the best incumbent, so
+repairing constants or narrowing a shift cannot silently disable a profitable
+exact schedule. Constant trees use target-width arithmetic (16-bit `int`,
+32-bit `long`), including signed division, remainder, comparisons, and shifts.
+A bounded consumer-demand proof can replace a wide right shift followed by a
+word conversion with an unsigned word shift when every observable use needs
+only bits available in the low word. For word right shifts by 4--7, an
+eight-bit-only result uses left shifts followed by high-byte extraction instead
+of repeated word shifts. Byte stores propagate eight-bit demand through integer
+casts and direct named-byte reloads, avoiding unobserved sign/zero extension.
+Boolean conversions, unknown
+uses, calls, and PHIs conservatively require the complete value; volatile loads
+retain their width. Full debug retains the original location-preserving forms;
+line debug remains release-identical.
+Constant word shifts by 8--15 operate only on the surviving byte, with sign
+extension for signed right shifts. Left shifts use accumulator doublings;
+unsigned right shifts by 12--15 use rotates and a mask, and signed right shift
+by 15 extracts the sign directly. Shared emitters and parameter-only schedules
+use the same reductions. The peephole optimizer folds XOR with a saved,
+byte-shifted copy into a direct byte update. It preserves DE unless CFG liveness
+proves that temporary dead; accumulator and final flags remain equivalent.
+The normalized candidate must not increase estimated machine bytes, emitted
+instructions, weighted cycles, or helper costs. Boolean-PHI alternatives retain
+their separate admission policy.
+
+Another costed alternative combines adjacent nonvolatile byte stores of a
+16-bit integer's low and high bytes into a native little-endian word store.
+It preserves byte order and permits unaligned addresses. Both source slices
+must use the same value, and no load, call, memory mutation, or control-flow
+boundary may intervene. Shared expression uses remain live. Volatile
+destinations and bit-fields retain their original byte accesses.
+
+Word quotient/remainder pairing also admits equal constants and stable reloads
+of nonvolatile, non-escaping frame objects. Reciprocal proof metadata preserves
+the original operand lifetimes rather than coalescing SSA values. The first
+operation computes both results; a future result can be stored early only when
+its sole destination is a private word object with no intervening observers or
+mutations. Other future results retain a spill slot. Signed division still uses
+signed helpers; negative dividends are not assumed impossible from source
+intent alone.
+
+The fastcall `memcpy` helper returns the original destination in HL and the
+advanced destination in DE. When its C return is unused, a following byte-pointer
+addition can reuse DE if destination and count are proven equivalent and all
+intervening expressions are disposable. Observable returns, scaled pointers,
+volatile counts, and possibly aliased reloads retain ordinary lowering. This
+avoids reloading and adding the projection output pointer without changing the
+public `memcpy` contract.
+
+Final peephole byte-store cleanup handles stack and exchange transfers with
+signed, zero, or absent extension. CFG liveness protects live D, accumulator,
+and flags; zero/absent extension does not require dead flags. The instruction
+effect model recognizes `xor a` as defining, not reading, the old accumulator.
+Indexed byte loads retain their direct-to-DE transfer when extension is absent,
+preserving the original high byte when D is live.
+
+Address-chain retirement distinguishes spilled rematerialization from homed
+address computation: a homed base remains live unless all downstream accesses
+can bypass it. Constant absolute byte stores can use the accumulator directly
+without clobbering live register-pair homes. In CFGs this requires a disposable
+nonzero member-address chain; index-only stores retain their existing path so
+peephole can fuse them with preceding bulk operations.
 
 ### One production body walk
 

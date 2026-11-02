@@ -10,6 +10,43 @@ ctest --test-dir build/mir-tests --output-on-failure
 
 ## Whole-compiler source-function coverage
 
+Exact numeric-kernel and flagged-record fingerprints canonicalize aggregate
+identities in first-use order rather than hashing parser-assigned struct IDs.
+Unrelated declarations must not disable optimized schedules. Distinct aggregate
+identities, pointer flags, signedness, memory layouts, and CFG payloads remain
+part of the existing semantic proofs. Run the declaration-order, layout, and
+type-identity controls after building the compiler:
+
+```sh
+python3 -m unittest scripts.tests.test_mir_type_fingerprints
+```
+
+Late integer normalization has target-width constant-tree and demanded-bit
+shift controls, including shared/volatile values, bounded proofs, constant
+address chains, and release-identical line-debug output. Its fixed-value CP/M
+oracles run in peep/nopeep and release/full-debug/line-debug modes:
+
+```sh
+python3 -m unittest scripts.tests.test_mir_integer_optimization
+```
+
+The same suite covers little-endian word-store combination, exact assembled
+writer size limits (25 bytes raw, 20 with peephole), alias-sensitive reloads,
+signed/unsigned values, masks, volatile destinations, and both debug modes.
+The host verifier additionally checks 33 store-proof cases covering shared
+trees, intervening observers and all memory/CFG barriers, including idempotence
+and preservation of rejected instructions.
+
+Bit-window controls exhaust all 65,536 word inputs for signed and unsigned shifts
+4--7 and enforce assembled size limits in both pipelines. Signed-byte parameter
+oracles cover all 256 values with byte-only, word, and shared uses.
+Copy-end tests cover zero-length and
+boundary copies, observable returns, scaled pointers, and aliased/volatile
+counts. Decimal and signed quotient/remainder oracles check negative and
+boundary inputs against long arithmetic. The host verifier covers 23 additional
+private-word equivalence and early-store variants, including escapes, mutations,
+observers, control/stack boundaries, unchanged SSA operands, and idempotence.
+
 The coverage collector additionally runs
 `scripts/test-compiler-entrypoints.py` with the checkpoint compiler and this
 existing verifier harness before writing its collection success stamp. Driver

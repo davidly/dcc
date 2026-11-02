@@ -22,6 +22,7 @@ HELP = VERSION + """usage: dcc [options] input.c -o output.mac
 options:
   -o <file>        write M80 assembly to <file> ('-' for stdout)
   -c, -module      emit a linkable helper module (not a final program)
+  -bank-api <file> emit resolved public function type/definition metadata
   -f, -ffloatio    force every printf-family call to support %f, even
                    ones whose literal format string doesn't use it
                    (normally auto-detected per call; only needed for a
