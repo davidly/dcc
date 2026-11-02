@@ -1,3 +1,4 @@
+import os
 import subprocess
 import tempfile
 import unittest
@@ -91,14 +92,20 @@ class LineDebugTests(unittest.TestCase):
                 f"dcc-tool={REPO_ROOT / 'dcc'}\n"
                 f"dccpeep-tool={REPO_ROOT / 'dccpeep'}\n"
                 f"dccrtlstrip-tool={REPO_ROOT / 'dccrtlstrip'}\n"
-                f"m80-command={REPO_ROOT / 'm80c'}\n"
-                f"l80-command={REPO_ROOT / 'l80c'}\n",
+                f"m80c-tool={REPO_ROOT / 'm80c'}\n"
+                f"l80c-tool={REPO_ROOT / 'l80c'}\n"
+                "dcc-use-emulated-m80=false\n"
+                "dcc-use-emulated-l80=false\n",
                 encoding="ascii",
             )
 
+            # Native tool settings must win over unrelated installed tools.
+            environment = dict(os.environ, M80C=str(root / "old-m80c"),
+                               L80C=str(root / "old-l80c"))
             subprocess.run(
                 [str(REPO_ROOT / "dccmake"), "dcc-debug=false"],
                 cwd=root,
+                env=environment,
                 check=True,
                 capture_output=True,
                 text=True,
@@ -108,6 +115,7 @@ class LineDebugTests(unittest.TestCase):
             subprocess.run(
                 [str(REPO_ROOT / "dccmake"), "-g"],
                 cwd=root,
+                env=environment,
                 check=True,
                 capture_output=True,
                 text=True,

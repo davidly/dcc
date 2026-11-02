@@ -391,6 +391,17 @@ function Invoke-ExtendedTest {
             $casePassed = $false
             break
         }
+        # Match the main suite's warning policy, including verifier failures
+        # from rejected MIR candidates even when compilation exits zero.
+        $buildWarnings = @($buildResult.Output -split "`r?`n" | Where-Object {
+            $_ -match '%Mult\. Def\.|%Phase error|%Undefined|^\s*; MIR \S+:'
+        })
+        if ($buildWarnings) {
+            $lines.Add("  Building $($Case.Name) ($displayMode)... FAILED (build diagnostics)")
+            foreach ($line in $buildWarnings) { $lines.Add("    BUILD> $line") }
+            $casePassed = $false
+            break
+        }
         $lines.Add("  Building $($Case.Name) ($displayMode)... done")
 
         $upper = $Case.Name.ToUpperInvariant()

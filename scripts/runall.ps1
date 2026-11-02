@@ -869,7 +869,10 @@ function Invoke-DccMakeBuild {
         return $false
     }
 
-    $buildWarnings = @($buildOut | Where-Object { $_ -match '%Mult\. Def\.|%Phase error|%Undefined' })
+    # MIR verifier diagnostics use '; MIR function: ...'. Normal MIR reports
+    # have no colon after the function name and remain permitted. A rejected
+    # optimization can emit a verifier failure while dcc still exits zero.
+    $buildWarnings = @($buildOut | Where-Object { $_ -match '%Mult\. Def\.|%Phase error|%Undefined|^\s*; MIR \S+:' })
     if ($buildWarnings) {
         $buildWarnings | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
         if (-not $Quiet) { Write-Warning "Build warnings treated as errors for $Name" }

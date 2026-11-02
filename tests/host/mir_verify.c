@@ -8445,6 +8445,83 @@ static void diamond(void)
     mir.insns[10].src1 = 3;
 }
 
+static void verify_boolean_branch_phi_target(void)
+{
+    struct MirInsn prefix[10];
+    struct MirInsn regions[2][17];
+    int variant;
+
+    diamond();
+    memcpy(prefix, mir.insns, sizeof(prefix));
+    for (variant = 0; variant < 3; ++variant) {
+        int phi = variant == 2 ? 15 : 14;
+        int guarded = variant != 0;
+        setup(17, 6, 6);
+        memcpy(mir.insns, prefix, sizeof(prefix));
+        mir.insns[4].immediate = 1;
+        mir.insns[10].opcode = MIR_BRANCH_FALSE;
+        mir.insns[10].src1 = 3;
+        mir.insns[10].label = 4;
+        mir.insns[11].opcode = MIR_LABEL;
+        mir.insns[11].label = 5;
+        mir.insns[12].opcode = MIR_JUMP;
+        mir.insns[12].label = 4;
+        mir.insns[13].opcode = MIR_LABEL;
+        mir.insns[13].label = 4;
+        if (variant == 2) {
+            mir.insns[14].opcode = MIR_CONST;
+            mir.insns[14].dst = 5;
+        }
+        mir.insns[phi].opcode = guarded ? MIR_PHI : MIR_UNARY;
+        mir.insns[phi].dst = 4;
+        mir.insns[phi].src1 = 0;
+        mir.insns[phi].src2 = guarded ? 0 : -1;
+        mir.insns[phi].immediate = '+';
+        mir.insns[phi].phi_pred1 = guarded ? 3 : -1;
+        mir.insns[phi].phi_pred2 = guarded ? 5 : -1;
+        mir.insns[16].src1 = 4;
+        expect_verification("boolean branch target fixture", 1);
+        if (variant == 0 || variant == 2)
+            memcpy(regions[variant == 2], mir.insns, sizeof(regions[0]));
+        if (mir_boolean_phi_branch_candidate_count() != 1) {
+            fprintf(stderr, "FAIL boolean branch PHI target candidate %d\n", variant);
+            ++failures;
+        }
+        mir_simplify_boolean_phi_branches();
+        if (mir_boolean_phi_branch_simplification_count() != !guarded ||
+            (guarded && mir.insns[10].opcode != MIR_BRANCH_FALSE)) {
+            fprintf(stderr, "FAIL boolean branch PHI target preservation %d\n", variant);
+            ++failures;
+        }
+        expect_verification("boolean branch preserves target PHI edges", 1);
+    }
+    /* A safe branch before an unsafe one must not leave a partial candidate. */
+    setup(34, 12, 12);
+    memcpy(mir.insns, regions[0], sizeof(regions[0]));
+    memcpy(mir.insns + 17, regions[1], sizeof(regions[1]));
+    mir.insns[16].opcode = MIR_NOP;
+    mir.insns[16].src1 = -1;
+    for (variant = 17; variant < 34; ++variant) {
+        struct MirInsn *insn = &mir.insns[variant];
+        if (insn->dst >= 0) insn->dst += 6;
+        if (insn->src1 >= 0) insn->src1 += 6;
+        if (insn->src2 >= 0) insn->src2 += 6;
+        if (insn->label >= 0) insn->label += 6;
+        if (insn->phi_pred1 >= 0) insn->phi_pred1 += 6;
+        if (insn->phi_pred2 >= 0) insn->phi_pred2 += 6;
+    }
+    expect_verification("mixed boolean branch target fixture", 1);
+    mir_simplify_boolean_phi_branches();
+    if (mir_boolean_phi_branch_candidate_count() != 2 ||
+        mir_boolean_phi_branch_simplification_count() != 0 ||
+        mir.insns[10].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[27].opcode != MIR_BRANCH_FALSE) {
+        fprintf(stderr, "FAIL boolean branch PHI target whole candidate preservation\n");
+        ++failures;
+    }
+    expect_verification("mixed boolean branch target preservation", 1);
+}
+
 static void verify_target_constraints(void)
 {
     struct MirInsn insn;
@@ -9237,6 +9314,7 @@ int main(int argc, char **argv)
     verify_preprocessor_characters();
     verify_global_pointer_write_ownership();
     verify_target_constraints();
+    verify_boolean_branch_phi_target();
     verify_shadow_schedules();
     verify_frontend_initializer_capture_only();
     setup(3, 1, 1);

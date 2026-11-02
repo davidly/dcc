@@ -28,7 +28,16 @@ def build(dcc_root, directory, output, *sources, line_debug=False):
         (
             f"dcc-output={output}",
             f"dcc-include-directory={dcc_root}",
-            f"l80-command={dcc_root / 'l80c.com'}",
+            # Builds run in a temporary directory, so dccmake's local-tool
+            # discovery cannot find this checkout. Never mix its compiler
+            # and debug metadata with older installed tools from PATH.
+            f"dcc-tool={dcc_root / 'dcc'}",
+            f"dccpeep-tool={dcc_root / 'dccpeep'}",
+            f"dccrtlstrip-tool={dcc_root / 'dccrtlstrip'}",
+            f"m80c-tool={dcc_root / 'm80c'}",
+            f"l80c-tool={dcc_root / 'l80c'}",
+            "dcc-use-emulated-m80=false",
+            "dcc-use-emulated-l80=false",
             f"dcc-runtime={dcc_root / 'DCCRTL.MAC'}",
             "dcc-build-dir=build",
         )
@@ -437,7 +446,10 @@ def main():
     arguments = parser.parse_args()
     host = arguments.host.resolve()
     dcc_root = arguments.dcc_root.resolve()
-    for required in (host, dcc_root / "dccmake", dcc_root / "DCCRTL.MAC"):
+    for required in (host, dcc_root / "DCCRTL.MAC", *(
+        dcc_root / tool for tool in
+        ("dccmake", "dcc", "dccpeep", "dccrtlstrip", "m80c", "l80c")
+    )):
         if not required.exists():
             parser.error(f"required file not found: {required}")
     with tempfile.TemporaryDirectory(prefix="dcc-debug-") as directory:

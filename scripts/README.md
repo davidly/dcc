@@ -496,6 +496,13 @@ build settings. Comparison is keyed by app name, so test discovery order does no
 Pass `-Extended` to run the extended c-testsuite corpus after the main suite.
 See [`tests/README.md`](../tests/README.md) for the test/baseline relationship.
 
+Both main and extended builds fail on MIR verifier diagnostics, including
+diagnostics from rejected optimization candidates whose compilation exits zero.
+Ordinary MIR reports remain permitted. The build-output policy also rejects
+assembler/linker multiple-definition, phase-error, and undefined-symbol warnings.
+Run `pwsh scripts/tests/test_runall_build_diagnostics.ps1` for focused checks of
+both runners with successful fake builds and injected diagnostics.
+
 **Runs in parallel by default** (each app builds in its own `build/<app>/`
 subdirectory so concurrent builds don't clobber shared artifacts). In parallel
 mode the whole run is isolated under a per-invocation `build/run-<pid>/` folder,

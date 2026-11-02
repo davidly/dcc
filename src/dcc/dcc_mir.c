@@ -7318,6 +7318,18 @@ int mir_prune_constant_unreachable(void)
 
 static int mir_boolean_phi_branch_simplifications;
 
+static int mir_boolean_phi_branch_target_has_phi(const struct MirInsn *branch)
+{
+    int instruction = mir_first_phi_or_block_end(mir_find_label(branch->label));
+
+    /* Redirecting the boolean's false paths changes the incoming edges at
+     * this join. Existing object PHIs still name the original predecessor;
+     * leave those branches intact until their PHI inputs can also be rebuilt.
+     * The PHI may follow calls or other ordinary instructions in the block. */
+    return instruction >= 0 && instruction < mir.count &&
+           mir.insns[instruction].opcode == MIR_PHI;
+}
+
 int mir_boolean_phi_branch_candidate_count(void)
 {
     unsigned char *actions;
@@ -7662,6 +7674,22 @@ void mir_simplify_boolean_phi_branches(void)
         (int *)malloc((size_t)mir.next_value * sizeof(*definition_indices));
     if (actions == NULL || definition_indices == NULL)
         fatal("out of memory simplifying MIR boolean phis");
+    /* Normalization is selected as one whole-function candidate. Check all
+     * affected joins before changing anything. Keep the feature count above
+     * independent of this legality check: selection also uses that count to
+     * classify the original, unnormalized function. */
+    for (branch_index = 0; branch_index < mir.count; ++branch_index) {
+        const struct MirInsn *branch = &mir.insns[branch_index];
+
+        if (branch->opcode != MIR_BRANCH_FALSE ||
+            !mir_boolean_phi_branch_target_has_phi(branch))
+            continue;
+        memset(actions, 0, (size_t)mir.next_value);
+        if (mir_collect_boolean_phi_chain(
+                branch->src1, -1, actions, definition_indices, 0) &&
+            actions[branch->src1] == 1)
+            goto done;
+    }
     for (branch_index = 0; branch_index < mir.count; ++branch_index) {
         struct MirInsn *branch = &mir.insns[branch_index];
         int value;
@@ -7690,6 +7718,7 @@ void mir_simplify_boolean_phi_branches(void)
         mir_make_nop(branch);
         ++mir_boolean_phi_branch_simplifications;
     }
+done:
     free(definition_indices);
     free(actions);
     mir_invalidate_use_cache();
