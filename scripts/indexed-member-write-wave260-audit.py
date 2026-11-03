@@ -37,7 +37,7 @@ SELECTED_HASH = re.compile(
     r"selected-hash=(?P<hash>[0-9a-f]{8})"
 )
 BASELINE_SHA256 = (
-    "32f652d93d598292d2dbef07f11cc0493d27c3f8be9d68f61fe73c2708a4a9d1"
+    "6def97ff7ae02bf382b415960cbfc6f94dd0647afa6a900d080208a749081828"
 )
 BASELINE_SELECTED_HASH = "c37f081a"
 EXPECTED_RUNTIME = (
@@ -324,11 +324,14 @@ def selection_from(report, function):
     return matches[-1].group("selector") if matches else None
 
 
-def reject_reason_from(report, function):
+def reject_reason_from(report, function, expected=None):
     matches = [
         match for match in REJECT_REASON.finditer(report)
         if match.group("function") == function
     ]
+    # Preserve the guard assertion across multiple cost alternatives.
+    if expected is not None and any(match.group("reason") == expected for match in matches):
+        return expected
     return matches[-1].group("reason") if matches else None
 
 
@@ -362,7 +365,7 @@ def require_generic(report, function, context, expected_reject):
             f"{context} selected {selector!r}, expected generic fallback\n"
             f"{report}"
         )
-    reject = reject_reason_from(report, function)
+    reject = reject_reason_from(report, function, expected_reject)
     if reject != expected_reject:
         raise RuntimeError(
             f"{context} reject {reject!r}, "

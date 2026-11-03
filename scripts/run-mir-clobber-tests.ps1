@@ -1,6 +1,7 @@
 #Requires -Version 7
 param(
     [int]$RunTimeout = 30,
+    [ValidateRange(1, 3600)][int]$BuildTimeout = 60,
     [string]$Emulator = "ntvcm",
     [string[]]$Cases = @(),
     [int[]]$FuzzSeeds = @(23117, 1, 65535),
@@ -131,7 +132,7 @@ function Assert-MachineMutationFailure(
         $result = Invoke-WithTimeout $dccCommand @(
             "-c", (Join-Path $fixtureRoot "logserie.c"),
             "-o", (Join-Path $tempRoot "BADMUT.MAC")
-        ) $repoRoot 60
+        ) $repoRoot $BuildTimeout
     } finally {
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
@@ -150,7 +151,7 @@ function Assert-MachineMutationIgnored {
         $result = Invoke-WithTimeout $dccCommand @(
             "-c", (Join-Path $fixtureRoot "logserie.c"),
             "-o", (Join-Path $tempRoot "NOMUTATE.MAC")
-        ) $repoRoot 60
+        ) $repoRoot $BuildTimeout
     } finally {
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
@@ -325,7 +326,7 @@ __ctu:
             $MachineMutationFunction
     }
     try {
-        $build = Invoke-WithTimeout $dccmake $arguments $repoRoot 60
+        $build = Invoke-WithTimeout $dccmake $arguments $repoRoot $BuildTimeout
     } finally {
         Set-ProcessEnvironment "DCC_MIR_COST_REPORT" $savedCostReport
         Set-ProcessEnvironment "DCC_MIR_REPORT" $savedMirReport
@@ -344,7 +345,10 @@ __ctu:
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE" $null
         Set-ProcessEnvironment "DCC_MIR_MACHINE_MUTATE_FUNCTION" $null
     }
-    if ($build.TimedOut -or $build.ExitCode -ne 0) {
+    if ($build.TimedOut) {
+        throw "$Name build timed out after ${BuildTimeout}s ($configuration):`n$($build.Output)"
+    }
+    if ($build.ExitCode -ne 0) {
         throw "$Name failed to build ($configuration):`n$($build.Output)"
     }
     if ($MirExpectations.Count) {
@@ -490,7 +494,7 @@ function Assert-ForcedRegionalSafe(
     Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "regional"
     Set-ProcessEnvironment "DCC_MIR_COST_REPORT" "1"
     try {
-        $build = Invoke-WithTimeout $dccmake $arguments $repoRoot 60
+        $build = Invoke-WithTimeout $dccmake $arguments $repoRoot $BuildTimeout
     } finally {
         Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $null
         Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $null
@@ -2465,7 +2469,7 @@ try {
             $proof = Invoke-WithTimeout $dccCommand @(
                 "-c", (Join-Path $fixtureRoot $proofCase.Source),
                 "-o", (Join-Path $tempRoot "SEMANTIC.MAC")
-            ) $repoRoot 60
+            ) $repoRoot $BuildTimeout
         } finally {
             Set-ProcessEnvironment "DCC_MIR_REPORT" `
                 $savedEnvironment["DCC_MIR_REPORT"]
@@ -2786,7 +2790,7 @@ try {
     New-Item -ItemType Directory -Path $tempRoot | Out-Null
     if ($Jobs -gt 1) {
         $childParameters = @{
-            RunTimeout = $RunTimeout; Emulator = $Emulator
+            RunTimeout = $RunTimeout; BuildTimeout = $BuildTimeout; Emulator = $Emulator
             Cases = $Cases; FuzzSeeds = $FuzzSeeds
         }
         $actual = @(Invoke-MirClobberShards $PSCommandPath $childParameters `

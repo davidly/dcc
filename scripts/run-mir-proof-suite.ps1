@@ -141,10 +141,9 @@ function Convert-ToShellPath {
 }
 
 function Resolve-AvailableClang {
-    $unversioned = Get-Command "clang" -ErrorAction SilentlyContinue
-    if ($unversioned) {
-        return $unversioned.Source
-    }
+    # A distro's unversioned clang may still point to an older sanitizer
+    # runtime even when newer complete LLVM toolchains are installed.
+    # An explicit CC remains authoritative at the call site below.
     $versioned = @(Get-Command "clang-*" -ErrorAction SilentlyContinue |
         Where-Object {
             [System.IO.Path]::GetFileNameWithoutExtension($_.Name) -match
@@ -156,6 +155,10 @@ function Resolve-AvailableClang {
         } -Descending)
     if ($versioned.Count -gt 0) {
         return $versioned[0].Source
+    }
+    $unversioned = Get-Command "clang" -ErrorAction SilentlyContinue
+    if ($unversioned) {
+        return $unversioned.Source
     }
     return ""
 }
@@ -171,7 +174,9 @@ function Resolve-LlvmPeer {
     $suffix = if ($compilerName -match "^clang(?:-cl)?-(\d+)$") {
         "-$($Matches[1])"
     } else {
-        ""
+        # Linux packages commonly expose clang as an unversioned symlink but
+        # install its coverage companions only as llvm-{cov,profdata}-NN.
+        "-$(Get-LlvmMajor $compilerPath)"
     }
     $extension = [System.IO.Path]::GetExtension($compilerPath)
     $directory = Split-Path -Parent $compilerPath
@@ -194,7 +199,15 @@ function Get-LlvmMajor {
 
     $output = @(& $Command "--version" 2>&1)
     $exitCode = $LASTEXITCODE
-    $version = $output | Select-Object -First 1
+    if ($exitCode -ne 0 -and
+        [System.IO.Path]::GetFileNameWithoutExtension($Command) -match "^llvm-profdata(?:-\d+)?$") {
+        # Older llvm-profdata releases accept version flags only after a
+        # subcommand. This requests version information without merging data.
+        $output = @(& $Command "merge" "--version" 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    # llvm-profdata may print its program name before the LLVM version line.
+    $version = $output -join "`n"
     if ($exitCode -ne 0 -or "$version" -notmatch "\bversion\s+(\d+)") {
         throw "Could not determine LLVM version for $Command"
     }
@@ -209,6 +222,10 @@ function Get-CommandVersionLine {
         return ""
     }
     $output = @(& $resolved.Source "--version" 2>&1)
+    if ($LASTEXITCODE -ne 0 -and
+        [System.IO.Path]::GetFileNameWithoutExtension($resolved.Source) -match "^llvm-profdata(?:-\d+)?$") {
+        $output = @(& $resolved.Source "merge" "--version" 2>&1)
+    }
     if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
         return ""
     }
@@ -334,6 +351,10 @@ if (-not $llvmCov -or -not $llvmProfdata) {
     }
 }
 Clear-AmbientProofControls
+# Several tools launch child tools from temporary build directories. A
+# relative '.' PATH entry no longer names the checkout there. Make the newly
+# built canonical tools available by absolute path throughout every phase.
+$env:PATH = $repoRoot + [System.IO.Path]::PathSeparator + $env:PATH
 
 if ($MutationBuildJobs -gt $Jobs) {
     $MutationBuildJobs = $Jobs
@@ -590,7 +611,7 @@ Invoke-ProofTaskGroup @(
             Arguments = @(
                 "-m", "unittest", "discover", "-s", "scripts/tests",
                 "-p", "test_*.py")
-            Environment = @{}
+            Environment = @{ CC = $coverageCompiler }
         })
     },
     [pscustomobject]@{

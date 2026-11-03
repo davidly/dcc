@@ -27,7 +27,7 @@ class MirTypeFingerprintTests(unittest.TestCase):
             input_path.write_text(source, encoding="ascii")
             env = os.environ.copy()
             env.update(DCC_MIR_REQUIRE_COMPLETE="1", DCC_MIR_REQUIRE_EMIT="1",
-                       DCC_MIR_EXACT_SHAPE_REPORT="1")
+                       DCC_MIR_EXACT_SHAPE_REPORT="1", DCC_MIR_MACHINE_REPORT="1")
             result = subprocess.run(
                 [str(ROOT / "dcc"), "-stack", "512", "-I", str(ROOT),
                  *options, str(input_path), "-o", str(output_path)],
@@ -50,6 +50,58 @@ class MirTypeFingerprintTests(unittest.TestCase):
                     original, _ = self.compile(source, options)
                     shifted, _ = self.compile(UNRELATED + source, options)
                     self.assertEqual(self.code(original), self.code(shifted))
+
+    def test_directory_schedule_ignores_unrelated_aggregate_declarations(self):
+        accepted = ("function=enumerate template=directory-enumeration-runner "
+                    "accept=emitted")
+        for wave in (3, 9):
+            source = (ROOT / f"tests/mir-clobber/direnum{wave}.c").read_text()
+            for options in ((), ("-fstack-check",), ("-c",), ("-c", "-fstack-check")):
+                with self.subTest(wave=wave, options=options):
+                    original, report = self.compile(source, options)
+                    shifted, shifted_report = self.compile(UNRELATED + source, options)
+                    self.assertIn(accepted, report)
+                    self.assertIn(accepted, shifted_report)
+                    self.assertEqual(self.code(original), self.code(shifted))
+
+    def test_directory_schedule_preserves_layout_and_type_identity_checks(self):
+        accepted = ("function=enumerate template=directory-enumeration-runner "
+                    "accept=emitted")
+        for wave in (3, 9):
+            source = (ROOT / f"tests/mir-clobber/direnum{wave}.c").read_text()
+            fcb = re.search(r"struct FCBCPM \{.*?\n\};", source, re.S).group()
+            distinct = fcb.replace("FCBCPM", "OtherFCB")
+            changed_identity = source.replace(fcb, fcb + "\n" + distinct).replace(
+                "struct FCBCPM *result_fcb;", "struct OtherFCB *result_fcb;")
+            for variant in (source.replace("char n[8];", "char n[9];"), changed_identity):
+                with self.subTest(wave=wave, variant=variant[:80]):
+                    _, report = self.compile(variant)
+                    self.assertNotIn(accepted, report)
+
+    def test_fortran_fatal_schedule_ignores_unrelated_aggregates(self):
+        accepted = "template=fortran-fatal-schedule accept=emitted"
+        for fixture in ("fatfor", "ffatal12"):
+            source = (ROOT / f"tests/mir-clobber/{fixture}.c").read_text()
+            for options in ((), ("-fstack-check",), ("-c",), ("-c", "-fstack-check"),
+                            ("-gline",), ("-gline", "-fstack-check")):
+                with self.subTest(fixture=fixture, options=options):
+                    original, report = self.compile(source, options)
+                    shifted, shifted_report = self.compile(UNRELATED + source, options)
+                    self.assertIn(accepted, report)
+                    self.assertIn(accepted, shifted_report)
+                    self.assertEqual(self.code(original), self.code(shifted))
+
+    def test_fortran_fatal_schedule_keeps_layout_and_type_checks(self):
+        accepted = "template=fortran-fatal-schedule accept=emitted"
+        source = (ROOT / "tests/mir-clobber/fatfor.c").read_text()
+        statement = re.search(r"struct Stmt \{.*?\n\};", source, re.S).group()
+        changed_identity = source.replace(
+            statement, statement + "\n" + statement.replace("Stmt", "OtherStmt")
+        ).replace("static struct Stmt *g_pc;", "static struct OtherStmt *g_pc;")
+        for variant in (source.replace("int label;", "long label;"), changed_identity):
+            with self.subTest(variant=variant[:80]):
+                _, report = self.compile(variant)
+                self.assertNotIn(accepted, report)
 
     def test_layout_and_signedness_changes_decline_struct_sort_kernel(self):
         source = (ROOT / "tests/texstrct.c").read_text(encoding="ascii")

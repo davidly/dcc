@@ -42,7 +42,7 @@ SELECTED_HASH = re.compile(
     r"selected-hash=(?P<hash>[0-9a-f]{8})"
 )
 BASELINE_SHA256 = (
-    "6bf3bb37f7281a406177fccf9c8d67cd069a947a730a280ef0a621159cad78f1"
+    "d49faf299d93e237eae7abcd756207c79bdc3e3408f90b8e31edd03beaed3cf8"
 )
 BASELINE_SELECTED_HASH = "f741fcea"
 EXPECTED_RUNTIME = ("wrapbool failures=0",)

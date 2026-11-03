@@ -12,6 +12,139 @@ PWSH = shutil.which("pwsh")
 
 @unittest.skipUnless(PWSH, "PowerShell 7 is required")
 class MirProofSuiteTests(unittest.TestCase):
+    def test_default_clang_prefers_newest_versioned_compiler(self):
+        command = r'''
+$ErrorActionPreference = 'Stop'
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path (Get-Location) 'scripts/run-mir-proof-suite.ps1'),
+    [ref]$tokens, [ref]$errors)
+$function = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Resolve-AvailableClang'
+}, $true)
+. ([scriptblock]::Create($function.Extent.Text))
+$script:versioned = @(
+    [pscustomobject]@{ Name = 'clang-14'; Source = 'older-compiler' },
+    [pscustomobject]@{ Name = 'clang-18'; Source = 'newer-compiler' },
+    [pscustomobject]@{ Name = 'clang-format-99'; Source = 'not-a-compiler' }
+)
+$script:unversioned = [pscustomobject]@{ Source = 'default-compiler' }
+function Get-Command {
+    param($Name, $ErrorAction)
+    if ($Name -eq 'clang-*') { return $script:versioned }
+    if ($Name -eq 'clang') { return $script:unversioned }
+}
+if ((Resolve-AvailableClang) -ne 'newer-compiler') {
+    throw 'Did not prefer the newest versioned compiler'
+}
+$script:versioned = @()
+if ((Resolve-AvailableClang) -ne 'default-compiler') {
+    throw 'Did not fall back to unversioned clang'
+}
+$script:unversioned = $null
+if (Resolve-AvailableClang) { throw 'Unexpected compiler resolution' }
+'''
+        result = subprocess.run(
+            [PWSH, "-NoLogo", "-NoProfile", "-Command", command],
+            cwd=ROOT, text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_llvm_version_accepts_profdata_banner_and_rejects_bad_commands(self):
+        command = r'''
+$ErrorActionPreference = 'Stop'
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path (Get-Location) 'scripts/run-mir-proof-suite.ps1'),
+    [ref]$tokens, [ref]$errors)
+$function = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Get-LlvmMajor'
+}, $true)
+. ([scriptblock]::Create($function.Extent.Text))
+function Test-Clang { 'Ubuntu clang version 18.1.8'; $global:LASTEXITCODE = 0 }
+function Test-Profdata { 'llvm-profdata'; 'LLVM version 18.1.8'; $global:LASTEXITCODE = 0 }
+function Test-Unknown { 'unknown'; $global:LASTEXITCODE = 0 }
+function Test-Failed { 'LLVM version 18.1.8'; $global:LASTEXITCODE = 2 }
+function llvm-profdata-14 {
+    param($First, $Second)
+    if ($First -eq 'merge' -and $Second -eq '--version') {
+        'Ubuntu LLVM version 14.0.0'; $global:LASTEXITCODE = 0
+    } else { 'Unknown command!'; $global:LASTEXITCODE = 1 }
+}
+if ((Get-LlvmMajor 'llvm-profdata-14') -ne 14) {
+    throw 'Could not read legacy llvm-profdata version'
+}
+foreach ($command in @('Test-Clang', 'Test-Profdata')) {
+    if ((Get-LlvmMajor $command) -ne 18) { throw "Incorrect version for $command" }
+}
+foreach ($command in @('Test-Unknown', 'Test-Failed')) {
+    $rejected = $false
+    try { Get-LlvmMajor $command } catch { $rejected = $true }
+    if (-not $rejected) { throw "Accepted invalid version for $command" }
+}
+'''
+        result = subprocess.run(
+            [PWSH, "-NoLogo", "-NoProfile", "-Command", command],
+            cwd=ROOT, text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_unversioned_clang_discovers_versioned_llvm_companions(self):
+        command = r'''
+$ErrorActionPreference = 'Stop'
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path (Get-Location) 'scripts/run-mir-proof-suite.ps1'),
+    [ref]$tokens, [ref]$errors)
+$function = $ast.Find({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Resolve-LlvmPeer'
+}, $true)
+. ([scriptblock]::Create($function.Extent.Text))
+$directory = Join-Path ([IO.Path]::GetTempPath()) 'fake-llvm'
+$script:compiler = Join-Path $directory 'clang'
+$script:available = @{}
+function Get-Command {
+    param($Name, $ErrorAction)
+    if ($Name -eq $script:compiler) { return [pscustomobject]@{ Source = $script:compiler } }
+    if ($script:available.ContainsKey($Name)) {
+        return [pscustomobject]@{ Source = $script:available[$Name] }
+    }
+    return $null
+}
+function Get-LlvmMajor { param($Command) return 18 }
+foreach ($name in @('clang', 'clang-18', 'clang-cl-18')) {
+    $script:compiler = Join-Path $directory $name
+    foreach ($tool in @('llvm-cov', 'llvm-profdata')) {
+        $script:available = @{}
+        $peer = Join-Path $directory "$tool-18"
+        $script:available[$peer] = $peer
+        if ((Resolve-LlvmPeer $script:compiler $tool) -ne $peer) {
+            throw "Could not resolve versioned $tool for $name"
+        }
+        $script:available = @{}
+        $peer = Join-Path $directory $tool
+        $script:available[$peer] = $peer
+        if ((Resolve-LlvmPeer $script:compiler $tool) -ne $peer) {
+            throw "Could not resolve unversioned $tool for $name"
+        }
+        $script:available = @{}
+        if (Resolve-LlvmPeer $script:compiler $tool) {
+            throw "Missing $tool unexpectedly resolved for $name"
+        }
+    }
+}
+Write-Output 'LLVM peer discovery checks=18 failures=0'
+'''
+        result = subprocess.run(
+            [PWSH, "-NoLogo", "-NoProfile", "-Command", command],
+            cwd=ROOT, text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("LLVM peer discovery checks=18 failures=0", result.stdout)
+
     def test_cmake_builds_do_not_replace_the_canonical_compiler(self):
         runner = (ROOT / "scripts/run-mir-proof-suite.ps1").read_text(
             encoding="utf-8"
@@ -26,6 +159,11 @@ class MirProofSuiteTests(unittest.TestCase):
         )
 
         self.assertIn("Clear-AmbientProofControls", runner)
+        self.assertIn('Environment = @{ CC = $coverageCompiler }', runner)
+        self.assertIn(
+            '$env:PATH = $repoRoot + [System.IO.Path]::PathSeparator + $env:PATH',
+            runner,
+        )
         self.assertIn(
             "[System.StringComparison]::OrdinalIgnoreCase",
             runner,

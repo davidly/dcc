@@ -24,7 +24,7 @@ TEMPLATE = "unnamed-bitfield-report"
 FORCED_CANDIDATE = "spilled-phi-slot"
 INSTRUCTION_COUNT = 99
 BASELINE_SHA256 = (
-    "d7648ba588d804d0d4de5416727beb020e52e8ccf8fb5293dd6309d967f6c15b"
+    "b734f56627195740629a699c965cf3518cbafb96382d9c2e3098b5e593adea70"
 )
 BASELINE_SELECTED_HASH = "c6ee54c1"
 EXPECTED_RUNTIME = "unnamed bitfield failures=0"

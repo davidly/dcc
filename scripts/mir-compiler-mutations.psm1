@@ -118,8 +118,8 @@ function Get-MirCompilerMutations {
         },
         @{
             Name = "memory-address-equality"
-            Before = "    if (left_value == right_value)"
-            After = "    if (1 || left_value == right_value)"
+            Before = "static int mir_dominated_load_pure_value_equal(`n    int left_value, int right_value, int depth)`n{`n    const struct MirInsn *left;`n    const struct MirInsn *right;`n`n    if (left_value == right_value)"
+            After = "static int mir_dominated_load_pure_value_equal(`n    int left_value, int right_value, int depth)`n{`n    const struct MirInsn *left;`n    const struct MirInsn *right;`n`n    if (1 || left_value == right_value)"
             ExpectedFailure = "FAIL memory rewrite dom-base"
         },
         @{

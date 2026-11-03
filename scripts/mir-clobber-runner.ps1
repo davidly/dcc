@@ -349,7 +349,7 @@ function Invoke-MirClobberShards(
                 "' -Raw | ConvertFrom-Json -AsHashtable; & '" +
                 $ScriptPath.Replace("'", "''") + "' @parameters"
             $executable = Join-Path $PSHOME $(if ($IsWindows) { "pwsh.exe" } else { "pwsh" })
-            $arguments = @("-NoProfile", "-NonInteractive", "-EncodedCommand",
+            $arguments = @("-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-EncodedCommand",
                 [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command)))
             $childEnvironment = @{}
             $removeEnvironment = [System.Collections.Generic.List[string]]::new()
@@ -376,7 +376,10 @@ function Invoke-MirClobberShards(
                 [Math]::Max(1.0, [double]$Parameters.RunTimeout)
             } else { 30.0 }
             $budget = if ($TimeoutSeconds -gt 0) { $TimeoutSeconds } else {
-                1200.0 + @(Get-MirClobberShard $Expected $index $Jobs).Count * (60.0 + $runTimeout)
+                $buildTimeout = if ($Parameters.ContainsKey("BuildTimeout")) {
+                    [Math]::Max(1.0, [double]$Parameters.BuildTimeout)
+                } else { 60.0 }
+                1200.0 + @(Get-MirClobberShard $Expected $index $Jobs).Count * ($buildTimeout + $runTimeout)
             }
             $supervised = Start-SupervisedProcess -FilePath $executable `
                 -Arguments $arguments -WorkingDirectory $RepoRoot -LogPath $logPath `

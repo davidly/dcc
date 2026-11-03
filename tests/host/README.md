@@ -21,6 +21,14 @@ type-identity controls after building the compiler:
 python3 -m unittest scripts.tests.test_mir_type_fingerprints
 ```
 
+Directory-enumeration fingerprints also normalize aggregate IDs. The unrelated
+`meminfo_t` declaration in `stdlib.h` must not disable the directory schedule.
+Controls cover both directory fixtures in whole-program and module builds,
+with and without stack checks, and preserve layout and distinct-type rejection.
+The Fortran fatal-error schedule has the same declaration-order controls for
+both fatal fixtures, including line-debug builds, while retaining its layout
+and type-identity rejection checks.
+
 Late integer normalization has target-width constant-tree and demanded-bit
 shift controls, including shared/volatile values, bounded proofs, constant
 address chains, and release-identical line-debug output. Its fixed-value CP/M

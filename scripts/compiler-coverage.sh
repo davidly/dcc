@@ -25,6 +25,9 @@ if [ "$default_clobber_jobs" -gt 8 ]; then
     default_clobber_jobs=8
 fi
 clobber_jobs=${DCC_COVERAGE_CLOBBER_JOBS:-$default_clobber_jobs}
+# Instrumentation and cache-verification probes can make a single compile
+# exceed the ordinary release runner's 60-second build budget.
+clobber_build_timeout=${DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT:-300}
 mutation_jobs=${DCC_COVERAGE_MUTATION_JOBS:-$jobs}
 default_campaign_jobs=${DCC_COVERAGE_CAMPAIGN_JOBS:-4}
 census_jobs=${DCC_COVERAGE_CENSUS_JOBS:-$jobs}
@@ -42,6 +45,7 @@ validate_jobs() {
 }
 validate_jobs DCC_COVERAGE_JOBS "$jobs"
 validate_jobs DCC_COVERAGE_CLOBBER_JOBS "$clobber_jobs"
+validate_jobs DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT "$clobber_build_timeout"
 validate_jobs DCC_COVERAGE_MUTATION_JOBS "$mutation_jobs"
 validate_jobs DCC_COVERAGE_CAMPAIGN_JOBS "$default_campaign_jobs"
 validate_jobs DCC_COVERAGE_CENSUS_JOBS "$census_jobs"
@@ -138,7 +142,8 @@ python3 "$repo_root/scripts/test-compiler-entrypoints.py" \
 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -NoStackCheck -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/runall-extended.ps1 -C11 -Mode full -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
-    -Jobs "$clobber_jobs" -ExecutionManifest "$report_dir/mir-clobber-executions.json"
+    -Jobs "$clobber_jobs" -BuildTimeout "$clobber_build_timeout" \
+    -ExecutionManifest "$report_dir/mir-clobber-executions.json"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-lifetime-tests.ps1
 "$pwsh_cmd" -NoProfile -File scripts/test-mir-require-emit.ps1 -Dcc "$DCC"
 "$pwsh_cmd" -NoProfile -File scripts/test-ast-dump.ps1 -Dcc "$DCC"

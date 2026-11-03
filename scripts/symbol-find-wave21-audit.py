@@ -70,27 +70,25 @@ PARAMETERIZED_IMMEDIATES = {
     75: "memory-limit",
     78: "memory-error-string",
 }
-EXPECTED_OUTCOMES = {"rejected": 738, "accepted": 1002}
+# The ten type=912 probes now name a different aggregate after meminfo_t was
+# added to stdlib.h; they must reject rather than count as baseline no-ops.
+EXPECTED_OUTCOMES = {"rejected": 748, "accepted": 992}
 EXPECTED_CLASSES = {
     "constant-representation": 5,
     "inert-identity": 13,
     "memory-error-string": 1,
     "memory-limit": 3,
-    "no-op": 66,
+    "no-op": 56,
     "symbol-error-string": 1,
     "symbol-limit": 2,
     "unused-field": 911,
 }
 BASELINE_NO_OPS = {
-    (1, "type", 17), (6, "type", 17), (12, "type", 912),
-    (14, "type", 912), (15, "type", 17), (16, "type", 17),
+    (1, "type", 17), (6, "type", 17), (15, "type", 17), (16, "type", 17),
     (17, "type", 17), (18, "type", 17), (35, "type", 17),
-    (36, "type", 17), (39, "type", 912), (41, "type", 912),
-    (42, "type", 17), (43, "type", 17), (44, "type", 17),
-    (45, "type", 17), (51, "type", 17), (52, "type", 912),
-    (54, "type", 912), (55, "type", 18), (61, "type", 912),
-    (63, "type", 912), (64, "type", 18), (68, "type", 912),
-    (70, "type", 912), (71, "type", 18), (78, "type", 17),
+    (36, "type", 17), (42, "type", 17), (43, "type", 17), (44, "type", 17),
+    (45, "type", 17), (51, "type", 17), (55, "type", 18),
+    (64, "type", 18), (71, "type", 18), (78, "type", 17),
     (79, "type", 17),
     (1, "immediate", 0), (2, "immediate", 0),
     (4, "immediate", 0), (6, "immediate", 0),

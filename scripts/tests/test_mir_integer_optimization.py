@@ -651,6 +651,8 @@ int main(void) {
         with tempfile.TemporaryDirectory(prefix="dcc-integer-run-") as directory:
             path = Path(directory)
             (path / "probe.c").write_text(source, encoding="ascii")
+            tool_arguments = [f"{tool}-tool={ROOT / tool}" for tool in
+                              ("dcc", "dccpeep", "dccrtlstrip", "m80c", "l80c")]
             release = {}
             for peep, debug in ((p, d) for p in ("true", "false")
                                 for d in ("false", "lines", "true")):
@@ -660,7 +662,9 @@ int main(void) {
                          "dcc-peep=" + peep, "dcc-stack-check=true",
                          "dcc-debug=" + debug,
                          "dcc-stack-bytes=1024", "dcc-include-directory=" + str(ROOT),
-                         "dcc-runtime=" + str(ROOT / "DCCRTL.MAC")],
+                         "dcc-runtime=" + str(ROOT / "DCCRTL.MAC"),
+                         "dcc-use-emulated-m80=false", "dcc-use-emulated-l80=false",
+                         *tool_arguments],
                         cwd=path, env=ENV, capture_output=True, text=True,
                         timeout=60,
                     )

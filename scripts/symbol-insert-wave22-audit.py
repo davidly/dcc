@@ -25,7 +25,7 @@ GENERIC_SELECTION = re.compile(
     r"regional-homed-scalar-cfg|spilled-scalar-cfg) result=mir"
 )
 BASELINE_SHA256 = (
-    "e4ef3322d56226a7cea371f524685831807c0287a701e8d51bfbb283f99863ab"
+    "eca6daabf5f6a3a4f3eceac8d7bf1af579f77a35488ad24948b9b84311cb8dc8"
 )
 FIELD_VALUES = {
     "type": (1, 2, 3, 4, 5, 6, 17, 18, 19, 33, 34, 49, 912, 32767),
@@ -90,8 +90,7 @@ BASELINE_NO_OPS = {
     (14, "immediate", 43),
     (15, "memory_size", 2), (15, "src1", 10),
     (17, "memory_size", 2), (17, "src1", 8),
-    (18, "type", 912),
-    (20, "type", 912), (20, "memory_size", 27),
+    (20, "memory_size", 27),
     (20, "src1", 12), (20, "src2", 8), (20, "immediate", 27),
     (22, "type", 19), (22, "src1", 14),
     (23, "type", 2), (23, "immediate", 0),
@@ -99,8 +98,7 @@ BASELINE_NO_OPS = {
     (25, "type", 2), (25, "immediate", 27),
     (27, "type", 34), (27, "src1", 17),
     (28, "type", 19),
-    (29, "type", 912),
-    (31, "type", 912), (31, "memory_size", 27),
+    (31, "memory_size", 27),
     (31, "src1", 20), (31, "src2", 8), (31, "immediate", 27),
     (32, "memory_size", 16), (32, "src1", 22),
     (32, "immediate", 0),
@@ -110,29 +108,25 @@ BASELINE_NO_OPS = {
     (38, "type", 2), (38, "immediate", 15),
     (40, "type", 34), (40, "src1", 27),
     (41, "type", 17),
-    (42, "type", 912),
-    (44, "type", 912), (44, "memory_size", 27),
+    (44, "memory_size", 27),
     (44, "src1", 30), (44, "src2", 8), (44, "immediate", 27),
     (45, "type", 49), (45, "memory_size", 1),
     (45, "src1", 32), (45, "immediate", 16),
     (47, "type", 33), (47, "src1", 1), (47, "immediate", 0),
     (48, "memory_size", 1), (48, "src1", 33), (48, "src2", 35),
-    (49, "type", 912),
-    (51, "type", 912), (51, "memory_size", 27),
+    (51, "memory_size", 27),
     (51, "src1", 36), (51, "src2", 8), (51, "immediate", 27),
     (52, "type", 49), (52, "memory_size", 1),
     (52, "src1", 38), (52, "immediate", 17),
     (54, "type", 33), (54, "src1", 2), (54, "immediate", 0),
     (55, "memory_size", 1), (55, "src1", 39), (55, "src2", 41),
-    (56, "type", 912),
-    (58, "type", 912), (58, "memory_size", 27),
+    (58, "memory_size", 27),
     (58, "src1", 42), (58, "src2", 8), (58, "immediate", 27),
     (59, "type", 18), (59, "memory_size", 2),
     (59, "src1", 44), (59, "immediate", 21),
     (60, "type", 2), (60, "immediate", 2),
     (61, "memory_size", 2), (61, "src1", 45), (61, "src2", 46),
-    (62, "type", 912),
-    (64, "type", 912), (64, "memory_size", 27),
+    (64, "memory_size", 27),
     (64, "src1", 47), (64, "src2", 8), (64, "immediate", 27),
     (65, "type", 49), (65, "memory_size", 1),
     (65, "src1", 49), (65, "immediate", 18),
@@ -140,11 +134,12 @@ BASELINE_NO_OPS = {
     (68, "memory_size", 1), (68, "src1", 50), (68, "src2", 52),
     (70, "src1", 8),
 }
-EXPECTED_OUTCOMES = {"rejected": 2569, "accepted": 1975}
+# Frozen type=912 probes now name a different aggregate after meminfo_t.
+EXPECTED_OUTCOMES = {"rejected": 2581, "accepted": 1963}
 EXPECTED_CLASSES = {
     "char-pointer-representation": 4,
     "inert-identity": 15,
-    "no-op": 85,
+    "no-op": 73,
     "unused-field": 1870,
     "valid-error-string": 1,
 }
@@ -343,12 +338,7 @@ def main():
         )
         writer.writerows(results)
 
-    outcomes = Counter(row[4] for row in results)
-    classes = Counter(row[5] for row in results if row[4] == "accepted")
-    if outcomes != EXPECTED_OUTCOMES:
-        raise RuntimeError(f"mutation outcome changed: {outcomes}")
-    if classes != EXPECTED_CLASSES:
-        raise RuntimeError(f"benign classification changed: {classes}")
+    outcomes, classes = validate_results(results)
     print(
         f"symbol-insert Wave 22 audit passed: {len(results)} mutations, "
         f"{outcomes['rejected']} semantic rejections, "
@@ -359,6 +349,16 @@ def main():
     ))
     print(f"compiler: {compiler}")
     print(f"census: {output_dir / 'mutation-census.tsv'}")
+
+
+def validate_results(results):
+    outcomes = Counter(row[4] for row in results)
+    classes = Counter(row[5] for row in results if row[4] == "accepted")
+    if outcomes != EXPECTED_OUTCOMES:
+        raise RuntimeError(f"mutation outcome changed: {outcomes}")
+    if classes != EXPECTED_CLASSES:
+        raise RuntimeError(f"benign classification changed: {classes}")
+    return outcomes, classes
 
 
 if __name__ == "__main__":

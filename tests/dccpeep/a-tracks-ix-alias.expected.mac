@@ -1,0 +1,81 @@
+; Reads and stores of A preserve cached frame bytes; other aliasing writes and IX changes invalidate them.
+	cseg
+
+_indirect_read:
+	ld a,(ix+4)
+	ld d,(hl)
+	ld l,a ; peep: a_tracks_ix
+	ld h,0
+	ret
+
+_other_frame_store:
+	ld a,(ix+4)
+	ld l,a ; peep: a_tracks_ix
+	ld h,0
+	ret
+
+_hl_store:
+	ld a,(ix+4)
+	ld (hl),e
+	ld l,(ix+4)
+	ld h,0
+	ret
+
+_de_store:
+	ld a,(ix+4)
+	ld (de),a
+	ld l,a ; peep: a_tracks_ix
+	ld h,0
+	ret
+
+_iy_store:
+	ld a,(ix+4)
+	ld (iy+0),b
+	ld l,(ix+4)
+	ld h,0
+	ret
+
+_frame_increment:
+	ld a,(ix+4)
+	inc (ix+4)
+	ld l,(ix+4)
+	ld h,0
+	ret
+
+_block_store:
+	ld a,(ix+4)
+	ldir
+	ld l,(ix+4)
+	ld h,0
+	ret
+
+_absolute_store:
+	ld a,(ix+4)
+	ld (_external),a
+	ld l,a ; peep: a_tracks_ix
+	ld h,0
+	ret
+
+_changed_ix:
+	ld a,(ix+4)
+	inc ix
+	ld l,(ix+4)
+	ld h,0
+	ret
+
+_absolute_word_store:
+	ld a,(ix+4)
+	ld (_external),hl
+	ld l,(ix+4)
+	ld h,0
+	ret
+
+_reload_after_store:
+	ld a,(ix+4)
+	ld (hl),e
+	ld a,(ix+4)
+	ld l,a
+	ld h,0
+	ret
+
+	end

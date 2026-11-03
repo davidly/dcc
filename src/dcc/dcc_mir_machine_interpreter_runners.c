@@ -7303,6 +7303,7 @@ static int mir_fortran_fatal_semantic_payload(void)
 {
     unsigned long long first = 1469598103934665603ULL;
     unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    struct MirShapeTypes types = {0};
     int instruction;
     int object;
     int declared;
@@ -7317,6 +7318,8 @@ static int mir_fortran_fatal_semantic_payload(void)
     /*
      * Symbol spellings and string IDs are normalized here; the matcher
      * separately binds every used symbol and validates both string contents.
+     * Aggregate identities use first-use order, independent of unrelated
+     * declarations such as stdlib.h's meminfo_t.
      */
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -7352,6 +7355,10 @@ static int mir_fortran_fatal_semantic_payload(void)
                 insn->divmod_cast_types
         };
 
+        values[4] = (unsigned int)mir_shape_type(insn->type, &types);
+        if (insn->opcode == MIR_BINARY)
+            values[20] = (unsigned int)mir_shape_type(
+                insn->secondary_offset, &types);
         for (item = 0;
              item < (int)(sizeof(values) / sizeof(values[0]));
              ++item)
@@ -7366,7 +7373,8 @@ static int mir_fortran_fatal_semantic_payload(void)
             (unsigned long long)(unsigned int)entry->storage);
         mir_fortran_fatal_hash_value(
             &first, &second,
-            (unsigned long long)(unsigned int)entry->type);
+            (unsigned long long)(unsigned int)
+                mir_shape_type(entry->type, &types));
         mir_fortran_fatal_hash_value(
             &first, &second,
             (unsigned long long)(unsigned int)entry->offset);
@@ -7428,6 +7436,10 @@ static int mir_fortran_fatal_semantic_payload(void)
             mir.declared_proto_nargs[declared] < 0 ||
             mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
             return 0;
+        values[0] = (unsigned int)mir_shape_type(
+            mir.declared_types[declared], &types);
+        values[17] = (unsigned int)mir_shape_type(
+            mir.declared_funcptr_return_types[declared], &types);
         for (item = 0;
              item < (int)(sizeof(values) / sizeof(values[0]));
              ++item)
@@ -7444,7 +7456,8 @@ static int mir_fortran_fatal_semantic_payload(void)
             mir_fortran_fatal_hash_value(
                 &first, &second,
                 (unsigned long long)(unsigned int)
-                    mir.declared_proto_types[declared][item]);
+                    mir_shape_type(
+                        mir.declared_proto_types[declared][item], &types));
     }
     for (item = 0; item < mir.alias_count; ++item) {
         mir_fortran_fatal_hash_value(
@@ -7488,14 +7501,15 @@ static int mir_fortran_fatal_semantic_payload(void)
             (unsigned long long)(unsigned int)mir.sink_purpose
         };
 
+        values[13] = (unsigned int)mir_shape_type(mir.return_type, &types);
         for (item = 0;
              item < (int)(sizeof(values) / sizeof(values[0]));
              ++item)
             mir_fortran_fatal_hash_value(
                 &first, &second, values[item]);
     }
-    if (first == 0x27f0daaf5afffc7bULL &&
-        second == 0x80ffe53abee3f7faULL)
+    if (first == 0xd7876efc34f4ea7eULL &&
+        second == 0xbb6722f59c501352ULL)
         return 1;
     if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
         fprintf(stderr,

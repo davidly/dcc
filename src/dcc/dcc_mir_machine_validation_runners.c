@@ -13309,6 +13309,7 @@ static int mir_directory_semantic_payload(void)
 {
     unsigned long long first = 1469598103934665603ULL;
     unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    struct MirShapeTypes types = {0};
     int instruction;
     int object;
     int declared;
@@ -13323,6 +13324,8 @@ static int mir_directory_semantic_payload(void)
     /*
      * This emitter synthesizes the complete routine. Preserve every MIR,
      * object, declaration, and alias field that can affect its semantics.
+     * Canonicalize aggregate identities in first-use order so unrelated
+     * declarations (such as stdlib.h's meminfo_t) cannot change the proof.
      */
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -13353,6 +13356,10 @@ static int mir_directory_semantic_payload(void)
             (unsigned long long)(unsigned int)insn->divmod_cast_types
         };
 
+        values[4] = (unsigned int)mir_shape_type(insn->type, &types);
+        if (insn->opcode == MIR_BINARY)
+            values[20] = (unsigned int)mir_shape_type(
+                insn->secondary_offset, &types);
         for (item = 0;
              item < (int)(sizeof(values) / sizeof(values[0]));
              ++item)
@@ -13377,7 +13384,8 @@ static int mir_directory_semantic_payload(void)
             (unsigned long long)(unsigned int)entry->storage);
         mir_directory_hash_value(
             &first, &second,
-            (unsigned long long)(unsigned int)entry->type);
+            (unsigned long long)(unsigned int)
+                mir_shape_type(entry->type, &types));
         mir_directory_hash_value(
             &first, &second,
             (unsigned long long)(unsigned int)entry->offset);
@@ -13439,6 +13447,10 @@ static int mir_directory_semantic_payload(void)
             mir.declared_proto_nargs[declared] < 0 ||
             mir.declared_proto_nargs[declared] > MAX_PROTO_PARAMS)
             return 0;
+        values[0] = (unsigned int)mir_shape_type(
+            mir.declared_types[declared], &types);
+        values[17] = (unsigned int)mir_shape_type(
+            mir.declared_funcptr_return_types[declared], &types);
         mir_directory_hash_text(
             &first, &second, mir.declared_names[declared]);
         mir_directory_hash_text(
@@ -13462,7 +13474,8 @@ static int mir_directory_semantic_payload(void)
             mir_directory_hash_value(
                 &first, &second,
                 (unsigned long long)(unsigned int)
-                    mir.declared_proto_types[declared][item]);
+                    mir_shape_type(
+                        mir.declared_proto_types[declared][item], &types));
     }
     for (item = 0; item < mir.alias_count; ++item) {
         mir_directory_hash_text(
@@ -13510,6 +13523,7 @@ static int mir_directory_semantic_payload(void)
             (unsigned long long)(unsigned int)mir.sink_purpose
         };
 
+        values[13] = (unsigned int)mir_shape_type(mir.return_type, &types);
         for (item = 0;
              item < (int)(sizeof(values) / sizeof(values[0]));
              ++item)
@@ -13517,18 +13531,18 @@ static int mir_directory_semantic_payload(void)
                 &first, &second, values[item]);
     }
     /* Wave 9 whole-program and module payloads. */
-    if (first == 0x501d8d651a0e9d97ULL &&
-        second == 0xec7a581a114702bcULL)
+    if (first == 0xe0e6c3df36281a7aULL &&
+        second == 0x353cc284eec34c07ULL)
         return 1;
-    if (first == 0x5ff1dac7c1c1e06bULL &&
-        second == 0xf88c9f2320d84756ULL)
+    if (first == 0xc1e80b8bdad0c646ULL &&
+        second == 0x981b8dc1228afd55ULL)
         return 1;
     /* Wave 3 uses the same proven schedule with distinct symbol metadata. */
-    if (first == 0xabbd741b11962ad6ULL &&
-        second == 0x8d4944d73a1d5511ULL)
+    if (first == 0xd765253491b307dbULL &&
+        second == 0xae976daadc91f82aULL)
         return 1;
-    if (first == 0x57370ba5556d4f3eULL &&
-        second == 0xf2defc979218d26fULL)
+    if (first == 0x1fd0db3212a41233ULL &&
+        second == 0x7ea4f65b3b410303ULL)
         return 1;
     if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
         fprintf(stderr,

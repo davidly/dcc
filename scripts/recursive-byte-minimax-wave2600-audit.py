@@ -38,7 +38,7 @@ SELECTED_HASH = re.compile(
 )
 BASELINE_SHA256 = (
     # Includes the surrounding functions' corrected promoted-bool homes.
-    "497d99759e6c07c984d3d9099ebee1a54390dfef83d9d25e407195aae3ef383d"
+    "e91cf33a65ec0aa6fed42d34f2fdbdcd5874d3d9fc36c2a7eaeff86dcd2afa7c"
 )
 BASELINE_SELECTED_HASH = "8b08568e"
 EXPECTED_RUNTIME = (

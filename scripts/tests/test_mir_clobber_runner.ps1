@@ -247,7 +247,7 @@ try {
 
     $worker = "$root/worker.ps1"
     @'
-param($ShardIndex, $ShardCount, $ExecutionManifest, $Helper, $Behavior, $Scratch)
+param($ShardIndex, $ShardCount, $ExecutionManifest, $Helper, $Behavior, $Scratch, $BuildTimeout)
 $ErrorActionPreference = "Stop"
 . $Helper
 if ($env:MIR_CLOBBER_PROCESS_TEST -ne "child") { throw "child environment not isolated" }
@@ -268,6 +268,7 @@ if ($Behavior -eq "swapped") {
 Write-Host "worker-pid=$PID"
 Write-Host "worker-dcc=$env:DCC"
 Write-Host "worker-profile=$env:LLVM_PROFILE_FILE"
+Write-Host "worker-build-timeout=$BuildTimeout"
 Write-MirClobberManifest $ExecutionManifest $keys $Scratch
 if ($Behavior -in @("orphan-pipe", "timeout")) {
     $readyPath = Join-Path $Scratch "descendant-$ShardIndex.ready"
@@ -293,7 +294,7 @@ if ($Behavior -in @("orphan-pipe", "timeout")) {
 '@ | Set-Content -LiteralPath $worker
     $childParameters = @{
         Helper = (Join-Path $repoRoot "scripts/mir-clobber-runner.ps1")
-        Behavior = "success"; Scratch = $root
+        Behavior = "success"; Scratch = $root; BuildTimeout = 73
     }
     $old = [Environment]::GetEnvironmentVariable("MIR_CLOBBER_PROCESS_TEST", "Process")
     $oldProfile = [Environment]::GetEnvironmentVariable("LLVM_PROFILE_FILE", "Process")
@@ -326,6 +327,9 @@ if ($Behavior -in @("orphan-pipe", "timeout")) {
         Assert-True ($env:LLVM_PROFILE_FILE -eq "$root/raw/dcc-%8m.profraw") `
             "Shards changed parent profile configuration"
         foreach ($index in 0..1) {
+            $childLog = Get-Content "$root/shard-$index.log" -Raw
+            Assert-True ($childLog -match 'worker-build-timeout=73') "Shard lost build timeout"
+            Assert-True ($childLog -notmatch '#< CLIXML') "Shard output was serialized as XML"
             $childDcc = [regex]::Match((Get-Content "$root/shard-$index.log" -Raw),
                 'worker-dcc=([^\r\n]+)').Groups[1].Value
             Assert-True ($childDcc -eq $env:DCC) "Shard changed inherited DCC"

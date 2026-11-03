@@ -56,7 +56,10 @@ try {
     )) {
         $script:buildOutput = $sample.Text
         foreach ($mode in @('fast', 'nopeep', 'full')) {
-            $actual = Invoke-DccMakeBuild -Name fixture -SourcePath $source -BuildDir $scratch -Mode $mode -Quiet
+            # These diagnostics are injected failure oracles, not actual
+            # compiler errors. Hide Write-Host output from the worker while
+            # retaining its return value and unexpected errors.
+            $actual = Invoke-DccMakeBuild -Name fixture -SourcePath $source -BuildDir $scratch -Mode $mode -Quiet 6>$null
             if ($actual -ne $sample.Pass) { throw "Main suite accepted/rejected incorrectly: $mode $($sample.Text)" }
             $checks++
         }

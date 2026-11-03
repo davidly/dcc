@@ -215,6 +215,40 @@ class Runner:
             defined, _ = self.compile("int probe(void) { return VALUE; }\n", args)
             expect(defined == baseline, "command-line macro value not used")
 
+    def bank_api(self):
+        metadata = self.directory / "probe.api"
+        self.compile("""
+typedef unsigned int Word;
+struct Packet {
+    char kind;
+    unsigned char tags[2];
+    int count;
+    Word flags;
+    long delta;
+    unsigned long total;
+};
+struct Link { int *target; };
+static int private_helper(int value) { return value + 1; }
+Word update(struct Packet *packet, const struct Packet *source) {
+    packet->count = source->count;
+    return packet->count;
+}
+int link_value(struct Link *link) { return *link->target; }
+void reset(void) {}
+""", ["-bank-api", metadata])
+        lines = metadata.read_text().splitlines()
+        expected = (
+            "F update 1 u16 2 0 pr:Packet pcr:Packet",
+            "N update packet source", "F reset 1 void 0 0",
+            "R Packet 15 6 1", "M kind i8 0 0", "M tags u8 1 2",
+            "M count i16 3 0", "M flags u16 5 0", "M delta i32 7 0",
+            "M total u32 11 0", "R Link 2 1 0", "M target unsupported 0 0",
+        )
+        for line in expected:
+            expect(line in lines, f"bank API metadata missing {line!r}: {lines}")
+        expect(not any("private_helper" in line for line in lines),
+               "bank API exported a static helper")
+
     def includes(self):
         name = "dcc_probe_" + uuid.uuid4().hex + ".h"
         dirs = [self.directory / "include one", self.directory / "include two"]
@@ -387,6 +421,7 @@ def main():
     runner = Runner(args.compiler, args.workspace, args.timeout)
     try:
         runner.cli()
+        runner.bank_api()
         runner.includes()
         runner.preprocessor_characters()
         runner.diagnostics()

@@ -78,6 +78,17 @@ struct MirAllocationSummary
                 self.assertIn(mutation["Before"], bitsets)
                 self.assertNotIn(mutation["Before"], source[:begin])
 
+    def test_all_mutations_have_unique_production_anchors(self):
+        for mutation in self.mutations:
+            if "Before" not in mutation:
+                continue
+            path = ROOT / mutation.get("Source", "src/dcc/dcc_mir.c")
+            source = path.read_text()
+            with self.subTest(mutation=mutation["Name"]):
+                self.assertEqual(source.count(mutation["Before"]), 1,
+                                 f"Mutation anchor changed in {path}")
+                self.assertNotEqual(mutation["Before"], mutation["After"])
+
     def test_branch_manifest_mutants_restore_unique_production_guards(self):
         manifest = json.loads((ROOT / "scripts/compiler-branch-proof.json").read_text())
         for name, label in manifest["mutant_assertions"].items():

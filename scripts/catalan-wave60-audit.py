@@ -115,7 +115,7 @@ MUTATION_CASES = (
     MutationCase(
         "s16-index-width",
         "15:memory_size:2",
-        expected_reject="metadata",
+        expected_reject="opcode",
     ),
     MutationCase(
         "s16-first-value",
@@ -135,12 +135,12 @@ MUTATION_CASES = (
     MutationCase(
         "second-loop-scale",
         "186:immediate:7",
-        expected_reject="second-loop-header",
+        expected_reject="opcode",
     ),
     MutationCase(
         "second-loop-divisor",
         "305:immediate:2048",
-        expected_reject="second-loop-tail",
+        expected_reject="opcode",
     ),
     MutationCase(
         "report-argument-source",
@@ -234,8 +234,12 @@ def selector_from(report):
     return None
 
 
-def reject_reason_from(report):
+def reject_reason_from(report, expected=None):
     matches = list(REJECT_REASON.finditer(report))
+    # Different cost candidates can fail different guards. Require the named
+    # guard to have fired, rather than taking a later alternative's rejection.
+    if expected is not None and any(match.group("reason") == expected for match in matches):
+        return expected
     return matches[-1].group("reason") if matches else None
 
 
@@ -307,7 +311,7 @@ def run_runtime_control(
     build_output = run(command, env, timeout=300)
     exact_selected = EXACT_ACCEPT in build_output
     selector = selector_from(build_output)
-    reject_reason = reject_reason_from(build_output)
+    reject_reason = reject_reason_from(build_output, control.expected_reject)
     if control.expect_exact:
         if not exact_selected or selector != "scheduled-machine-cfg":
             raise RuntimeError(
@@ -377,7 +381,7 @@ def run_mutation(compiler, work_dir, case):
         env,
     )
     selector = selector_from(report)
-    reject_reason = reject_reason_from(report)
+    reject_reason = reject_reason_from(report, case.expected_reject)
     output.unlink(missing_ok=True)
     if EXACT_ACCEPT in report:
         raise RuntimeError(

@@ -10748,7 +10748,9 @@ static int pass_walk_row_cached_float_index(void)
  *   ld e,(ix-3)          ; redundant memory read → ld e,a  [4 T-states, 1 byte]
  *
  * Tracking resets at labels, calls, ret, any A-writing instruction, and any
- * store to the tracked (ix+N) offset.
+ * store of another value to the tracked (ix+N) offset. Indirect/absolute writes
+ * can alias the frame slot; stores of A preserve equality even when they alias.
+ * Modifying IX changes which slot the offset denotes.
  */
 static int pass_a_tracks_ix_byte(void)
 {
@@ -10764,6 +10766,23 @@ static int pass_a_tracks_ix_byte(void)
         }
 
         strip_peep_comment_copy(tmp, lines[i]);
+
+        if (a_valid) {
+            const PeepLineInfo *info = peep_line_info(i);
+            /* A byte store of A preserves equality even if it aliases the
+             * tracked slot. Other writes must invalidate the cached byte. */
+            int stores_a = info != NULL && info->opcode == PEEP_OPCODE_LD &&
+                           info->right.kind == PEEP_OPERAND_REGISTER &&
+                           info->right.registers == PEEP_REG_A;
+            if (info == NULL || info->effects.unknown ||
+                (info->effects.writes & PEEP_REG_IX) != 0 ||
+                (!stores_a && (info->effects.memory_written &
+                 (PEEP_MEM_INDIRECT | PEEP_MEM_GLOBAL | PEEP_MEM_OPAQUE)) != 0) ||
+                ((info->effects.memory_written & PEEP_MEM_FRAME) != 0 &&
+                 (!info->left.frame_offset_valid ||
+                  info->left.frame_offset == a_off)))
+                a_valid = 0;
+        }
 
         if (strncmp(tmp, "call ", 5) == 0 || strcmp(tmp, "ret") == 0) {
             a_valid = 0;

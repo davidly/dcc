@@ -9,6 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 LINKER = Path(os.environ.get("DCC_L80C", str(ROOT / "l80c")))
+NATIVE_CLANG = shutil.which(os.environ.get("CC", "clang"))
 
 API = """#ifndef API_H
 #define API_H
@@ -306,7 +307,7 @@ int main(void) {
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("record fields differ from authoritative", result.stderr)
 
-    @unittest.skipUnless(shutil.which("clang"), "native clang required for executable harness")
+    @unittest.skipUnless(NATIVE_CLANG, "native compiler required for executable harness")
     def test_executable_record_directions_guards_aliasing_and_failure_copyback(self):
         self.record_source(r'''
 struct Record { unsigned char flags; signed char shift; unsigned char name[3]; };
@@ -777,7 +778,7 @@ unsigned int ignored(unsigned char **p) { return **p; }
         self.assertFalse((self.folder / "build/B1ADAPT.C").exists())
         self.assertFalse((self.folder / "build/SPREADS.LIB").exists())
 
-    @unittest.skipUnless(shutil.which("clang"), "native clang required for executable harness")
+    @unittest.skipUnless(NATIVE_CLANG, "native compiler required for executable harness")
     def test_executable_host_adapter_framing_and_copyback(self):
         result = self.build()
         self.assertTrue((self.folder / "build/B1ADAPT.C").exists(),
@@ -874,7 +875,7 @@ unsigned int bank_library_call_bound(bank_library_binding_t *binding,
                 ("build/B1ADAPT.C", "adapter.o", True),
                 ("generated/B1HOST.C", "host.o", False),
                 ("HARNESS.C", "harness.o", False)):
-            command = ["clang", "-x", "c", "-std=c99", "-Wno-unknown-pragmas",
+            command = [NATIVE_CLANG, "-x", "c", "-std=c99", "-Wno-unknown-pragmas",
                        "-fsanitize=address,undefined",
                        "-I", str(self.folder), "-c", source, "-o", output]
             if rename:
@@ -882,7 +883,7 @@ unsigned int bank_library_call_bound(bank_library_binding_t *binding,
             process = subprocess.run(command, cwd=self.folder, capture_output=True, text=True)
             self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
         process = subprocess.run(
-            ["clang", "-fsanitize=address,undefined",
+            [NATIVE_CLANG, "-fsanitize=address,undefined",
              "lib.o", "adapter.o", "host.o", "harness.o", "-o", "verify"],
             cwd=self.folder, capture_output=True, text=True)
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
@@ -890,7 +891,7 @@ unsigned int bank_library_call_bound(bank_library_binding_t *binding,
                                  capture_output=True, text=True)
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
 
-    @unittest.skipUnless(shutil.which("clang"), "native clang required for executable harness")
+    @unittest.skipUnless(NATIVE_CLANG, "native compiler required for executable harness")
     def test_in_out_inout_and_const_buffer_copy_directions(self):
         (self.folder / "API.H").write_text("""
 unsigned int input(const unsigned char *data, unsigned int count);

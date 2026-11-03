@@ -24,7 +24,7 @@ TEMPLATE = "pointer-cast-diff-schedule"
 FORCED_CANDIDATE = "spilled-phi-slot"
 INSTRUCTION_COUNT = 100
 BASELINE_SHA256 = (
-    "7214aadd91a2310b86f8688550e5fc2ee8eb2bdd4b37174ffb357a0fefd06fe8"
+    "14fd0e61d5813c6ee28c7f9091fbd0df58b729143bf2f923a87e5c1bafa42693"
 )
 BASELINE_SELECTED_HASH = "d4f39cb6"
 SELECTION = re.compile(

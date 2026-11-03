@@ -46,7 +46,7 @@ SELECTED_HASH = re.compile(
     r"selected-hash=(?P<hash>[0-9a-f]{8})"
 )
 BASELINE_SHA256 = (
-    "dc95b353f36d0e1245a68d34b22f3ed7fafdff6bdba02a991fbd1fecb22cbfbb"
+    "056a6c93a790f290da7ab784f43141103647f8f87c05bbc340483c6f87d998a0"
 )
 BASELINE_SELECTED_HASH = "a855a26c"
 EXPECTED_RUNTIME = (
@@ -219,8 +219,11 @@ def selected_hash(report):
     return match.group("hash") if match is not None else None
 
 
-def reject_reason(report):
+def reject_reason(report, expected=None):
     matches = list(REJECT_REASON.finditer(report))
+    # Later cost alternatives may reject on a different guard.
+    if expected is not None and any(match.group("reason") == expected for match in matches):
+        return expected
     return matches[-1].group("reason") if matches else None
 
 
@@ -290,7 +293,7 @@ def run_runtime_control(
         outcome = "exact"
     else:
         require_generic(build_output, control.name)
-        actual_reject = reject_reason(build_output)
+        actual_reject = reject_reason(build_output, control.expected_reject)
         if actual_reject != control.expected_reject:
             raise RuntimeError(
                 f"{control.name} reject {actual_reject!r}, "
@@ -351,7 +354,7 @@ def run_mutation(compiler, work_dir, case):
         compiler_command(compiler, ordinary_path), environment
     )
     require_generic(ordinary_report, case.name)
-    actual_reject = reject_reason(ordinary_report)
+    actual_reject = reject_reason(ordinary_report, case.expected_reject)
     if actual_reject != case.expected_reject:
         raise RuntimeError(
             f"{case.name} reject {actual_reject!r}, "

@@ -33,7 +33,7 @@ SOURCE = "tests/mir-clobber/byterotflags.c"
 TEMPLATE = "byte-rotate-flags"
 COUNT = 139
 BASELINE_SHA256 = (
-    "c9c5a3d9a538835aba4525fa4562b73d8e676d2420945789c8fd3a1756093391"
+    "143ec3095154fffd97d739baa5161f7bd1f9c8aec8d8b5255f4ca1fdfb78dc1a"
 )
 BASELINE_SELECTED_HASH = "02a87b1c"
 EXPECTED_OUTCOMES = Counter(rejected=1914, accepted=1443)

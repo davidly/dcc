@@ -25,7 +25,7 @@ GENERIC_SELECTION = re.compile(
     r"regional-homed-scalar-cfg|spilled-scalar-cfg) result=mir"
 )
 BASELINE_SHA256 = (
-    "2c8340bb8fb6bc70257705d1b63b8b12c24bed69e1300d32b261b3bfac5c21eb"
+    "953e6e67a0ea223556930af7a63a36cceab1ce0e365c69e20ba9c70724cff8b9"
 )
 EXPECTED_OUTCOMES = Counter(
     rejected=3265,

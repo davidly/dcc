@@ -458,6 +458,39 @@ The text summary is written to
 `build/compiler-coverage/report/summary.txt`, and the browsable report starts
 at `build/compiler-coverage/report/html/index.html`. Set `CC`, `PWSH`,
 `LLVM_COV`, or `LLVM_PROFDATA` to override tool discovery.
+Coverage clobber builds have a separate 300-second timeout because
+instrumentation and cache verification can exceed the ordinary 60-second
+build budget. Set `DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT` to override it. Standalone
+`run-mir-clobber-tests.ps1` accepts `-BuildTimeout` (default 60); `-RunTimeout`
+continues to control target execution independently.
+
+## `prepush.ps1`
+
+Run the complete local pre-push gate with one command:
+
+```sh
+pwsh scripts/prepush.ps1
+```
+
+It runs the build-diagnostic regression checks, then the comprehensive MIR
+proof suite described below. This includes strict `-Mode full -Extended`
+release suites with and without stack checks, plus builds, script tests,
+audits, host and sanitizer tests, debugger tests, compiler mutants, and coverage.
+It stops on failure and returns a nonzero exit code. It does not commit or push.
+
+Use `-List` to inspect the gates. `-Jobs`, `-MutationJobs`, `-MutationBuildJobs`,
+`-RunTimeout` (default 60 seconds per target), `-OutputDirectory`, and
+`-RequireComplete` are forwarded to the proof suite. Paths are resolved from
+the repository root, even when invoked from another directory. This is a long
+run and needs the proof suite's compiler, emulator, and coverage prerequisites.
+The proof suite retains its artifacts and receipt under its output directory.
+The early Python phase compiles the data-driven positive exact-schedule controls
+and checks campaign assembly baselines and type-sensitive symbol mutations, so
+these regressions are reported before the long coverage campaign.
+Automatic LLVM discovery prefers the newest installed `clang-N` over the
+unversioned `clang` command and resolves matching coverage tools. Set `CC`
+explicitly to choose a different toolchain (for example,
+`CC=clang-18 pwsh scripts/prepush.ps1` in a POSIX shell).
 
 ## `run-mir-proof-suite.ps1`
 
