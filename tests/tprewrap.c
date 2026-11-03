@@ -1,8 +1,9 @@
 /* Prefix decrement of an unsigned byte must promote its wrapped value. */
 #include <stdio.h>
+#include <stdint.h>
 
 typedef unsigned char u8;
-typedef unsigned long u32;
+typedef uint32_t u32;
 
 static u32 step(u8 d, u32 e, u32 g)
 {

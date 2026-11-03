@@ -13,7 +13,7 @@ int main(void)
 {
     int values[6];
 
-    if (sizeof(compiler_ptrdiff_t) != sizeof(int) ||
+    if (sizeof(compiler_ptrdiff_t) != sizeof(values + 5 - (values + 1)) ||
         distance(values + 5, values + 1) != 4 ||
         distance(values + 1, values + 5) != -4) {
         printf("tptrmac failed\n");
