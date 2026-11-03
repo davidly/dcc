@@ -4,9 +4,9 @@
 Run the complete local pre-push validation gate.
 
 .DESCRIPTION
-Runs build-diagnostic regression checks followed by the comprehensive MIR
-proof suite: tool builds, script tests and audits, normal and sanitized MIR
-host tests, debugger tests, compiler mutants, strict full+extended release
+Runs build-diagnostic regression checks, native compiler baseline validation,
+and the comprehensive MIR proof suite: tool builds, script tests and audits,
+normal and sanitized MIR host tests, debugger tests, compiler mutants, strict full+extended release
 suites with and without stack checks, generated-MIR census, and coverage.
 The release suites always use Mode full. Stops at the first failed gate and
 returns its exit code. Does not commit or push.
@@ -58,6 +58,16 @@ try {
         Write-Host "Running build-diagnostic regression checks"
         & $pwsh -NoLogo -NoProfile -File (
             Join-Path $PSScriptRoot "tests/test_runall_build_diagnostics.ps1")
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+
+    if ($List) {
+        Write-Host "Native compiler baseline validation"
+    } else {
+        Write-Host "Running native compiler baseline validation"
+        & $pwsh -NoLogo -NoProfile -File (
+            Join-Path $PSScriptRoot "validate-unit-test.ps1") `
+            -ThrottleLimit $Jobs -RunTimeout $RunTimeout
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 

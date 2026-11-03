@@ -49,7 +49,11 @@
         { "suffix": "6502fun", "args": "-x -a:400 6502FUN.HEX", "fixtures": ["6502FUN.HEX"] }
       ] },
     { "name": "texfile", "fixtures": ["DATA.TXT"] },
-    { "name": "tfilero", "fixtures": [{ "name": "READONLY.TXT", "read_only": true }] },
+    { "name": "tfilero", "host": true, "host-skip-reason": "CP/M permits opening a read-only file for update and reports failure on write; native hosts may reject the open.", "fixtures": [{ "name": "READONLY.TXT", "read_only": true }] },
+    { "name": "tfpspec", "host": true, "host-skip-reason": "Checks DCC's canonical NaN bit patterns; native NaN payloads and signs differ." },
+    { "name": "tppreg", "host": true, "host-skip-reason": "Checks DCC's unsigned high-byte preprocessor character constants; signed native plain char differs." },
+    { "name": "tsizetyp", "host": true, "host-skip-reason": "Requires DCC's 16-bit unsigned int and size_t, including sizeof(int) == 2." },
+    { "name": "tstrcmpf", "host": true, "host-skip-reason": "Checks exact DCC strcmp return magnitudes; C guarantees only the result's sign." },
     { "name": "wumpus", "args": "-c" },
     { "name": "tchess", "args": "-c -p:1" },
     { "name": "targs", "args": "a bb ccc dddd eeeee", "host": true },

@@ -472,8 +472,11 @@ Run the complete local pre-push gate with one command:
 pwsh scripts/prepush.ps1
 ```
 
-It runs the build-diagnostic regression checks, then the comprehensive MIR
-proof suite described below. This includes strict `-Mode full -Extended`
+It runs the build-diagnostic regression checks, native compiler baseline validation
+(`validate-unit-test.ps1`), then the comprehensive MIR proof suite described below.
+Native validation honors the host-only exclusions in `tests/_test_overrides.json`
+and uses `-Jobs` and `-RunTimeout` for its worker and timeout limits.
+The MIR proof suite includes strict `-Mode full -Extended`
 release suites with and without stack checks, plus builds, script tests,
 audits, host and sanitizer tests, debugger tests, compiler mutants, and coverage.
 It stops on failure and returns a nonzero exit code. It does not commit or push.
