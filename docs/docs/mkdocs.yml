@@ -53,6 +53,7 @@ nav:
       - Runtime optimization: en/appendix/01-dccrtlstrip.md
       - Runtime function sizes: en/appendix/02-runtime-sizes.md
       - Utilities: en/appendix/03-utilities.md
+      - Banked memory support: en/appendix/04-banked-memory.md
       - Building project docs: en/appendix/05-building-project-docs.md
 
 plugins:

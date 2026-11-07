@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="1420" viewBox="0 0 1480 1420" role="img" aria-labelledby="title description">
+  <title id="title">CP/M banked memory: two banks, one Z80 address window</title>
+  <desc id="description">Schematic, not-to-scale memory map. Bank 0 has a 58,624-byte transient program area; bank 1 has a 50,944-byte fixed-address DCC library region. Each region shows separate image/BSS, malloc heap and call stack blocks with a 512-byte call stack example. In each bank, the image (code, DCC runtime and initialized data) and BSS occupy 0100h through that bank's heap_base minus one. The illustrative bank-0 heap ends at E3FFh and its stack occupies E400h through E5FFh, reserving the top 512 bytes of the TPA. The bank-1 heap ends at C5FFh and its stack occupies C600h through C7FFh. Actual bank-0 placement is application-specific; the bank-1 stack budget comes from the LIB header. Bank 0 also holds page zero, CCP, the BDOS shim and BIOS. Bank 1 also holds page zero, a separate 5,632-byte allocation pool, resident services, allocator, authoritative BDOS and BIOS. Both banks contain the FB40h trampoline and FF00h gateway. OUT 07h selects A16 from D0 in PIO1. Checked copied transfers and synchronous calls restore the caller's bank and stack; pointers do not cross banks. BSS means Block Started by Symbol: RAM for zero-initialized global and static variables. The bank-1 library loader clears BSS before use; heap_base follows the image and BSS.</desc>
+  <defs>
+    <style>
+      text { font-family: Inter, "Segoe UI", Arial, sans-serif; fill: #162b45; }
+      .title { font-size: 34px; font-weight: 750; }
+      .subtitle { font-size: 21px; fill: #536780; }
+      .heading { font-size: 26px; font-weight: 750; }
+      .label { font-size: 20px; font-weight: 700; }
+      .body { font-size: 19px; }
+      .small { font-size: 17px; }
+      .blue { fill: #1d5fc0; }
+      .teal { fill: #007f79; }
+      .purple { fill: #7644b5; }
+      .muted { fill: #536780; }
+    </style>
+  </defs>
+  <rect width="1480" height="1420" fill="#f6f8fc"/>
+  <path d="M0 0H1480V8H0Z" fill="#162b45"/>
+  <text x="50" y="65" class="title">CP/M memory: two banks, one address window</text>
+  <text x="50" y="102" class="subtitle">128 KiB SRAM | Z80 sees 0000h-FFFFh | A16 selects one complete 64 KiB bank</text>
+  <text x="50" y="132" class="small muted">Addresses are hexadecimal. Region heights are schematic, not proportional to capacity.</text>
+
+  <rect x="50" y="155" width="680" height="830" rx="18" fill="#ffffff" stroke="#b9c8dc" stroke-width="2"/>
+  <rect x="750" y="155" width="680" height="830" rx="18" fill="#ffffff" stroke="#b9c8dc" stroke-width="2"/>
+  <text x="70" y="193" class="heading blue">BANK 0 | CP/M host | A16 = 0</text>
+  <text x="770" y="193" class="heading teal">BANK 1 | Resident services | A16 = 1</text>
+
+  <rect x="70" y="215" width="640" height="55" rx="8" fill="#e5eaf4"/>
+  <text x="86" y="239" class="label">0000h-00FFh | Page zero</text>
+  <text x="86" y="261" class="small">0000h: warm boot | 0005h: BDOS shim | FCBs / DMA</text>
+  <rect x="770" y="215" width="640" height="55" rx="8" fill="#e5eaf4"/>
+  <text x="786" y="239" class="label">0000h-00FFh | Page zero</text>
+  <text x="786" y="261" class="small">0005h: bank-1 BDOS | library's local CP/M vectors</text>
+
+  <rect x="70" y="280" width="640" height="245" rx="8" fill="#edf3ff" stroke="#9ab8e7"/>
+  <text x="86" y="310" class="label blue">0100h-E5FFh | Transient Program Area (TPA)</text>
+  <text x="86" y="351" class="heading">58,624 bytes total</text>
+  <rect x="86" y="365" width="608" height="45" rx="6" fill="#ffffff" stroke="#9ab8e7"/>
+  <text x="100" y="385" class="label blue">0100h-(heap_base-1) | .COM image + BSS</text>
+  <text x="100" y="404" class="small">Code + DCC runtime + initialized data + BSS</text>
+  <rect x="86" y="418" width="608" height="42" rx="6" fill="#dce8ff" stroke="#9ab8e7"/>
+  <text x="100" y="438" class="label blue">heap_base-E3FFh | malloc heap</text>
+  <text x="100" y="456" class="small">512-byte stack example; heap size depends on image + BSS</text>
+  <rect x="86" y="468" width="608" height="45" rx="6" fill="#fff2e5" stroke="#e7bb8d"/>
+  <text x="100" y="488" class="label">E400h-E5FFh | Call stack (512-byte example)</text>
+  <text x="100" y="507" class="small">Grows down; example reservation below E600h</text>
+
+  <rect x="770" y="280" width="640" height="245" rx="8" fill="#e9f6f3" stroke="#8cc5ba"/>
+  <text x="786" y="310" class="label teal">0100h-C7FFh | Fixed-address DCC library region</text>
+  <text x="786" y="351" class="heading">50,944 bytes total</text>
+  <rect x="786" y="365" width="608" height="45" rx="6" fill="#ffffff" stroke="#8cc5ba"/>
+  <text x="800" y="385" class="label teal">0100h-(heap_base-1) | .LIB image + BSS</text>
+  <text x="800" y="404" class="small">Code + DCC runtime + initialized data + BSS</text>
+  <rect x="786" y="418" width="608" height="42" rx="6" fill="#d7eee8" stroke="#8cc5ba"/>
+  <text x="800" y="438" class="label teal">heap_base-C5FFh | malloc heap</text>
+  <text x="800" y="456" class="small">512-byte stack example; heap size depends on image + BSS</text>
+  <rect x="786" y="468" width="608" height="45" rx="6" fill="#fff2e5" stroke="#e7bb8d"/>
+  <text x="800" y="488" class="label">C600h-C7FFh | Call stack (512-byte example)</text>
+  <text x="800" y="507" class="small">Grows down; .LIB stack budget: 256-2,048 bytes</text>
+  <rect x="770" y="535" width="640" height="55" rx="8" fill="#e9f6f3" stroke="#8cc5ba"/>
+  <text x="786" y="559" class="label teal">C800h-DDFFh | Separate general pool</text>
+  <text x="786" y="581" class="small">5,632 bytes | checked handles | not the DCC malloc heap</text>
+  <rect x="770" y="600" width="640" height="55" rx="8" fill="#fff2e5"/>
+  <text x="786" y="624" class="label">DE00h-E5FFh | Resident service workspace</text>
+  <text x="786" y="646" class="small">BDOS proxy, library loader, exports and service stacks</text>
+  <rect x="770" y="665" width="640" height="55" rx="8" fill="#fff2e5"/>
+  <text x="786" y="689" class="label">E600h-EDFFh | Resident extent allocator</text>
+  <text x="786" y="711" class="small">Allocation metadata, dispatch and context management</text>
+
+  <rect x="70" y="535" width="640" height="75" rx="8" fill="#e5eaf4"/>
+  <text x="86" y="563" class="label">E600h-EDFFh | CCP</text>
+  <text x="86" y="593" class="body">Console Command Processor: prompt and .COM loading</text>
+  <rect x="70" y="620" width="640" height="175" rx="8" fill="#fff2e5"/>
+  <text x="86" y="647" class="label">EE00h-FB3Fh | BDOS shim / tables</text>
+  <text x="86" y="677" class="body">Entry EE06h | private stack F600h-F7FFh</text>
+  <rect x="770" y="730" width="640" height="65" rx="8" fill="#fff2e5"/>
+  <text x="786" y="757" class="label">EE00h-FB3Fh | Authoritative CP/M BDOS</text>
+  <text x="786" y="784" class="body">Files, directories and shared drive allocation state</text>
+
+  <rect x="70" y="805" width="640" height="45" rx="8" fill="#f3eefb"/>
+  <text x="86" y="825" class="label purple">FB40h-FB7Fh | Mirrored trampoline</text>
+  <text x="86" y="844" class="small">Warm-boot return and checked extent lookup</text>
+  <rect x="770" y="805" width="640" height="45" rx="8" fill="#f3eefb"/>
+  <text x="786" y="825" class="label purple">FB40h-FB7Fh | Mirrored trampoline</text>
+  <text x="786" y="844" class="small">Matching code at the same addresses</text>
+  <rect x="70" y="860" width="640" height="45" rx="8" fill="#e5eaf4"/>
+  <text x="86" y="880" class="label">FB80h-FEFFh | BIOS buffer, core and padding</text>
+  <text x="86" y="899" class="small">FC00h: standard 17-entry BIOS jump table</text>
+  <rect x="770" y="860" width="640" height="45" rx="8" fill="#e5eaf4"/>
+  <text x="786" y="880" class="label">FB80h-FEFFh | BIOS buffer, core and padding</text>
+  <text x="786" y="899" class="small">Record and console I/O available to bank-1 BDOS</text>
+  <rect x="70" y="915" width="640" height="45" rx="8" fill="#f3eefb" stroke="#b293d6"/>
+  <text x="86" y="935" class="label purple">FF00h-FFFFh | Mirrored bank-switch gateway</text>
+  <text x="86" y="954" class="small">READ / WRITE / INFO / service + private workspace</text>
+  <rect x="770" y="915" width="640" height="45" rx="8" fill="#f3eefb" stroke="#b293d6"/>
+  <text x="786" y="935" class="label purple">FF00h-FFFFh | Mirrored bank-switch gateway</text>
+  <text x="786" y="954" class="small">Matching instructions survive the A16 switch</text>
+  <path d="M710 938H770" fill="none" stroke="#7644b5" stroke-width="3" stroke-dasharray="5 4"/>
+
+  <rect x="50" y="1015" width="1380" height="150" rx="14" fill="#f3eefb" stroke="#b293d6"/>
+  <text x="72" y="1047" class="heading purple">A bank switch is a controlled call, not a pointer conversion</text>
+  <text x="72" y="1080" class="body">1. Save caller state; copy checked arguments through the mirrored gateway.</text>
+  <text x="72" y="1110" class="body">2. OUT 07h selects bank 1 in PIO1; resident code runs with a bank-1 service or library stack.</text>
+  <text x="72" y="1140" class="body">3. Restore bank 0 and the caller's stack; copy results back. No nested calls or cross-bank pointers.</text>
+  <rect x="50" y="1185" width="1380" height="180" rx="14" fill="#e9f6f3" stroke="#8cc5ba"/>
+  <text x="72" y="1217" class="heading teal">BSS (Block Started by Symbol): zero-initialized global and static variables</text>
+  <text x="72" y="1250" class="body">For a bank-1 library, the loader clears BSS to zero before execution.</text>
+  <text x="72" y="1280" class="body">Example: static unsigned char buffer[1024]; uses 1,024 BSS bytes, without storing those zeros in the .LIB file.</text>
+  <text x="72" y="1310" class="body">Image = code + DCC runtime + initialized data | malloc heap = dynamic allocations | call stack = call state + locals</text>
+  <text x="72" y="1340" class="body">heap_base is the first address after the image and BSS.</text>
+  <text x="50" y="1398" class="small muted">Source-backed overview: cpm-execution.md, build_images.py, bank0_bdos_shim.asm and banked_transfer.asm</text>
+</svg>
