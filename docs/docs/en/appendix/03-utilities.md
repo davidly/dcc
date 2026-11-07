@@ -104,7 +104,7 @@ image without a CP/M startup wrapper. Header bytes 14-15 are reserved and zero.
 The image and BSS must end below the heap limit, `C800H` minus the stack reserve. Library metadata, exports and signatures
 are validated before opening the output; rejected metadata leaves an existing
 library and symbol map untouched and does not create an empty output file.
-See [Fixed-address bank-1 libraries](../02-build-and-link.md#fixed-address-bank-1-libraries)
+See [Fixed-address bank-1 libraries](04-banked-memory.md#fixed-address-bank-1-libraries)
 for runtime, heap and generated-contract requirements.
 
 The normal DCC command is:
@@ -265,7 +265,7 @@ Help needs no valid project configuration and never invokes build tools.
 | `dcc-output` | First input base name | CP/M 8-character output base name |
 | `dcc-output-format` | `com` | `com` application or fixed-address `lib`; both use DCC's native `l80c`, with `--lib` selecting library output |
 | `dcc-exports` | none | Must be `auto` for `lib` and is not allowed for `com`: discovers 1–8 public C definitions and links each with its canonical signature; names are at most eight characters |
-| `dcc-library-api` | none | `auto` generates API.H from public definitions; a header path validates a handwritten contract. Required for `lib`; see [Automatic typed libraries](../02-build-and-link.md#automatic-typed-libraries) |
+| `dcc-library-api` | none | `auto` generates API.H from public definitions; a header path validates a handwritten contract. Required for `lib`; see [Automatic typed libraries](04-banked-memory.md#automatic-typed-libraries) |
 | `dcc-library-host-dir` | none | Generated client directory, created with missing parents; required for `lib`. Receives `B1HOST.C` and, with auto API, `API.H` |
 | `dcc-contract-only` | `false` | Generate typed LIB contracts without assembly/linking or replacing an existing LIB; composite runs skip COM children |
 | `dcc-library-linker` | none | Native library-linker override for LIB projects only, including composite children; COM linkers remain unchanged |

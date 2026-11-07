@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="1480" viewBox="0 0 1480 1480" role="img" aria-labelledby="title description">
+  <title id="title">How CP/M calls reach the PIO I/O engine</title>
+  <desc id="description">Bank-0 application disk calls pass through the BDOS shim and copied gateway requests to bank-1 BDOS, which calls BIOS. All of this runs on the Z80. BIOS emits IN and OUT instructions. Hardware HCT32 asserts WAIT; PIO1 holds PIO0's clock LOW, exchanges ordered snapshots and replies with core 0, and completes the bus cycle. Core 1 owns queued USB, WebSocket, network and flash work. An OUT queues a snapshot before resuming, except OUT 07h selects A16 directly. An IN waits for the reply, runs two clocks, isolates the output buffer and then resumes instruction fetching. The four disk images are 512 KiB each with 128-byte records.</desc>
+  <defs>
+    <style>
+      text { font-family: Inter, "Segoe UI", Arial, sans-serif; fill: #162b45; }
+      .title { font-size: 34px; font-weight: 750; }
+      .subtitle { font-size: 21px; fill: #536780; }
+      .heading { font-size: 25px; font-weight: 750; }
+      .label { font-size: 20px; font-weight: 700; }
+      .body { font-size: 19px; }
+      .small { font-size: 17px; }
+      .muted { fill: #536780; }
+      .blue { fill: #1d5fc0; }
+      .teal { fill: #007f79; }
+      .orange { fill: #ac530b; }
+      .flow { fill: none; stroke: #536780; stroke-width: 2.5; stroke-linejoin: round; }
+      .data { fill: none; stroke: #1d5fc0; stroke-width: 2.5; }
+      .clock { fill: none; stroke: #ac530b; stroke-width: 2.5; stroke-linejoin: round; }
+      .queue { fill: none; stroke: #007f79; stroke-width: 2.5; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#536780"/></marker>
+    <marker id="data-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#1d5fc0"/></marker>
+    <marker id="clock-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#ac530b"/></marker>
+    <marker id="queue-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#007f79"/></marker>
+  </defs>
+  <rect width="1480" height="1480" fill="#f6f8fc"/>
+  <path d="M0 0H1480V8H0Z" fill="#162b45"/>
+  <text x="50" y="65" class="title">From a CP/M call to a physical IN or OUT</text>
+  <text x="50" y="103" class="subtitle">CP/M runs on the Z80. PIO owns bus timing. ARM cores provide device services.</text>
+  <text x="50" y="139" class="label blue">Z80 SOFTWARE | disk/file call path (arrows are logical flow, not PCB wiring)</text>
+
+  <rect x="50" y="160" width="300" height="145" rx="12" fill="#edf3ff" stroke="#9ab8e7"/>
+  <text x="70" y="193" class="heading blue">Bank-0 application</text>
+  <text x="70" y="225" class="body">.COM starts at 0100h</text>
+  <text x="70" y="254" class="body">CALL 0005h</text>
+  <text x="70" y="283" class="small">DCC uses standard CP/M APIs</text>
+  <rect x="410" y="160" width="300" height="145" rx="12" fill="#fff2e5" stroke="#e7bb8d"/>
+  <text x="430" y="193" class="heading">Bank-0 BDOS shim</text>
+  <text x="430" y="225" class="body">Entry EE06h</text>
+  <text x="430" y="254" class="body">Private stack; copied</text>
+  <text x="430" y="283" class="body">FCB / DMA requests</text>
+  <rect x="770" y="160" width="300" height="145" rx="12" fill="#e9f6f3" stroke="#8cc5ba"/>
+  <text x="790" y="193" class="heading teal">Bank-1 BDOS</text>
+  <text x="790" y="225" class="body">Files and directories</text>
+  <text x="790" y="254" class="body">Allocation and record</text>
+  <text x="790" y="283" class="body">selection</text>
+  <rect x="1130" y="160" width="300" height="145" rx="12" fill="#e5eaf4" stroke="#b9c8dc"/>
+  <text x="1150" y="193" class="heading">Custom Z80 BIOS</text>
+  <text x="1150" y="225" class="body">17 entries at FC00h</text>
+  <text x="1150" y="254" class="body">128-byte record I/O</text>
+  <text x="1150" y="283" class="body">Ports 10h-14h</text>
+  <path d="M350 235H410" class="flow" marker-end="url(#arrow)"/>
+  <path d="M710 235H770" class="flow" marker-end="url(#arrow)"/>
+  <path d="M1070 235H1130" class="flow" marker-end="url(#arrow)"/>
+  <text x="50" y="335" class="small muted">Console calls stay local via BIOS ports 00h-01h. A bank-1 library calls its own 0005h BDOS vector.</text>
+  <path d="M1280 305V380H260V485" class="flow" marker-end="url(#arrow)"/>
+  <text x="550" y="372" class="body">BIOS emits Z80 IN / OUT instructions</text>
+
+  <rect x="50" y="415" width="1380" height="495" rx="18" fill="#ffffff" stroke="#b9c8dc" stroke-width="2"/>
+  <text x="72" y="451" class="label blue">PICO HARDWARE + FIRMWARE | normal SRAM accesses bypass this I/O path</text>
+  <rect x="80" y="485" width="360" height="150" rx="12" fill="#e5eaf4"/>
+  <text x="100" y="519" class="heading">Z80 bus</text>
+  <text x="100" y="552" class="body">IORQ#, RD#, WR#, D0-D7</text>
+  <text x="100" y="581" class="body">Buffered data paths</text>
+  <text x="100" y="610" class="body">WAIT# holds the I/O cycle</text>
+  <rect x="505" y="485" width="390" height="150" rx="12" fill="#edf3ff" stroke="#9ab8e7"/>
+  <text x="525" y="519" class="heading blue">PIO1 | I/O engine</text>
+  <text x="525" y="552" class="body">Samples OUT; drives IN</text>
+  <text x="525" y="581" class="body">Buffers, WAIT# release, timing</text>
+  <text x="525" y="610" class="body">OUT 07h: D0 directly selects A16</text>
+  <rect x="1020" y="485" width="380" height="150" rx="12" fill="#edf3ff" stroke="#9ab8e7"/>
+  <text x="1040" y="519" class="heading blue">Core 0 | device logic</text>
+  <text x="1040" y="552" class="body">Ordered OUTs, then IN reply</text>
+  <text x="1040" y="581" class="body">Console rings, disk buffers</text>
+  <text x="1040" y="610" class="body">Handler executes from SRAM</text>
+  <path d="M440 560H505" class="data" marker-start="url(#data-arrow)" marker-end="url(#data-arrow)"/>
+  <path d="M895 545H1020" class="data" marker-end="url(#data-arrow)"/>
+  <text x="908" y="535" class="small blue">RX snapshot</text>
+  <path d="M1020 602H895" class="data" marker-end="url(#data-arrow)"/>
+  <text x="914" y="592" class="small blue">TX reply</text>
+
+  <rect x="80" y="730" width="360" height="145" rx="12" fill="#fff2e5" stroke="#e7bb8d"/>
+  <text x="100" y="764" class="heading orange">HCT32 | fixed logic</text>
+  <text x="100" y="797" class="body">IORQ# LOW asserts WAIT#</text>
+  <text x="100" y="826" class="body">before PIO or an ARM core</text>
+  <text x="100" y="855" class="body">reacts to the cycle.</text>
+  <rect x="505" y="730" width="390" height="145" rx="12" fill="#fff2e5" stroke="#e7bb8d"/>
+  <text x="525" y="764" class="heading orange">PIO0 | Z80 clock</text>
+  <text x="525" y="797" class="body">20 MHz from 120 MHz sysclk</text>
+  <text x="525" y="826" class="body">Stops at a LOW-phase hold</text>
+  <text x="525" y="855" class="small">Shares PIO0 with DMA-fed OLED I2C</text>
+  <rect x="1020" y="730" width="380" height="145" rx="12" fill="#e9f6f3" stroke="#8cc5ba"/>
+  <text x="1040" y="764" class="heading teal">Core 1 | workers</text>
+  <text x="1040" y="797" class="body">USB / WebSocket / network</text>
+  <text x="1040" y="826" class="body">Disk read-ahead, flash commits</text>
+  <text x="1040" y="855" class="small">CYW43 Wi-Fi SPI uses PIO2</text>
+  <path d="M260 730V635" class="clock" marker-end="url(#clock-arrow)"/>
+  <text x="276" y="691" class="small orange">WAIT#</text>
+  <path d="M700 635V730" class="clock" marker-end="url(#clock-arrow)"/>
+  <text x="716" y="675" class="small orange">IRQ PREV</text>
+  <text x="716" y="699" class="small orange">clock hold</text>
+  <path d="M505 805H475V665H385V635" class="clock" marker-end="url(#clock-arrow)"/>
+  <text x="414" y="711" class="small orange">CLK</text>
+  <path d="M1210 635V730" class="queue" marker-start="url(#queue-arrow)" marker-end="url(#queue-arrow)"/>
+  <text x="1038" y="675" class="small teal">Bounded queues</text>
+  <text x="1038" y="699" class="small teal">and mailboxes</text>
+
+  <text x="50" y="950" class="label">CYCLE SEQUENCES | # = active LOW | PIO controls every bus step</text>
+  <rect x="50" y="975" width="680" height="390" rx="14" fill="#edf3ff" stroke="#9ab8e7"/>
+  <rect x="750" y="975" width="680" height="390" rx="14" fill="#e9f6f3" stroke="#8cc5ba"/>
+  <text x="72" y="1012" class="heading blue">OUT | write a byte</text>
+  <text x="772" y="1012" class="heading teal">IN | read a byte</text>
+  <text x="72" y="1050" class="label">1. Hardware WAIT; PIO holds CLK LOW.</text>
+  <text x="72" y="1088" class="label">2. Enable receive buffer; sample byte.</text>
+  <text x="72" y="1126" class="label">3. Queue RX snapshot; or set A16 for 07h.</text>
+  <text x="72" y="1164" class="label">4. Release WAIT; resume clock.</text>
+  <text x="72" y="1202" class="label">5. Isolate buffer; rearm for next cycle.</text>
+  <text x="72" y="1251" class="body">Core 0 applies queued writes afterwards.</text>
+  <text x="72" y="1283" class="body">A full four-word RX FIFO holds the Z80:</text>
+  <text x="72" y="1315" class="body">no lost snapshots; later IN sees earlier OUTs.</text>
+  <text x="772" y="1050" class="label">1. Hardware WAIT; PIO holds CLK LOW.</text>
+  <text x="772" y="1088" class="label">2. Queue RX request; wait for core-0 TX reply.</text>
+  <text x="772" y="1126" class="label">3. Drive byte; enable buffer; release WAIT.</text>
+  <text x="772" y="1164" class="label">4. Run two clocks: wait release, T3 sample.</text>
+  <text x="772" y="1202" class="label">5. Hold LOW; isolate; resume opcode fetch.</text>
+  <text x="772" y="1251" class="body">The output buffer is off before the next</text>
+  <text x="772" y="1283" class="body">SRAM instruction read. Core 0 supplies data;</text>
+  <text x="772" y="1315" class="body">it does not time or step the bus cycle.</text>
+  <text x="50" y="1405" class="body">Storage: A-D = 4 x 512 KiB raw flash images | 128 tracks x 32 records x 128 bytes per image</text>
+  <text x="50" y="1440" class="small muted">Runtime flash commits use a separate safe BUSREQ#/BUSACK# grant. This overview is not timing qualification.</text>
+  <text x="50" y="1466" class="small muted">Sources: z80_bios.asm, bank0_bdos_shim.asm, banked_io.pio, banked_pio.c and flash_layout.h</text>
+</svg>
