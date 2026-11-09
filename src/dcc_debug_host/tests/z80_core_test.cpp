@@ -247,6 +247,36 @@ int main(void)
     z80_execute_instructions(&cpu, 1);
     assert(cpu.registers.a == 0xff && (cpu.registers.flags & FLAGS_CARRY));
 
+    reset_at(&cpu, 0x0c70, 0xb000);
+    memory[0x0c70] = 0x37; // SCF
+    memory[0x0c71] = 0x21; // LD HL,0fffh
+    memory[0x0c72] = 0xff;
+    memory[0x0c73] = 0x0f;
+    memory[0x0c74] = 0x11; // LD DE,0fffh
+    memory[0x0c75] = 0xff;
+    memory[0x0c76] = 0x0f;
+    memory[0x0c77] = 0xed; // SBC HL,DE
+    memory[0x0c78] = 0x52;
+    z80_execute_instructions(&cpu, 4);
+    assert(cpu.registers.hl == 0xffff);
+    assert((cpu.registers.flags & (FLAGS_H | FLAGS_CARRY | 0x02)) ==
+           (FLAGS_H | FLAGS_CARRY | 0x02)); // H, C, and N
+
+    reset_at(&cpu, 0x0c80, 0xb000);
+    memory[0x0c80] = 0x37; // SCF
+    memory[0x0c81] = 0x21; // LD HL,0fffh
+    memory[0x0c82] = 0xff;
+    memory[0x0c83] = 0x0f;
+    memory[0x0c84] = 0x11; // LD DE,0ffffh
+    memory[0x0c85] = 0xff;
+    memory[0x0c86] = 0xff;
+    memory[0x0c87] = 0xed; // SBC HL,DE
+    memory[0x0c88] = 0x52;
+    z80_execute_instructions(&cpu, 4);
+    assert(cpu.registers.hl == 0x0fff);
+    assert((cpu.registers.flags & (FLAGS_H | FLAGS_CARRY | 0x02)) ==
+           (FLAGS_H | FLAGS_CARRY | 0x02)); // H, C, and N
+
     reset_at(&cpu, 0x0c50, 0x0d00);
     memory[0x0c50] = 0xed;
     memory[0x0c51] = 0x75; // undocumented RETN alias
