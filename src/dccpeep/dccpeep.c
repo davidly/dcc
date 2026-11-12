@@ -2179,11 +2179,14 @@ static int pass_byte_minmax_patterns(void)
          *   sbc hl,de
          *   jp cc,L
          *
-         * For byte values this is equivalent to:
+         * The subtraction is N - byte. For z/nz that is equivalent to:
          *
          *   ld a,(ix+K)
          *   cp N
          *   jp cc,L
+         *
+         * c (N < byte) is byte >= N+1, so "cp N+1 / jp nc", and nc (byte <= N)
+         * is "cp N+1 / jp c". With N = 255 there is no N+1; keep the original.
          */
         if (peep_parse_ld_hl_0_to_255(lines[i], &imm) &&
             eq(i + 1, "push hl") &&
@@ -2195,13 +2198,27 @@ static int pass_byte_minmax_patterns(void)
             eq(i + 7, "sbc hl,de") &&
             (strncmp(lines[i + 8], "jp z,", 5) == 0 ||
              strncmp(lines[i + 8], "jp nz,", 6) == 0 ||
-             strncmp(lines[i + 8], "jp c,", 5) == 0 ||
-             strncmp(lines[i + 8], "jp nc,", 6) == 0)) {
+             (imm < 255 &&
+              (strncmp(lines[i + 8], "jp c,", 5) == 0 ||
+               strncmp(lines[i + 8], "jp nc,", 6) == 0)))) {
+            char jump[160];
+            int carry_test = 1;
+
+            if (strncmp(lines[i + 8], "jp c,", 5) == 0)
+                sprintf(jump, "jp nc,%s", lines[i + 8] + 5);
+            else if (strncmp(lines[i + 8], "jp nc,", 6) == 0)
+                sprintf(jump, "jp c,%s", lines[i + 8] + 6);
+            else {
+                strcpy(jump, lines[i + 8]);
+                carry_test = 0;
+            }
+            if (carry_test)
+                ++imm;
             sprintf(newline, "ld a,(ix%s)", off);
             replace1_tagged(i, newline, "byte_const_cmp");
             sprintf(newline, "cp %d", imm);
             replace1(i + 1, newline);
-            replace1(i + 2, lines[i + 8]);
+            replace1(i + 2, jump);
             delete_n(i + 3, 6);
             changed = 1;
             if (i > 0) --i;

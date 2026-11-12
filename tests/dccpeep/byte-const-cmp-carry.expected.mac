@@ -1,0 +1,66 @@
+; N - byte compares: z/nz keep "cp N"; c (N < byte) becomes "cp N+1 / jp nc" and nc (byte <= N) "cp N+1 / jp c"; N = 255 keeps the 16-bit form.
+	cseg
+	public _lt
+_lt:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld a,(ix+4) ; peep: byte_const_cmp
+	cp 128
+	jr nc,L1 ; peep: jp_to_jr
+	ld hl,0
+	pop ix
+	ret
+L1:
+	ld hl,1
+	pop ix
+	ret
+	public _ge
+_ge:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld a,(ix+4) ; peep: byte_const_cmp
+	cp 11
+	jr c,L2 ; peep: jp_to_jr
+	ld hl,0
+	pop ix
+	ret
+L2:
+	ld hl,1
+	pop ix
+	ret
+	public _eq
+_eq:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld a,(ix+4) ; peep: byte_const_cmp
+	cp 7
+	jr z,L3 ; peep: jp_to_jr
+	ld hl,0
+	pop ix
+	ret
+L3:
+	ld hl,1
+	pop ix
+	ret
+	public _top
+_top:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld hl,255
+	ld e,(ix+4) ; peep: ix_byte_load_to_de
+	ld d,0
+	or a
+	sbc hl,de
+	jr c,L4 ; peep: jp_to_jr
+	ld hl,0
+	pop ix
+	ret
+L4:
+	ld hl,1
+	pop ix
+	ret
+	end
