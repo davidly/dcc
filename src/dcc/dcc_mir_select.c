@@ -3142,6 +3142,19 @@ static int mir_prefer_regional_diagnostic(void)
     return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
 }
 
+/*
+ * DCC_MIR_NO_EXACT is diagnostic-only: it declines every exact schedule, and
+ * the call-runner profiles derived from them, so each function is compiled by
+ * the generated candidates. The test corpus's baselines mostly exercise exact
+ * schedules; this runs the general emitters over the same programs.
+ */
+static int mir_no_exact_diagnostic(void)
+{
+    const char *value = getenv("DCC_MIR_NO_EXACT");
+
+    return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
 static const char *mir_diagnostic_candidate(void)
 {
     const char *candidate = getenv("DCC_MIR_SELECT_CANDIDATE");
@@ -3204,6 +3217,7 @@ static int mir_apply_mir_v1_policy(
         strict_candidate = required_candidate;
         select_alternative = 1;
     } else if (diagnostic_candidate == NULL &&
+        !mir_no_exact_diagnostic() &&
         mir_call_runner_strict_profile(&strict_profile)) {
         strict_candidate =
             mir_strict_profile_candidate_name(strict_profile);
@@ -3884,7 +3898,7 @@ static int mir_try_generated_candidate(
         default_policy = 1;
         *selector_name = "scheduled-machine-cfg";
         label_id = label_base;
-        emitted = mir_try_selector(
+        emitted = !mir_no_exact_diagnostic() && mir_try_selector(
             generated, mir_try_emit_scheduled_machine_cfg);
         *selected_label_id = label_id;
     }
