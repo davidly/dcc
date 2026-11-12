@@ -723,6 +723,9 @@ int mir_probe_wide_colors_for_homed(
     const unsigned char *rematerializable, int bounded_hybrid);
 int mir_homed_rematerializable_wide_candidate_count(void);
 int mir_homed_value_is_rematerializable(int value);
+int mir_homed_direct_binary_only_constant(int value);
+void mir_begin_homed_direct_forms(void);
+void mir_end_homed_direct_forms(void);
 void mir_begin_hybrid_homed_selection(void);
 void mir_end_hybrid_homed_selection(void);
 int mir_begin_regional_home_plan(void);

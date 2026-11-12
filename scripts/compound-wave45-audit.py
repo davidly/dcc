@@ -38,7 +38,7 @@ REJECT_REASON = re.compile(
     r"template=compound-check-runner reject=(?P<reason>\S+)"
 )
 BASELINE_SHA256 = (
-    "e84f005a07fdedd9a0dfb05b74ac285051d12daf75377c0fb95d64450cf4ffd1"
+    "12af913dd0d60824ebf5995ebb362691c2e88086593033d1a530ff6e2bd6ce16"
 )
 BASELINE_SELECTED_HASH = "044ec27d"
 EXPECTED_RUNTIME = (

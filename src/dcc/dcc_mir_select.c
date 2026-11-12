@@ -3990,6 +3990,68 @@ static int mir_try_generated_candidate(
 }
 
 static int mir_generated_stream_is_better(
+    MirStream *candidate, MirStream *incumbent);
+
+/* Re-emit the selected homed candidate with direct operand forms. Selection
+ * has already been decided on the accumulator forms; the re-emission is
+ * adopted only when that selected stream can be reproduced exactly and the
+ * direct stream is estimated cheaper. */
+static void mir_refine_selected_homed_candidate(
+    MirStream **selected, const char *selector_name,
+    const char *candidate_name, int *selected_label_id, int label_base)
+{
+    enum MirCostCandidateKind kind = mir_cost_selector_kind(selector_name);
+    const struct MirCostCandidateSpec *spec = NULL;
+    struct MirCostCandidate plain;
+    struct MirCostCandidate direct;
+    const char *result = "not-reproduced";
+    size_t i;
+
+    if (kind == MIR_COST_CANDIDATE_SPILLED)
+        return;
+    if (kind == MIR_COST_CANDIDATE_HOMED &&
+        !strcmp(candidate_name, "homed-lazy"))
+        kind = MIR_COST_CANDIDATE_HOMED_LAZY;
+    for (i = 0;
+         i < sizeof(mir_cost_candidate_specs) /
+                 sizeof(mir_cost_candidate_specs[0]);
+         ++i)
+        if (mir_cost_candidate_specs[i].kind == kind) {
+            spec = &mir_cost_candidate_specs[i];
+            break;
+        }
+    if (spec == NULL)
+        return;
+    mir_cost_build_candidate(spec, &plain, label_base);
+    if (plain.emitted &&
+        mir_stream_size(plain.stream) == mir_stream_size(*selected) &&
+        mir_stream_hash(plain.stream) == mir_stream_hash(*selected)) {
+        mir_begin_homed_direct_forms();
+        mir_cost_build_candidate(spec, &direct, label_base);
+        mir_end_homed_direct_forms();
+        if (!direct.emitted) {
+            result = "not-emitted";
+        } else if (mir_generated_stream_is_better(direct.stream, *selected)) {
+            result = "adopted";
+            mir_stream_close(*selected);
+            *selected = direct.stream;
+            direct.stream = NULL;
+            *selected_label_id = direct.label_id_after;
+        } else {
+            result = "not-better";
+        }
+        if (direct.stream != NULL)
+            mir_stream_close(direct.stream);
+    }
+    if (plain.stream != NULL)
+        mir_stream_close(plain.stream);
+    if (getenv("DCC_MIR_COST_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR homed-direct function=%s candidate=%s result=%s\n",
+                mir.name, spec->name, result);
+}
+
+static int mir_generated_stream_is_better(
     MirStream *candidate, MirStream *incumbent)
 {
     struct MirCostComponents candidate_cost;
@@ -4247,6 +4309,12 @@ void mir_end_function(void)
             label_id = selected_label_id;
         }
         free(original_insns);
+    }
+    if (failure_reason == NULL && generated != NULL && !opt_debug) {
+        mir_refine_selected_homed_candidate(
+            &generated, selector_name, candidate_name,
+            &selected_label_id, candidate_label_base);
+        label_id = selected_label_id;
     }
     if (failure_reason == NULL &&
         mir_has_inline_temp_identity_overwrite())

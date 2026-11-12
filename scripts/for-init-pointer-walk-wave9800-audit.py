@@ -25,7 +25,7 @@ TEMPLATE = "for-init-pointer-walk-schedule"
 FORCED_CANDIDATE = "spilled-phi-slot"
 INSTRUCTION_COUNT = 34
 BASELINE_SHA256 = (
-    "7dee6b9ff0ec8842ee29f2e82955f1f45d06999445e8dffda7181a9c5f81b0a3"
+    "b0f42caf75320a8eb2d0d9cb4fee674d46f9409e7adc0dc5e432f1d54b69805f"
 )
 BASELINE_SELECTED_HASH = "ad66cb79"
 EXPECTED_RUNTIME = ("for init pointer walk failures=0 checksum=130",)

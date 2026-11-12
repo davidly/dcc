@@ -129,6 +129,7 @@ static int mir_regional_saved_fixed_moves;
 static int mir_regional_saved_operand_moves;
 static int mir_regional_saved_phi_moves;
 static int mir_regional_home_plan_active;
+static int *mir_regional_object_homes;
 static unsigned char *mir_regional_register_valid;
 static int mir_regional_register_valid_capacity;
 static int mir_regional_emission_region = -1;
@@ -11450,39 +11451,131 @@ static int mir_regional_value_has_width(int value, int width)
            type_size(definition->type) == width;
 }
 
-static int mir_regional_object_home_for_value(int value)
+/* The named object whose slot can hold every value of this PHI, or -1. */
+static int mir_regional_phi_object_home(const struct MirInsn *phi)
 {
+    const struct MirObject *object;
+    int width;
+
+    if (phi->opcode != MIR_PHI ||
+        phi->object < 0 || phi->object >= mir.object_count)
+        return -1;
+    object = &mir.objects[phi->object];
+    width = type_size(phi->type);
+    if ((object->storage != SC_LOCAL &&
+         object->storage != SC_PARAM) ||
+        type_size(object->type) != width ||
+        !mir_regional_object_home_bounds(object, width) ||
+        !mir_regional_value_has_width(phi->dst, width) ||
+        !mir_regional_value_has_width(phi->src1, width) ||
+        !mir_regional_value_has_width(phi->src2, width) ||
+        mir_object_address_taken(phi->object) ||
+        !mir_regional_source_backs_object(phi->src1, phi->object) ||
+        !mir_regional_source_backs_object(phi->src2, phi->object))
+        return -1;
+    return phi->object;
+}
+
+static int mir_regional_parameter_rematerializable(
+    const struct MirInsn *parameter);
+static int mir_regional_address_rematerializable(
+    const struct MirInsn *address);
+
+/* A PHI result lives in its own object. Any other value may live in the
+ * one object whose PHIs consume it; a value feeding two objects has no
+ * single slot, and a rematerialized value is never stored at all. */
+static int mir_regional_object_home_candidate(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int object = -1;
     int instruction;
 
-    if (!mir_regional_home_plan_active)
+    if (definition != NULL && definition->opcode == MIR_PHI)
+        return mir_regional_phi_object_home(definition);
+    if (mir_regional_parameter_rematerializable(definition) ||
+        mir_regional_address_rematerializable(definition))
         return -1;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *phi = &mir.insns[instruction];
-        const struct MirObject *object;
-        int width;
+        int candidate;
 
         if (phi->opcode != MIR_PHI ||
-            phi->object < 0 || phi->object >= mir.object_count ||
-            (phi->dst != value &&
-             phi->src1 != value &&
-             phi->src2 != value))
+            (phi->src1 != value && phi->src2 != value))
             continue;
-        object = &mir.objects[phi->object];
-        width = type_size(phi->type);
-        if ((object->storage != SC_LOCAL &&
-             object->storage != SC_PARAM) ||
-            type_size(object->type) != width ||
-            !mir_regional_object_home_bounds(object, width) ||
-            !mir_regional_value_has_width(phi->dst, width) ||
-            !mir_regional_value_has_width(phi->src1, width) ||
-            !mir_regional_value_has_width(phi->src2, width) ||
-            mir_object_address_taken(phi->object) ||
-            !mir_regional_source_backs_object(phi->src1, phi->object) ||
-            !mir_regional_source_backs_object(phi->src2, phi->object))
+        candidate = mir_regional_phi_object_home(phi);
+        if (candidate < 0)
             continue;
-        return phi->object;
+        if (object >= 0 && object != candidate)
+            return -1;
+        object = candidate;
     }
-    return -1;
+    return object;
+}
+
+/* Values that share an object's slot must never be live together: each is
+ * written to the slot when defined, so an overlap would overwrite a value
+ * that is still needed. An object with any such overlap gets no home. */
+static void mir_regional_build_object_homes(void)
+{
+    size_t values = (size_t)(mir.next_value > 0 ? mir.next_value : 1);
+    size_t objects = (size_t)(mir.object_count > 0 ? mir.object_count : 1);
+    int *homed;
+    int *live_count;
+    unsigned char *overlaps;
+    int homed_count = 0;
+    int instruction;
+    int value;
+    int i;
+
+    free(mir_regional_object_homes);
+    mir_regional_object_homes =
+        (int *)malloc(values * sizeof(*mir_regional_object_homes));
+    homed = (int *)malloc(values * sizeof(*homed));
+    live_count = (int *)malloc(objects * sizeof(*live_count));
+    overlaps = (unsigned char *)calloc(objects, 1);
+    if (mir_regional_object_homes == NULL || homed == NULL ||
+        live_count == NULL || overlaps == NULL)
+        fatal("out of memory planning regional MIR object homes");
+    for (value = 0; value < mir.next_value; ++value) {
+        mir_regional_object_homes[value] =
+            mir_regional_object_home_candidate(value);
+        if (mir_regional_object_homes[value] >= 0)
+            homed[homed_count++] = value;
+    }
+    for (instruction = 0; homed_count > 1 && instruction < mir.count;
+         ++instruction) {
+        int pass;
+
+        for (pass = 0; pass < 2; ++pass) {
+            const MirLiveWord *live =
+                pass == 0 ? mir.live_in : mir.live_out;
+
+            for (i = 0; i < homed_count; ++i)
+                live_count[mir_regional_object_homes[homed[i]]] = 0;
+            for (i = 0; i < homed_count; ++i) {
+                int object = mir_regional_object_homes[homed[i]];
+
+                if (MIR_LIVE_TEST(live, instruction, homed[i]) &&
+                    ++live_count[object] > 1)
+                    overlaps[object] = 1;
+            }
+        }
+    }
+    for (i = 0; i < homed_count; ++i)
+        if (overlaps[mir_regional_object_homes[homed[i]]])
+            mir_regional_object_homes[homed[i]] = -1;
+    free(overlaps);
+    free(live_count);
+    free(homed);
+}
+
+static int mir_regional_object_home_for_value(int value)
+{
+    if (!mir_regional_home_plan_active ||
+        mir_regional_object_homes == NULL ||
+        value < 0 || value >= mir.next_value)
+        return -1;
+    return mir_regional_object_homes[value];
 }
 
 int mir_regional_object_home_offset(int value, int *offset)
@@ -12135,6 +12228,7 @@ int mir_begin_regional_home_plan(void)
            (size_t)mir.next_value *
                sizeof(*mir_regional_base_spills));
     mir_regional_home_plan_active = 1;
+    mir_regional_build_object_homes();
     mir_build_call_free_regions();
     mir_regional_reserve_segments(
         mir.next_value > 0 ? mir.next_value : 1);
@@ -12292,6 +12386,8 @@ void mir_end_regional_home_plan(void)
     free(mir_regional_saved_spills);
     free(mir_regional_base_colors);
     free(mir_regional_base_spills);
+    free(mir_regional_object_homes);
+    mir_regional_object_homes = NULL;
     mir_regional_saved_colors = NULL;
     mir_regional_saved_spills = NULL;
     mir_regional_base_colors = NULL;

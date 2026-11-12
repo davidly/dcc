@@ -35,7 +35,7 @@ SELECTED_HASH = re.compile(
     r"selected-hash=(?P<hash>[0-9a-f]{8})"
 )
 BASELINE_SHA256 = (
-    "6c3450a1a149bfa98a48657d49dad5da6ecaeee89c26f88621e793bee6bf8146"
+    "78ba681aab1e98af6378f1255585e7b96ff998cc2c13ccc50cf82437df635bb1"
 )
 BASELINE_SELECTED_HASH = "b3ab4a13"
 EXPECTED_RUNTIME = ("scope block failures=0",)

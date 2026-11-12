@@ -1249,17 +1249,22 @@ static int mir_emit_regional_address_to_hl(MirStream *out, int value)
     }
     if (memory_storage == SC_PARAM && mir_home_uses_iy())
         memory_offset += 2;
-    mir_stream_puts("\tpush ix\n\tpop hl\n", out);
     if (memory_offset != 0) {
         int preserve_de =
             mir_de_home_live_in(mir_emit_instruction_index);
 
+        /* dccpeep recognizes an escaping frame address only as the
+         * unbroken "push ix / pop hl / ld de,N / add hl,de"; anything
+         * between them lets it delete stores to that frame as dead. */
         if (preserve_de)
             mir_stream_puts("\tpush de\n", out);
         mir_stream_printf(out,
-            "\tld de,%d\n\tadd hl,de\n", memory_offset);
+            "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n",
+            memory_offset);
         if (preserve_de)
             mir_stream_puts("\tpop de\n", out);
+    } else {
+        mir_stream_puts("\tpush ix\n\tpop hl\n", out);
     }
     return 1;
 }
@@ -1618,6 +1623,8 @@ int mir_emit_ix_offset_address_to_home(MirStream *out, int value,
  * else live there needing preservation), so this also correctly restores
  * base's own value afterward when base's home is hl or de and base still
  * has a use later in the function. */
+static int mir_homed_values_share_home(int left, int right);
+
 int mir_emit_pointer_offset_address_to_home(MirStream *out, int dst,
                                                     int base, long offset)
 {
@@ -1633,8 +1640,9 @@ int mir_emit_pointer_offset_address_to_home(MirStream *out, int dst,
         dst_color != MIR_COLOR_DE &&
         mir_home_color_live_across(instruction, MIR_COLOR_DE);
 
-    if (offset == 0 &&
-        dst_color == mir.allocation_colors[base])
+    /* Two spilled values both have color -1 but live in different slots,
+     * so compare homes rather than colors before eliding the copy. */
+    if (offset == 0 && mir_homed_values_share_home(dst, base))
         return 1;
     if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
     if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
@@ -2475,6 +2483,54 @@ int mir_float_identity_unary(const struct MirInsn *insn)
            type_size(insn->type) == 4;
 }
 
+/* Direct homed operands: a value whose home is HL, DE, or BC can be read
+ * and written in place, without routing it through the HL/DE accumulator.
+ * Candidates are still scored on the accumulator forms; the selector turns
+ * the direct forms on only to re-emit an already selected homed candidate,
+ * so they improve its code without moving any selection decision. */
+static int mir_homed_direct_forms;
+
+void mir_begin_homed_direct_forms(void)
+{
+    mir_homed_direct_forms = 1;
+}
+
+void mir_end_homed_direct_forms(void)
+{
+    mir_homed_direct_forms = 0;
+}
+
+static int mir_homed_direct_color(int value)
+{
+    int color;
+
+    if (!mir_homed_direct_forms ||
+        value < 0 || value >= mir.next_value ||
+        mir_regional_rematerialization_kind(value) !=
+            MIR_REGIONAL_REMAT_NONE ||
+        mir_is_lazy_parameter(value))
+        return -1;
+    color = mir.allocation_colors[value];
+    return color == MIR_COLOR_HL || color == MIR_COLOR_DE ||
+           color == MIR_COLOR_BC ? color : -1;
+}
+
+static const char *mir_homed_direct_pair(int color)
+{
+    return color == MIR_COLOR_HL ? "hl" : color == MIR_COLOR_DE ? "de" : "bc";
+}
+
+static void mir_emit_homed_direct_copy(MirStream *out, int dst_color,
+                                       int src_color)
+{
+    const char *dst = mir_homed_direct_pair(dst_color);
+    const char *src = mir_homed_direct_pair(src_color);
+
+    if (dst_color != src_color)
+        mir_stream_printf(out, "\tld %c,%c\n\tld %c,%c\n",
+                          dst[0], src[0], dst[1], src[1]);
+}
+
 int mir_emit_homed_unary_instruction(MirStream *out,
                                             const struct MirInsn *insn)
 {
@@ -2494,6 +2550,12 @@ int mir_emit_homed_unary_instruction(MirStream *out,
                       mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
                       mir_home_color_live_across(
                           instruction, MIR_COLOR_HL);
+    enum {
+        MIR_NARROW_CAST_NONE,
+        MIR_NARROW_CAST_BOOL,
+        MIR_NARROW_CAST_EXTEND_TARGET,
+        MIR_NARROW_CAST_EXTEND_SOURCE
+    } narrow_cast = MIR_NARROW_CAST_NONE;
     int label;
 
     if (source_wide || target_wide) {
@@ -2589,12 +2651,6 @@ int mir_emit_homed_unary_instruction(MirStream *out,
         return 1;
     }
 
-    if (preserve_hl_de)
-        mir_stream_puts("\tpush de\n\tpush hl\n", out);
-    if (preserve_hl)
-        mir_stream_puts("\tpush hl\n", out);
-    if (!mir_emit_home_to_hl(out, insn->src1))
-        return 0;
     if (insn->immediate == 0) {
         /* Cast in the 16-bit home subset: usually a no-op, except a cast to
          * _Bool must normalize any nonzero value to exactly 1 (C requires
@@ -2605,15 +2661,40 @@ int mir_emit_homed_unary_instruction(MirStream *out,
             /* Only the low byte is observed. */
         } else if (type_is_bool(insn->type) &&
             !type_is_bool(source != NULL ? source->type : 0)) {
-            label = new_label();
-            mir_stream_puts("\tld a,h\n\tor l\n\tld hl,0\n", out);
-            mir_stream_printf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n", label, label);
+            narrow_cast = MIR_NARROW_CAST_BOOL;
         } else if (type_size(insn->type) == 1 &&
                    !mir_value_is_normalized_byte(insn->src1, insn->type, 0)) {
-            mir_emit_byte_extension(out, MIR_COLOR_HL, insn->type);
+            narrow_cast = MIR_NARROW_CAST_EXTEND_TARGET;
         } else if (type_size(source_type) == 1 &&
                    type_size(insn->type) == 2 &&
                    !mir_value_is_normalized_byte(insn->src1, source_type, 0)) {
+            narrow_cast = MIR_NARROW_CAST_EXTEND_SOURCE;
+        }
+    }
+    /* A cast or unary plus that converts nothing is a move between homes:
+     * copy the pair directly, or emit nothing when it is already there. */
+    if ((insn->immediate == 0 || insn->immediate == '+') &&
+        narrow_cast == MIR_NARROW_CAST_NONE &&
+        mir_homed_direct_color(insn->src1) >= 0 &&
+        mir_homed_direct_color(insn->dst) >= 0) {
+        mir_emit_homed_direct_copy(out, mir_homed_direct_color(insn->dst),
+                                   mir_homed_direct_color(insn->src1));
+        return 1;
+    }
+    if (preserve_hl_de)
+        mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    if (preserve_hl)
+        mir_stream_puts("\tpush hl\n", out);
+    if (!mir_emit_home_to_hl(out, insn->src1))
+        return 0;
+    if (insn->immediate == 0) {
+        if (narrow_cast == MIR_NARROW_CAST_BOOL) {
+            label = new_label();
+            mir_stream_puts("\tld a,h\n\tor l\n\tld hl,0\n", out);
+            mir_stream_printf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n", label, label);
+        } else if (narrow_cast == MIR_NARROW_CAST_EXTEND_TARGET) {
+            mir_emit_byte_extension(out, MIR_COLOR_HL, insn->type);
+        } else if (narrow_cast == MIR_NARROW_CAST_EXTEND_SOURCE) {
             mir_emit_byte_extension(out, MIR_COLOR_HL, source_type);
         }
     } else if (insn->immediate == '+') {
@@ -2635,6 +2716,297 @@ int mir_emit_homed_unary_instruction(MirStream *out,
         mir_stream_puts("\tpop hl\n", out);
     if (preserve_hl_de)
         mir_stream_puts("\tpop hl\n\tpop de\n", out);
+    return 1;
+}
+
+/* Direct homed binaries: a 16-bit add, subtract, or bitwise operation whose
+ * result and non-constant operands all live in HL, DE, or BC is emitted in
+ * place. Only A, the flags, the destination pair, and an add constant's own
+ * reserved home change, so nothing has to be saved, and a constant operand
+ * is used as an immediate. */
+struct MirHomedDirectBinary {
+    int operation;
+    int dst_color;
+    int left_color;     /* -1: constant held in left_bits */
+    int right_color;    /* -1: constant held in right_bits */
+    int constant_color; /* own home of an unmaterialized add constant */
+    unsigned int left_bits;
+    unsigned int right_bits;
+};
+
+static int mir_homed_direct_constant(int value, unsigned int *bits)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    if (definition == NULL || definition->opcode != MIR_CONST ||
+        type_size(definition->type) > 2)
+        return 0;
+    *bits = (unsigned int)(definition->immediate & 0xffffL);
+    return 1;
+}
+
+/* Structural half of the plan: independent of whether a constant operand
+ * is materialized, so the constant predicate below can rely on it. */
+static int mir_homed_direct_binary_shape(const struct MirInsn *insn)
+{
+    unsigned int bits;
+    int left_constant;
+    int right_constant;
+
+    if (insn == NULL || insn->opcode != MIR_BINARY ||
+        (insn->immediate != '+' && insn->immediate != '-' &&
+         insn->immediate != '&' && insn->immediate != '|' &&
+         insn->immediate != '^') ||
+        type_size(insn->type) != 2 || type_is_float(insn->type) ||
+        type_size(insn->secondary_offset) > 2 ||
+        type_is_float(insn->secondary_offset) ||
+        mir_homed_direct_color(insn->dst) < 0)
+        return 0;
+    left_constant = mir_homed_direct_constant(insn->src1, &bits);
+    right_constant = mir_homed_direct_constant(insn->src2, &bits);
+    if (left_constant && right_constant)
+        return 0;
+    return (left_constant || mir_homed_direct_color(insn->src1) >= 0) &&
+           (right_constant || mir_homed_direct_color(insn->src2) >= 0);
+}
+
+/* A constant whose every use is a direct binary is never read from its
+ * home, so its MIR_CONST need not load one. The home stays reserved for the
+ * constant's live range, which lets an add borrow it as the addend pair.
+ * Regional plans rehome values between regions, so they keep the load. */
+int mir_homed_direct_binary_only_constant(int value)
+{
+    unsigned int bits;
+    int instruction;
+    int uses = 0;
+
+    if (mir_regional_home_plan_is_active() ||
+        !mir_homed_direct_constant(value, &bits) ||
+        mir_homed_direct_color(value) < 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src1 != value && insn->src2 != value)
+            continue;
+        if (!mir_homed_direct_binary_shape(insn))
+            return 0;
+        ++uses;
+    }
+    return uses > 0;
+}
+
+static int mir_homed_direct_binary_plan(const struct MirInsn *insn,
+                                        struct MirHomedDirectBinary *plan)
+{
+    int left_constant;
+    int right_constant;
+    int additive;
+
+    if (!mir_homed_direct_binary_shape(insn))
+        return 0;
+    plan->operation = (int)insn->immediate;
+    plan->dst_color = mir_homed_direct_color(insn->dst);
+    plan->constant_color = -1;
+    plan->left_bits = 0;
+    plan->right_bits = 0;
+    left_constant = mir_homed_direct_constant(insn->src1, &plan->left_bits);
+    right_constant = mir_homed_direct_constant(insn->src2, &plan->right_bits);
+    plan->left_color = left_constant ? -1 : mir_homed_direct_color(insn->src1);
+    plan->right_color =
+        right_constant ? -1 : mir_homed_direct_color(insn->src2);
+    additive = plan->operation == '+' || plan->operation == '-';
+    /* A materialized add constant is an ordinary register operand; an
+     * unmaterialized one is an immediate that may borrow its own home. */
+    if (left_constant && additive) {
+        if (!mir_homed_direct_binary_only_constant(insn->src1)) {
+            plan->left_color = mir_homed_direct_color(insn->src1);
+            if (plan->left_color < 0)
+                return 0;
+        } else if (plan->operation == '+') {
+            plan->constant_color = mir_homed_direct_color(insn->src1);
+        }
+    }
+    if (right_constant && additive) {
+        if (!mir_homed_direct_binary_only_constant(insn->src2)) {
+            plan->right_color = mir_homed_direct_color(insn->src2);
+            if (plan->right_color < 0)
+                return 0;
+        } else {
+            plan->constant_color = mir_homed_direct_color(insn->src2);
+        }
+    }
+    if (plan->operation != '-' && plan->left_color < 0) {
+        /* Commutative: keep the constant on the right. */
+        plan->left_color = plan->right_color;
+        plan->right_color = -1;
+        plan->right_bits = plan->left_bits;
+        plan->left_bits = 0;
+    }
+    if (plan->operation == '-' && plan->right_color < 0) {
+        plan->operation = '+';
+        plan->right_bits = (0u - plan->right_bits) & 0xffffu;
+    }
+    return 1;
+}
+
+/* The pair that holds `color` while HL and DE are exchanged. */
+static int mir_homed_direct_exchanged(int color)
+{
+    return color == MIR_COLOR_HL ? MIR_COLOR_DE :
+           color == MIR_COLOR_DE ? MIR_COLOR_HL : color;
+}
+
+static void mir_emit_homed_direct_operand(MirStream *out, const char *prefix,
+                                          int color, unsigned int bits,
+                                          int high)
+{
+    if (color < 0)
+        mir_stream_printf(out, "\t%s%u\n", prefix,
+                          high ? (bits >> 8) & 0xffu : bits & 0xffu);
+    else
+        mir_stream_printf(out, "\t%s%c\n", prefix,
+                          mir_homed_direct_pair(color)[high ? 0 : 1]);
+}
+
+/* One result byte of a bitwise operation with a constant right operand. */
+static void mir_emit_homed_direct_mask_byte(
+    MirStream *out, const struct MirHomedDirectBinary *plan, int high)
+{
+    unsigned int mask =
+        high ? (plan->right_bits >> 8) & 0xffu : plan->right_bits & 0xffu;
+    char dst = mir_homed_direct_pair(plan->dst_color)[high ? 0 : 1];
+    char src = mir_homed_direct_pair(plan->left_color)[high ? 0 : 1];
+    unsigned int identity = plan->operation == '&' ? 0xffu : 0u;
+    const char *mnemonic = plan->operation == '&' ? "and" :
+                           plan->operation == '|' ? "or" : "xor";
+
+    if (mask == identity) {
+        if (dst != src)
+            mir_stream_printf(out, "\tld %c,%c\n", dst, src);
+    } else if (plan->operation != '^' && mask == (identity ^ 0xffu)) {
+        mir_stream_printf(out, "\tld %c,%u\n", dst, mask);
+    } else if (plan->operation == '^' && mask == 0xffu) {
+        mir_stream_printf(out, "\tld a,%c\n\tcpl\n\tld %c,a\n", src, dst);
+    } else {
+        mir_stream_printf(out, "\tld a,%c\n\t%s %u\n\tld %c,a\n",
+                          src, mnemonic, mask, dst);
+    }
+}
+
+static void mir_emit_homed_direct_bytewise(
+    MirStream *out, const struct MirHomedDirectBinary *plan)
+{
+    const char *dst = mir_homed_direct_pair(plan->dst_color);
+    const char *low = plan->operation == '+' ? "add a," :
+                      plan->operation == '-' ? "sub " :
+                      plan->operation == '&' ? "and " :
+                      plan->operation == '|' ? "or " : "xor ";
+    const char *high = plan->operation == '+' ? "adc a," :
+                       plan->operation == '-' ? "sbc a," : low;
+
+    mir_emit_homed_direct_operand(out, "ld a,", plan->left_color,
+                                  plan->left_bits, 0);
+    mir_emit_homed_direct_operand(out, low, plan->right_color,
+                                  plan->right_bits, 0);
+    mir_stream_printf(out, "\tld %c,a\n", dst[1]);
+    mir_emit_homed_direct_operand(out, "ld a,", plan->left_color,
+                                  plan->left_bits, 1);
+    mir_emit_homed_direct_operand(out, high, plan->right_color,
+                                  plan->right_bits, 1);
+    mir_stream_printf(out, "\tld %c,a\n", dst[0]);
+}
+
+/* `add hl,rr` with the destination pair exchanged into HL when it is DE.
+ * `left` is already in the destination pair. */
+static void mir_emit_homed_direct_add_pair(MirStream *out, int dst_color,
+                                           int right_color)
+{
+    if (dst_color == MIR_COLOR_HL) {
+        mir_stream_printf(out, "\tadd hl,%s\n",
+                          mir_homed_direct_pair(right_color));
+        return;
+    }
+    mir_stream_printf(out, "\tex de,hl\n\tadd hl,%s\n\tex de,hl\n",
+                      mir_homed_direct_pair(
+                          mir_homed_direct_exchanged(right_color)));
+}
+
+static int mir_emit_homed_direct_binary(MirStream *out,
+                                        const struct MirInsn *insn)
+{
+    struct MirHomedDirectBinary plan;
+    int in_place_pair;
+
+    if (!mir_homed_direct_binary_plan(insn, &plan))
+        return 0;
+    if (plan.operation != '+') {
+        if (plan.right_color < 0 && plan.operation != '-') {
+            mir_emit_homed_direct_mask_byte(out, &plan, 0);
+            mir_emit_homed_direct_mask_byte(out, &plan, 1);
+        } else if (plan.operation == '-' &&
+                   plan.dst_color == MIR_COLOR_HL &&
+                   plan.left_color == MIR_COLOR_HL &&
+                   plan.right_color != MIR_COLOR_HL) {
+            mir_stream_printf(out, "\tor a\n\tsbc hl,%s\n",
+                              mir_homed_direct_pair(plan.right_color));
+        } else {
+            mir_emit_homed_direct_bytewise(out, &plan);
+        }
+        return 1;
+    }
+    if (plan.right_color < 0) {
+        unsigned int addend = plan.right_bits;
+        unsigned int steps = addend <= 3u ? addend : 0x10000u - addend;
+        const char *dst = mir_homed_direct_pair(plan.dst_color);
+
+        if (steps <= 3u) {
+            mir_emit_homed_direct_copy(out, plan.dst_color, plan.left_color);
+            while (steps-- > 0)
+                mir_stream_printf(out, "\t%s %s\n",
+                                  addend <= 3u ? "inc" : "dec", dst);
+            return 1;
+        }
+        /* Borrow the constant's own reserved home as the addend pair. */
+        if (plan.constant_color >= 0 &&
+            plan.constant_color != plan.left_color &&
+            (plan.dst_color == MIR_COLOR_HL ||
+             (plan.dst_color == MIR_COLOR_DE &&
+              plan.left_color == MIR_COLOR_DE))) {
+            if (plan.constant_color == MIR_COLOR_HL &&
+                plan.dst_color == MIR_COLOR_HL) {
+                mir_stream_printf(out, "\tld hl,%u\n\tadd hl,%s\n", addend,
+                                  mir_homed_direct_pair(plan.left_color));
+                return 1;
+            }
+            mir_emit_homed_direct_copy(out, plan.dst_color, plan.left_color);
+            mir_stream_printf(out, "\tld %s,%u\n",
+                              mir_homed_direct_pair(plan.constant_color),
+                              addend);
+            mir_emit_homed_direct_add_pair(out, plan.dst_color,
+                                           plan.constant_color);
+            return 1;
+        }
+        mir_emit_homed_direct_bytewise(out, &plan);
+        return 1;
+    }
+    /* Register add: put an operand that already sits in the destination
+     * pair on the left so the 16-bit add can run in place. */
+    if (plan.right_color == plan.dst_color) {
+        int color = plan.left_color;
+
+        plan.left_color = plan.right_color;
+        plan.right_color = color;
+    }
+    in_place_pair = plan.dst_color == MIR_COLOR_HL ||
+                    (plan.dst_color == MIR_COLOR_DE &&
+                     plan.left_color == MIR_COLOR_DE);
+    if (!in_place_pair) {
+        mir_emit_homed_direct_bytewise(out, &plan);
+        return 1;
+    }
+    mir_emit_homed_direct_copy(out, plan.dst_color, plan.left_color);
+    mir_emit_homed_direct_add_pair(out, plan.dst_color, plan.right_color);
     return 1;
 }
 
@@ -2663,6 +3035,8 @@ int mir_emit_homed_binary_instruction(MirStream *out,
     int biased_right_constant;
     int byte_unit_update = mir_binary_is_byte_unit_update(insn);
 
+    if (mir_emit_homed_direct_binary(out, insn))
+        return 1;
     if (mir.allocation_colors[right] == MIR_COLOR_HL) {
         int temporary;
         if (!commutative && runtime_helper == NULL)

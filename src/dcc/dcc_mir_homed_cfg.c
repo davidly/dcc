@@ -403,6 +403,21 @@ static int mir_emit_homed_wide_indirect_increment(
     return 1;
 }
 
+/* Forwarding a wide value in HL:DE from one instruction to the next reads
+ * register liveness through the current colors. A regional plan recolors
+ * and spills at region boundaries, so the two instructions must share one
+ * region for that reading to describe both. */
+static int mir_homed_share_emission_region(int first, int second)
+{
+    if (!mir_regional_home_plan_is_active())
+        return 1;
+    return first >= 0 && second >= 0 &&
+           first < mir.count && second < mir.count &&
+           mir.instruction_regions[first] >= 0 &&
+           mir.instruction_regions[first] ==
+               mir.instruction_regions[second];
+}
+
 static int mir_homed_forwarded_wide_rhs(
     int value, int consumer)
 {
@@ -424,7 +439,8 @@ static int mir_homed_forwarded_wide_rhs(
         next >= mir.count ||
         mir.insns[next].opcode != MIR_BINARY ||
         mir.insns[next].src2 != value ||
-        type_size(mir.insns[next].secondary_offset) != 4)
+        type_size(mir.insns[next].secondary_offset) != 4 ||
+        !mir_homed_share_emission_region(definition_index, next))
         return 0;
     return !mir_home_color_live_across(
                definition_index, MIR_COLOR_HL_DE) &&
@@ -454,7 +470,8 @@ static int mir_homed_stack_forwarded_wide_rhs(
     while (next < mir.count &&
            mir.insns[next].opcode == MIR_NOP)
         ++next;
-    if (next != consumer || next >= mir.count)
+    if (next != consumer || next >= mir.count ||
+        !mir_homed_share_emission_region(definition_index, next))
         return 0;
     binary = &mir.insns[next];
     return binary->opcode == MIR_BINARY &&
@@ -1267,6 +1284,18 @@ static int mir_homed_requires_ix_frame(void)
 
     if (mir_has_lazy_parameters())
         return 1;
+    /* A regional plan reads rematerialized parameters and named object
+     * homes through IX, whatever the frame size. */
+    if (mir_regional_home_plan_is_active()) {
+        int value;
+
+        for (value = 0; value < mir.next_value; ++value)
+            if ((mir_regional_rematerialization_kind(value) ==
+                     MIR_REGIONAL_REMAT_PARAMETER &&
+                 mir_value_has_use(value)) ||
+                mir_regional_object_home_offset(value, NULL))
+                return 1;
+    }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         int memory_type, memory_storage, memory_offset;
@@ -1318,6 +1347,44 @@ static const struct MirInsn *mir_homed_immediate_wide_named_store(
     return store;
 }
 
+/* The linker cannot resolve an external symbol plus an offset, so the high
+ * word of a 32-bit extern object is reached through HL instead of name+2.
+ * Both forms change only the registers the direct form changes. */
+static int mir_homed_named_object_is_extern(const struct MirInsn *insn)
+{
+    int memory_type, memory_storage, memory_offset;
+
+    return mir_scalar_memory_location(
+               insn, &memory_type, &memory_storage, &memory_offset) &&
+           memory_storage == SC_EXTERN;
+}
+
+static void mir_emit_homed_wide_symbol_load(
+    MirStream *out, const struct MirInsn *insn, const char *assembly_name)
+{
+    if (mir_homed_named_object_is_extern(insn))
+        mir_stream_printf(out,
+                "\tld hl,%s\n\tinc hl\n\tinc hl\n"
+                "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tld hl,(%s)\n",
+                assembly_name, assembly_name);
+    else
+        mir_stream_printf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
+                assembly_name, assembly_name);
+}
+
+static void mir_emit_homed_wide_symbol_store(
+    MirStream *out, const struct MirInsn *insn, const char *assembly_name)
+{
+    if (mir_homed_named_object_is_extern(insn))
+        mir_stream_printf(out,
+                "\tld (%s),hl\n\tpush hl\n\tld hl,%s\n\tinc hl\n\tinc hl\n"
+                "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tpop hl\n",
+                assembly_name, assembly_name);
+    else
+        mir_stream_printf(out, "\tld (%s),hl\n\tld (%s+2),de\n",
+                assembly_name, assembly_name);
+}
+
 static int mir_emit_current_wide_named_store(
     MirStream *out, const struct MirInsn *store)
 {
@@ -1336,8 +1403,7 @@ static int mir_emit_current_wide_named_store(
          (global != NULL && global->needs_extrn)) &&
         mir_extrn_should_emit(global))
         mir_stream_printf(out, "\textrn %s\n", assembly_name);
-    mir_stream_printf(out, "\tld (%s),hl\n\tld (%s+2),de\n",
-            assembly_name, assembly_name);
+    mir_emit_homed_wide_symbol_store(out, store, assembly_name);
     return 1;
 }
 
@@ -1572,8 +1638,7 @@ static int mir_emit_homed_named_wide_load_to_hl_de(
          (global != NULL && global->needs_extrn)) &&
         mir_extrn_should_emit(global))
         mir_stream_printf(out, "\textrn %s\n", assembly_name);
-    mir_stream_printf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
-            assembly_name, assembly_name);
+    mir_emit_homed_wide_symbol_load(out, load, assembly_name);
     return 1;
 }
 
@@ -1694,8 +1759,7 @@ static int mir_emit_homed_wide_named_load(MirStream *out,
     if (preserve_bc_iy) mir_stream_puts("\tpush iy\n\tpush bc\n", out);
     if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
     if (preserve_de) mir_stream_puts("\tpush de\n", out);
-    mir_stream_printf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
-            assembly_name, assembly_name);
+    mir_emit_homed_wide_symbol_load(out, insn, assembly_name);
     if (!mir_emit_hl_de_to_wide_home(out, insn->dst))
         return 0;
     if (preserve_de) mir_stream_puts("\tpop de\n", out);
@@ -1718,7 +1782,9 @@ static int mir_homed_previous_wide_value_in_hl_de(
         --previous;
     if (previous < 0 ||
         mir.insns[previous].dst != value ||
-        type_size(mir.insns[previous].type) != 4)
+        type_size(mir.insns[previous].type) != 4 ||
+        !mir_homed_share_emission_region(
+            previous, (int)(consumer - mir.insns)))
         return 0;
     return !mir_home_color_live_across(
                previous, MIR_COLOR_HL_DE) &&
@@ -1755,8 +1821,7 @@ static int mir_emit_homed_wide_named_store(MirStream *out,
         if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
             return 0;
     }
-    mir_stream_printf(out, "\tld (%s),hl\n\tld (%s+2),de\n",
-            assembly_name, assembly_name);
+    mir_emit_homed_wide_symbol_store(out, insn, assembly_name);
     if (!direct) {
         if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
         if (preserve_de) mir_stream_puts("\tpop de\n", out);
@@ -3357,12 +3422,25 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                  if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
                  if (preserve_de) mir_stream_puts("\tpush de\n", out);
                  if (preserve_bc) mir_stream_puts("\tpush bc\n", out);
-                if (!mir_emit_home_to_hl(out, insn->src1))
-                    goto done;
-                mir_stream_puts("\tpush hl\n", out);
-                if (!mir_emit_home_to_hl(out, insn->src2))
-                    goto done;
-                mir_stream_puts("\tpop de\n", out);
+                if (mir.allocation_colors[insn->src2] == MIR_COLOR_HL &&
+                    !mir_is_lazy_parameter(insn->src2) &&
+                    mir_regional_rematerialization_kind(insn->src2) ==
+                        MIR_REGIONAL_REMAT_NONE) {
+                    /* The source address already sits in HL, where the
+                     * destination is about to be materialized. Save it
+                     * first, as MIR_STORE_INDIRECT does for its value. */
+                    mir_stream_puts("\tpush hl\n", out);
+                    if (!mir_emit_home_to_hl(out, insn->src1))
+                        goto done;
+                    mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+                } else {
+                    if (!mir_emit_home_to_hl(out, insn->src1))
+                        goto done;
+                    mir_stream_puts("\tpush hl\n", out);
+                    if (!mir_emit_home_to_hl(out, insn->src2))
+                        goto done;
+                    mir_stream_puts("\tpop de\n", out);
+                }
                 if (insn->memory_size > 0)
                     mir_stream_printf(out, "\tld bc,%d\n\tldir\n", insn->memory_size);
                 if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
@@ -3444,6 +3522,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
              * T18). */
             if (            mir_index_only_constant(insn->dst) ||
             mir_homed_binary_only_constant(insn->dst) ||
+            mir_homed_direct_binary_only_constant(insn->dst) ||
             mir_homed_wide_binary_only_constant(insn->dst) ||
             mir_homed_wide_increment_component(insn->dst) ||
             mir_value_only_used_by_dead_stores(insn->dst))
@@ -3913,6 +3992,13 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                 }
                 if (argument != -1)
                     goto done;
+                /* Enable the runtime's %x/%o conversions as the spilled
+                 * emitter does. Every argument is already on the stack, and
+                 * the enablers change only HL. */
+                if ((insn->memory_flags & MIR_CALL_FLAG_FORMAT_HEX) != 0)
+                    mir_emit_runtime_call(out, "__pfehx");
+                if ((insn->memory_flags & MIR_CALL_FLAG_FORMAT_OCTAL) != 0)
+                    mir_emit_runtime_call(out, "__pfeoc");
                 if (callee->needs_extrn &&
                     mir_extrn_should_emit_name(assembly_name))
                     mir_stream_printf(out, "\textrn %s\n", assembly_name);
