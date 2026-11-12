@@ -3135,6 +3135,22 @@ static const char *mir_strict_profile_candidate_name(
     return NULL;
 }
 
+static int mir_prefer_regional_diagnostic(void)
+{
+    const char *value = getenv("DCC_MIR_PREFER_REGIONAL");
+
+    return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
+static const char *mir_diagnostic_candidate(void)
+{
+    const char *candidate = getenv("DCC_MIR_SELECT_CANDIDATE");
+
+    if (candidate == NULL && mir_prefer_regional_diagnostic())
+        return "regional";
+    return candidate;
+}
+
 static int mir_call_runner_strict_profile(
     enum MirStrictSpilledProfile *profile)
 {
@@ -3149,10 +3165,11 @@ static int mir_call_runner_strict_profile(
 
 static void mir_reject_unvalidated_regional_diagnostic(void)
 {
-    const char *candidate = getenv("DCC_MIR_SELECT_CANDIDATE");
+    const char *candidate = mir_diagnostic_candidate();
     const char *function = getenv("DCC_MIR_SELECT_FUNCTION");
 
     if (candidate == NULL || strcmp(candidate, "regional") != 0 ||
+        mir_prefer_regional_diagnostic() ||
         (function != NULL && strcmp(function, mir.name) != 0) ||
         mir_cost_regional_candidate_is_diagnostic_validated())
         return;
@@ -3167,10 +3184,10 @@ static int mir_apply_mir_v1_policy(
     const char **candidate_name, int *selected_label_id, int label_base,
     int select_alternative, const char *required_candidate)
 {
-    const char *diagnostic_candidate =
-        getenv("DCC_MIR_SELECT_CANDIDATE");
+    const char *diagnostic_candidate = mir_diagnostic_candidate();
     const char *diagnostic_function =
         getenv("DCC_MIR_SELECT_FUNCTION");
+    int prefer_regional = mir_prefer_regional_diagnostic();
     const char *strict_candidate = NULL;
     enum MirStrictSpilledProfile strict_profile;
     struct MirCostCandidateSpec incumbent_spec;
@@ -3242,7 +3259,8 @@ static int mir_apply_mir_v1_policy(
              if (candidate.spec->kind == MIR_COST_CANDIDATE_REGIONAL)
                  candidate.selectable =
                      candidate.selectable &&
-                     mir_cost_regional_candidate_is_diagnostic_validated();
+                     (prefer_regional ||
+                      mir_cost_regional_candidate_is_diagnostic_validated());
          } else if (strict_candidate != NULL) {
              candidate.selectable =
                  !strcmp(strict_candidate, candidate.spec->name);
@@ -3814,7 +3832,7 @@ static int mir_try_generated_candidate(
 {
     const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
     const char *general_filter = getenv("DCC_MIR_GENERAL_FUNCTION");
-    const char *diagnostic_candidate = getenv("DCC_MIR_SELECT_CANDIDATE");
+    const char *diagnostic_candidate = mir_diagnostic_candidate();
     const char *diagnostic_function = getenv("DCC_MIR_SELECT_FUNCTION");
     int force_diagnostic = diagnostic_candidate != NULL &&
         (diagnostic_function == NULL || !strcmp(diagnostic_function, mir.name));
@@ -4231,7 +4249,7 @@ void mir_end_function(void)
             mir_boolean_candidate_is_validated() ||
             mir_large_dense_switch_phi_candidate_is_eligible() ||
             strict_profile_valid ||
-            (getenv("DCC_MIR_SELECT_CANDIDATE") != NULL &&
+            (mir_diagnostic_candidate() != NULL &&
                 diagnostic_function != NULL &&
              !strcmp(diagnostic_function, mir.name));
         int boolean_phi_changed = 0;

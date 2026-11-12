@@ -39,6 +39,7 @@ $environmentNames = @(
     "DCC_MIR_FUNCTION",
     "DCC_MIR_REQUIRE_COMPLETE",
     "DCC_MIR_REQUIRE_EMIT",
+    "DCC_MIR_PREFER_REGIONAL",
     "DCC_MIR_SELECT_CANDIDATE",
     "DCC_MIR_SELECT_FUNCTION",
     "DCC_MIR_SELECT_REPORT_FUNCTION",
@@ -462,7 +463,8 @@ function Assert-ForcedRegionalSafe(
     [bool]$StackCheck,
     [bool]$Peep,
     [string[]]$Defines = @(),
-    [switch]$RequireReject
+    [switch]$RequireReject,
+    [switch]$PreferRegional
 ) {
     $configuration = @(
         if ($StackCheck) { "stack" } else { "nostack" }
@@ -490,14 +492,22 @@ function Assert-ForcedRegionalSafe(
         $arguments += "dcc-define=$define"
     }
 
-    Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $Function
-    Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "regional"
+    if ($PreferRegional) {
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $null
+        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $null
+        Set-ProcessEnvironment "DCC_MIR_PREFER_REGIONAL" "1"
+    } else {
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $Function
+        Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" "regional"
+        Set-ProcessEnvironment "DCC_MIR_PREFER_REGIONAL" $null
+    }
     Set-ProcessEnvironment "DCC_MIR_COST_REPORT" "1"
     try {
         $build = Invoke-WithTimeout $dccmake $arguments $repoRoot $BuildTimeout
     } finally {
         Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $null
         Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $null
+        Set-ProcessEnvironment "DCC_MIR_PREFER_REGIONAL" $null
         Set-ProcessEnvironment "DCC_MIR_COST_REPORT" $null
     }
     if ($build.TimedOut) {
@@ -523,9 +533,9 @@ function Assert-ForcedRegionalSafe(
         return
     }
     if ($build.ExitCode -ne 0) {
-        if ($build.Output -notmatch '(?i)regional.*(invalid|reject|safe|valid)') {
-            throw "$Name forced regional failed without an explicit " +
-                "validation rejection ($configuration):`n$($build.Output)"
+        if ($PreferRegional -or
+            $build.Output -notmatch '(?i)regional.*(invalid|reject|safe|valid)') {
+            throw "$Name forced regional failed to build ($configuration):`n$($build.Output)"
         }
         if (-not $executedConfigurations.Add(
                 "$Name-forced|$configuration")) {
@@ -533,6 +543,12 @@ function Assert-ForcedRegionalSafe(
                 "$Name-forced|$configuration"
         }
         return
+    }
+    if (-not $build.Output.Contains(
+            "MIR cost-selected function=$Function candidate=regional " +
+            "selector=regional-homed-scalar-cfg")) {
+        throw "$Name did not select the regional candidate for $Function " +
+            "($configuration):`n$($build.Output)"
     }
 
     $run = Invoke-WithTimeout $emulator @(
@@ -2778,6 +2794,12 @@ try {
                         "arbiter=655" $stackCheck $peep
                 }
             }
+        }
+        if ($Cases.Count -eq 0 -or "regbyte" -in $Cases) {
+            Assert-ForcedRegionalSafe "regbyte-prefer" `
+                (Join-Path $fixtureRoot "regbyte.c") "late" `
+                "regional-byte 1729 1123 79" $false $false `
+                -PreferRegional
         }
     }
     $expectedKeys = @(Get-MirClobberShard @($executionPlan.Keys) $ShardIndex $ShardCount)

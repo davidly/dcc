@@ -130,8 +130,10 @@ DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
   pwsh ./scripts/runall.ps1 -Apps app1,app2 -Mode full
 ```
 
-Do not push compiler/runtime changes until both strict full+extended commands
-pass:
+Before pushing compiler/runtime changes, run the regular unit tests relevant
+to the change and both strict full+extended regression commands below. Use the
+focused host, debugger, and script unit-test commands in this skill where
+applicable.
 
 ```sh
 DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
@@ -140,6 +142,12 @@ DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
   pwsh ./scripts/runall.ps1 -Mode full -Extended -NoStackCheck \
   -RunTimeout 30 -FailuresOnly
 ```
+
+The exhaustive `pwsh ./scripts/prepush.ps1` proof suite adds compiler mutants,
+sanitizers, and instrumented coverage and can take about five hours. It is a
+periodic manual check run by the maintainer, not a required gate for every
+commit or push. Do not run it automatically or substitute it for the regular
+unit and regression tests above; run it only when explicitly requested.
 
 ## Tests and baselines
 
