@@ -4742,6 +4742,31 @@ static void mir_emit_prepacked_constant_arguments(
             return;
     }
     /*
+     * A nested call's argument staged on the stack (the wide stack cache or
+     * a narrow direct push) is pushed at its definition. If that comes
+     * before the trigger, the suffix would land between the argument and its
+     * call (texpfsp: expf(nan1) inside okb(..., isnan(...), 1)). The plain
+     * call cache holds its value in registers, which the suffix preserves.
+     */
+    for (instruction = trigger_instruction;
+         instruction < outer_instruction; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        const struct MirInsn *source;
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset == outer_call->secondary_offset ||
+            arg->src1 < 0 || arg->src1 >= mir.next_value ||
+            (mir.backend_slots[arg->src1] !=
+                 MIR_BACKEND_SLOT_WIDE_ARGUMENT_STACK_CACHE &&
+             mir.backend_slots[arg->src1] !=
+                 MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH))
+            continue;
+        source = mir_definition(arg->src1);
+        if (source != NULL &&
+            (int)(source - mir.insns) < trigger_instruction)
+            return;
+    }
+    /*
      * The ABI pushes arguments in descending source-index order. Emit the
      * constant suffix before evaluating the nested call, then push that
      * call's result. The outer call later emits only the lower-index prefix,
