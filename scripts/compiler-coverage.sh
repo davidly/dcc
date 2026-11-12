@@ -161,6 +161,11 @@ DCC_MIR_SELECT_CANDIDATE=spilled-all "$pwsh_cmd" -NoProfile -File scripts/runall
 DCC_MIR_SELECT_CANDIDATE=spilled-boolean-phi-branch "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
     -Apps tctxflt -Mode full -NoStackCheck -NoPerfCheck \
     -ThrottleLimit "$jobs"
+# A spilled `!!` over a value just widened to long must not read its slot
+# unwritten (tdblnotw).
+DCC_MIR_SELECT_CANDIDATE=spilled-baseline "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
+    -Apps tdblnotw -Mode full -NoStackCheck -NoPerfCheck \
+    -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
     -Jobs "$clobber_jobs" -BuildTimeout "$clobber_build_timeout" \
     -ExecutionManifest "$report_dir/mir-clobber-executions.json"

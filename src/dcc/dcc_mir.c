@@ -2439,6 +2439,25 @@ static int mir_lower_shift_count(int count, int shifted_type)
     return count;
 }
 
+/* An arm of a ?: whose type was unknown at build: always convert, marking
+ * the conversion so repair retypes it with the phi. */
+static int mir_lower_deferred_arm(int value, int conditional_type)
+{
+    struct MirInsn *conversion;
+    int result;
+
+    if (value < 0)
+        return value;
+    result = mir_new_value();
+    conversion = mir_emit(MIR_UNARY);
+    conversion->dst = result;
+    conversion->src1 = value;
+    conversion->type = conditional_type;
+    conversion->immediate = 0;
+    conversion->deferred_operand_types = 1;
+    return result;
+}
+
 static int mir_lower_compound_value(int left, int right, int operation,
                                     int target_type)
 {
@@ -3462,10 +3481,18 @@ static int mir_lower_expr_impl(const struct AstNode *node)
         }
         if (node->operand_type != 0 &&
             !left_is_pointer && !right_is_pointer) {
-            left = mir_lower_conversion(left, node->operand_type);
-            if (node->op != TOK_SHL && node->op != TOK_SHR)
-                right = mir_lower_conversion(right, node->operand_type);
-            else
+            int converted = mir_lower_conversion(left, node->operand_type);
+            /* A deferred-type binary's conversions target an assumed type;
+             * mark them so repair retypes them with the operation. */
+            if (node->deferred_types && converted != left)
+                mir_mutable_definition(converted)->deferred_operand_types = 1;
+            left = converted;
+            if (node->op != TOK_SHL && node->op != TOK_SHR) {
+                converted = mir_lower_conversion(right, node->operand_type);
+                if (node->deferred_types && converted != right)
+                    mir_mutable_definition(converted)->deferred_operand_types = 1;
+                right = converted;
+            } else
                 right = mir_lower_shift_count(right, node->operand_type);
         }
         if (!left_is_pointer && !right_is_pointer) {
@@ -3669,11 +3696,16 @@ static int mir_lower_expr_impl(const struct AstNode *node)
         int true_pointer_type;
         int false_pointer_type;
         int no_deref;
+        int deferred;
         if (ast_pointer_expr_type(node->b, &true_pointer_type, &no_deref) &&
             ast_pointer_expr_type(node->c, &false_pointer_type, &no_deref) &&
             type_ptr_depth(true_pointer_type) > 0 &&
             type_ptr_depth(false_pointer_type) > 0)
             conditional_type = true_pointer_type;
+        deferred = node->deferred_types &&
+                   type_ptr_depth(conditional_type) == 0 &&
+                   !type_is_float(conditional_type) &&
+                   (conditional_type & 15) != TYPE_VOID;
         false_label = mir_new_label();
         end_label = mir_new_label();
         left = mir_lower_expr(node->a);
@@ -3681,12 +3713,16 @@ static int mir_lower_expr_impl(const struct AstNode *node)
         insn->src1 = left;
         insn->label = false_label;
         true_value = mir_lower_expr(node->b);
-        true_value = mir_lower_conversion(true_value, conditional_type);
+        true_value = deferred
+            ? mir_lower_deferred_arm(true_value, conditional_type)
+            : mir_lower_conversion(true_value, conditional_type);
         mir_emit_label(then_exit_label = mir_new_label());
         mir_emit_jump(end_label);
         mir_emit_label(false_label);
         false_value = mir_lower_expr(node->c);
-        false_value = mir_lower_conversion(false_value, conditional_type);
+        false_value = deferred
+            ? mir_lower_deferred_arm(false_value, conditional_type)
+            : mir_lower_conversion(false_value, conditional_type);
         mir_emit_label(else_exit_label = mir_new_label());
         mir_emit_label(end_label);
         if ((conditional_type & 15) == TYPE_VOID &&
@@ -3700,6 +3736,7 @@ static int mir_lower_expr_impl(const struct AstNode *node)
         insn->phi_pred1 = then_exit_label;
         insn->phi_pred2 = else_exit_label;
         insn->type = conditional_type;
+        insn->deferred_operand_types = deferred;
         return value;
         }
     case AST_ASSIGN:
@@ -8390,12 +8427,32 @@ void mir_resolve_deferred_metadata(void)
                     int left_type;
                     int right_type;
                     int operand_type;
+                    struct MirInsn *left_conversion = NULL;
+                    struct MirInsn *right_conversion = NULL;
                     left = mir_mutable_definition(insn->src1);
                     right = mir_mutable_definition(insn->src2);
+                    /* Read operands through the conversions lowering made to
+                     * the assumed type; they are retyped below. */
+                    if (left != NULL && left->opcode == MIR_UNARY &&
+                        left->deferred_operand_types) {
+                        left_conversion = left;
+                        left = mir_mutable_definition(left->src1);
+                    }
+                    if (right != NULL && right->opcode == MIR_UNARY &&
+                        right->deferred_operand_types) {
+                        right_conversion = right;
+                        right = mir_mutable_definition(right->src1);
+                    }
                     if (left == NULL || right == NULL ||
                         type_ptr_depth(left->type) != 0 ||
                         type_ptr_depth(right->type) != 0)
                         continue;
+                    /* An && or || operand is an untyped 0/1 phi; a later
+                     * conversion may widen it, so give it its int type. */
+                    if (left->opcode == MIR_PHI && left->type == 0)
+                        left->type = TYPE_INT;
+                    if (right->opcode == MIR_PHI && right->type == 0)
+                        right->type = TYPE_INT;
                     left_type = promote_int_type(
                         left->type != 0 ? left->type : TYPE_INT);
                     right_type = promote_int_type(
@@ -8415,7 +8472,78 @@ void mir_resolve_deferred_metadata(void)
                         insn->secondary_offset = operand_type;
                         changed = 1;
                     }
-
+                    /* A conversion's bits depend only on its width, but
+                     * later passes rederive an arithmetic operation's type
+                     * from its operands' types. Retype one only when its
+                     * width is wrong or it would steer that rederivation
+                     * elsewhere; other retypes would just defeat schedules
+                     * matching it. A shift's count is never converted. */
+                    if (left_conversion != NULL &&
+                        left_conversion->type != operand_type &&
+                        (type_size(left_conversion->type) !=
+                             type_size(operand_type) ||
+                         (insn->immediate != TOK_SHL &&
+                          insn->immediate != TOK_SHR &&
+                          common_arith_type(
+                              left_conversion->type,
+                              right_conversion != NULL
+                                  ? right_conversion->type : right->type) !=
+                              operand_type))) {
+                        left_conversion->type = operand_type;
+                        changed = 1;
+                    }
+                    if (right_conversion != NULL &&
+                        right_conversion->type != operand_type &&
+                        insn->immediate != TOK_SHL &&
+                        insn->immediate != TOK_SHR &&
+                        (type_size(right_conversion->type) !=
+                             type_size(operand_type) ||
+                         common_arith_type(
+                             left_conversion != NULL
+                                 ? left_conversion->type : left->type,
+                             right_conversion->type) != operand_type)) {
+                        right_conversion->type = operand_type;
+                        changed = 1;
+                    }
+                } else if (insn->opcode == MIR_PHI &&
+                           insn->deferred_operand_types &&
+                           insn->src1 >= 0 && insn->src2 >= 0) {
+                    /* A ?: typed at build as if a nested-block local were
+                     * int: its type is the usual arithmetic conversion of
+                     * the repaired arms, and both arm conversions follow. */
+                    struct MirInsn *left_source;
+                    struct MirInsn *right_source;
+                    left = mir_mutable_definition(insn->src1);
+                    right = mir_mutable_definition(insn->src2);
+                    if (left == NULL || right == NULL ||
+                        left->opcode != MIR_UNARY ||
+                        right->opcode != MIR_UNARY ||
+                        !left->deferred_operand_types ||
+                        !right->deferred_operand_types)
+                        continue;
+                    left_source = mir_mutable_definition(left->src1);
+                    right_source = mir_mutable_definition(right->src1);
+                    if (left_source == NULL || right_source == NULL ||
+                        type_ptr_depth(left_source->type) != 0 ||
+                        type_ptr_depth(right_source->type) != 0)
+                        continue;
+                    /* An && or || arm is an untyped 0/1 phi that the arm
+                     * conversion may widen; give it its int type. */
+                    if (left_source->opcode == MIR_PHI && left_source->type == 0)
+                        left_source->type = TYPE_INT;
+                    if (right_source->opcode == MIR_PHI && right_source->type == 0)
+                        right_source->type = TYPE_INT;
+                    repaired_type = common_arith_type(
+                        promote_int_type(left_source->type != 0
+                                             ? left_source->type : TYPE_INT),
+                        promote_int_type(right_source->type != 0
+                                             ? right_source->type : TYPE_INT));
+                    if (insn->type != repaired_type) {
+                        insn->type = repaired_type;
+                        left->type = repaired_type;
+                        right->type = repaired_type;
+                        changed = 1;
+                    }
                 } else if (insn->opcode == MIR_PHI && insn->src1 >= 0 &&
                            insn->src2 >= 0) {
                     left = mir_mutable_definition(insn->src1);
@@ -8531,7 +8659,11 @@ scoped_type_repair_done:
             if (!comparison)
                 insn->type = left->type;
         }
+        /* A shift has its left operand's type whatever its count's is; a
+         * deferred-type shift's count was narrowed after repair above. */
         if (right != NULL &&
+            !(insn->deferred_operand_types &&
+              (insn->immediate == TOK_SHL || insn->immediate == TOK_SHR)) &&
             type_size(right->type) > type_size(insn->secondary_offset)) {
             insn->secondary_offset = right->type;
             if (!comparison)
@@ -9096,13 +9228,33 @@ scoped_type_repair_done:
         mir_fold_repaired_integer_unary(&mir.insns[i]);
     /* A deferred-type binary's constant operand was lowered for the int it was
      * assumed to meet (a negative one is folded only just above); extend it to
-     * the repaired operation's width. */
+     * the repaired operation's width. Other narrower operands get conversions
+     * where 32-bit binaries are reconciled with their operands. */
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
 
-        if (insn->opcode != MIR_BINARY || !insn->deferred_operand_types ||
-            insn->immediate == TOK_SHL || insn->immediate == TOK_SHR)
+        if (insn->opcode != MIR_BINARY || !insn->deferred_operand_types)
             continue;
+        if (insn->immediate == TOK_SHL || insn->immediate == TOK_SHR) {
+            /* A word shift reads only a word count; narrow a long count that
+             * was lowered as the int it was assumed to be. */
+            const struct MirInsn *count = mir_definition(insn->src2);
+            if (count != NULL && type_size(insn->secondary_offset) <= 2 &&
+                type_size(count->type) == 4 && !type_is_float(count->type) &&
+                type_ptr_depth(count->type) == 0) {
+                int narrowed = mir_new_value();
+                struct MirInsn *conversion =
+                    mir_insert_instruction_before(i, MIR_UNARY);
+
+                conversion->dst = narrowed;
+                conversion->src1 = mir.insns[i + 1].src2;
+                conversion->type = TYPE_INT;
+                conversion->immediate = 0;
+                ++i;
+                mir.insns[i].src2 = narrowed;
+            }
+            continue;
+        }
         mir_extend_deferred_constant(insn->src1, insn->secondary_offset);
         mir_extend_deferred_constant(insn->src2, insn->secondary_offset);
     }

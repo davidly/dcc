@@ -930,6 +930,8 @@ static struct AstNode *p_conditional(struct AstArena *ar)
         {
             struct AstNode *conditional = ast_cond(ar, c, then_e, else_e, 0);
             conditional->type = ast_expr_type_for_sizeof(conditional);
+            conditional->deferred_types = ast_types_deferred(then_e) ||
+                                          ast_types_deferred(else_e);
             return conditional;
         }
     }

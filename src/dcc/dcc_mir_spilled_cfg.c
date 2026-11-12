@@ -25714,6 +25714,11 @@ static int mir_match_double_logical_not(
     if (source != NULL && source->opcode == MIR_UNARY &&
         source->immediate == '!')
         return 0;
+    /* A wide source just converted into HL:DE is forwarded to the inner `!`
+     * without being stored; fused away, its slot would be read unwritten
+     * (`!!(long)x`). */
+    if (mir_value_is_wide(inner->src1))
+        return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *use = &mir.insns[instruction];
 
