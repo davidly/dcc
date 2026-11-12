@@ -825,6 +825,18 @@ static int binop_level(int k)
     }
 }
 
+/* Whether n's type is unknown at build: its value derives from a nested-block
+ * local, directly, through - or ~, or through a binary whose own operand
+ * types were. */
+static int ast_types_deferred(const struct AstNode *n)
+{
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_UNARY && (n->op == '-' || n->op == '~' || n->op == '+'))
+        return ast_types_deferred(n->a);
+    return n->deferred_types || ast_expr_base_ident_unresolved(n);
+}
+
 static int ast_promoted_binary_operand_type(const struct AstNode *n)
 {
     int type = n != NULL && n->type != 0
@@ -892,6 +904,8 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
                 lhs->operand_type = left_type;
             else
                 lhs->operand_type = common_arith_type(left_type, right_type);
+            lhs->deferred_types = ast_types_deferred(lhs->a) ||
+                                  ast_types_deferred(lhs->b);
             if (k != '<' && k != '>' && k != TOK_LE && k != TOK_GE &&
                 k != TOK_EQ && k != TOK_NE &&
                 (ast_binary_operand_is_bitfield(lhs->a) ||

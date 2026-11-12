@@ -125,6 +125,7 @@ struct AstNode *ast_new(struct AstArena *ar, int kind)
     n->list_cap = 0;
     n->aux = NULL;
     n->peek_type = 0;
+    n->deferred_types = 0;
     file = g_lex.tok.file[0] ? g_lex.tok.file : (input_name ? input_name : "<input>");
     file_len = strlen(file) + 1;
     n->file = (char *)ast_arena_alloc(ar, file_len);

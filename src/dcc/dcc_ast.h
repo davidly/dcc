@@ -130,6 +130,10 @@ struct AstNode {
                             /* computes the arithmetic common-type choice    */
     int operand_type;       /* AST_BINARY: effective common/left computation */
                             /* type; distinct from int comparison result      */
+    int deferred_types;     /* AST_BINARY: an operand's type was unknown at  */
+                            /* build (a nested-block local not yet entered), */
+                            /* so type and operand_type assumed int; MIR     */
+                            /* lowering recomputes them from the operands    */
     char *file;             /* arena-owned source filename                  */
     int line;               /* source line, for diagnostics                */
     char *end_file;         /* AST_COMPOUND closing-brace source filename  */

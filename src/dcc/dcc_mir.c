@@ -2465,6 +2465,8 @@ static int mir_lower_compound_value(int left, int right, int operation,
     insn->type = computation_type;
     insn->secondary_offset = computation_type;
     insn->immediate = operation;
+    /* A nested-block local's type is unknown until repair (0 here). */
+    insn->deferred_operand_types = target_type == 0;
     return mir_lower_conversion(value, target_type);
 }
 
@@ -3517,6 +3519,8 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             insn->secondary_offset = node->operand_type != 0
                 ? node->operand_type : insn->type;
         insn->immediate = node->op;
+        insn->deferred_operand_types = node->deferred_types &&
+                                       !left_is_pointer && !right_is_pointer;
         if (node->op == '-' && left_is_pointer && right_is_pointer) {
             int stride = mir_pointer_arithmetic_stride(node->a);
             mir.has_pointer_difference = 1;
@@ -7910,6 +7914,30 @@ static void mir_preserve_divmod_cast_types(void)
     }
 }
 
+/* Retype a one-use integer constant to a wider operation type, extending its
+ * value as its own type requires (sign for signed, zero for unsigned). */
+static void mir_extend_deferred_constant(int value, int operation_type)
+{
+    struct MirInsn *constant = mir_mutable_definition(value);
+    long extended;
+
+    if (constant == NULL || constant->opcode != MIR_CONST ||
+        constant->type == 0 || constant->type == operation_type ||
+        type_is_float(constant->type) || type_is_float(operation_type) ||
+        type_ptr_depth(constant->type) != 0 ||
+        type_size(constant->type) >= type_size(operation_type) ||
+        mir_value_use_count(value) != 1)
+        return;
+    extended = constant->immediate & 0xffffL;
+    if (type_size(constant->type) == 1)
+        extended &= 0xff;
+    if ((constant->type & TYPE_UNSIGNED) == 0 &&
+        (extended & (type_size(constant->type) == 1 ? 0x80L : 0x8000L)))
+        extended -= type_size(constant->type) == 1 ? 0x100L : 0x10000L;
+    constant->immediate = extended;
+    constant->type = operation_type;
+}
+
 static void mir_repair_divmod_types(void)
 {
     int i;
@@ -8333,6 +8361,40 @@ void mir_resolve_deferred_metadata(void)
                         insn->type = repaired_type;
                         changed = 1;
                     }
+                } else if (insn->opcode == MIR_BINARY &&
+                           insn->deferred_operand_types &&
+                           insn->src1 >= 0 && insn->src2 >= 0) {
+                    /* Its AST typed the operation as int; derive it as C
+                     * does from the repaired operand types. */
+                    int left_type;
+                    int right_type;
+                    int operand_type;
+                    left = mir_mutable_definition(insn->src1);
+                    right = mir_mutable_definition(insn->src2);
+                    if (left == NULL || right == NULL ||
+                        type_ptr_depth(left->type) != 0 ||
+                        type_ptr_depth(right->type) != 0)
+                        continue;
+                    left_type = promote_int_type(
+                        left->type != 0 ? left->type : TYPE_INT);
+                    right_type = promote_int_type(
+                        right->type != 0 ? right->type : TYPE_INT);
+                    operand_type =
+                        insn->immediate == TOK_SHL || insn->immediate == TOK_SHR
+                            ? left_type
+                            : common_arith_type(left_type, right_type);
+                    repaired_type =
+                        insn->immediate == '<' || insn->immediate == '>' ||
+                        insn->immediate == TOK_LE || insn->immediate == TOK_GE ||
+                        insn->immediate == TOK_EQ || insn->immediate == TOK_NE
+                            ? TYPE_INT : operand_type;
+                    if (insn->type != repaired_type ||
+                        insn->secondary_offset != operand_type) {
+                        insn->type = repaired_type;
+                        insn->secondary_offset = operand_type;
+                        changed = 1;
+                    }
+
                 } else if (insn->opcode == MIR_PHI && insn->src1 >= 0 &&
                            insn->src2 >= 0) {
                     left = mir_mutable_definition(insn->src1);
@@ -9011,6 +9073,18 @@ scoped_type_repair_done:
     }
     for (i = 0; i < mir.count; ++i)
         mir_fold_repaired_integer_unary(&mir.insns[i]);
+    /* A deferred-type binary's constant operand was lowered for the int it was
+     * assumed to meet (a negative one is folded only just above); extend it to
+     * the repaired operation's width. */
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+
+        if (insn->opcode != MIR_BINARY || !insn->deferred_operand_types ||
+            insn->immediate == TOK_SHL || insn->immediate == TOK_SHR)
+            continue;
+        mir_extend_deferred_constant(insn->src1, insn->secondary_offset);
+        mir_extend_deferred_constant(insn->src2, insn->secondary_offset);
+    }
     /* Preserve the incumbent normalization used by existing exact schedules.
      * The general integer fold is evaluated separately as a costed candidate. */
     for (i = 0; i < mir.count; ++i) {

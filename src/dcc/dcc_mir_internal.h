@@ -142,6 +142,9 @@ struct MirInsn {
     int divmod_cast_types;
     /* Reciprocal instruction index + 1 for a proven word div/mod pair. */
     int word_divmod_partner;
+    /* MIR_BINARY: its AST operand types were unknown at build (a nested-block
+     * local), so type and secondary_offset are re-derived after repair. */
+    int deferred_operand_types;
     char name[64];
     char base_name[64];
 };
