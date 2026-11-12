@@ -1723,6 +1723,24 @@ static int mir_emit_pointer_word_load(int address, int result_type)
     return value;
 }
 
+/* && and || lower to untyped 0/1 phis, and an untyped value is never
+ * converted. Before such a phi is widened to a long or float, type it as the
+ * int it is; otherwise the high word is whatever HL:DE held. Narrow
+ * consumers, and untyped constants (folded later), keep the untyped form the
+ * optimizers and exact schedules expect. */
+static void mir_type_untyped_widened_value(int value, int target_type)
+{
+    struct MirInsn *definition;
+
+    if (value < 0 || target_type == 0 ||
+        (type_size(target_type) <= 2 && !type_is_float(target_type)))
+        return;
+    definition = mir_mutable_definition(value);
+    if (definition != NULL && definition->opcode == MIR_PHI &&
+        definition->type == 0)
+        definition->type = TYPE_INT;
+}
+
 static int mir_lower_conversion(int value, int target_type)
 {
     struct MirInsn *definition;
@@ -1731,6 +1749,7 @@ static int mir_lower_conversion(int value, int target_type)
 
     if (value < 0 || target_type == 0)
         return value;
+    mir_type_untyped_widened_value(value, target_type);
     definition = mir_mutable_definition(value);
     if (definition == NULL || definition->type == 0 ||
         definition->type == target_type)
@@ -1752,6 +1771,7 @@ static int mir_lower_ident_assignment_conversion(
 
     if (value < 0 || ident == NULL || ident->kind != AST_IDENT)
         return value;
+    mir_type_untyped_widened_value(value, mir_lvalue_type(ident));
     result = mir_new_value();
     conversion = mir_emit(MIR_UNARY);
     conversion->dst = result;
@@ -3038,6 +3058,8 @@ static int mir_lower_simple_unary_chain(const struct AstNode *node)
         struct MirInsn *insn;
         int result = mir_new_value();
 
+        if (unary->kind == AST_CAST)
+            mir_type_untyped_widened_value(value, unary->type);
         insn = mir_emit(MIR_UNARY);
         insn->dst = result;
         insn->src1 = value;
