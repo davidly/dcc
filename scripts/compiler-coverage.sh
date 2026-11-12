@@ -156,6 +156,11 @@ DCC_MIR_SELECT_CANDIDATE=homed-lazy "$pwsh_cmd" -NoProfile -File scripts/runall.
 DCC_MIR_SELECT_CANDIDATE=spilled-all "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
     -Apps texpfsp -Mode full -NoStackCheck -NoPerfCheck \
     -ThrottleLimit "$jobs"
+# A constant return suffix whose branch the boolean-PHI fold removes must
+# still produce its 0/1 result (tctxflt's truth_and and truth_or).
+DCC_MIR_SELECT_CANDIDATE=spilled-boolean-phi-branch "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
+    -Apps tctxflt -Mode full -NoStackCheck -NoPerfCheck \
+    -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
     -Jobs "$clobber_jobs" -BuildTimeout "$clobber_build_timeout" \
     -ExecutionManifest "$report_dir/mir-clobber-executions.json"

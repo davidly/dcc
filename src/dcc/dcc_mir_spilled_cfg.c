@@ -36366,6 +36366,33 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     mir_definition(insn->src1);
                 if (mir_boolean_phi_eliminated != NULL &&
                     mir_boolean_phi_eliminated[i]) {
+                    struct MirConstantReturnSuffix constant_suffix;
+                    struct MirBooleanReturnSuffix boolean_suffix;
+
+                    /* Slot planning left a return suffix starting at this
+                     * branch without slots, expecting the suffix emitter
+                     * below to forward its result in HL. The folded edges
+                     * reach the true label or the branch's false label, so
+                     * materialize the constant suffix from those; the
+                     * boolean suffix has no such form. */
+                    if (mir_match_boolean_return_suffix(i, &boolean_suffix))
+                        goto done;
+                    if (mir_match_constant_return_suffix(
+                            i, &constant_suffix)) {
+                        int done_label = new_label();
+
+                        mir_stream_printf(
+                            out,
+                            "L%d:\n\tld hl,1\n\tjp L%d\n"
+                            "L%d:\n\tld hl,0\nL%d:\n",
+                            mir_boolean_phi_true_labels[i], done_label,
+                            labels[insn->label], done_label);
+                        mir_forwarded_hl_value = constant_suffix.result_value;
+                        mir_forwarded_hl_instruction =
+                            constant_suffix.return_instruction - 1;
+                        i = constant_suffix.return_instruction - 1;
+                        continue;
+                    }
                     mir_stream_printf(
                         out, "L%d:\n",
                         mir_boolean_phi_true_labels[i]);
