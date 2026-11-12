@@ -5588,7 +5588,10 @@ static int mir_wide_helper_rhs_pair_consumer(
         !mir_wide_helper_handoff_supported(consumer))
         return 0;
     left = mir_definition(consumer->src1);
-    if (left == NULL)
+    /* The pair expects the left operand pushed where it is defined; a
+     * parameter or constant is materialized where it is used instead
+     * (`x < n / x` with long n, `x < 65536L / x`). */
+    if (left == NULL || left->opcode == MIR_PARAM || left->opcode == MIR_CONST)
         return 0;
     left_instruction = (int)(left - mir.insns);
     if (!mir_wide_helper_lhs_consumer(
