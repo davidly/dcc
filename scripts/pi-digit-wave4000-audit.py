@@ -24,7 +24,7 @@ TEMPLATE = "pi-digit"
 FORCED_CANDIDATE = "spilled-phi-slot"
 INSTRUCTION_COUNT = 76
 BASELINE_SHA256 = (
-    "fd10156aabb8d44414176aceb295e32948b6783cf2c1baee1edbd809b4896554"
+    "752d6b53a5ac4bfbe40da24893c7505bfc6be5dbdb765b3f8ca7815380fbff52"
 )
 BASELINE_SELECTED_HASH = "050cebd0"
 EXPECTED_RUNTIME = "pi digit failures=0 digits=243f6a88"

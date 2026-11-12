@@ -44,7 +44,7 @@ SPILLED_SELECTED_COST = re.compile(
     r"emitted=1 selectable=1 selected=1"
 )
 BASELINE_SHA256 = (
-    "464c9dc3af8d8081d2548e3049bae1cf16623bf6309f31a387c95db0f7662a7c"
+    "99d79f3a60de6d22693387137c11b4abdef4e29b8caf14a7c4ed9acf63871497"
 )
 BASELINE_SELECTED_HASH = "2dc38a8d"
 EXPECTED_RUNTIME = ("random wide fill failures=0",)

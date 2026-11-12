@@ -3444,6 +3444,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
              * T18). */
             if (            mir_index_only_constant(insn->dst) ||
             mir_homed_binary_only_constant(insn->dst) ||
+            mir_homed_direct_binary_only_constant(insn->dst) ||
             mir_homed_wide_binary_only_constant(insn->dst) ||
             mir_homed_wide_increment_component(insn->dst) ||
             mir_value_only_used_by_dead_stores(insn->dst))
