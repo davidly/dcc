@@ -2422,6 +2422,23 @@ static int mir_lvalue_type(const struct AstNode *node)
     return node->type != 0 ? node->type : ast_expr_type_for_sizeof(node);
 }
 
+/* A shift count may be any integer type, but the word shift emitters read
+ * only its low byte from a word. A count of 32 or more is undefined, so a
+ * long count narrows to int without changing any defined result. Long
+ * shifts already take a long count; leave their shape alone. */
+static int mir_lower_shift_count(int count, int shifted_type)
+{
+    const struct MirInsn *definition = mir_definition(count);
+
+    if (type_size(shifted_type) > 2)
+        return count;
+    if (definition != NULL && type_size(definition->type) == 4 &&
+        !type_is_float(definition->type) &&
+        type_ptr_depth(definition->type) == 0)
+        return mir_lower_conversion(count, TYPE_INT);
+    return count;
+}
+
 static int mir_lower_compound_value(int left, int right, int operation,
                                     int target_type)
 {
@@ -2449,7 +2466,9 @@ static int mir_lower_compound_value(int left, int right, int operation,
             insn->immediate = '*';
             right = scaled;
         }
-    } else if (operation != TOK_SHL && operation != TOK_SHR) {
+    } else if (operation == TOK_SHL || operation == TOK_SHR) {
+        right = mir_lower_shift_count(right, target_type);
+    } else {
         right_definition = mir_mutable_definition(right);
         computation_type = common_arith_type(
             target_type, right_definition != NULL
@@ -3446,6 +3465,8 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             left = mir_lower_conversion(left, node->operand_type);
             if (node->op != TOK_SHL && node->op != TOK_SHR)
                 right = mir_lower_conversion(right, node->operand_type);
+            else
+                right = mir_lower_shift_count(right, node->operand_type);
         }
         if (!left_is_pointer && !right_is_pointer) {
             struct MirInsn *left_definition = mir_mutable_definition(left);

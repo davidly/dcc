@@ -31,6 +31,28 @@ The `tfilero` test also requires ntvcm's read-only open fallback (upstream
 commit [`59c0b63`](https://github.com/davidly/ntvcm/commit/59c0b63d5cb1a14b6ee342df9440dee29e67a79f)
 or newer); update and rebuild older emulator installations if read-only opens fail.
 
+## `typed-expr-fuzz.py`
+
+Differential fuzzer for integer expression code generation. Each generated
+program has 40 small functions; each applies one operator to two operands of
+chosen types (`signed char` through `unsigned long`) and storage (parameter,
+local, nested-block local, global, static, array element, struct member,
+pointer, constant) and uses the result in a chosen context (return, `if`,
+ternary, compound assignment, converted argument, global store, loop
+accumulation). Expected values come from a model of C's conversions with dcc's
+type sizes, not from a host compiler, whose 32-bit `int` promotes differently.
+Every program is built and run with and without `dccpeep`.
+
+```sh
+python3 scripts/typed-expr-fuzz.py --seeds 1-500
+python3 scripts/typed-expr-fuzz.py --seeds 1-200 --env DCC_MIR_SELECT_CANDIDATE=homed-lazy
+python3 scripts/typed-expr-fuzz.py --generate 7 prog.c prog.expected
+```
+
+A failing seed keeps `t.c`, `t.expected` and each mode's output under
+`build/typed-expr-fuzz/<seed>`; an output line is the case number times ten
+plus the input index, then the result as an `unsigned long`, both in hex.
+
 ## `mir-migration-census.py`
 
 Measures generated MIR selection across `tests/*.c` and compares two snapshots

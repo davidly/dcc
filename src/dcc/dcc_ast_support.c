@@ -205,7 +205,7 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
         }
         if (ast_node_is_const(n) && is_shift_op(n->op) &&
             ast_value_is_long_word(n->a))
-            return ast_value_is_plain_int(n->b);
+            return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b);
         if (ast_node_is_const(n) &&
             (is_cmp_op(n->op) || is_float_arith_op(n->op)) &&
             (ast_value_is_float_word(n->a) || ast_value_is_float_word(n->b)))
@@ -246,8 +246,13 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
                     ast_value_is_long_word(n->b));
         if (n->a->kind == AST_FLOAT_LIT || n->b->kind == AST_FLOAT_LIT)
             return 0;
+        /* A shift count may be any integer type; MIR lowering narrows a
+         * long count (mir_lower_shift_count). */
         if (is_shift_op(n->op) && ast_value_is_long_word(n->a))
-            return ast_value_is_plain_int(n->b);
+            return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b);
+        if (is_shift_op(n->op) && ast_value_is_plain_int(n->a) &&
+            ast_value_is_long_word(n->b))
+            return 1;
         /* Only the plain-int branch produces the uniform sequence; pointers,
          * longs, floats and structs use other lowerings. */
         if (!ast_value_is_plain_int(n->a) || !ast_value_is_plain_int(n->b))
@@ -677,13 +682,17 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                 if ((n->op == TOK_SHLEQ || n->op == TOK_SHREQ) &&
                     ast_is_plain_int_type(s->type) &&
                     type_size(s->type) == 2)
-                    return ast_value_is_plain_int(n->b);
+                    return ast_value_is_plain_int(n->b) ||
+                           (ast_value_is_long_word(n->b) &&
+                            ast_expr_supported(n->b));
                 if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
                      n->op == TOK_ANDEQ || n->op == TOK_OREQ ||
                      n->op == TOK_XOREQ) &&
                     ast_is_plain_int_type(s->type) &&
                     (type_size(s->type) == 1 || type_size(s->type) == 2))
-                    return ast_value_is_plain_int(n->b);
+                    return ast_value_is_plain_int(n->b) ||
+                           (ast_value_is_long_word(n->b) &&
+                            ast_expr_supported(n->b));
                 /* `ptr += n` / `ptr -= n` (dead result) with ptr itself out
                  * of ix-direct range: mirrors the pointer-lhs case below
                  * (search "Pointer lhs") - ast_gen_dead_expr always emits
@@ -708,7 +717,8 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                  * 16-bit target) is rejected only when the frame is large
                  * enough to push the local out of ix-direct range. */
                 if (!(n->op == '=' && ast_is_plain_int_type(s->type) &&
-                      type_size(s->type) == 2 && ast_value_is_long_word(n->b)))
+                      (type_size(s->type) == 1 || type_size(s->type) == 2) &&
+                      ast_value_is_long_word(n->b)))
                     return 0;
             }
             if (!ast_is_plain_int_type(s->type))
@@ -738,11 +748,16 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                 return 1;
             if (n->b->kind == AST_IDENT) {
                 struct Sym *rs = find_sym(n->b->sval);
-                return sym_can_ix_direct(rs) || is_global_word_sym(rs) ||
-                       (rs != NULL &&
-                        (rs->storage == SC_GLOBAL || rs->storage == SC_EXTERN) &&
-                        !rs->is_array && type_size(rs->type) == 1 &&
-                        ast_is_plain_int_type(rs->type));
+                if (sym_can_ix_direct(rs) || is_global_word_sym(rs) ||
+                    (rs != NULL &&
+                     (rs->storage == SC_GLOBAL || rs->storage == SC_EXTERN) &&
+                     !rs->is_array && type_size(rs->type) == 1 &&
+                     ast_is_plain_int_type(rs->type)))
+                    return 1;
+                /* A long global or static takes the general long-rhs rule
+                 * below. */
+                if (!ast_value_is_long_word(n->b))
+                    return 0;
             }
             if (ast_const_plain_int_binary_supported(n->b))
                 return 1;
@@ -788,6 +803,23 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
         }
         if (type_size(s->type) == 1 && n->op == '=' &&
             n->b->kind == AST_CALL && ast_value_is_long_word(n->b))
+            return 1;
+        /* `c = l` and `c = l + m`: MIR lowering converts any supported long
+         * value to the byte, as it does for an explicit cast or a size-2
+         * target. */
+        if (type_size(s->type) == 1 && n->op == '=' &&
+            ast_value_is_long_word(n->b) && ast_expr_supported(n->b))
+            return 1;
+        /* `x <<= l` / `x >>= l`: the long count is narrowed in lowering. */
+        if ((type_size(s->type) == 1 || type_size(s->type) == 2) &&
+            (n->op == TOK_SHLEQ || n->op == TOK_SHREQ) &&
+            ast_value_is_long_word(n->b) && ast_expr_supported(n->b))
+            return 1;
+        /* `x OP= l` for a byte or word x: MIR lowering computes in long and
+         * narrows the result back (mir_lower_compound_value). */
+        if ((type_size(s->type) == 1 || type_size(s->type) == 2) &&
+            is_compound && n->op != TOK_SHLEQ && n->op != TOK_SHREQ &&
+            ast_value_is_long_word(n->b) && ast_expr_supported(n->b))
             return 1;
         /* A byte-sized ix-direct bitwise compound-assign with a constant
          * integer literal rhs (e.g. `a |= 0xFFL;`) accepts the literal
@@ -1185,7 +1217,8 @@ int ast_value_is_long_word(const struct AstNode *arg)
     if (arg->kind == AST_COND)
         return ast_cond_result_is_long(arg);
     if (arg->kind == AST_BINARY && is_shift_op(arg->op))
-        return ast_value_is_long_word(arg->a) && ast_value_is_plain_int(arg->b);
+        return ast_value_is_long_word(arg->a) &&
+               (ast_value_is_plain_int(arg->b) || ast_value_is_long_word(arg->b));
     if (arg->kind == AST_BINARY && ast_long_arith_supported(arg))
         return 1;
     if (arg->kind == AST_BINARY && ast_mixed_long_rhs_arith_supported(arg))

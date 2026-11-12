@@ -195,7 +195,12 @@ int ast_value_is_plain_int(const struct AstNode *n)
             return 1;
         if (ast_pointer_diff_supported(n))
             return 1;
-        if (is_supported_binary_op(n->op) || is_shift_op(n->op))
+        /* A shift has its left operand's type whatever the count's is. */
+        if (is_shift_op(n->op))
+            return ast_value_is_plain_int(n->a) &&
+                   (ast_value_is_plain_int(n->b) ||
+                    ast_value_is_long_word(n->b));
+        if (is_supported_binary_op(n->op))
             return ast_value_is_plain_int(n->a) &&
                    ast_value_is_plain_int(n->b);
         return 0;
