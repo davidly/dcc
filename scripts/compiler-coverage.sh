@@ -146,6 +146,11 @@ regional_apps=tgcdphi,tfracphi,tiyreg,tdmfuse,tlimbsh,tvolopt,tnestfor,tflddecl,
 DCC_MIR_PREFER_REGIONAL=1 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
     -Apps "$regional_apps" -Mode full -NoStackCheck -NoPerfCheck \
     -ThrottleLimit "$jobs"
+# A lazy wide parameter loads nothing, so homed-lazy must not take it as
+# already in HL:DE when a comparison follows it (tlongsub's if_lt).
+DCC_MIR_SELECT_CANDIDATE=homed-lazy "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
+    -Apps tlongsub -Mode full -NoStackCheck -NoPerfCheck \
+    -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
     -Jobs "$clobber_jobs" -BuildTimeout "$clobber_build_timeout" \
     -ExecutionManifest "$report_dir/mir-clobber-executions.json"

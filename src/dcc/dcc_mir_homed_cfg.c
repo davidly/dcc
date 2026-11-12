@@ -1769,6 +1769,23 @@ static int mir_emit_homed_wide_named_load(MirStream *out,
     return 1;
 }
 
+/* Whether MIR_PARAM loads its value into the home. A lazy or rematerialized
+ * parameter, or one whose home is its own frame slot, is read where it is
+ * used and loads nothing. */
+static int mir_homed_param_is_loaded(const struct MirInsn *insn)
+{
+    int home_offset;
+
+    if (!mir_value_has_use(insn->dst) ||
+        mir_regional_rematerialization_kind(insn->dst) ==
+            MIR_REGIONAL_REMAT_PARAMETER ||
+        mir_is_lazy_parameter(insn->dst))
+        return 0;
+    return !mir_regional_object_home_offset(insn->dst, &home_offset) ||
+           home_offset != mir.objects[insn->object].offset +
+               (mir_home_uses_iy() ? 2 : 0);
+}
+
 static int mir_homed_previous_wide_value_in_hl_de(
     const struct MirInsn *consumer, int value)
 {
@@ -1785,6 +1802,12 @@ static int mir_homed_previous_wide_value_in_hl_de(
         type_size(mir.insns[previous].type) != 4 ||
         !mir_homed_share_emission_region(
             previous, (int)(consumer - mir.insns)))
+        return 0;
+    /* A wide parameter is loaded straight into its home, not through HL:DE,
+     * and some parameters load nothing at all. */
+    if (mir.insns[previous].opcode == MIR_PARAM &&
+        (mir.allocation_colors[value] != MIR_COLOR_HL_DE ||
+         !mir_homed_param_is_loaded(&mir.insns[previous])))
         return 0;
     return !mir_home_color_live_across(
                previous, MIR_COLOR_HL_DE) &&
@@ -3465,24 +3488,9 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                 mir_stream_printf(out, "L%d:\n", labels[insn->label]);
             break;
         case MIR_PARAM:
-            if (!mir_value_has_use(insn->dst))
-                break;
-            if (mir_regional_rematerialization_kind(insn->dst) ==
-                MIR_REGIONAL_REMAT_PARAMETER)
-                break;
-            if (mir_is_lazy_parameter(insn->dst))
+            if (!mir_homed_param_is_loaded(insn))
                 break;
             object = &mir.objects[insn->object];
-            {
-                int home_offset;
-                int parameter_offset =
-                    object->offset + (uses_iy ? 2 : 0);
-
-                if (mir_regional_object_home_offset(
-                        insn->dst, &home_offset) &&
-                    home_offset == parameter_offset)
-                    break;
-            }
             if (type_size(object->type) == 4) {
                 int offset = object->offset + (uses_iy ? 2 : 0);
                 if (mir.allocation_colors[insn->dst] == MIR_COLOR_HL_DE)
