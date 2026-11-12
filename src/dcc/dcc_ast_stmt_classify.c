@@ -800,6 +800,10 @@ int ast_cond_generic(const struct AstNode *n)
          * condition probes, so AST evaluates it normally and tests the
          * resulting value. */
         return 1;
+    case AST_CAST:
+        /* if ((char)x) / while ((unsigned char)n): the converted value is
+         * tested like any other supported plain-int value. */
+        return 1;
     default:
         return 0;
     }

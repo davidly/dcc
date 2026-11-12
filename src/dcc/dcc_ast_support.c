@@ -145,7 +145,8 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
                     type_is_float(fs->type))
                     return 1;
             }
-            if (n->op == '~' && ast_const_plain_int_binary_supported(n->a))
+            if ((n->op == '~' || n->op == '-' || n->op == '+') &&
+                ast_const_plain_int_binary_supported(n->a))
                 return 1;
             if (n->op == '!' && n->a != NULL && n->a->kind == AST_BINARY &&
                 is_cmp_op(n->a->op) && ast_expr_supported(n->a) &&
@@ -206,6 +207,10 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
         if (ast_node_is_const(n) && is_shift_op(n->op) &&
             ast_value_is_long_word(n->a))
             return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b);
+        /* `1U << 7L` (macros): a word shift folds whatever its count's type. */
+        if (ast_node_is_const(n) && is_shift_op(n->op) &&
+            ast_value_is_plain_int(n->a) && ast_value_is_long_word(n->b))
+            return 1;
         if (ast_node_is_const(n) &&
             (is_cmp_op(n->op) || is_float_arith_op(n->op)) &&
             (ast_value_is_float_word(n->a) || ast_value_is_float_word(n->b)))
@@ -257,12 +262,9 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
          * longs, floats and structs use other lowerings. */
         if (!ast_value_is_plain_int(n->a) || !ast_value_is_plain_int(n->b))
             return 0;
-        /* Shifts derive their result/branch shape from the (already plain-int)
-         * left operand; the arithmetic/comparison group instead depends on the
-         * stored rhs peek staying on the 16-bit branch. */
-        if (!is_shift_op(n->op) &&
-            (type_is_long(n->peek_type) || type_is_float(n->peek_type)))
-            return 0;
+        /* Both operands are plain ints, so MIR lowering types the operation
+         * from them. The rhs peek (the type of the rhs's first token) is not
+         * consulted: for `a + (lb == 0)` it predicts the long lb. */
         return 1;
     default:
         return -1;
@@ -953,8 +955,12 @@ static int ast_other_supported_uncached(const struct AstNode *n)
          * chain label-for-label.  A wholly constant logical is folded by the
          * constant evaluator -> decline.  Operands are required to be supported
          * plain-int values so the tested type stays 16-bit. */
-        if (ast_node_is_const(n))
-            return 0;
+        if (ast_node_is_const(n)) {
+            /* A wholly constant logical (`A || B` of macros) still has to be
+             * a value where nothing folds it first; accept the foldable ones. */
+            long cv;
+            return ast_const_scalar_fold(n, &cv);
+        }
         if (!ast_logical_operand_ok(n->a) || !ast_logical_operand_ok(n->b))
             return 0;
         return 1;
