@@ -73,6 +73,7 @@ python3 scripts/audit-c-module-exports.py src/dcc/module.c \
 | `DCC_MIR_REQUIRE_EMIT=1` | Detailed diagnostics when required MIR emission fails |
 | `DCC_MIR_SELECT_FUNCTION=name` | Restrict a candidate comparison |
 | `DCC_MIR_SELECT_CANDIDATE=name` | Select a named generated candidate |
+| `DCC_MIR_PREFER_REGIONAL=1` | Diagnostic sweep: select emitted regional candidates across functions, bypassing the rollout whitelist |
 | `DCC_MIR_EMIT_FUNCTION=name` | Diagnostic specialized-emitter isolation |
 | `DCC_MIR_GENERAL_FUNCTION=name` | Diagnostic general-emitter isolation |
 | `DCC_MIR_COST_POLICY=mir-v1-report` | Report alternatives without selecting them |
@@ -81,6 +82,8 @@ AST construction and verified MIR body emission are unconditional. The strict
 flags remain proof diagnostics, not backend enable switches. Do not revive
 removed forced-legacy controls or the retired `DCC_AST_BUILD`,
 `DCC_MIR_CANDIDATES`, and `DCC_MIR_GENERAL_CANDIDATES` rollout switches.
+`DCC_MIR_PREFER_REGIONAL` is diagnostic-only; the coverage workflow uses it
+to exercise regional candidates, not as a production selection gate.
 
 ## Snapshot and compare
 
@@ -134,7 +137,9 @@ no-stack release gates.
 8. Run every changed app in strict stack and no-stack full mode.
 9. Use ASan/UBSan for CFG, liveness, allocation, recursive proof, or ownership
    changes.
-10. Run both strict full+extended release gates before commit/push.
+10. Run relevant regular unit tests and both strict full+extended regression
+    gates before pushing. The exhaustive `prepush.ps1` proof suite is a
+    periodic manual maintainer check, not an automatic commit/push gate.
 
 ## Selector and cost policy
 
@@ -194,7 +199,8 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 git diff --check
 ```
 
-Final publication requires:
+Routine pre-push validation requires the relevant regular unit tests above
+and both strict full+extended regression runs:
 
 ```sh
 DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
@@ -204,6 +210,11 @@ DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
   pwsh ./scripts/runall.ps1 -Mode full -Extended -NoStackCheck \
   -RunTimeout 30 -FailuresOnly
 ```
+
+The maintainer runs `pwsh ./scripts/prepush.ps1` manually periodically for the
+exhaustive proof, mutation, sanitizer, and coverage checks (about five hours).
+Do not require or launch that suite for every commit/push; run it only when
+explicitly requested. See `dcc-project` for the shared testing workflow.
 
 Keep `plan.md` as the concise handoff and `mir-text-size-plan.md` as the
 chronological experiment/rejection log. Re-derive priorities from current

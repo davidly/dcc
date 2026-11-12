@@ -2813,7 +2813,10 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                                                 &memory_offset))
                     goto done;
                 if (type_size(memory_type) == 4) {
-                    if (memory_storage == SC_LOCAL) {
+                    if (memory_storage == SC_LOCAL ||
+                        memory_storage == SC_PARAM) {
+                        memory_offset = mir_homed_frame_offset(
+                            memory_storage, memory_offset, uses_iy);
                         if (!mir_emit_homed_wide_frame_store(
                                 out, insn, memory_offset))
                             goto done;

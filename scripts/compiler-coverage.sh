@@ -141,6 +141,11 @@ python3 "$repo_root/scripts/test-compiler-entrypoints.py" \
 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -NoStackCheck -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/runall-extended.ps1 -C11 -Mode full -ThrottleLimit "$jobs"
+# Exercise the apps affected by the regional regressions against baselines.
+regional_apps=tgcdphi,tfracphi,tiyreg,tdmfuse,tlimbsh,tvolopt,tnestfor,tflddecl,tinlinfb,tszswap,too,targs,tdblnot,tsvbmod,tvlaparm,tisnan,tcalb11,tctxflt
+DCC_MIR_PREFER_REGIONAL=1 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
+    -Apps "$regional_apps" -Mode full -NoStackCheck -NoPerfCheck \
+    -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
     -Jobs "$clobber_jobs" -BuildTimeout "$clobber_build_timeout" \
     -ExecutionManifest "$report_dir/mir-clobber-executions.json"
