@@ -42,7 +42,8 @@
     { "name": "cint", "args": "eu.cin", "stack_size": 768,
       "dcc_floatio": false, "dcc_longio": false, "fixtures": ["eu.cin"],
       "extra_scenarios": [
-        { "suffix": "ttt", "args": "ttt.c", "fixtures": ["ttt.c"] }
+        { "suffix": "ttt", "args": "ttt.c", "fixtures": ["ttt.c"] },
+        { "suffix": "suffix", "args": "cintsuf.cin", "fixtures": ["cintsuf.cin"] }
       ] },
     { "name": "a1", "args": "-l:HELLO.BAS", "dcc_floatio": false, "dcc_longio": false, "fixtures": ["HELLO.BAS"],
       "extra_scenarios": [

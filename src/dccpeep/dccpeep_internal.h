@@ -412,6 +412,7 @@ int find_label_line_in_range(const char *name, int lo, int hi);
 void peep_indexed_function_bounds(int from, int include_static,
                                   int *func_start, int *func_end);
 int is_label_referenced(const char *label);
+int label_reference_count(const char *label);
 
 /* Application-specific board/game passes (peep_pass_minmax.c). */
 int peep_in_function_range(const char *func, int *startp, int *endp);

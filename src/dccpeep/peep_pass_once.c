@@ -106,13 +106,18 @@ static int try_fold_bool_branch(int i)
         return 0;
     if (!eq(i + 8, "or l"))
         return 0;
+    /* The folds delete the test after Lend and the "ld hl,1" after the true
+     * label, so no jump from outside the window may reach either label. */
+    if (label_reference_count(e) != 1)
+        return 0;
 
     /* Two-way true test, used for <= and >= materialization. */
     if ((parse_jp_z_label(lines[i], t1) &&
          (parse_jp_c_label(lines[i + 1], t2) || parse_jp_nc_label(lines[i + 1], t2))) &&
         strcmp(t1, t2) == 0 &&
         line_is_label_name(i + 4, t1) &&
-        eq(i + 5, "ld hl,1")) {
+        eq(i + 5, "ld hl,1") &&
+        label_reference_count(t1) == 2) {
 
         sprintf(d, "%s:", t1);
         sprintf(elab, "%s:", e);
@@ -141,7 +146,8 @@ static int try_fold_bool_branch(int i)
     /* Single true test, used for ==/!= materialization. */
     if ((parse_jp_z_label(lines[i], t1) || parse_jp_nz_label(lines[i], t1)) &&
         line_is_label_name(i + 4, t1) &&
-        eq(i + 5, "ld hl,1")) {
+        eq(i + 5, "ld hl,1") &&
+        label_reference_count(t1) == 1) {
 
         sprintf(d, "%s:", t1);
         sprintf(elab, "%s:", e);
@@ -699,6 +705,36 @@ static int try_and1_bool_at(int i)
     return 0;
 }
 
+/* After try_bool_suffix_at's fold, Lend is the not-taken side of the deleted
+ * test. Another jump to Lend is accepted only as "ld hl,0|1 / jp Lend", whose
+ * outcome is known; with apply set, those whose constant takes the branch are
+ * retargeted to Ldest. Returns 0 if any other reference has another form. */
+static int bool_suffix_other_refs(int i, const char *lab_end,
+                                  const char *ldest, int final_is_z,
+                                  int apply)
+{
+    char tgt[128];
+    char out[256];
+    int jumps = 0;
+    int k;
+
+    for (k = 0; k < nlines; k++) {
+        if (k == i + 1 || !jump_target_any(lines[k], tgt) ||
+            strcmp(tgt, lab_end) != 0)
+            continue;
+        if (k == 0 || !peep_parse_jp_uncond_label(lines[k], tgt) ||
+            (!eq(k - 1, "ld hl,0") && !eq(k - 1, "ld hl,1")))
+            return 0;
+        jumps++;
+        /* jp nz branches on 1, jp z on 0. */
+        if (apply && eq(k - 1, "ld hl,1") != final_is_z) {
+            sprintf(out, "jp %s", ldest);
+            replace1(k, out);
+        }
+    }
+    return label_reference_count(lab_end) == jumps + 1;
+}
+
 static int try_bool_suffix_at(int i)
 {
     /*
@@ -720,6 +756,10 @@ static int try_bool_suffix_at(int i)
      *
      * For final "jp z", the false path jumps to Ldest instead.
      * Also handles the symmetric "ld hl,0 ... Ltrue: ld hl,1" form.
+     *
+     * Either way Lend lands past the deleted test, on its not-taken side, so
+     * other jumps to Lend must carry a known constant; see
+     * bool_suffix_other_refs.
      */
     {
         char ljump[128], lab_mid[128], lab_end[128], ldest[128];
@@ -734,7 +774,12 @@ static int try_bool_suffix_at(int i)
             eq(i + 5, "ld a,h") &&
             eq(i + 6, "or l") &&
             (peep_parse_jp_cond_label(lines[i + 7], "z", ldest) ||
-             peep_parse_jp_cond_label(lines[i + 7], "nz", ldest))) {
+             peep_parse_jp_cond_label(lines[i + 7], "nz", ldest)) &&
+            /* The middle label needs no check: its jumps pass through the
+             * middle constant load too. */
+            bool_suffix_other_refs(i, lab_end, ldest,
+                                   strncmp(lines[i + 7], "jp z,", 5) == 0,
+                                   0)) {
 
             int first_is_true;
             int final_is_z;
@@ -742,6 +787,7 @@ static int try_bool_suffix_at(int i)
 
             first_is_true = eq(i, "ld hl,1");
             final_is_z = strncmp(lines[i + 7], "jp z,", 5) == 0;
+            bool_suffix_other_refs(i, lab_end, ldest, final_is_z, 1);
 
             /* final jp nz branches on true; final jp z branches on false. */
             branch_from_first_path =
@@ -852,7 +898,10 @@ static int try_cp_hl_bool_at(int i)
             eq(i + 7, "ld a,h") &&
             eq(i + 8, "or l") &&
             (peep_parse_jp_cond_label(lines[i + 9], "z", ldest) ||
-             peep_parse_jp_cond_label(lines[i + 9], "nz", ldest))) {
+             peep_parse_jp_cond_label(lines[i + 9], "nz", ldest)) &&
+            /* Both labels are deleted. */
+            label_reference_count(ltrue) == 1 &&
+            label_reference_count(lend) == 1) {
 
             first_is_z = strncmp(lines[i + 1], "jp z,", 5) == 0;
             final_is_z = strncmp(lines[i + 9], "jp z,", 5) == 0;

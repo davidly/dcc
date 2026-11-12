@@ -1,0 +1,24 @@
+	extrn _yes
+	extrn _no
+	extrn _tok
+; As bool-suffix-shared-end with a final jp z: Lend is the not-taken side, so the other ld hl,1 jump stays.
+	cseg
+	public _f
+_f:
+	ld hl,(_tok)
+	ld de,300
+	or a
+	sbc hl,de
+	jr nz,L506 ; peep: jp_to_jr
+	ld hl,1
+	jr L510 ; peep: jp_to_jr
+L506:
+	ld hl,(_tok)
+	ld de,91
+	or a
+	sbc hl,de
+	jr nz,L504 ; peep: jp_to_jr
+L510:
+	jp _no ; peep: call_to_tail_jp
+L504:
+	jp _yes ; peep: call_to_tail_jp

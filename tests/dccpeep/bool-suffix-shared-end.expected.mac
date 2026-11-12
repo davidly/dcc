@@ -1,0 +1,23 @@
+	extrn _yes
+	extrn _no
+	extrn _tok
+; A || whose two true paths share Lend: folding the suffix deletes the test after Lend, so the other ld hl,1 jump must be retargeted to the jp nz destination.
+	cseg
+	public _f
+_f:
+	ld hl,(_tok)
+	ld de,300
+	or a
+	sbc hl,de
+	jr nz,L506 ; peep: jp_to_jr
+	ld hl,1
+	jr L504 ; peep: jp_to_jr
+L506:
+	ld hl,(_tok)
+	ld de,91
+	or a
+	sbc hl,de
+	jr z,L504 ; peep: jp_to_jr
+	jp _no ; peep: call_to_tail_jp
+L504:
+	jp _yes ; peep: call_to_tail_jp

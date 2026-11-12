@@ -1,0 +1,42 @@
+; Another jump reaches Lend with an unknown HL, so the suffix must not be folded.
+	cseg
+	public _f
+_f:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld hl,(_tok)
+	ld de,300
+	or a
+	sbc hl,de
+	jp nz, L506
+	ld hl,(_tok)
+	jp L510
+L506:
+	ld hl,(_tok)
+	ld de,91
+	or a
+	sbc hl,de
+	jp nz, L508
+	ld hl,1
+	jp L509
+L508:
+	ld hl,0
+L509:
+L510:
+	ld a,h
+	or l
+	jp nz, L504
+	call _no
+	ld sp,ix
+	pop ix
+	ret
+L504:
+	call _yes
+	ld sp,ix
+	pop ix
+	ret
+	extrn _tok
+	extrn _no
+	extrn _yes
+	end

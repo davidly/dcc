@@ -1,0 +1,19 @@
+/* integer literal suffixes: cint skips u, U, l and L after the digits */
+
+#include <stdio.h>
+
+extern int main() {
+  int a;
+  int b;
+  int c;
+  int d;
+  int e;
+
+  a = 10u;
+  b = 20U;
+  c = 30l;
+  d = 40L;
+  e = 50ul;
+  printf("%d %d %d %d %d\n", a, b, c, d, e);
+  return 0;
+}

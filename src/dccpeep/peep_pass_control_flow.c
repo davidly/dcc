@@ -18,6 +18,7 @@
  * this module owns only rewrites. dccpeep.c decides when they run.
  */
 #include "dccpeep_internal.h"
+#include <limits.h>
 
 static void rewrite_jump_target(int i, const char *newtarget)
 {
@@ -41,9 +42,12 @@ static void rewrite_jump_target(int i, const char *newtarget)
     replace1(i, out);
 }
 
-int is_label_referenced(const char *lab)
+/* The number of lines referring to lab, counting up to limit (0: no limit).
+ * A line that refers to it twice counts once. */
+static int label_references(const char *lab, int limit)
 {
     int i;
+    int count = 0;
     char tgt[128];
     int lablen;
     const char *found;
@@ -52,13 +56,15 @@ int is_label_referenced(const char *lab)
 
     /* Opaque user-asm barriers must survive adjacent-label cleanup. */
     if (strncmp(lab, "__dcc_user_asm_", 15) == 0)
-        return 1;
+        return INT_MAX;
 
     lablen = (int)strlen(lab);
 
-    for (i = 0; i < nlines; i++) {
-        if (jump_target_any(lines[i], tgt) && strcmp(tgt, lab) == 0)
-            return 1;
+    for (i = 0; i < nlines && (limit == 0 || count < limit); i++) {
+        if (jump_target_any(lines[i], tgt) && strcmp(tgt, lab) == 0) {
+            count++;
+            continue;
+        }
 
         /* Be conservative for data or non-jump references. */
         if (!starts_label(lines[i]) && !is_jump_line(lines[i])) {
@@ -69,14 +75,25 @@ int is_label_referenced(const char *lab)
                 after  = *(found + lablen);
                 if (!isalnum((unsigned char)before) && before != '_' &&
                     !isalnum((unsigned char)after)  && after  != '_') {
-                    return 1;
+                    count++;
+                    break;
                 }
                 found = strstr(found + 1, lab);
             }
         }
     }
 
-    return 0;
+    return count;
+}
+
+int is_label_referenced(const char *lab)
+{
+    return label_references(lab, 1) != 0;
+}
+
+int label_reference_count(const char *lab)
+{
+    return label_references(lab, 0);
 }
 
 /*

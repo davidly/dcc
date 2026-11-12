@@ -3030,30 +3030,6 @@ static int mir_cost_candidate_is_selectable(
         spec->kind == MIR_COST_CANDIDATE_HOMED_LAZY ||
         spec->kind == MIR_COST_CANDIDATE_HYBRID;
 
-    if (generated_home_candidate &&
-        mir.sink_purpose == EMIT_SINK_DEFERRED &&
-        (mir.return_type & 15) == TYPE_VOID &&
-        mir_has_cfg_backedge() && mir_has_member_address() &&
-        mir.count == 44 && mir.next_value == 21 &&
-        mir_cfg_block_count() == 10 && mir_call_count() == 4 &&
-        mir.local_bytes == 2)
-        return 0;
-    if (generated_home_candidate &&
-        mir.sink_purpose == EMIT_SINK_DEFERRED &&
-        (mir.return_type & 15) == TYPE_INT &&
-        !mir_has_cfg_backedge() && !mir_has_member_address() &&
-        mir.count == 171 && mir.next_value == 70 &&
-        mir_cfg_block_count() == 39 && mir_call_count() == 24 &&
-        mir.local_bytes == 2)
-        return 0;
-    if (generated_home_candidate &&
-        mir.sink_purpose == EMIT_SINK_DEFERRED &&
-        (mir.return_type & 15) == TYPE_VOID &&
-        !mir_has_cfg_backedge() && mir_has_member_address() &&
-        mir.count == 163 && mir.next_value == 104 &&
-        mir_cfg_block_count() == 17 && mir_call_count() == 14 &&
-        mir.local_bytes == 38)
-        return 0;
     if (generated_home_candidate)
         return 1;
     if (spec->kind == MIR_COST_CANDIDATE_REGIONAL)
