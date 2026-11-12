@@ -1249,17 +1249,22 @@ static int mir_emit_regional_address_to_hl(MirStream *out, int value)
     }
     if (memory_storage == SC_PARAM && mir_home_uses_iy())
         memory_offset += 2;
-    mir_stream_puts("\tpush ix\n\tpop hl\n", out);
     if (memory_offset != 0) {
         int preserve_de =
             mir_de_home_live_in(mir_emit_instruction_index);
 
+        /* dccpeep recognizes an escaping frame address only as the
+         * unbroken "push ix / pop hl / ld de,N / add hl,de"; anything
+         * between them lets it delete stores to that frame as dead. */
         if (preserve_de)
             mir_stream_puts("\tpush de\n", out);
         mir_stream_printf(out,
-            "\tld de,%d\n\tadd hl,de\n", memory_offset);
+            "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n",
+            memory_offset);
         if (preserve_de)
             mir_stream_puts("\tpop de\n", out);
+    } else {
+        mir_stream_puts("\tpush ix\n\tpop hl\n", out);
     }
     return 1;
 }
@@ -1618,6 +1623,8 @@ int mir_emit_ix_offset_address_to_home(MirStream *out, int value,
  * else live there needing preservation), so this also correctly restores
  * base's own value afterward when base's home is hl or de and base still
  * has a use later in the function. */
+static int mir_homed_values_share_home(int left, int right);
+
 int mir_emit_pointer_offset_address_to_home(MirStream *out, int dst,
                                                     int base, long offset)
 {
@@ -1633,8 +1640,9 @@ int mir_emit_pointer_offset_address_to_home(MirStream *out, int dst,
         dst_color != MIR_COLOR_DE &&
         mir_home_color_live_across(instruction, MIR_COLOR_DE);
 
-    if (offset == 0 &&
-        dst_color == mir.allocation_colors[base])
+    /* Two spilled values both have color -1 but live in different slots,
+     * so compare homes rather than colors before eliding the copy. */
+    if (offset == 0 && mir_homed_values_share_home(dst, base))
         return 1;
     if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
     if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
