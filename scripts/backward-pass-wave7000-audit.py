@@ -31,8 +31,8 @@ KB = S * D
 VB = 2 * S * D
 AB = 3 * S * D
 BASELINE_SHA256 = (
-    # Includes the surrounding functions' corrected promoted-bool homes.
-    "5b90f2fbfcc9c23f2e3737f664f6cca78f4cbc023efb5b510bb894385790ba34"
+    # Wide parameter-store repair removes a spurious assembler-name registration.
+    "9553060779ed4e4ea6d126f4b0cd50ddc0ca06070a4c2318b202425d9eb2078d"
 )
 BASELINE_SELECTED_HASH = "e16e3e51"
 EXPECTED_CHECKSUM = 276938403

@@ -25,7 +25,8 @@ GENERIC_SELECTION = re.compile(
     r"regional-homed-scalar-cfg|spilled-scalar-cfg) result=mir"
 )
 BASELINE_SHA256 = (
-    "c30a83bcb85bac786488217a28103af9fe9afdb7d04ab7af18606a7f2f2f1145"
+    # Wide parameter-store repair removes a spurious assembler-name registration.
+    "ac7b8b6aee4b66f87381219c4f79781b0eda57b1f2f212992c02090a4646b2a0"
 )
 FIELD_VALUES = {
     "type": (-12345, 32767),
