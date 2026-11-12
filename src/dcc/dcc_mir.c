@@ -7047,6 +7047,52 @@ void mir_thread_jumps(void)
 }
 #undef MIR_THREAD_JUMPS_MAX_CHAIN
 
+/* Metadata repair can restore a block-scoped operand's declared type after
+ * lowering sized its call argument from the parser's default int, leaving a
+ * narrowing or floating conversion implied by MIR_ARG alone. The general
+ * emitters represent only same-width and integer-widening arguments, so make
+ * every other implied conversion an explicit cast. Callers re-verify. */
+int mir_materialize_folded_argument_conversions(void)
+{
+    int saved_scope = mir_use_cache_scope_active;
+    int changed = 0;
+    int instruction;
+
+    mir_use_cache_scope_active = 0;
+    mir_invalidate_use_cache();
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *argument = &mir.insns[instruction];
+        const struct MirInsn *source;
+        struct MirInsn *conversion;
+        int source_value = argument->src1;
+        int argument_type = argument->type;
+        int converted_value;
+
+        if (argument->opcode != MIR_ARG || source_value < 0 ||
+            type_is_struct_object(argument_type))
+            continue;
+        source = mir_definition(source_value);
+        if (source == NULL || source->type == 0 ||
+            mir_spilled_argument_source_type_valid(
+                source->type, argument_type))
+            continue;
+        converted_value = mir_new_value();
+        conversion = mir_insert_instruction_before(instruction, MIR_UNARY);
+        if (conversion == NULL)
+            fatal("cannot insert MIR argument conversion");
+        conversion->dst = converted_value;
+        conversion->src1 = source_value;
+        conversion->type = argument_type;
+        conversion->immediate = 0;
+        ++instruction;
+        mir.insns[instruction].src1 = converted_value;
+        ++changed;
+    }
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = saved_scope;
+    return changed;
+}
+
 void mir_canonicalize_signed_wide_relational_constants(void)
 {
     int instruction;

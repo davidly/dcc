@@ -4134,6 +4134,17 @@ void mir_end_function(void)
             &generated, &selector_name, &candidate_name,
             &selected_label_id, candidate_label_base, NULL)) {
         failure_reason = "selector";
+        /* An exact schedule may consume a conversion implied by MIR_ARG, so
+         * the shared graph keeps that form until no candidate accepts it. */
+        if (mir_materialize_folded_argument_conversions() > 0 &&
+            mir_verify_and_dump()) {
+            mir_compute_dead_local_suffix();
+            selected_label_id = candidate_label_base;
+            if (mir_try_generated_candidate(
+                    &generated, &selector_name, &candidate_name,
+                    &selected_label_id, candidate_label_base, NULL))
+                failure_reason = NULL;
+        }
     }
     for (normalization_pass = 0;
          failure_reason == NULL && generated != NULL && !opt_debug &&

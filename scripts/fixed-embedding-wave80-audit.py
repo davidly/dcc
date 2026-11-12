@@ -41,9 +41,9 @@ SELECTED_HASH = re.compile(
     r"selected-hash=(?P<hash>[0-9a-f]{8})"
 )
 BASELINE_SHA256 = (
-    "399f0d1374c4e85d8da4744ccaf930010a55a07c7169e4675822bdb36ec7f2e4"
+    "817305d4ec5d858410fd2c89dc109ad697e31b0e32785e57a3ebdc6b1b0c083b"
 )
-BASELINE_SELECTED_HASH = "e979e278"
+BASELINE_SELECTED_HASH = "f06a3918"
 EXPECTED_RUNTIME = (
     "fixed embedding failures=0 clamps=16/16 checksum=-1479652912",
 )

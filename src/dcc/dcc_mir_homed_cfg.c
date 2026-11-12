@@ -495,14 +495,21 @@ static int mir_emit_homed_wide_comparison_instruction(
     if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
     if (preserve_de) mir_stream_puts("\tpush de\n", out);
     if (preserve_bc) mir_stream_puts("\tpush bc\n", out);
-    if ((!stack_rhs &&
-         !mir_emit_wide_home_to_stack(out, insn->src1)) ||
-        (!stack_rhs &&
-         !direct_right &&
-         !mir_homed_forwarded_wide_rhs(
-             insn->src2, instruction) &&
-         !mir_emit_wide_home_to_hl_de(out, insn->src2)) ||
-        !mir_emit_wide_operation(out, insn) ||
+    /* The signed-constant fast path compares DE:HL with the literal and
+     * takes no stack operand, so it needs the left value, not the constant. */
+    if (mir_wide_operation_is_signed_const_relational(insn)) {
+        if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
+            return 0;
+    } else if ((!stack_rhs &&
+                !mir_emit_wide_home_to_stack(out, insn->src1)) ||
+               (!stack_rhs &&
+                !direct_right &&
+                !mir_homed_forwarded_wide_rhs(
+                    insn->src2, instruction) &&
+                !mir_emit_wide_home_to_hl_de(out, insn->src2))) {
+        return 0;
+    }
+    if (!mir_emit_wide_operation(out, insn) ||
         !mir_emit_hl_to_home(out, insn->dst))
         return 0;
     if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
