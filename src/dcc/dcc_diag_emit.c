@@ -446,8 +446,10 @@ int new_label(void)
 void flush_pending_asm(void)
 {
     /* Never flush during a suppressed sizing/metadata pass. Leave the buffer
-     * intact for the next real output point. */
-    if (asm_suppress_depth > 0)
+     * intact for the next real output point. Nor into a deferred static body:
+     * that body is dropped when every call to it is inlined, and the asm with
+     * it. The next function emitted to the final sink, or emit_data, takes it. */
+    if (asm_suppress_depth > 0 || g_emit_sink.purpose == EMIT_SINK_DEFERRED)
         return;
     if (pending_asm_len > 0 && g_emit_sink.stream) {
         fputs("\t; dcc user asm begin\n", g_emit_sink.stream);
