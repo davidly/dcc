@@ -166,6 +166,11 @@ DCC_MIR_SELECT_CANDIDATE=spilled-boolean-phi-branch "$pwsh_cmd" -NoProfile -File
 DCC_MIR_SELECT_CANDIDATE=spilled-baseline "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
     -Apps tdblnotw -Mode full -NoStackCheck -NoPerfCheck \
     -ThrottleLimit "$jobs"
+# A homed wide compare that saves a live register must not push it between a
+# stacked left operand and the right one (tregwide).
+DCC_MIR_PREFER_REGIONAL=1 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
+    -Apps tregwide -Mode full -NoStackCheck -NoPerfCheck \
+    -ThrottleLimit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
     -Jobs "$clobber_jobs" -BuildTimeout "$clobber_build_timeout" \
     -ExecutionManifest "$report_dir/mir-clobber-executions.json"

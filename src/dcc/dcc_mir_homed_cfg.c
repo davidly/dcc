@@ -474,6 +474,8 @@ static int mir_homed_stack_forwarded_wide_rhs(
         !mir_homed_share_emission_region(definition_index, next))
         return 0;
     binary = &mir.insns[next];
+    /* The consumer pushes its own register saves before its operands, which
+     * would land between this stacked left operand and the right one. */
     return binary->opcode == MIR_BINARY &&
            binary->src2 == value &&
            type_size(binary->secondary_offset) == 4 &&
@@ -481,7 +483,11 @@ static int mir_homed_stack_forwarded_wide_rhs(
            mir.allocation_colors[binary->src1] ==
                MIR_COLOR_HL_DE &&
            mir_home_color_live_across(
-               definition_index, MIR_COLOR_HL_DE);
+               definition_index, MIR_COLOR_HL_DE) &&
+           !mir_home_color_live_across(next, MIR_COLOR_BC_IY) &&
+           !mir_home_color_live_across(next, MIR_COLOR_BC) &&
+           !mir_home_color_live_across(next, MIR_COLOR_HL) &&
+           !mir_home_color_live_across(next, MIR_COLOR_DE);
 }
 
 static int mir_emit_homed_wide_comparison_instruction(

@@ -11,6 +11,7 @@ conversions with dcc's sizes (char 8, short and int 16, long 32 bits), so no
 host compiler is involved; inputs that would be undefined are skipped.
 
   typed-expr-fuzz.py --seeds 1-200            fuzz 200 programs, peep and nopeep
+  typed-expr-fuzz.py --seeds 1-200 --mode tree   nested expression trees instead
   typed-expr-fuzz.py --seeds 7 --keep         keep seed 7's program and outputs
   typed-expr-fuzz.py --generate 7 prog.c prog.expected
 
@@ -200,6 +201,9 @@ class Case:
             return acc
         return wrap(v, self.rt)
 
+    def expected_for(self, k):
+        return self.expected(*self.inputs[k])
+
     def operand(self, which):
         s, t, c = (self.sa, self.ta, self.ca) if which == 'a' else (self.sb, self.tb, self.cb)
         n = self.n
@@ -283,6 +287,203 @@ class Case:
                 n * 10 + k, n, literal(a, self.ta), literal(b, self.tb), k % 3, pa, pb))
 
 
+TREE_LEAVES = 3
+TREE_STORES = ['param', 'local', 'block', 'global', 'static', 'array', 'member', 'ptr', 'const']
+TREE_CONTEXTS = ['return', 'if', 'arg', 'global']
+
+
+class TreeCase:
+    """One expression tree over three typed leaves: binary operators, unary
+    - ~ !, casts and ?:, nested up to depth 3."""
+
+    def __init__(self, n, rng):
+        self.n = n
+        self.types = [rng.choice(NAMES) for _ in range(TREE_LEAVES)]
+        self.stores = [rng.choice(TREE_STORES) for _ in range(TREE_LEAVES)]
+        if all(s == 'const' for s in self.stores):
+            self.stores[0] = 'param'
+        self.consts = [interesting(t, rng) for t in self.types]
+        self.rt = rng.choice(NAMES)
+        self.ctx = rng.choice(TREE_CONTEXTS)
+        self.tree = self.grow(rng, rng.randint(2, 3))
+        self.inputs = []
+        for _ in range(80):
+            if len(self.inputs) == INPUTS:
+                break
+            values = tuple(self.consts[i] if self.stores[i] == 'const'
+                           else interesting(self.types[i], rng) for i in range(TREE_LEAVES))
+            try:
+                self.expected(values)
+            except Undefined:
+                continue
+            self.inputs.append(values)
+
+    def grow(self, rng, depth):
+        if depth == 0 or rng.random() < 0.25:
+            return ('leaf', rng.randrange(TREE_LEAVES))
+        kind = rng.choice(['binary'] * 5 + ['unary', 'cast', 'ternary'])
+        if kind == 'binary':
+            op = rng.choice(OPS)
+            right = self.grow(rng, depth - 1)
+            if op in ('<<', '>>'):
+                right = ('cast', 'int', ('cast', 'unsigned char', right)) if rng.random() < 0.5 \
+                    else ('const', rng.randint(0, 9), rng.choice(SHIFT_COUNT_TYPES))
+            return ('binary', op, self.grow(rng, depth - 1), right)
+        if kind == 'unary':
+            return ('unary', rng.choice('-~!'), self.grow(rng, depth - 1))
+        if kind == 'cast':
+            return ('cast', rng.choice(NAMES), self.grow(rng, depth - 1))
+        return ('ternary', self.grow(rng, depth - 1), self.grow(rng, depth - 1),
+                self.grow(rng, depth - 1))
+
+    def type_of(self, node):
+        kind = node[0]
+        if kind == 'leaf':
+            return self.types[node[1]]
+        if kind == 'const':
+            return node[2]
+        if kind == 'binary':
+            op, ta, tb = node[1], self.type_of(node[2]), self.type_of(node[3])
+            if op in ('<<', '>>'):
+                return promote(ta)
+            if op in COMPARISONS + ('&&', '||'):
+                return 'int'
+            return common(ta, tb)
+        if kind == 'unary':
+            return 'int' if node[1] == '!' else promote(self.type_of(node[2]))
+        if kind == 'cast':
+            return node[1]
+        return common(self.type_of(node[2]), self.type_of(node[3]))
+
+    def evaluate(self, node, values):
+        """(value, type); only the arms and operands C evaluates are evaluated."""
+        kind = node[0]
+        if kind == 'leaf':
+            return values[node[1]], self.types[node[1]]
+        if kind == 'const':
+            return wrap(node[1], node[2]), node[2]
+        if kind == 'binary':
+            op = node[1]
+            a, ta = self.evaluate(node[2], values)
+            if op in ('&&', '||') and (a != 0) == (op == '||'):
+                return int(op == '||'), 'int'
+            b, tb = self.evaluate(node[3], values)
+            return binop(op, a, ta, b, tb)
+        if kind == 'unary':
+            v, t = self.evaluate(node[2], values)
+            if node[1] == '!':
+                return int(v == 0), 'int'
+            pt = promote(t)
+            v = wrap(v, pt)
+            if node[1] == '~':
+                return wrap(~v, pt), pt
+            if signed(pt) and not lo(pt) <= -v <= hi(pt):
+                raise Undefined
+            return wrap(-v, pt), pt
+        if kind == 'cast':
+            v, _ = self.evaluate(node[2], values)
+            return wrap(v, node[1]), node[1]
+        c, _ = self.evaluate(node[1], values)
+        rt = self.type_of(node)
+        v, _ = self.evaluate(node[2] if c else node[3], values)
+        return wrap(v, rt), rt
+
+    def expected(self, values):
+        v, _ = self.evaluate(self.tree, values)
+        if self.ctx == 'if':
+            return wrap(1 if v else 0, self.rt)
+        return wrap(v, self.rt)
+
+    def leaf_text(self, i):
+        n, s, t = self.n, self.stores[i], self.types[i]
+        return {'param': 'a%d' % i, 'local': 'l%d' % i, 'block': 'k%d' % i,
+                'global': 'g%d_%d' % (n, i), 'static': 's%d' % i,
+                'array': 'r%d_%d[i]' % (n, i), 'member': 'm%d.f%d' % (n, i),
+                'ptr': '(*p%d)' % i, 'const': literal(self.consts[i], t)}[s]
+
+    def text(self, node):
+        kind = node[0]
+        if kind == 'leaf':
+            return self.leaf_text(node[1])
+        if kind == 'const':
+            return literal(node[1], node[2])
+        if kind == 'binary':
+            return '(%s %s %s)' % (self.text(node[2]), node[1], self.text(node[3]))
+        if kind == 'unary':
+            return '(%s(%s))' % (node[1], self.text(node[2]))
+        if kind == 'cast':
+            return '((%s)(%s))' % (node[1], self.text(node[2]))
+        return '((%s) ? (%s) : (%s))' % (self.text(node[1]), self.text(node[2]),
+                                         self.text(node[3]))
+
+    def emit(self, out):
+        n, rt = self.n, self.rt
+        for i, (s, t) in enumerate(zip(self.stores, self.types)):
+            if s == 'global':
+                out.append('%s g%d_%d;' % (t, n, i))
+            elif s == 'array':
+                out.append('%s r%d_%d[3];' % (t, n, i))
+        if 'member' in self.stores:
+            out.append('struct { char pad; %s } m%d;' % (
+                ' '.join('%s f%d;' % (t, i) for i, t in enumerate(self.types)), n))
+        if self.ctx == 'global':
+            out.append('%s o%d;' % (rt, n))
+        params = ['%s a%d' % (t, i) for i, t in enumerate(self.types)] + ['int i'] + \
+                 ['%s *p%d' % (t, i) for i, t in enumerate(self.types)]
+        out.append('%s t%d(%s)' % (rt, n, ', '.join(params)))
+        out.append('{')
+        for i, (s, t) in enumerate(zip(self.stores, self.types)):
+            if s == 'local':
+                out.append('    %s l%d;' % (t, i))
+            elif s == 'static':
+                out.append('    static %s s%d;' % (t, i))
+        for i, s in enumerate(self.stores):
+            if s in ('local', 'static'):
+                out.append('    %s%d = a%d;' % (s[0], i, i))
+        e = self.text(self.tree)
+        body = {'return': ['return (%s)(%s);' % (rt, e)],
+                'if': ['if (%s) return 1;' % e, 'return 0;'],
+                'arg': ['return take%d(%s);' % (n, e)],
+                'global': ['o%d = %s;' % (n, e), 'return o%d;' % n]}[self.ctx]
+        out.append('    {')
+        for i, (s, t) in enumerate(zip(self.stores, self.types)):
+            if s == 'block':
+                out.append('        %s k%d = a%d;' % (t, i, i))
+        out.extend('        ' + line for line in body)
+        out.append('    }')
+        out.append('}')
+        out.append('')
+
+    def emit_take(self, out):
+        if self.ctx == 'arg':
+            out.append('%s take%d(%s v) { return v; }' % (self.rt, self.n, self.rt))
+
+    def emit_calls(self, out):
+        n = self.n
+        for k, values in enumerate(self.inputs):
+            setup = []
+            for i, (s, t, v) in enumerate(zip(self.stores, self.types, values)):
+                if s == 'global':
+                    setup.append('g%d_%d = %s;' % (n, i, literal(v, t)))
+                elif s == 'array':
+                    setup.append('r%d_%d[%d] = %s;' % (n, i, k % 3, literal(v, t)))
+                elif s == 'member':
+                    setup.append('m%d.f%d = %s;' % (n, i, literal(v, t)))
+                elif s == 'ptr':
+                    setup.append('v%d = %s;' % (i, literal(v, t)))
+            decls = ''.join(' %s v%d;' % (t, i) for i, (s, t) in
+                            enumerate(zip(self.stores, self.types)) if s == 'ptr')
+            out.append('    {' + decls)
+            out.extend('      ' + line for line in setup)
+            args = [literal(v, t) for v, t in zip(values, self.types)] + [str(k % 3)] + \
+                   ['&v%d' % i if s == 'ptr' else '0' for i, s in enumerate(self.stores)]
+            out.append('      show(%d, (unsigned long)t%d(%s)); }' % (
+                n * 10 + k, n, ', '.join(args)))
+
+    def expected_for(self, k):
+        return self.expected(self.inputs[k])
+
+
 HEADER = '''/* generated by typed-expr-fuzz.py, seed %d */
 #include <stdio.h>
 
@@ -303,12 +504,14 @@ static void show(int id, unsigned long v)
 '''
 
 
-def generate(seed, count):
+def generate(seed, count, mode='binary'):
     """(C source, expected output) for one seed."""
     rng = random.Random(seed)
     cases = []
     while len(cases) < count:
-        case = Case(len(cases), rng)
+        kind = Case if mode == 'binary' or (mode == 'mixed' and rng.random() < 0.5) \
+            else TreeCase
+        case = kind(len(cases), rng)
         if case.inputs:
             cases.append(case)
     out = [HEADER % seed]
@@ -321,8 +524,8 @@ def generate(seed, count):
         case.emit_calls(out)
     out += ['    return 0;', '}']
     expected = ''.join('%08x %08x\n' % ((case.n * 10 + k) & 0xffffffff,
-                                        wrap(case.expected(a, b), 'unsigned long'))
-                       for case in cases for k, (a, b) in enumerate(case.inputs))
+                                        wrap(case.expected_for(k), 'unsigned long'))
+                       for case in cases for k in range(len(case.inputs)))
     return '\n'.join(out) + '\n', expected
 
 
@@ -331,7 +534,7 @@ def run_seed(seed, args):
     work = args.work / str(seed)
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    source, expected = generate(seed, args.count)
+    source, expected = generate(seed, args.count, args.mode)
     (work / 't.c').write_text(source)
     (work / 't.expected').write_text(expected)
     env = dict(os.environ)
@@ -341,10 +544,16 @@ def run_seed(seed, args):
     failure = None
     for peep in ('True', 'False'):
         build = work / ('peep' if peep == 'True' else 'nopeep')
-        result = subprocess.run(
-            [str(REPO / 'dccmake'), 'dcc-input=%s' % (work / 't.c'), 'dcc-output=T',
-             'dcc-build-dir=%s' % build, 'dcc-peep=%s' % peep, 'ntvcm-tool=%s' % args.emulator],
-            cwd=REPO, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                [str(REPO / 'dccmake'), 'dcc-input=%s' % (work / 't.c'), 'dcc-output=T',
+                 'dcc-build-dir=%s' % build, 'dcc-peep=%s' % peep,
+                 'ntvcm-tool=%s' % args.emulator],
+                cwd=REPO, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                timeout=args.build_timeout)
+        except subprocess.TimeoutExpired:
+            failure = 'HANG building %s (over %d s)' % (build.name, args.build_timeout)
+            break
         log = result.stdout + result.stderr
         (work / ('build-%s.log' % build.name)).write_text(log)
         if result.returncode != 0:
@@ -379,10 +588,14 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--seeds', default='1-100', help='seeds to run, e.g. 1-100,250')
     parser.add_argument('--count', type=int, default=40, help='cases per program')
+    parser.add_argument('--mode', choices=('binary', 'tree', 'mixed'), default='binary',
+                        help='one binary operation per case, nested expression trees, or both')
     parser.add_argument('--jobs', type=int, default=os.cpu_count() or 1)
     parser.add_argument('--work', type=Path, default=REPO / 'build' / 'typed-expr-fuzz')
     parser.add_argument('--emulator', default='ntvcm')
-    parser.add_argument('--timeout', type=int, default=60)
+    parser.add_argument('--timeout', type=int, default=60, help='seconds to run a program')
+    parser.add_argument('--build-timeout', type=int, default=300,
+                        help='seconds to build a program; longer is reported as a hang')
     parser.add_argument('--keep', action='store_true', help='keep passing seeds too')
     parser.add_argument('--env', action='append', default=[],
                         help='NAME=VALUE for dcc, e.g. DCC_MIR_SELECT_CANDIDATE=homed')
@@ -390,7 +603,7 @@ def main():
                         help='only write one program and its expected output')
     args = parser.parse_args()
     if args.generate:
-        source, expected = generate(int(args.generate[0]), args.count)
+        source, expected = generate(int(args.generate[0]), args.count, args.mode)
         Path(args.generate[1]).write_text(source)
         Path(args.generate[2]).write_text(expected)
         return 0
