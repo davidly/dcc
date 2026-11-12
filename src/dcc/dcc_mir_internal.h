@@ -620,6 +620,8 @@ int mir_emit_pointer_offset_address_to_home(MirStream *out, int dst,
                                                     int base, long offset);
 void mir_emit_prologue(MirStream *out);
 int mir_emit_wide_operation(MirStream *out, const struct MirInsn *insn);
+int mir_wide_operation_is_signed_const_relational(
+    const struct MirInsn *insn);
 void mir_emit_scalar_compare(MirStream *out, int operation, int is_unsigned);
 void mir_emit_scalar_compare_biased_right(MirStream *out, int operation);
 void mir_emit_signed_byte_extend(MirStream *out);
@@ -741,6 +743,9 @@ int mir_value_low_bit_demand(int value);
 int mir_word_values_have_same_bits(int left, int right);
 int mir_private_load_can_rematerialize_at(int value, int instruction);
 int mir_canonicalize_divmod_operands(void);
+int mir_materialize_folded_argument_conversions(void);
+int mir_spilled_argument_source_type_valid(int source_type,
+                                           int argument_type);
 int mir_divmod_early_store(int instruction);
 int mir_memcpy_end_pointer_target(int call_index);
 int mir_byte_cast_needs_no_extension(const struct MirInsn *insn);

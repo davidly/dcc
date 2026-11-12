@@ -1255,7 +1255,8 @@ int ast_call_arg_supported(struct Sym *fn_sym, int arg_index,
             return ast_value_is_float_word(arg) || ast_call_arg_word_supported(arg) ||
                    ast_value_is_long_word(arg);
         if (type_is_long(want_type))
-            return ast_value_is_long_word(arg) || ast_call_arg_word_supported(arg);
+            return ast_value_is_long_word(arg) || ast_call_arg_word_supported(arg) ||
+                   ast_value_is_float_word(arg);
         return ast_call_arg_word_supported(arg) || ast_value_is_long_word(arg) ||
                ast_value_is_float_word(arg);
     }

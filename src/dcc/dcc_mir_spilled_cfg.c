@@ -26002,7 +26002,9 @@ static int mir_direct_wide_location(int value,
     int iy_offset;
     int byte;
 
-    if (definition == NULL)
+    /* A narrow operand of a wide operation is extended when loaded; its home
+     * holds only its own bytes, so it has no four-byte location to read. */
+    if (definition == NULL || type_size(definition->type) != 4)
         return 0;
     if (mir_value_has_direct_named_home(value) &&
         mir_direct_named_home_location(definition, &storage, &offset)) {
@@ -31715,7 +31717,7 @@ static void mir_spilled_resolve_call_prototype(
     }
 }
 
-static int mir_spilled_argument_source_type_valid(
+int mir_spilled_argument_source_type_valid(
     int source_type, int argument_type)
 {
     int argument_size;
