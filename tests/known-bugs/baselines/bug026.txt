@@ -1,0 +1,9 @@
+1: square 81 twice 18 minus 0 equal 1 and 11
+1: global 10 condition 1 long 81 copied 81
+1: other operand 90 separated 81
+2: square 324 twice 36 minus 0 equal 1 and 22
+2: global 10 condition 1 long 324 copied 324
+2: other operand 360 separated 324
+3: square 729 twice 54 minus 0 equal 1 and 33
+3: global 10 condition 1 long 729 copied 729
+3: other operand 810 separated 729

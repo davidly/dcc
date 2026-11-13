@@ -1,0 +1,4 @@
+bit-field 384 -1
+bit-field via pointer 29
+array member 300 4162 35533 34816
+element of struct array 4767 304

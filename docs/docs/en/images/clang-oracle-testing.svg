@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="1210" viewBox="0 0 1480 1210" role="img" aria-labelledby="title description">
+  <title id="title">How dcc is tested against clang</title>
+  <desc id="description">A nine-step loop. Step 1: a generator turns a seed into a C program that uses only fixed-width types. Step 2: clang builds it with a checking layer under ASan and UBSan; operations that trip are repaired, and a program whose clang builds disagree is discarded. Step 3: the same source is built by clang on the host, giving the expected output, and by the dcc toolchain (dcc, dccpeep, m80c, l80c) and run under the ntvcm Z80 emulator, with and without dccpeep. Step 4: the outputs are compared; a program that matches is dropped, and one that is rejected, prints the wrong thing or hangs is a failure. Step 5: the failing program is reduced automatically to a few lines. Step 6: the failure is confirmed by hand with one-statement variants. Step 7: a reproducer is parked in tests/known-bugs with clang's output as its baseline. Step 8: the bug is logged in compiler-bugs.md and reported as a GitHub issue. Step 9: the generator gets a switch that stops it producing that shape, so later runs find different bugs. The loop then repeats from step 1.</desc>
+  <defs>
+    <style>
+      text { font-family: Inter, "Segoe UI", Arial, sans-serif; fill: #162b45; }
+      .title { font-size: 34px; font-weight: 750; }
+      .subtitle { font-size: 21px; fill: #536780; }
+      .heading { font-size: 24px; font-weight: 750; }
+      .label { font-size: 20px; font-weight: 700; }
+      .body { font-size: 19px; }
+      .small { font-size: 17px; fill: #536780; }
+      .badge { font-size: 16px; font-weight: 750; fill: #ffffff; text-anchor: middle; }
+      .blue { fill: #1d5fc0; }
+      .teal { fill: #007f79; }
+      .orange { fill: #ac530b; }
+      .flow { fill: none; stroke: #536780; stroke-width: 2.5; stroke-linejoin: round; }
+      .loop { fill: none; stroke: #1d5fc0; stroke-width: 2.5; stroke-linejoin: round; stroke-dasharray: 9 7; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#536780"/></marker>
+    <marker id="loop-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#1d5fc0"/></marker>
+  </defs>
+  <rect width="1480" height="1210" fill="#f6f8fc"/>
+  <path d="M0 0H1480V8H0Z" fill="#162b45"/>
+  <text x="60" y="65" class="title">How dcc is tested against clang</text>
+  <text x="60" y="103" class="subtitle">Generated C programs are built by both compilers. Any difference in what they print is investigated.</text>
+
+  <!-- Row 1: prepare, then build twice -->
+  <rect x="60" y="140" width="400" height="250" rx="12" fill="#edf3ff" stroke="#9ab8e7"/>
+  <circle cx="90" cy="172" r="16" fill="#1d5fc0"/>
+  <text x="90" y="178" class="badge">1</text>
+  <text x="118" y="180" class="heading blue">Generate a program</text>
+  <text x="82" y="215" class="body">One seed makes one C program:</text>
+  <text x="82" y="243" class="body">loops, switch, structs, pointers,</text>
+  <text x="82" y="271" class="body">bit-fields, calls, nested blocks.</text>
+  <text x="82" y="305" class="body">Fixed-width types only, so it</text>
+  <text x="82" y="333" class="body">means the same on both targets.</text>
+  <text x="82" y="368" class="small">scripts/clang_oracle_gen.py</text>
+
+  <rect x="530" y="140" width="400" height="250" rx="12" fill="#edf3ff" stroke="#9ab8e7"/>
+  <circle cx="560" cy="172" r="16" fill="#1d5fc0"/>
+  <text x="560" y="178" class="badge">2</text>
+  <text x="588" y="180" class="heading blue">Prove it is defined C</text>
+  <text x="552" y="215" class="body">Run a checked build with ASan</text>
+  <text x="552" y="243" class="body">and UBSan. Operations that trip</text>
+  <text x="552" y="271" class="body">are repaired and it is run again.</text>
+  <text x="552" y="305" class="body">clang -O0, -O2 and sanitized</text>
+  <text x="552" y="333" class="body">builds must print the same.</text>
+  <text x="552" y="368" class="small">Otherwise the program is discarded</text>
+
+  <rect x="1000" y="140" width="400" height="100" rx="12" fill="#e9f6f3" stroke="#8cc5ba"/>
+  <circle cx="1030" cy="172" r="16" fill="#007f79"/>
+  <text x="1030" y="178" class="badge">3a</text>
+  <text x="1058" y="180" class="heading teal">Host: clang</text>
+  <text x="1022" y="215" class="body">Its output is the expected result.</text>
+
+  <rect x="1000" y="252" width="400" height="138" rx="12" fill="#e9f6f3" stroke="#8cc5ba"/>
+  <circle cx="1030" cy="283" r="16" fill="#007f79"/>
+  <text x="1030" y="289" class="badge">3b</text>
+  <text x="1058" y="291" class="heading teal">Target: dcc toolchain</text>
+  <text x="1022" y="322" class="body">dcc → dccpeep → m80c → l80c,</text>
+  <text x="1022" y="348" class="body">run under ntvcm, a Z80 emulator.</text>
+  <text x="1022" y="375" class="small">With and without dccpeep: 4 configs</text>
+
+  <path d="M460 265H530" class="flow" marker-end="url(#arrow)"/>
+  <path d="M930 265H965" class="flow"/>
+  <path d="M965 265V190H1000" class="flow" marker-end="url(#arrow)"/>
+  <path d="M965 265V321H1000" class="flow" marker-end="url(#arrow)"/>
+  <path d="M1400 321H1435" class="flow"/>
+  <path d="M1400 190H1435V567H1400" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Row 2: compare, reduce, confirm (right to left) -->
+  <rect x="1000" y="450" width="400" height="235" rx="12" fill="#e9f6f3" stroke="#8cc5ba"/>
+  <circle cx="1030" cy="482" r="16" fill="#007f79"/>
+  <text x="1030" y="488" class="badge">4</text>
+  <text x="1058" y="490" class="heading teal">Compare the outputs</text>
+  <text x="1022" y="525" class="body">Same in every config: the</text>
+  <text x="1022" y="553" class="body">program passes and is dropped.</text>
+  <text x="1022" y="587" class="body">Different: dcc rejected valid C,</text>
+  <text x="1022" y="615" class="body">printed the wrong thing, or hung.</text>
+  <text x="1022" y="650" class="small">Stack or 64K overflow is a target</text>
+  <text x="1022" y="672" class="small">limit and is not counted</text>
+
+  <rect x="530" y="450" width="400" height="235" rx="12" fill="#fff2e5" stroke="#e7bb8d"/>
+  <circle cx="560" cy="482" r="16" fill="#ac530b"/>
+  <text x="560" y="488" class="badge">5</text>
+  <text x="588" y="490" class="heading orange">Reduce the failure</text>
+  <text x="552" y="525" class="body">Shrink the program automatically</text>
+  <text x="552" y="553" class="body">to the few lines that still fail</text>
+  <text x="552" y="581" class="body">the same way.</text>
+  <text x="552" y="615" class="body">Every step must still pass the</text>
+  <text x="552" y="643" class="body">clang checks in step 2.</text>
+  <text x="552" y="672" class="small">Never drifts into an already-known bug</text>
+
+  <rect x="60" y="450" width="400" height="235" rx="12" fill="#fff2e5" stroke="#e7bb8d"/>
+  <circle cx="90" cy="482" r="16" fill="#ac530b"/>
+  <text x="90" y="488" class="badge">6</text>
+  <text x="118" y="490" class="heading orange">Confirm by hand</text>
+  <text x="82" y="525" class="body">Write one-statement variants and</text>
+  <text x="82" y="553" class="body">run each on clang and dcc to find</text>
+  <text x="82" y="581" class="body">exactly what triggers it.</text>
+  <text x="82" y="615" class="body">A new shape of a filed bug becomes</text>
+  <text x="82" y="643" class="body">a comment on that issue.</text>
+  <text x="82" y="672" class="small">Fuzzer faults are fixed, not filed</text>
+
+  <path d="M1000 567H930" class="flow" marker-end="url(#arrow)"/>
+  <path d="M530 567H460" class="flow" marker-end="url(#arrow)"/>
+  <path d="M260 685V745" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Row 3: park, report, steer -->
+  <rect x="60" y="745" width="400" height="235" rx="12" fill="#fff2e5" stroke="#e7bb8d"/>
+  <circle cx="90" cy="777" r="16" fill="#ac530b"/>
+  <text x="90" y="783" class="badge">7</text>
+  <text x="118" y="785" class="heading orange">Park a reproducer</text>
+  <text x="82" y="820" class="body">tests/known-bugs/bugNNN.c with</text>
+  <text x="82" y="848" class="body">failing cases and controls.</text>
+  <text x="82" y="882" class="body">Its baseline is clang's output,</text>
+  <text x="82" y="910" class="body">proven under ASan and UBSan.</text>
+  <text x="82" y="945" class="small">Outside the suite, which stays green</text>
+
+  <rect x="530" y="745" width="400" height="235" rx="12" fill="#fff2e5" stroke="#e7bb8d"/>
+  <circle cx="560" cy="777" r="16" fill="#ac530b"/>
+  <text x="560" y="783" class="badge">8</text>
+  <text x="588" y="785" class="heading orange">Log and report</text>
+  <text x="552" y="820" class="body">An entry in compiler-bugs.md:</text>
+  <text x="552" y="848" class="body">what fails and what does not.</text>
+  <text x="552" y="882" class="body">A GitHub issue with the full</text>
+  <text x="552" y="910" class="body">program, commands, expected</text>
+  <text x="552" y="938" class="body">and actual output.</text>
+
+  <rect x="1000" y="745" width="400" height="235" rx="12" fill="#edf3ff" stroke="#9ab8e7"/>
+  <circle cx="1030" cy="777" r="16" fill="#1d5fc0"/>
+  <text x="1030" y="783" class="badge">9</text>
+  <text x="1058" y="785" class="heading blue">Steer round the bug</text>
+  <text x="1022" y="820" class="body">The generator gets a switch that</text>
+  <text x="1022" y="848" class="body">stops it producing that shape.</text>
+  <text x="1022" y="882" class="body">Later runs spend their time on</text>
+  <text x="1022" y="910" class="body">bugs that are not yet known.</text>
+  <text x="1022" y="945" class="small">Removed again when the bug is fixed</text>
+
+  <path d="M460 862H530" class="flow" marker-end="url(#arrow)"/>
+  <path d="M930 862H1000" class="flow" marker-end="url(#arrow)"/>
+  <path d="M1200 980V1015H30V265H60" class="loop" marker-end="url(#loop-arrow)"/>
+  <text x="730" y="1042" class="small blue" text-anchor="middle">The loop repeats: with known shapes switched off, the next run finds different bugs</text>
+
+  <rect x="60" y="1066" width="1340" height="108" rx="12" fill="#ffffff" stroke="#c9d4e3"/>
+  <text x="82" y="1100" class="label">Why a difference points at dcc</text>
+  <text x="82" y="1130" class="body">The program has no undefined behaviour and its meaning does not depend on the size of int,</text>
+  <text x="82" y="1156" class="body">so clang and dcc should print exactly the same output.</text>
+</svg>

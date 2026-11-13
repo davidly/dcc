@@ -1,0 +1,8 @@
+from parameter 301
+from global 301
+signed from unsigned 301
+decrement 299
+equality 301
+stored 1 301
+updated in loop -16651
+decremented in loop -16663

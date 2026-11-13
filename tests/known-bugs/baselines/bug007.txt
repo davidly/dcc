@@ -1,0 +1,3 @@
+narrowing 3
+widening 6
+for-init 15

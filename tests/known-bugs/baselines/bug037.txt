@@ -1,0 +1,6 @@
+for 2
+for postinc 12
+while 2
+narrow 2
+do 2
+straight 2

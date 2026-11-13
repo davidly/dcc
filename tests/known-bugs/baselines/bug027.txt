@@ -1,0 +1,7 @@
+then arm 10 10
+both arms 10 10
+else arm 11 11
+l = l + 1 10 10
+parameter 231
+no outer if 10 10
+no else 10 10

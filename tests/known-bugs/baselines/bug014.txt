@@ -1,0 +1,4 @@
+post-increment 70001 70001
+add one 6 6
+assigned pre-increment 8 8
+after goto 10 10

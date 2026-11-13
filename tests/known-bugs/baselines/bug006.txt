@@ -1,0 +1,6 @@
+%= constant 4 48
+%= variable 18 1148
+/= 0 164
+>>= 9 143
+top bit clear 2 125
+neighbours 33407 -11 33407 -11

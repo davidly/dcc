@@ -1,0 +1,5 @@
+|| to member 00000001
+&& to element 00000001
+|| to global 00000000
+constant || 00000001
+block local 00000001

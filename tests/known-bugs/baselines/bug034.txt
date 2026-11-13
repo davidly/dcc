@@ -1,0 +1,12 @@
+bit-field 8: 100
+8: equal 100 not equal 85 sixteen 85
+bit-field 7: 85
+7: equal 85 not equal 1 sixteen 85
+bit-field 9: 85
+9: equal 85 not equal 1 sixteen 85
+bit-field 12: 85
+12: equal 85 not equal 1 sixteen 85
+bit-field 15: 85
+47: equal 85 not equal 1 sixteen 85
+bit-field 0: 85
+16: equal 85 not equal 1 sixteen 100

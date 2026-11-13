@@ -1,0 +1,6 @@
+remainder >= 0 1
+quotient < 1 0
+product >= 0 1
+member >= 1 1
+as value 0 1
+switch arms taken 8

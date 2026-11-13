@@ -1,0 +1,4 @@
+cast of post-increment 74465
+cast of post-decrement 139999
+argument 345
+returned 44

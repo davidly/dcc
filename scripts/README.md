@@ -62,6 +62,119 @@ A failing seed keeps `t.c`, `t.expected` and each mode's output under
 `build/typed-expr-fuzz/<seed>`; an output line is the case number times ten
 plus the input index, then the result as an `unsigned long`, both in hex.
 
+## `clang-oracle-fuzz.py`
+
+Differential fuzzer whose expected output comes from the host C compiler. It
+complements `typed-expr-fuzz.py`: that one checks single expressions against a
+model; this one generates whole programs and lets clang say what they print.
+
+Each seed is one program of helper and test functions over fixed-width
+integers, arrays, structs, bit-fields and pointers, with `for`/`while`/`do`
+loops, `switch`, nested-block locals, `goto`, calls with mixed-width
+arguments, bounded recursion, calls through function pointers, compound
+assignment and `++`/`--` on every kind of lvalue, and assignments used as
+values. The generator and renderers are in `clang_oracle_gen.py`.
+
+`--gen float` switches to `clang_oracle_float_gen.py`, which builds on the
+same model to exercise dcc's only floating type: `float` globals, locals,
+parameters, arrays and struct members; arithmetic, negation, comparison,
+truth tests, `?:`, `++`/`--`, compound assignment, conversions to and from
+every integer width, and mixed integer/float arithmetic. Every operation is
+clamped so no value overflows, and floats are printed and checksummed as
+their IEEE bits with `-0` folded to `0`, so a difference is a difference in
+the arithmetic rather than in formatting. Its failures and reductions go
+under `build/clang-oracle-fuzz-float/`.
+
+The same source is compiled by clang and by dcc. It can be, because it never
+spells `int` or `long`, and the renderer inserts the casts and masks that
+make an expression mean the same with a 16-bit and a 32-bit `int`. What a
+cast cannot fix (signed overflow at 16 bits, division by zero, and so on) is
+caught at run time: a second, host-only rendering routes every such operation
+through a checking helper, and the driver repairs the operations that trip,
+or drops the program. A program is used only when
+
+- the checked build, under ASan and UBSan, reports nothing;
+- clang finds no unsequenced modification, no missing `return` and no syntax
+  that is only valid from C23; and
+- `-O0`, `-O2`, the sanitized build and the checked build all print the same.
+
+So a difference from dcc is a dcc defect, not a porting difference.
+
+```sh
+python3 scripts/clang-oracle-fuzz.py --seeds 1-300 --off known
+python3 scripts/clang-oracle-fuzz.py --seeds 1-300 --off known --configs all
+python3 scripts/clang-oracle-fuzz.py --reduce 17,42 --config nopeep --off known
+python3 scripts/clang-oracle-fuzz.py --generate 17 prog.c --off known
+python3 scripts/clang-oracle-fuzz.py --list-configs
+python3 scripts/clang-oracle-fuzz.py --gen float --seeds 1-300 --off known
+python3 scripts/clang-oracle-fuzz.py --gen float --reduce 36 --config nopeep --off known
+```
+
+- `--configs production` builds with and without `dccpeep` and with and
+  without the stack check. `default` adds `DCC_MIR_NO_EXACT=1`. `all` adds one
+  config per MIR candidate, forced with `DCC_MIR_SELECT_CANDIDATE` (or
+  `DCC_MIR_PREFER_REGIONAL=1` for the regional one); a failure only there is
+  latent, not shipped behaviour.
+- `--off known` leaves out every form that hits a bug already logged in
+  `compiler-bugs.md`, so a run reports new failures instead of the same ones
+  again. `KNOWN_BUGS` in `clang_oracle_gen.py` (and in
+  `clang_oracle_float_gen.py` for `--gen float`) maps each such form to its
+  entry; delete a line when its bug is fixed. The float generator also
+  rewrites a few logged shapes after generation (`Gen.steer`) when they are
+  easier to see in the finished tree, for example by swapping the operands
+  of a `+` whose right side is a product. `--off` also takes individual
+  generator features (`-h` lists them) to narrow a search by hand. A program
+  whose undefined-behaviour repair rebuilt one of those forms is dropped and
+  counted as `INVALID`.
+- Failures are reported as `COMPILE` (dcc rejects the program), `VERIFY` (dcc
+  prints a MIR verifier diagnostic but still exits 0), `MISMATCH`, `RUN-HANG`
+  or `BUILD-HANG`. A program that only overflows its stack, does not link
+  into 64K or reports `out of ram` at start-up has met a limit of the target,
+  not a defect; it is counted as `limit-only`. A failing seed keeps `t.c`,
+  `t.expected` and each failing
+  config's output under `build/clang-oracle-fuzz/<seed>`. An output line is a
+  call number and the returned value, or 0x4000 plus the call number and a
+  checksum of every global after that call.
+- `--reduce` shrinks a failing seed to a small program that still fails the
+  same way and is still accepted by the host checks, written to
+  `build/clang-oracle-fuzz/<seed>-reduce-<config>/reduced.c`. It refuses
+  edits that would turn the failure into a known one. Reduce a hang with a
+  short `--timeout`.
+
+A seed names a program only together with the generator version and
+`--tests`, `--size`, `--depth` and `--off`; keep the reduced program, not the
+seed.
+
+## `run-known-bugs.py`
+
+Checks the reproducers parked in `tests/known-bugs/`, one per open entry in
+`compiler-bugs.md`. For each it proves the baseline with the host compiler
+(same output, clean under ASan and UBSan, no unsequenced modification), then
+builds and runs the program with dcc with and without `dccpeep` and reports
+`fails` with the reason, or `FIXED`. See `tests/known-bugs/README.md` for what
+to do with a fixed one.
+
+```sh
+python3 scripts/run-known-bugs.py
+python3 scripts/run-known-bugs.py bug003 --dcc path/to/another/dcc
+python3 scripts/run-known-bugs.py --update bug022    # write a new baseline from clang
+```
+
+## `bug-issue-body.py`
+
+Writes the GitHub issue for an entry in `compiler-bugs.md`: the entry's text,
+the reproducer from `tests/known-bugs/`, the build commands, the host
+compiler's output (checked against the baseline) and what dcc does now, with
+and without `dccpeep`. The title comes from the entry's summary-table row and
+cross-references become issue links through the table's Issue column, so the
+row must exist first. Bodies go to `build/bug-issues/bugNNN.md`; `--create`
+opens the issue with `gh`.
+
+```sh
+python3 scripts/bug-issue-body.py bug054
+python3 scripts/bug-issue-body.py bug054 --create
+```
+
 ## `mir-migration-census.py`
 
 Measures generated MIR selection across `tests/*.c` and compares two snapshots
