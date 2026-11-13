@@ -18,7 +18,7 @@ class PrepushTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="dcc prepush ")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()  # macOS: /var -> /private/var
         scripts = self.root / "scripts"
         (scripts / "tests").mkdir(parents=True)
         shutil.copyfile(ROOT / "scripts/prepush.ps1", scripts / "prepush.ps1")

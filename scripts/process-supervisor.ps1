@@ -73,9 +73,12 @@ public static class DccProcessScope {
     public static void TerminateUnix(int pid, bool ready) {
         // The group remains addressable after its leader exits. Before the
         // supervisor creates it, only the recorded bootstrap PID can exist.
+        // ESRCH: already gone. EPERM: macOS reports it for a group whose only
+        // members are unreaped zombies (the leader just killed by Process.Kill),
+        // and for a PID reused by another user, which must not be killed anyway.
         if (kill(ready ? -pid : pid, 9) < 0) {
             int error = Marshal.GetLastWin32Error();
-            if (error != 3) throw new Win32Exception(error); // ESRCH: already gone
+            if (error != 3 && error != 1) throw new Win32Exception(error);
         }
     }
 }
