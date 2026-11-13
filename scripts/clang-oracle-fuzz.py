@@ -153,9 +153,11 @@ def host_oracle(prog, work, repair=True, strict=True, timeout=10, rounds=40):
     src.write_text(gen.render(prog, title=', seed %s' % prog.seed))
     # clang proves at compile time what no run can: an object modified twice,
     # or modified and read, with no sequence point between; and a value
-    # returning function that can fall off its end
+    # returning function that can fall off its end. It also accepts newer C
+    # than dcc claims to, which must not be mistaken for a dcc rejection
     lint = subprocess.run(['clang', '-std=gnu99', '-fsigned-char', '-fsyntax-only',
                            '-Wno-everything', '-Werror=unsequenced', '-Werror=return-type',
+                           '-Werror=c23-extensions',
                            str(src)], capture_output=True, text=True)
     if lint.returncode != 0:
         return None, 'not well defined: ' + lint.stderr.strip().splitlines()[0][-160:]
@@ -181,7 +183,7 @@ def host_oracle(prog, work, repair=True, strict=True, timeout=10, rounds=40):
 
 def dcc_run(source, build, cfg, args):
     """(kind, detail, output) of building and running source with dcc.
-    kind: ok, COMPILE, BUILD, BUILD-HANG, VERIFY or RUN-HANG."""
+    kind: ok, COMPILE, BUILD, BUILD-HANG, VERIFY, RUN-HANG or TOOBIG."""
     shutil.rmtree(build, ignore_errors=True)
     env = dict(os.environ)
     for key in DIAGNOSTIC_ENV:
@@ -206,6 +208,9 @@ def dcc_run(source, build, cfg, args):
         first = first.replace(str(source) + ':', '')
         if 'error DCC' in first or 'dcc: fatal' in first or 'MIR' in first:
             return 'COMPILE', first[:200], log
+        if 'program too large' in log:
+            # over 64K: a limit of the target, not a defect
+            return 'TOOBIG', 'program does not fit in 64K', log
         return 'BUILD', first[:200], log
     verify = re.search(r'^; MIR \S+: (instruction \d+ .*)$', log, re.M)
     if verify:
@@ -226,6 +231,9 @@ def judge(kind, detail, output, expected):
         return 'ok', ''
     if 'stack overflow' in output:
         return 'STACK', 'stack overflow'
+    if 'out of ram' in output:
+        # the runtime's start-up check: code and stack do not fit in the TPA
+        return 'TOOBIG', 'program does not fit in memory'
     want, got = expected.splitlines(), output.splitlines()
     wrong = [w.split()[0] for w, g in zip(want, got) if w != g]
     if len(got) != len(want):
@@ -264,6 +272,13 @@ def run_seed(seed, args, configs):
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
         return seed, 'INVALID', {'-': ('INVALID', reason)}
+    logged = gen.known_shapes(prog)
+    if logged:
+        # the generator steers round these, but a repair can rebuild one
+        if not args.keep:
+            shutil.rmtree(work, ignore_errors=True)
+        return seed, 'INVALID', {'-': ('INVALID', 'repair made a logged shape: %s'
+                                       % ','.join(sorted(logged)))}
     failures = {}
     for cfg in configs:
         build = work / cfg.name
@@ -303,9 +318,13 @@ def fuzz(args):
                 if args.verbose or status == 'GENERATOR':
                     print('seed %d: %s %s' % (seed, status, failures['-'][1]))
                 continue
-            real = {k: v for k, v in failures.items() if v[0] != 'STACK'}
+            real = {k: v for k, v in failures.items() if v[0] not in ('STACK', 'TOOBIG')}
+            if any(v[0] == 'TOOBIG' for v in failures.values()):
+                # past 64K the assembler's location counter wraps, and the
+                # larger builds of the same program fail in the linker instead
+                real = {k: v for k, v in real.items() if v[0] != 'BUILD'}
             if not real:
-                status = 'stack-only' if failures else 'ok'
+                status = 'limit-only' if failures else 'ok'
                 counts[status] = counts.get(status, 0) + 1
                 continue
             counts['FAIL'] = counts.get('FAIL', 0) + 1

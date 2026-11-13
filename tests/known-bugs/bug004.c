@@ -8,6 +8,7 @@ struct S { uint16_t m0; uint32_t m1; };
 static struct S s = { 255, 0x5dd1d183 };
 static uint32_t u[2] = { 0x80000000, 0x12345678 };
 static uint32_t g = 0xdeadbeef;
+static uint32_t g2 = 0xdeadbeef;
 static uint16_t one = 1;
 static uint16_t zero = 0;
 
@@ -40,15 +41,27 @@ static void constant_or(void)
     u[1] = l;
 }
 
+/* the same un-widened result, assigned to a 32-bit nested-block local */
+static void block_local(uint16_t x)
+{
+    {
+        int32_t b = 0;
+        b = ((--x) || 1);
+        g2 = (uint32_t)b;
+    }
+}
+
 int main(void)
 {
     or_to_member();
     and_to_element();
     or_to_global();
     constant_or();
+    block_local(1);
     show("|| to member", s.m1);
     show("&& to element", u[0]);
     show("|| to global", g);
     show("constant ||", u[1]);
+    show("block local", g2);
     return 0;
 }

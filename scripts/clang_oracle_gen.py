@@ -348,6 +348,107 @@ def init_keeps_type(init, t):
     return ty(init) is t
 
 
+def folds(e):
+    """e is a constant once an assignment of a constant is taken as its
+    value: `~3`, `-(x = 77)`."""
+    if e.op == 'asg':
+        return e.a == '=' and folds(e.k[1])
+    return e.op == 'const' or (e.op in ('bin', 'un', 'cast', 'cond')
+                               and all(folds(k) for k in e.k))
+
+
+def negative_constant(rhs, t):
+    """rhs is a constant, possibly under casts, that is negative before or
+    after them or, for a signed 32-bit target, has the top bit set: the
+    BUG-008 shape. Any other expression that folds is taken to be one."""
+    casts = []
+    while rhs.op == 'cast':
+        casts.append(ty(rhs))
+        rhs = rhs.k[0]
+    if rhs.op != 'const':
+        return folds(rhs)
+    v = rhs.a
+    for ct in reversed(casts):
+        v = ct.wrap(v) if is_int(ct) else v
+    return rhs.a < 0 or v < 0 or (t is I32 and v >= 1 << 31)
+
+
+def same_variable(a, b):
+    """a and b are the same variable: as the two operands of one binary
+    operator, the BUG-026 shape."""
+    return a.op == 'var' and b.op == 'var' and a.a is b.a
+
+
+def nested_if_else(s):
+    """s is an `if` with, directly in one of its arms, an `if` that has an
+    `else`: the BUG-027 shape."""
+    return s.op == 'if' and any(
+        t.op == 'if' and len(t.b) > 1 and t.b[1] is not None
+        for arm in s.b if arm is not None for t in arm.stmts)
+
+
+def byte_arm(s):
+    """s is an `if … else` with a plain assignment to an 8-bit local or
+    parameter directly in one of its arms: the BUG-029 shape when the other
+    arm assigns another variable."""
+    if s.op != 'if' or len(s.b) < 2 or s.b[1] is None:
+        return False
+    for arm in s.b:
+        for t in arm.stmts:
+            e = t.e[0] if t.op == 'expr' and t.e else None
+            if e is not None and e.op == 'asg' and e.a == '=' and e.k[0].op == 'var' \
+                    and e.k[0].a.storage != 'global' and is_int(e.k[0].a.t) \
+                    and e.k[0].a.t.bits == 8:
+                return True
+    return False
+
+
+def block_object(e):
+    """e names, or assigns to, an object declared in a nested block: as the
+    operand of `return` in a function returning an 8-bit type, the BUG-025
+    shape."""
+    if e.op in ('incdec', 'asg'):
+        e = e.k[0]
+    return e.op in ('var', 'idx') and e.a.storage == 'block'
+
+
+def cross_type(rhs, t):
+    """rhs, stored to a 16-bit local of type t, arrives as a value of another
+    type, or through a cast that only changes signedness: the BUG-023 shape.
+    A constant, and a cast that also changes width, `(t)(int32_t)e`, are
+    not."""
+    if is_constant(rhs):
+        return False
+    if ty(rhs) is not t:
+        return True
+    if rhs.op == 'cast':
+        inner = ty(rhs.k[0])
+        return is_int(inner) and inner is not t and inner.bits == 16
+    return False
+
+
+def logic_value(e):
+    """e is `!x`, `x && y` or `x || y`: under unary `-` or `~` with constant
+    operands, the BUG-012 shape."""
+    return (e.op == 'un' and e.a == '!') or (e.op == 'bin' and e.a in LOGIC)
+
+
+def is_constant(e):
+    """e names no object and calls nothing, so a compiler can fold it."""
+    return e.op == 'const' or (e.op in ('bin', 'un', 'cast', 'cond')
+                               and all(is_constant(k) for k in e.k))
+
+
+def const_jump(s):
+    """s jumps on a condition that folds, leaving what follows it
+    unreachable: with a declaring scope after it, the BUG-019 shape."""
+    if s.op == 'goto':
+        return s.e[0] is not None and is_constant(s.e[0])
+    return s.op == 'if' and is_constant(s.e[0]) and any(
+        x.op in ('ret', 'break', 'continue') for sub in s.b if sub is not None
+        for x in sub.stmts)
+
+
 def known_shapes(prog):
     """The features in prog.off whose bug shape the program contains anyway.
 
@@ -356,14 +457,22 @@ def known_shapes(prog):
     It uses this to refuse an edit that introduces a shape the program did not
     already have."""
     found = set()
+    # a loop's own counter step, `for (…; …; i++)` or `while (w++ < n)`, is in
+    # every program and is not one of the logged increment shapes
+    steps = set()
+    for b in all_blocks(prog):
+        for s in b.stmts:
+            if s.op == 'for' and s.e[2] is not None:
+                steps.add(id(s.e[2]))
+            elif s.op == 'while' and s.e[0].op == 'bin' and s.e[0].k[0].op == 'incdec':
+                steps.add(id(s.e[0].k[0]))
 
     def stored(rhs, d):
         if not is_int(d.t) or d.storage == 'global':
             return
-        if d.t.bits <= 16 and rhs.op == 'bin' and rhs.a in LOGIC:
+        if (d.t.bits <= 16 or d.storage == 'block') and rhs.op == 'bin' and rhs.a in LOGIC:
             found.add('logicinit')
-        if d.storage == 'block' and d.t.bits == 32 and rhs.op == 'const' \
-                and (rhs.a < 0 or (d.t is I32 and rhs.a >= 1 << 31)):
+        if d.storage == 'block' and d.t.bits == 32 and negative_constant(rhs, d.t):
             found.add('blockwideneg')
 
     def expr(e, root):
@@ -374,6 +483,8 @@ def known_shapes(prog):
             if is_int(lt) and e.a == '=':
                 if lv.op == 'var':
                     stored(rhs, lv.a)
+                    if lv.a.storage != 'global' and lt.bits == 16 and cross_type(rhs, lt):
+                        found.add('crosstypeasg')
             elif is_int(lt):
                 local = lv.op == 'var' and lv.a.storage != 'global'
                 if lv.op != 'var' and lt.bits < 32 and ty(rhs).bits == 32:
@@ -383,7 +494,9 @@ def known_shapes(prog):
                     found.add('widecasgbf')
                 if e.a == '<<=' and lt.bits == 8 and ty(rhs).bits == 8:
                     found.add('bytevarshl')
-                if e.a in ('/=', '%=') and is_bitfield(lv) and not lv.a.t.signed:
+                if e.a == '>>=' and lt is I8 and ty(rhs) is U16:
+                    found.add('bytesarcount')
+                if e.a in ('/=', '%=', '>>=') and is_bitfield(lv) and not lv.a.t.signed:
                     found.add('bfdivasg')
                 if e.a in ('/=', '%=') and lv.op == 'fld' and lt.bits == 32:
                     found.add('blockwidediv')
@@ -391,21 +504,30 @@ def known_shapes(prog):
                     found.add('structbytecasg')
                 if lv.op == 'var' and rhs.op == 'var' and rhs.a is lv.a:
                     found.add('selfand')
-                if local and lt is I32 and e.a == '+=' and rhs.op == 'const' and rhs.a == 1:
+                if local and lt.bits == 32 and e.a == '+=' and rhs.op == 'const' and rhs.a == 1 \
+                        and id(e) not in steps:
                     found.add('widelocalinc')
         elif op == 'incdec':
             lv = e.k[0]
             lt = ty(lv)
+            local = lv.op == 'var' and lv.a.storage != 'global'
             if is_int(lt) and lt.bits == 32:
                 if lv.op in ('idx', 'pidx') or (lv.op == 'fld' and lv.a.dims):
                     found.add('wideidxincdec')
-                if lv.op == 'var' and not e.a[1] and not root:
-                    found.add('widepostinc')
-                if lv.op == 'var' and lt is I32 and lv.a.storage != 'global' and e.a[0] == '++':
-                    found.add('widelocalinc')
+                if id(e) not in steps:
+                    if lv.op == 'var' and not e.a[1] and not root:
+                        found.add('widepostinc')
+                    if local and e.a[0] == '++':
+                        found.add('widelocalinc')
+            if is_int(lt) and lv.op == 'var' and not e.a[1] and not root \
+                    and id(e) not in steps:
+                found.add('postincvalue')
         elif op == 'un':
-            if e.a in ('-', '~') and e.k[0].op == 'un' and e.k[0].a == '!':
+            if e.a in ('-', '~') and logic_value(e.k[0]):
                 found.add('negnotconst')
+        elif op == 'bin':
+            if same_variable(e.k[0], e.k[1]):
+                found.add('selfoperand')
         elif op == 'call':
             if e.a.via_ptr and any(is_int(p.t) and ty(a) is not p.t
                                    for a, p in zip(e.k, e.a.params)):
@@ -425,11 +547,29 @@ def known_shapes(prog):
         for d in b.decls:
             decl(d)
         for s in b.stmts:
+            if const_jump(s):
+                found.add('constjump')
+            if nested_if_else(s):
+                found.add('nestedifelse')
+            if byte_arm(s):
+                found.add('bytearm')
             if s.op == 'for' and s.a is not None:
                 decl(s.a)
             for e in s.e:
                 if e is not None:
                     expr(e, True)
+
+    def returns(f, b):
+        for s in b.stmts:
+            if s.op == 'ret' and s.e and f.ret.bits == 8 and block_object(s.e[0]):
+                found.add('blockret')
+            for sub in s.b:
+                if sub is not None:
+                    returns(f, sub)
+
+    for f in prog.funcs:
+        if f.ret is not None and is_int(f.ret):
+            returns(f, f.body)
     return found & prog.off
 
 
@@ -897,6 +1037,9 @@ class Renderer:
                 self.block(body, out, ind + '    ')
                 if has_break:
                     out.append(ind + '    break;')
+            if out[-1].endswith(':'):
+                # a label needs a statement after it before C23
+                out.append(ind + '    ;')
             out.append(ind + '}')
         elif op in ('break', 'continue'):
             out.append('%s%s;' % (ind, op))
@@ -1017,6 +1160,7 @@ class Ctx:
         self.prot = set()
         self.used, self.banned = set(), set()
         self.loop = 0
+        self.in_if = 0
         self.nosfx = 0
         self.names = 0
         self.labels = 0
@@ -1056,7 +1200,8 @@ FEATURES = frozenset((
     'widecassign', 'bytevarshl', 'castsfx', 'widepostinc', 'structbytecasg', 'negnotconst',
     'bfdivasg', 'wideidxincdec', 'logicinit', 'blockwidediv', 'ptrcallconv',
     'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'blockptr', 'inittype',
-    'selfand', 'widecasgbf', 'widehelperparam'))
+    'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg',
+    'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
@@ -1079,6 +1224,15 @@ KNOWN_BUGS = {
     'selfand': 'BUG-017',
     'widecasgbf': 'BUG-018',
     'widehelperparam': 'BUG-020',
+    'postincvalue': 'BUG-021, BUG-023, BUG-024',
+    'duplabel': 'BUG-022',
+    'crosstypeasg': 'BUG-023',
+    'constjump': 'BUG-019',
+    'blockret': 'BUG-025',
+    'selfoperand': 'BUG-026',
+    'nestedifelse': 'BUG-027',
+    'bytesarcount': 'BUG-028',
+    'bytearm': 'BUG-029',
 }
 
 
@@ -1096,6 +1250,10 @@ class Gen:
     # ---- small helpers
 
     def mk(self, op, k=(), a=None, t=None):
+        if op == 'bin' and not self.on('selfoperand') and same_variable(k[0], k[1]):
+            # one variable is never both operands of an operator
+            self.prog.nid += 1
+            k = [k[0], E('const', (), 1, I16, self.prog.nid)]
         self.prog.nid += 1
         return E(op, k, a, t, self.prog.nid)
 
@@ -1349,8 +1507,7 @@ class Gen:
         if kind == 'un':
             op = r.choice(('-', '~', '!'))
             operand = sub()
-            if op in ('-', '~') and operand.op == 'un' and operand.a == '!' \
-                    and not self.on('negnotconst'):
+            if op in ('-', '~') and logic_value(operand) and not self.on('negnotconst'):
                 return operand
             return self.mk('un', [operand], op)
         if kind == 'cast':
@@ -1370,14 +1527,16 @@ class Gen:
         x = r.random()
         if x < 0.45:
             # with `widepostinc` off a 32-bit victim is only pre-incremented:
-            # its old value could reach a narrower type
-            prefix = r.random() < 0.5 or (d.t.bits == 32 and not self.on('widepostinc'))
+            # its old value could reach a narrower type. With `postincvalue`
+            # off nothing uses the value of a post-increment at all.
+            prefix = r.random() < 0.5 or not self.on('postincvalue') \
+                or (d.t.bits == 32 and not self.on('widepostinc'))
             op = r.choice(('++', '--'))
-            if d.t is I32 and not self.on('widelocalinc'):
+            if d.t.bits == 32 and not self.on('widelocalinc'):
                 op = '--'
             return self.mk('incdec', [lv], a=(op, prefix))
         if x < 0.75:
-            return self.mk('asg', [lv, sub()], '=')
+            return self.mk('asg', [lv, self.stored(sub(), d.t, d.storage)], '=')
         return self.compound(lv, sub(), r.choice(('+=', '-=', '^=', '|=', '&=', '>>=')))
 
     def gen_cond(self, c, depth):
@@ -1443,11 +1602,15 @@ class Gen:
         initialiser), steered round logged bugs whose feature is off."""
         if storage == 'global' or not is_int(t):
             return rhs
-        if not self.on('logicinit') and t.bits <= 16 and rhs.op == 'bin' and rhs.a in LOGIC:
+        if not self.on('logicinit') and (t.bits <= 16 or storage == 'block') \
+                and rhs.op == 'bin' and rhs.a in LOGIC:
             rhs.a = '|' if rhs.a == '||' else '&'
         if not self.on('blockwideneg') and storage == 'block' and t.bits == 32 \
-                and rhs.op == 'const' and (rhs.a < 0 or (t is I32 and rhs.a >= 1 << 31)):
-            rhs.a = -rhs.a if rhs.a < 0 and rhs.a != rhs.t.lo else 1
+                and negative_constant(rhs, t):
+            rhs = self.small(1, 1)
+        if not init and not self.on('crosstypeasg') and t.bits == 16 and cross_type(rhs, t):
+            # a cast that changes width as well as type keeps the value
+            rhs = self.mk('cast', [self.mk('cast', [rhs], t=I32)], t=t)
         return rhs
 
     def initialiser(self, c, t, expr, storage):
@@ -1480,7 +1643,7 @@ class Gen:
         if op != '=' and is_int(lt):
             if not self.on('selfand') and lv.op == 'var' and rhs.op == 'var' and rhs.a is lv.a:
                 rhs = self.small(1, 7)
-            if not self.on('widelocalinc') and lv.op == 'var' and lt is I32 \
+            if not self.on('widelocalinc') and lv.op == 'var' and lt.bits == 32 \
                     and lv.a.storage != 'global' and op == '+=' and rhs.op == 'const' \
                     and rhs.a == 1:
                 rhs = self.small(2, 2)
@@ -1488,7 +1651,7 @@ class Gen:
                     and lt.bits == 8:
                 op = '='
                 return self.mk('asg', [lv, rhs], op)
-            if not self.on('bfdivasg') and is_bitfield(lv) and op in ('/=', '%=') \
+            if not self.on('bfdivasg') and is_bitfield(lv) and op in ('/=', '%=', '>>=') \
                     and not lv.a.t.signed:
                 rhs = self.mk('bin', [clone(lv), rhs], op[:-1])
                 return self.mk('asg', [lv, rhs], '=')
@@ -1504,6 +1667,8 @@ class Gen:
                 rhs = self.mk('cast', [rhs], t=lt)
             if not self.on('bytevarshl') and op == '<<=' and lt.bits == 8 \
                     and ty(rhs).bits == 8:
+                rhs = self.mk('cast', [rhs], t=I16)
+            if not self.on('bytesarcount') and op == '>>=' and lt is I8 and ty(rhs) is U16:
                 rhs = self.mk('cast', [rhs], t=I16)
         return self.mk('asg', [lv, rhs], op)
 
@@ -1526,7 +1691,7 @@ class Gen:
         if lv is None:
             return
         op = self.rng.choice(('++', '--'))
-        if not self.on('widelocalinc') and lv.op == 'var' and ty(lv) is I32 \
+        if not self.on('widelocalinc') and lv.op == 'var' and ty(lv).bits == 32 \
                 and lv.a.storage != 'global':
             op = '--'
         indexed = lv.op in ('idx', 'pidx') or (lv.op == 'fld' and lv.a.dims)
@@ -1538,11 +1703,19 @@ class Gen:
     def st_if(self, c, depth, b):
         r = self.rng
         cond = self.gen_cond(c, min(depth, 2))
+        # with `nestedifelse` off an `if` inside an `if` gets no `else`
+        bare = c.in_if and not self.on('nestedifelse')
+        c.in_if += 1
         then = self.gen_block(c, depth - 1, r.randint(1, 3), decls=r.random() < 0.3)
         blocks = [then]
-        if r.random() < 0.45:
+        if r.random() < 0.45 and not bare:
             blocks.append(self.gen_block(c, depth - 1, r.randint(1, 2), decls=r.random() < 0.2))
-        b.stmts.append(S('if', [cond], blocks))
+        c.in_if -= 1
+        s = S('if', [cond], blocks)
+        if not self.on('bytearm') and byte_arm(s):
+            # keep the assignment, lose the other arm
+            del s.b[1:]
+        b.stmts.append(s)
 
     def loop_bound(self, c, b, n):
         """(bound, slack): a constant n, or a protected local set to a value in
@@ -1557,6 +1730,7 @@ class Gen:
         base = self.gen_expr(c, 1)
         value = self.mk('bin', [self.mk('bin', [base, self.small(3, 3)], '&'),
                                 self.small(n, n)], '+')
+        value = self.stored(value, t, 'local')
         b.stmts.append(S('expr', [self.mk('asg', [self.mk('var', a=d), value], '=')]))
         c.ints.append(d)
         return self.mk('var', a=d), 3
@@ -1569,7 +1743,9 @@ class Gen:
             c.ints.append(counter)
             c.counters.append(counter)
         c.loop += 1
+        outer, c.in_if = c.in_if, 0
         body = self.gen_block(c, depth - 1, r.randint(1, 3), decls=r.random() < 0.3)
+        c.in_if = outer
         c.loop -= 1
         c.release(mark)
         return body
@@ -1709,25 +1885,49 @@ class Gen:
         b.stmts.append(S('block', b=[self.gen_block(c, depth - 1, r.randint(1, 3),
                                                     decls=r.randint(1, 2))]))
 
+    def jump_cond(self, c):
+        """The condition of a conditional jump, or None when only one that
+        folds to a constant could be made and `constjump` is off."""
+        for _ in range(8):
+            cond = self.gen_cond(c, 1)
+            if self.on('constjump') or not is_constant(cond):
+                return cond
+        return None
+
     def st_brk(self, c, depth, b):
-        cond = self.gen_cond(c, 1)
+        cond = self.jump_cond(c)
+        if cond is None:
+            return self.st_assign(c, depth, b)
         inner = Block()
         inner.stmts.append(S(self.rng.choice(('break', 'continue'))))
         b.stmts.append(S('if', [cond], [inner]))
 
+    def returned(self, fn, e):
+        """e as the operand of `return` in fn. With `blockret` off a
+        nested-block object returned to an 8-bit type goes through a cast."""
+        if not self.on('blockret') and fn.ret.bits == 8 and block_object(e):
+            return self.mk('cast', [e], t=fn.ret)
+        return e
+
     def st_ret(self, c, depth, b):
         if c.fn.ret is None or not is_int(c.fn.ret):
             return
-        cond = self.gen_cond(c, 1)
+        cond = self.jump_cond(c)
+        if cond is None:
+            return self.st_assign(c, depth, b)
         inner = Block()
         c.fresh()
-        inner.stmts.append(S('ret', [self.gen_expr(c, min(depth, 2))]))
+        inner.stmts.append(S('ret', [self.returned(c.fn, self.gen_expr(c, min(depth, 2)))]))
         b.stmts.append(S('if', [cond], [inner]))
 
     def st_goto(self, c, depth, b):
+        cond = self.jump_cond(c)
+        if cond is None:
+            return self.st_assign(c, depth, b)
         c.labels += 1
-        label = 'L%d' % c.labels
-        b.stmts.append(S('goto', [self.gen_cond(c, 1)], a=label))
+        # a label name is unique in the program unless `duplabel` is on
+        label = 'L%d' % c.labels if self.on('duplabel') else '%s_L%d' % (c.fn.name, c.labels)
+        b.stmts.append(S('goto', [cond], a=label))
         for _ in range(self.rng.randint(1, 2)):
             self.st_assign(c, depth - 1, b)
         b.stmts.append(S('label', a=label))
@@ -1874,8 +2074,9 @@ class Gen:
         local = [d for d in simple if d.storage != 'global' and not d.addr_taken]
         x = r.random()
         if x < 0.5 and simple:
-            b.stmts.append(S('expr', [self.mk('asg', [self.mk('var', a=r.choice(simple)),
-                                                     call], '=')]))
+            dst = r.choice(simple)
+            b.stmts.append(S('expr', [self.mk('asg', [
+                self.mk('var', a=dst), self.stored(call, dst.t, dst.storage)], '=')]))
         elif x < 0.7 and local:
             op = r.choice(('+=', '^=', '-=', '|='))
             b.stmts.append(S('expr', [self.mk('asg', [self.mk('var', a=r.choice(local)),
@@ -1884,7 +2085,10 @@ class Gen:
             other = self.mk('var', a=r.choice(local)) if local and r.random() < 0.5 \
                 else self.const()
             cond = self.mk('bin', [call, other], r.choice(CMP))
-            b.stmts.append(S('if', [cond], [self.gen_block(c, depth - 1, r.randint(1, 2))]))
+            c.in_if += 1
+            then = self.gen_block(c, depth - 1, r.randint(1, 2))
+            c.in_if -= 1
+            b.stmts.append(S('if', [cond], [then]))
         else:
             b.stmts.append(S('expr', [call]))
 

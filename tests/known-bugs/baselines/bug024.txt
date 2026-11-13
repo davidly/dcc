@@ -1,0 +1,4 @@
+signed char 2 1
+unsigned char 0 0
+compared 0 2
+while loop 0 0

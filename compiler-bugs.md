@@ -25,26 +25,36 @@ has been fixed by this work; this file is the log.
 | [BUG-002](#bug-002) | #223 | wrong result | `unsigned char` local `<<=` an `unsigned char` variable is not truncated on return |
 | [BUG-003](#bug-003) | #224 | wrong result | `++`/`--` on a 32-bit array element is done in 16 bits |
 | [BUG-004](#bug-004) | #225 | wrong result | 16-bit local set from `&&`/`\|\|`, stored to a 32-bit lvalue, leaves a garbage high word |
-| [BUG-006](#bug-006) | #226 | wrong result | `/=` and `%=` on an unsigned bit-field |
+| [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-007](#bug-007) | #227 | rejects valid C, or crashes | Indirect call with a nested-block local argument that needs converting |
 | [BUG-008](#bug-008) | #228 | rejects valid C | Negative constant assigned to a 32-bit nested-block local |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-010](#bug-010) | #230 | rejects valid C | Cast or narrowing return of a 32-bit post-increment or post-decrement |
 | [BUG-011](#bug-011) | #231 | rejects valid C | Compound assignment to an element of a byte array inside a struct |
-| [BUG-012](#bug-012) | #232 | rejects valid C | Unary `-` or `~` applied to `!` of a constant |
+| [BUG-012](#bug-012) | #232 | rejects valid C | Unary `-` or `~` applied to `!`, `&&` or `\|\|` of constants |
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-014](#bug-014) | #234 | rejects valid C | 32-bit local with two definitions, incremented, stored to a global |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
 | [BUG-017](#bug-017) | #237 | wrong result | Parameter `x &= x` returned through a widening cast gives 0 |
 | [BUG-018](#bug-018) | #238 | rejects valid C | 32-bit value compound-assigned to a bit-field or to an element of a 16-bit array member |
-| [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break` or `goto` |
+| [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
 | [BUG-021](#bug-021) | #241 | wrong result | `x++`/`x--` yields the new value for a 16-bit local assigned from a local array element |
+| [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
+| [BUG-023](#bug-023) | #243 | wrong result | `if (x++ > K) x = v;` leaves `x` as 1 when not taken (local assigned from another type) |
+| [BUG-024](#bug-024) | #244 | wrong result | `if (x++)` in a loop tests the incremented value (8-bit local, later `do … while`) |
+| [BUG-025](#bug-025) | #245 | wrong result | `return x;` of a nested-block object is not converted to an 8-bit or 32-bit return type |
+| [BUG-026](#bug-026) | #246 | wrong result | `d = a - b; return d * d;`: the second operand is read from an unallocated stack slot |
+| [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
+| [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
+| [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
 
-Nineteen are open: nine give wrong results with no diagnostic, one hangs,
-and nine stop the compile (BUG-007 can instead compile and crash). BUG-003,
-BUG-013 and BUG-016 are the ones most likely to be hit by ordinary code.
+Twenty-seven are open: sixteen give wrong results with no diagnostic, one
+hangs, nine stop the compile (BUG-007 can instead compile and crash), and
+one (BUG-022) turns a compile error into a broken program. BUG-026 is the
+one most likely to be hit by ordinary code, then BUG-003, BUG-013, BUG-016
+and BUG-025.
 
 Two more were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -115,22 +125,40 @@ s.m1 = l;            /* uint32_t m1: want 00000001, dcc xxxx0001 (e.g. 09f90001)
 
 - Wrong with variable or constant operands, `&&` or `||`, and a 32-bit
   member, array element or global as the destination.
+- The same garbage high word appears when `&&` or `||` is assigned straight
+  to a 32-bit local declared in a nested block:
+  `{ int32_t b = 0; b = ((--x) || 1); g = b; }` gives `00010001`. That is
+  correct with the local at function scope, as an initialiser
+  (`int32_t b = (--x) || 1;`), and for `!` or a comparison.
 - Correct: `l = 1`; `l = one`; `s.m1 = one || zero` stored directly.
 - Commit `f00e062e` ("Widen && and || results converted to long or float")
   fixed a neighbouring shape.
 
 ## BUG-006
 
-**`/=` and `%=` on an unsigned bit-field store the wrong value.**
+**`/=`, `%=` and `>>=` on an unsigned bit-field store the wrong value when
+the field's top bit is set.** The field is sign-extended from its own width,
+as if it were a signed bit-field, before the operation.
 
 ```c
 struct S { uint16_t m2 : 11; uint16_t m5 : 5; } s = { 1148, 18 };
-s.m5 %= 7;         /* want 4,    dcc 2   */
-s.m5 /= 21930;     /* want 0,    dcc 2   */
-s.m2 %= 21930;     /* want 1148, dcc 296 */
+s.m5 %= 7;         /* want 4,    dcc 2    */
+s.m5 /= 21930;     /* want 0,    dcc 2    */
+s.m2 %= 21930;     /* want 1148, dcc 296  */
+s.m5 >>= 1;        /* want 9,    dcc 25   */
+s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
 ```
 
-- Correct: `s.m5 = s.m5 % 7`; `+=`; `%=` on a signed bit-field.
+- Every wrong value is what sign extension gives. 18 in 5 bits is `10010`,
+  which sign-extends to `0xfff2` (65522): 65522 % 7 is 2, 65522 / 21930 is 2,
+  and `0xfff2 >> 1` done arithmetically is `0xfff9`, 25 in 5 bits.
+- Wrong for a field of any width, including all 16 bits
+  (`uint16_t a : 16` holding `0x8421`: `a >>= 3` gives `0xf084`), in a
+  global or local struct and through a pointer (`p->a >>= 3`), and when the
+  result is used (`r = (s.a >>= 3)`).
+- Correct: the same statements when the field's top bit is clear;
+  `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
+  (their low bits do not depend on the extension); a signed bit-field.
 
 ## BUG-007
 
@@ -231,15 +259,19 @@ p->name[i] |= 0x80;
 
 ## BUG-012
 
-**Unary `-` or `~` applied to `!` of a constant is rejected.** `DCC-E1002`.
+**Unary `-` or `~` applied to `!`, `&&` or `||` of constants is rejected.**
+`DCC-E1002`.
 
 ```c
 r = -(!(-128));
 r = ~(!15);
 r = -(!0);
+r = ~(1 || 2);
+if (n > (~(1 && 2))) r = 1;
 ```
 
-- Accepted: `-(!p)` and `~(!p)` with a variable; `r = !(-128); r = -r;`.
+- Accepted: `-(!p)`, `~(!p)` and `~(p || 2)` with a variable;
+  `r = !(-128); r = -r;`; `~(3 > 2)`; `!(1 || 2)`; `(1 || 2) + 1`.
 
 ## BUG-013
 
@@ -263,7 +295,7 @@ if ((sel ? -21931 : s.m1) > 1)   /* false; dcc takes the branch */
 
 ## BUG-014
 
-**A signed 32-bit local that has two reaching definitions, is incremented by
+**A 32-bit local that has two reaching definitions, is incremented by
 one and is then stored to a global stops the compile.**
 `dcc: fatal: missing direct MIR named-home offset`.
 
@@ -274,9 +306,12 @@ l++;                 /* also ++l, l += 1, l = l + 1, g = ++l */
 g = l;
 ```
 
-- The second definition can come from `if`, `switch` or a `goto`.
-- Accepted: `--l`; `l += 2`; a `uint32_t` local; storing to an array element
-  or a local; a local with a single definition.
+- The second definition can come from `if`, `switch`, a `goto` or a loop
+  (`do { g = ++l; } while (…);`).
+- It also fails for a `uint32_t` local stored to a `uint32_t` global.
+- Accepted: `--l`; `l += 2`; storing to an array element or a local; storing
+  through a conversion (`g = (int32_t)u;` with a `uint32_t u`); a local with a
+  single definition.
 
 ## BUG-015
 
@@ -386,10 +421,13 @@ if (sel) {
 
 - Fails after `return`, `break` and `goto`, inside `if`, `else`, `for`,
   `while` and `switch` bodies.
+- It also fails when the jump is conditional on a constant that is true,
+  which leaves the same code unreachable: `if (7) break;`, `if (1) return 5;`,
+  `if ((0 + 7) >= (-128)) continue;`, `if (0) { } else { break; }`.
 - Accepted: the same dead code at function scope (not inside a nested
   block); dead code with no declaration (`return 1; { low += 1; }`); a
   `for` loop whose counter is declared at function scope; a conditional jump
-  (`if (sel) continue;`).
+  on a variable (`if (sel) continue;`, `if (1 || sel) break;`).
 - Dead code like this is rare in hand-written programs, so this is low
   priority; it is still valid C.
 
@@ -450,6 +488,301 @@ static uint16_t f(void)
   cause is probably shared state (a slot or register), not the increment
   itself.
 
+## BUG-022
+
+**When a label name used in one function is reused inside a nested block of
+a later function, dcc stops reporting `MIR emission is required` for the
+functions after it.** It exits 0, and the program hangs or restarts in a
+loop when the function it could not emit is called.
+
+```c
+static uint16_t first(void)  { L1:; return 1; }
+static uint16_t second(void) { { L1:; } return 2; }       /* same name, nested block */
+static int8_t third(void)    { { int32_t b = 0; b = -8305; low = (uint16_t)b; } return 3; }
+```
+
+`third` is a function dcc cannot emit (BUG-008). Without `first` and
+`second` the compile stops with the fatal error. With them it succeeds and
+the program fails at run time.
+
+- Needs the same label name in both functions and the second one inside a
+  nested block. With the second label renamed, or at function scope, the
+  fatal error is reported as usual.
+- Shown with the functions of BUG-008 and BUG-019. Functions that fail with
+  `missing direct MIR named-home offset` (BUG-014) still stop the compile.
+- This only matters while some function cannot be emitted, but then it turns
+  a compile error into a silently broken program.
+
+## BUG-023
+
+**A 16-bit local that was assigned a value of a different type and is then
+updated loses the assigned value when a branch or loop follows.** The update
+is applied to 0 or to a stale value instead.
+
+```c
+static uint16_t f(int16_t n)
+{
+    uint16_t l;
+    l = n;                  /* 300 */
+    if (l++ > 400)          /* false */
+        l = 0;
+    return l;               /* want 301, dcc 1 */
+}
+
+short l = 0;
+l = big;                    /* uint16_t big = 0xbeef, so l = -16657 */
+l++;
+for (i = 5; i > 0; i--) {
+    if (zero) continue;
+    l++;
+}
+g = l;                      /* want -16651, dcc 6 (or another unrelated value) */
+```
+
+- First shape: wrong when the local is `uint16_t` assigned from an `int16_t`
+  parameter or global, from `(uint8_t)n` or from `n + 0`, and when it is
+  `int16_t` assigned from a `uint16_t`; for `++` and `--`; for `>`, `>=`, `<`
+  and `==`. Correct with `++l`, an `else` branch, a `while` instead of `if`,
+  `l++;` as a separate statement, or the branch taken.
+- Second shape: wrong for `l++`, `++l`, `l += 1`, `l = l + 1` and `l--`
+  before the loop, with any update of `l` inside it. Correct without the
+  update before the loop, or without the conditional `continue`.
+- Both are correct when the local was assigned a value of its own type
+  (`uint16_t` from `uint16_t`), and for 8-bit and 32-bit locals.
+- The dependence on the assigned value's type suggests the same root as
+  BUG-016.
+
+## BUG-024
+
+**`if (x++)` inside a loop tests the incremented value instead of the old
+one**, for an 8-bit local that a later `do … while` loop also modifies.
+
+```c
+int8_t l = 0, i;
+short d = 0;
+for (i = 0; i < 3; i++) {
+    if (l++)                /* l is 0, 1, 2: true twice; dcc: three times */
+        hits++;
+}
+do { l--; } while (++d < 2);
+```
+
+- Wrong for `signed char` and `unsigned char`; for `if (l++)` and
+  `if (l++ != 0)`; with the first loop a `for` or a `while`; with `l--`,
+  `l -= 1` or `l++` in the later loop.
+- Correct: a 16-bit local; no later `do … while` (a plain `l--;`, or a
+  `while` loop, after the first loop is fine); the `if` not in a loop.
+- BUG-021 is another case where a post-increment yields the new value.
+
+## BUG-025
+
+**`return x;`, where `x` is an object declared in a nested block, is not
+converted to the function's return type.** To an 8-bit return type it is
+not truncated (the caller receives all 16 bits); to a 32-bit return type it
+is not widened (the high word is whatever was in the register).
+
+```c
+static uint8_t f(void)
+{
+    {
+        int16_t b = 300;
+        return b;            /* want 44 (300 truncated to 8 bits), dcc 300 */
+    }
+}
+static int8_t g(void) { { uint8_t b = 200; return b; } }   /* want -56, dcc 200 */
+static uint32_t w(void) { { int16_t b = 7; return b; } }   /* want 7, dcc e.g. 0x012c0007 */
+```
+
+- 8-bit return type (`uint8_t`, `int8_t`, plain `char`): wrong for a
+  nested-block `int16_t`, `uint16_t`, `int32_t` (the low 16 bits are
+  returned) and an 8-bit local of the other signedness.
+- 32-bit return type (`int32_t`, `uint32_t`): wrong for a nested-block
+  `int8_t`, `uint8_t`, `int16_t` and `uint16_t`. A nested-block `int32_t`
+  is correct.
+- Also wrong for a `static` local, an array element (`return b[0];`) and a
+  struct member (`return s.m;`); for `return (b);`, `return b++;` and
+  `return b = n;`.
+- The nested scope can be a plain block, the body of an `if`, `while`,
+  `do`, `for` or `switch`, or a `for` initialiser
+  (`for (int16_t b = 300; …) return b;`).
+- Correct: a local declared at function scope, even when the `return` is
+  inside a nested block; a parameter; `return (uint8_t)b;`, `return b + 1;`,
+  `return -b;`, `return +b;`, `return n ? b : 1;`, `return *p;`,
+  `return (int32_t)b;`, `return b + 0;`; a 16-bit return type; copying to a
+  function-scope local and returning that.
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+- Like BUG-007, BUG-008 and BUG-015 it depends on the object being declared
+  in a nested block.
+
+## BUG-026
+
+**A variable that is assigned a computed value and is then, in the next
+statement, both operands of one binary operator is read from a stack slot
+the function never allocates.** The result is garbage.
+
+```c
+int sq(int a, int b)
+{
+    int d = a - b;
+    return d * d;            /* sq(10, 1) is 81 and sq(20, 2) is 324; dcc returned 0 and 16578 */
+}
+```
+
+dcc emits, for `sq`:
+
+```
+    push ix
+    ld ix,0
+    add ix,sp          ; no frame is allocated
+    ...
+    sbc hl,de          ; a - b
+    push hl            ; first operand: forwarded
+    ld l,(ix-10)       ; second operand: read from below the stack pointer
+    ld h,(ix-9)
+    ex de,hl
+    pop hl
+    call __mulu
+```
+
+- Wrong for a local with an initialiser (`int d = a - b;`) or assigned
+  (`d = a - b;`), and for a parameter (`a = a ^ b; return a - a;`); assigned
+  from an expression or from a global (`a = g; return a + a;`).
+- Wrong for `+ - * & | ^ << >> == != < > <= >=`; in `return d * d;`,
+  `g = d + d;`, `d = d * d;`, `return (d + d) * 2;`, `return d * d + 1;` and
+  `if (d + d > 3)`; when the second operand is a copy
+  (`int e = d; return d * e;`). A `long` local is wrong for `*`, `<<` and
+  `>>`.
+- `int`, `unsigned`, `short`, `int16_t` and `uint16_t` behave the same, in
+  `static` and external functions.
+- Correct: `d / d`, `d % d`, `d && d`, `d || d`; a different second operand
+  (`d * a`, `d * (d + 1)`, `d + a + d`, `d + d + d`); another statement
+  between the assignment and the use (`int d = a - b; calls++; return d * d;`);
+  `int d = a;` or `int d = 7;` (nothing computed); a `char` local; a
+  `register` local; another initialised local declared first
+  (`int t = 1; int d = a - b; return d * d + t;`).
+- The selected emitter is `spilled-scalar-cfg`, which reports `frame=0
+  slots=0` for `sq` (`DCC_MIR_COST_REPORT=1`).
+- Not a regression: the v3.6.0 compiler (`20290235`) emits the same code.
+- BUG-017 (`x &= x` on a parameter) also has one variable as both operands
+  and may be the same defect.
+
+## BUG-027
+
+**A 16-bit local that is assigned in an `if … else` nested inside another
+`if`, and then updated, loses the assignment when a loop follows.** The value
+merged from the two arms is never stored; the update is applied to the old
+value.
+
+```c
+int f(int n)
+{
+    int l = 0, i;
+    if (one) {
+        if (one) { l = n; } else { }
+        l++;
+    }
+    for (i = 0; i < 2; i++)
+        seen = l;
+    return l;                /* f(9): want 10, dcc 1 */
+}
+```
+
+dcc emits, after the inner `if … else`:
+
+```
+L15:
+    ld l,(ix+4)        ; l = n: the value is left in HL
+    ld h,(ix+5)
+L5:
+    inc (ix-2)         ; l++ in place on l's slot, which still holds 0
+    jp nz, L16
+    inc (ix-1)
+```
+
+- Wrong for `l++`, `++l`, `l--`, `l += 2` and `l = l + 1`; with the
+  assignment in the `if` arm, the `else` arm or both
+  (`if (c) l = n; else l = 2;`); with an empty or a non-empty `else`; when the
+  outer `if` has an `else` of its own; for a local and for a parameter;
+  assigned a variable or a constant; with constant or variable conditions.
+- What follows can be a `for` or `while` loop that reads the local, or a
+  conditional expression (`wide = (n ? x : 1);`).
+- Correct: no outer `if`, or a plain block or a loop in its place; the inner
+  `if` without an `else`; `l = c ? n : l;` or a `switch` in place of the
+  inner `if … else`; nothing but `return l;` after it; an `unsigned char` or
+  `long` local.
+- The selected candidate is `spilled-phi-slot` (`DCC_MIR_COST_REPORT=1`).
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+- The symptom is BUG-023's (an update applied to a stale value), but nothing
+  here is assigned from another type, so it is logged separately.
+
+## BUG-028
+
+**`>>=` on a signed 8-bit object with a count of type `unsigned int` shifts
+logically instead of arithmetically.** The left operand is promoted to
+`int`, which is signed, so the count's type must not matter.
+
+```c
+signed char g = -34;
+unsigned n = 11;
+g >>= n;                 /* want -1, dcc 31 */
+g >>= 11u;               /* want -1, dcc 31 */
+```
+
+dcc sign-extends `g` to 16 bits and then shifts it with `srl h` / `rr l`
+(`sra h` is needed), so zeros come in at the top: `0xffde >> 11` is `0x1f`.
+
+- Wrong for a global, a local, an array element (`a[7] >>= 11u;`) and
+  through a pointer; with the count a constant (`11u`, `(uint16_t)11`,
+  `((uint16_t)20155) & 15`) or an `unsigned int` variable.
+- The result only differs for counts 9 to 15: for 1 to 8 the low 8 bits of
+  the logical and the arithmetic shift are the same.
+- Correct: a count of type `int`, `unsigned char` or `unsigned long`;
+  `g = g >> n;`; a 16-bit or 32-bit left operand; `<<=`.
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+- Low priority: shifting an 8-bit value right by more than 8 is unusual.
+
+## BUG-029
+
+**An 8-bit local is assigned in one arm of an `if … else` and another
+variable in the other arm; when the two are then combined, with the 8-bit
+local cast or negated, the other variable's value is lost.** On the path
+that assigned the 8-bit local, the other operand becomes a copy of it (or 0).
+
+```c
+static uint16_t f(uint16_t x)
+{
+    int8_t l = 0;
+    if (sel) { x = 1; } else { l = 100; }
+    return (uint16_t)((int16_t)l - x);   /* sel 0, x 32767: want 32869, dcc 0 (100 - 100) */
+}
+```
+
+dcc emits (`x` should be in DE at `L4`):
+
+```
+L8:                    ; sel != 0
+    ld de,1            ; x = 1
+    jp L4
+L3:                    ; else
+    ld hl,100          ; l = 100
+    push hl
+    pop de             ; ... and DE, the home of x, is overwritten with it
+L4:
+    or a
+    sbc hl,de          ; l - x
+```
+
+- Wrong for `(int16_t)l - x`, `(int16_t)l + x`, `(uint8_t)l - x`, `-l - x`
+  and `g = (int16_t)l; return g - x;`; for `int8_t`, `uint8_t` and `char`;
+  when the other variable is a parameter, a 16-bit local or another 8-bit
+  local; whichever arm assigns which; when one arm assigns both
+  (`if (sel) { c = '-'; x = 5; } else { c = '+'; } return (int)c + x;`).
+- Correct: no cast (`l - x`); `(int32_t)l - x`; the operands the other way
+  round (`x - (int16_t)l`); `&`; a 16-bit `l`; an `if` with no `else`; both
+  arms assigning only `l`; a `switch` or `?:` in place of the `if … else`.
+- The selected emitter is `homed-scalar-cfg` (`DCC_MIR_COST_REPORT=1`).
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+
 ---
 
 ## Fixed upstream
@@ -472,3 +805,10 @@ they were reported. Their reproducers now pass.
   (`-x -a:400 6502FUN.HEX`) runs past 30 s in both peep modes. That variable
   is diagnostic-only, so this is latent at most, and it has not been
   investigated. It was observed at `aa9b2f1c` and not rechecked since.
+- **A module larger than 64K is not diagnosed as such.** Without `dccpeep`,
+  a 1,100-line generated program whose code passes 64K assembles with
+  `No Fatal error(s)` and then fails in the linker with
+  `l80c: module T: code range 2853..2854 out of bounds (segment size 2853)`:
+  the assembler's location counter appears to wrap. With `dccpeep` the same
+  program gets the clear `program too large: extends past 0xFFFF`. This is a
+  confusing message for a real limit, not wrong code, and is not reported.

@@ -95,9 +95,11 @@ def check(name, args):
     out, err = host_output(source, work, ['-O2'], args.timeout)
     if out is not None:
         # unsequenced modifications and missing returns are undefined but
-        # invisible to the sanitizers; clang diagnoses them at compile time
+        # invisible to the sanitizers; clang diagnoses them at compile time.
+        # C23-only syntax is not something dcc has to accept
         lint = subprocess.run(['clang', '-std=gnu99', '-fsigned-char', '-fsyntax-only',
                                '-Wno-everything', '-Werror=unsequenced', '-Werror=return-type',
+                               '-Werror=c23-extensions',
                                str(source)], capture_output=True, text=True)
         if lint.returncode:
             out, err = None, 'not well defined: ' + lint.stderr.strip().splitlines()[0][-150:]

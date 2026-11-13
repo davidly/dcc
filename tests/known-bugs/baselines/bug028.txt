@@ -1,0 +1,6 @@
+array element -1
+global -1
+local -1
+pointer -1
+int count -1
+16-bit object -1

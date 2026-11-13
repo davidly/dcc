@@ -84,7 +84,8 @@ through a checking helper, and the driver repairs the operations that trip,
 or drops the program. A program is used only when
 
 - the checked build, under ASan and UBSan, reports nothing;
-- clang finds no unsequenced modification and no missing `return`; and
+- clang finds no unsequenced modification, no missing `return` and no syntax
+  that is only valid from C23; and
 - `-O0`, `-O2`, the sanitized build and the checked build all print the same.
 
 So a difference from dcc is a dcc defect, not a porting difference.
@@ -106,10 +107,15 @@ python3 scripts/clang-oracle-fuzz.py --list-configs
   `compiler-bugs.md`, so a run reports new failures instead of the same ones
   again. `KNOWN_BUGS` in `clang_oracle_gen.py` maps each such form to its
   entry; delete a line when its bug is fixed. `--off` also takes individual
-  generator features (`-h` lists them) to narrow a search by hand.
+  generator features (`-h` lists them) to narrow a search by hand. A program
+  whose undefined-behaviour repair rebuilt one of those forms is dropped and
+  counted as `INVALID`.
 - Failures are reported as `COMPILE` (dcc rejects the program), `VERIFY` (dcc
   prints a MIR verifier diagnostic but still exits 0), `MISMATCH`, `RUN-HANG`
-  or `BUILD-HANG`. A failing seed keeps `t.c`, `t.expected` and each failing
+  or `BUILD-HANG`. A program that only overflows its stack, does not link
+  into 64K or reports `out of ram` at start-up has met a limit of the target,
+  not a defect; it is counted as `limit-only`. A failing seed keeps `t.c`,
+  `t.expected` and each failing
   config's output under `build/clang-oracle-fuzz/<seed>`. An output line is a
   call number and the returned value, or 0x4000 plus the call number and a
   checksum of every global after that call.
