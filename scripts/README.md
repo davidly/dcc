@@ -160,6 +160,21 @@ python3 scripts/run-known-bugs.py bug003 --dcc path/to/another/dcc
 python3 scripts/run-known-bugs.py --update bug022    # write a new baseline from clang
 ```
 
+## `bug-issue-body.py`
+
+Writes the GitHub issue for an entry in `compiler-bugs.md`: the entry's text,
+the reproducer from `tests/known-bugs/`, the build commands, the host
+compiler's output (checked against the baseline) and what dcc does now, with
+and without `dccpeep`. The title comes from the entry's summary-table row and
+cross-references become issue links through the table's Issue column, so the
+row must exist first. Bodies go to `build/bug-issues/bugNNN.md`; `--create`
+opens the issue with `gh`.
+
+```sh
+python3 scripts/bug-issue-body.py bug054
+python3 scripts/bug-issue-body.py bug054 --create
+```
+
 ## `mir-migration-census.py`
 
 Measures generated MIR selection across `tests/*.c` and compares two snapshots
