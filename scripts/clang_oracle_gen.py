@@ -469,6 +469,12 @@ def const_jump(s):
         for x in sub.stmts)
 
 
+def has_block_wide(e):
+    if e.op == 'var':
+        return e.a.storage == 'block' and is_int(e.a.t) and e.a.t.bits == 32
+    return any(has_block_wide(k) for k in e.k)
+
+
 def known_shapes(prog):
     """The features in prog.off whose bug shape the program contains anyway.
 
@@ -548,9 +554,6 @@ def known_shapes(prog):
             if is_int(lt) and lv.op == 'var' and not e.a[1] and not root \
                     and id(e) not in steps:
                 found.add('postincvalue')
-        elif op == 'cast':
-            if e.t is I16 and ty(e.k[0]) is U16:
-                found.add('blockcast')
         elif op == 'un':
             if e.a in ('-', '~') and (logic_value(e.k[0]) or (
                     e.k[0].op != 'const' and is_constant(e.k[0]))):
@@ -558,6 +561,10 @@ def known_shapes(prog):
         elif op == 'bin':
             if same_variable(e.k[0], e.k[1]):
                 found.add('selfoperand')
+            for i in (0, 1):
+                c, o = e.k[i], e.k[1 - i]
+                if c.op == 'cast' and c.t is I16 and ty(c.k[0]) is U16 and has_block_wide(o):
+                    found.add('blockcast')
             if const_div_zero(e):
                 found.add('constdivzero')
         elif op == 'call':
@@ -1314,9 +1321,13 @@ class Gen:
             # the checking layer only repairs a division that runs
             self.prog.nid += 1
             k = [k[0], E('const', (), 1, I16, self.prog.nid)]
-        if op == 'cast' and not self.on('blockcast') and t is I16 and ty(k[0]) is U16:
-            # a narrowing cast of an unsigned 16-bit value goes through 32 bits
-            k = [self.mk('cast', [k[0]], t=I32)]
+        if op == 'bin' and not self.on('blockcast'):
+            for i in (0, 1):
+                c = k[i]
+                if c.op == 'cast' and c.t is I16 and ty(c.k[0]) is U16 and has_block_wide(k[1 - i]):
+                    # compare and combine the unsigned value without the signed cast
+                    k = list(k)
+                    k[i] = self.mk('cast', [c.k[0]], t=I32)
         self.prog.nid += 1
         return E(op, k, a, t, self.prog.nid)
 
