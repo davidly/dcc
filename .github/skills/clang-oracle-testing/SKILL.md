@@ -156,12 +156,18 @@ A fix is accepted only when all of these hold:
    is what proves the facets listed under the entry are covered, not only
    the parked program.
 3. `python3 ./scripts/runall.py -mode=full -extended` is `SUCCESS`, and
-   `tests/perf_baselines.csv` is not regressed. Baselines are never moved
-   to accept a regression.
-4. The reproducer is promoted to `tests/<name>.c` with its baseline and a
-   `perf_baselines.csv` row, the entry in `compiler-bugs.md` is closed, and
-   the issue is closed from the fixing commit. Steps are in
-   `tests/known-bugs/README.md`.
+   no existing row of `tests/perf_baselines.csv` changes. Everything in
+   `tests/` compiles correctly today, so a fix must not alter their emitted
+   code; a changed row in either direction means the fix is wider than the
+   defect. Baselines are never moved to accept a regression.
+4. The reproducer is promoted to `tests/<name>.c` as a new unit test with
+   its baseline and a new `perf_baselines.csv` row, the entry in
+   `compiler-bugs.md` is closed, and the issue is closed from the fixing
+   commit. Steps are in `tests/known-bugs/README.md`.
+5. The fix keeps the output concise and fast: the narrowest change that
+   makes the wrong shape right, ideally emitting what the compiler already
+   emits for the neighbouring correct shape listed in the entry, not a
+   fallback to a slower or larger schedule.
 
 Related bugs are grouped by probable root cause in `fix-plan.md`; work one
 cluster per branch, and if the first fix in a cluster does not clear its

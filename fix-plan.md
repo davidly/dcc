@@ -26,10 +26,23 @@ and report; do not force unrelated defects into one change.
   2. The cluster's features are removed from `KNOWN_BUGS` and a 300-seed
      batch per affected generator with `--off known` is clean.
   3. `python3 ./scripts/runall.py -mode=full -extended` is `SUCCESS`, and
-     `tests/perf_baselines.csv` does not regress. Baselines are never moved
-     to accept a regression.
-  4. Reproducers are promoted to `tests/` (`tests/known-bugs/README.md`),
-     entries closed in `compiler-bugs.md`, issues closed from the commit.
+     **no existing row of `tests/perf_baselines.csv` changes**. Every
+     program in `tests/` compiles correctly today, so a fix for code that
+     is wrong must not alter the code emitted for code that is right. A
+     changed baseline, in either direction, is a sign that the fix is wider
+     than the defect; understand it before going on, and never move a
+     baseline to absorb a regression.
+  4. Reproducers are promoted to `tests/` (`tests/known-bugs/README.md`)
+     as **new** unit tests with **new** `perf_baselines.csv` rows measured
+     on the normal stack-check `runall.ps1` path, entries closed in
+     `compiler-bugs.md`, issues closed from the commit.
+- The goal is still concise, fast Z80. A fix is the narrowest change that
+  makes the wrong shape right, not a general fallback to a slower or larger
+  schedule. Compare peep and nopeep output for the reproducer before and
+  after, and prefer a fix that emits for the bad shape what the compiler
+  already emits for the neighbouring good shape (each entry lists them). If
+  the only correct fix costs code in the new tests, note the cost in the
+  pull request; it must never cost code in the existing ones.
 - Run the regular MIR gates for compiler changes
   (`DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1` strict runall, debug
   metadata tests when statement or scope boundaries move; see
