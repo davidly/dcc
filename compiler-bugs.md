@@ -348,6 +348,11 @@ signed char l2 = -66;
   `{ int32_t b = 0; out = b + ((int16_t)((uint16_t)a6[1])); }` with `a6[1]`
   holding -1 gives 65535, and `if (b >= ((int16_t)((uint16_t)a6[1])))` is
   not taken. Correct with `b` at function scope, or with one cast.
+  It is not about `a6`: `{ int32_t b = 0; if (((int16_t)g16) > b) r = 1; }`
+  with a `uint16_t g16` of 0x8000 takes the branch, as does
+  `b + ((int16_t)g16)` (32768, not -32768) and
+  `(int16_t)((uint16_t)(1 << (g1 & 15)))` with `g1` at 15 (seed 6006). The
+  `(int16_t)` of an unsigned 16-bit operand is lost.
 - A nested-block pointer to a `uint16_t` element with the top bit set is
   shifted and divided as signed (found by fuzzing at `83dc7a91`; seeds
   4245 and later): `{ uint16_t *q = &a2[1]; r = (*q) >> (g1 & 15); }` with

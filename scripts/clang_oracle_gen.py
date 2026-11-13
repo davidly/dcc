@@ -548,6 +548,9 @@ def known_shapes(prog):
             if is_int(lt) and lv.op == 'var' and not e.a[1] and not root \
                     and id(e) not in steps:
                 found.add('postincvalue')
+        elif op == 'cast':
+            if e.t is I16 and ty(e.k[0]) is U16:
+                found.add('blockcast')
         elif op == 'un':
             if e.a in ('-', '~') and (logic_value(e.k[0]) or (
                     e.k[0].op != 'const' and is_constant(e.k[0]))):
@@ -1248,7 +1251,7 @@ FEATURES = frozenset((
     'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'blockptr', 'inittype',
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
-    'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum'))
+    'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockcast'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
@@ -1284,6 +1287,7 @@ KNOWN_BUGS = {
     'blockwidecopy': 'BUG-031',
     'constdivzero': 'BUG-033',
     'peepsum': 'BUG-032',
+    'blockcast': 'BUG-015',
 }
 
 
@@ -1310,6 +1314,9 @@ class Gen:
             # the checking layer only repairs a division that runs
             self.prog.nid += 1
             k = [k[0], E('const', (), 1, I16, self.prog.nid)]
+        if op == 'cast' and not self.on('blockcast') and t is I16 and ty(k[0]) is U16:
+            # a narrowing cast of an unsigned 16-bit value goes through 32 bits
+            k = [self.mk('cast', [k[0]], t=I32)]
         self.prog.nid += 1
         return E(op, k, a, t, self.prog.nid)
 
