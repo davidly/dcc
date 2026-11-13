@@ -2458,8 +2458,26 @@ static int mir_lower_deferred_arm(int value, int conditional_type)
     return result;
 }
 
+/* Whether a compound assignment's rhs derives from a nested-block local, whose
+ * type its lowering can only assume. */
+static int mir_compound_rhs_deferred(const struct AstNode *rhs)
+{
+    if (rhs == NULL)
+        return 0;
+    if (rhs->deferred_types)
+        return 1;
+    /* A closed block's local no longer resolves; its load is typed later. */
+    return rhs->kind == AST_IDENT && mir_ident_symbol(rhs) == NULL;
+}
+
+/* The expression whose value its statement discards (an expression
+ * statement or a for init/step), so `++c;` and `c <<= n;` keep their
+ * established shapes. */
+static const struct AstNode *mir_discarded_expr;
+
 static int mir_lower_compound_value(int left, int right, int operation,
-                                    int target_type)
+                                    int target_type, int result_used,
+                                    int deferred_rhs)
 {
     struct MirInsn *insn;
     const struct MirInsn *right_definition;
@@ -2486,14 +2504,32 @@ static int mir_lower_compound_value(int left, int right, int operation,
             right = scaled;
         }
     } else if (operation == TOK_SHL || operation == TOK_SHR) {
-        right = mir_lower_shift_count(right, target_type);
+        /* A byte's shift is done in int and narrowed back. When the
+         * assignment's value is used it must be the narrowed one
+         * (`(unsigned char)(c <<= 5)`); a discarded one keeps its form. */
+        if (result_used && type_size(target_type) == 1 &&
+            type_ptr_depth(target_type) == 0) {
+            computation_type = promote_int_type(target_type);
+            left = mir_lower_conversion(left, computation_type);
+        }
+        right = mir_lower_shift_count(right, computation_type);
     } else {
+        int converted;
+
         right_definition = mir_mutable_definition(right);
         computation_type = common_arith_type(
             target_type, right_definition != NULL
                 ? right_definition->type : target_type);
-        left = mir_lower_conversion(left, computation_type);
-        right = mir_lower_conversion(right, computation_type);
+        /* With a nested-block rhs these conversions target an assumed type;
+         * mark them so repair retypes them with the operation. */
+        converted = mir_lower_conversion(left, computation_type);
+        if (deferred_rhs && converted != left)
+            mir_mutable_definition(converted)->deferred_operand_types = 1;
+        left = converted;
+        converted = mir_lower_conversion(right, computation_type);
+        if (deferred_rhs && converted != right)
+            mir_mutable_definition(converted)->deferred_operand_types = 1;
+        right = converted;
     }
     value = mir_new_value();
     insn = mir_emit(MIR_BINARY);
@@ -2504,12 +2540,25 @@ static int mir_lower_compound_value(int left, int right, int operation,
     insn->secondary_offset = computation_type;
     insn->immediate = operation;
     /* A nested-block local's type is unknown until repair (0 here). */
-    insn->deferred_operand_types = target_type == 0;
+    insn->deferred_operand_types = target_type == 0 || deferred_rhs;
+    /* Repair may widen the operation past the target (`(long)(a[i] -= kl)`),
+     * so a used value keeps an explicit narrowing even when the assumed
+     * types match. */
+    if (deferred_rhs && result_used && target_type != 0 &&
+        insn->type == target_type) {
+        int result = mir_new_value();
+        insn = mir_emit(MIR_UNARY);
+        insn->dst = result;
+        insn->src1 = value;
+        insn->type = target_type;
+        insn->immediate = 0;
+        return result;
+    }
     return mir_lower_conversion(value, target_type);
 }
 
 static int mir_lower_incdec(const struct AstNode *operand, int operation,
-                            int postfix)
+                            int postfix, int result_used)
 {
     struct MirInsn *insn;
     struct FieldDef *field = NULL;
@@ -2519,6 +2568,7 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     int new_value;
     int operand_type;
     int lvalue_type;
+    int narrow_result;
     long step = 1;
 
     if (operand == NULL)
@@ -2529,7 +2579,11 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     /* Recover the stored byte type without changing the established MIR
      * types and matcher shapes for word and pointer increments. */
     lvalue_type = mir_lvalue_type(operand);
-    if (type_size(lvalue_type) == 1)
+    /* A used value needs a type, or a long element's old value is read as
+     * a word (`v = q[i]--`). A word postfix keeps its established shape. */
+    if (type_size(lvalue_type) == 1 ||
+        (result_used && operand_type == 0 &&
+         (!postfix || type_size(lvalue_type) > 2)))
         operand_type = lvalue_type;
     if (operand->kind == AST_IDENT) {
         struct Sym *symbol = mir_ident_symbol(operand);
@@ -2565,6 +2619,11 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     insn->dst = one;
     insn->type = operand_type;
     insn->immediate = step;
+    /* A prefix ++/-- yields the stored value. For a nested-block local, whose
+     * type is unknown until repair, the operation is typed by repair and its
+     * value converted back to the local's type, so it wraps as the stored
+     * value does. Known types keep the form existing matchers expect. */
+    narrow_result = result_used && !postfix && operand_type == 0;
     new_value = mir_new_value();
     insn = mir_emit(MIR_BINARY);
     insn->dst = new_value;
@@ -2573,11 +2632,14 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     insn->type = operand_type;
     insn->secondary_offset = operand_type;
     insn->immediate = operation == TOK_INC ? '+' : '-';
+    insn->deferred_operand_types = narrow_result;
     if (operand->kind == AST_IDENT) {
         struct Sym *symbol = mir_ident_symbol(operand);
         insn->narrowed_for_counter_update =
             symbol != NULL && symbol->is_narrowed_for_counter;
     }
+    if (narrow_result && operand->kind == AST_IDENT)
+        new_value = mir_lower_ident_assignment_conversion(new_value, operand);
     if (operand->kind == AST_IDENT) {
         mir_emit_ident_store(operand, new_value);
     } else {
@@ -3337,7 +3399,8 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             }
         }
         if (node->op == TOK_INC || node->op == TOK_DEC) {
-            value = mir_lower_incdec(node->a, node->op, 0);
+            value = mir_lower_incdec(node->a, node->op, 0,
+                                     node != mir_discarded_expr);
             if (value >= 0)
                 return value;
         }
@@ -3390,7 +3453,8 @@ static int mir_lower_expr_impl(const struct AstNode *node)
         return mir_lower_simple_unary_chain(node);
     case AST_POSTFIX:
         if (node->op == TOK_INC || node->op == TOK_DEC) {
-            value = mir_lower_incdec(node->a, node->op, 1);
+            value = mir_lower_incdec(node->a, node->op, 1,
+                                     node != mir_discarded_expr);
             if (value >= 0)
                 return value;
         }
@@ -3785,13 +3849,20 @@ static int mir_lower_expr_impl(const struct AstNode *node)
                 insn->dst = left;
                 insn->src1 = address;
                 insn->type = node->a->type;
+                /* With a nested-block rhs, repair derives the operation from
+                 * this load, so it needs the field's type up front. */
+                if (field != NULL && field->bit_width == 0 &&
+                    mir_compound_rhs_deferred(node->b))
+                    insn->type = field->type;
                 if (field != NULL)
                     mir_set_field_memory(insn, field);
                 else
                     insn->memory_flags |= 8;
                 right = mir_lower_expr(node->b);
-                value = mir_lower_compound_value(left, right, binary_operator,
-                                                 target_type);
+                value = mir_lower_compound_value(
+                    left, right, binary_operator, target_type,
+                    node != mir_discarded_expr,
+                    mir_compound_rhs_deferred(node->b));
             }
             insn = mir_emit(MIR_STORE_INDIRECT);
             insn->src1 = address;
@@ -3832,8 +3903,10 @@ static int mir_lower_expr_impl(const struct AstNode *node)
                 mir_set_node_memory(insn, node->a);
                 insn->memory_size = type_size(target_type);
                 right = mir_lower_expr(node->b);
-                value = mir_lower_compound_value(left, right, binary_operator,
-                                                 target_type);
+                value = mir_lower_compound_value(
+                    left, right, binary_operator, target_type,
+                    node != mir_discarded_expr,
+                    mir_compound_rhs_deferred(node->b));
             }
             insn = mir_emit(MIR_STORE_INDIRECT);
             insn->src1 = address;
@@ -3856,8 +3929,10 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             right = mir_lower_expr(node->b);
             {
                 int target_type = mir_lvalue_type(node->a);
-            value = mir_lower_compound_value(left, right, binary_operator,
-                                             target_type);
+            value = mir_lower_compound_value(
+                left, right, binary_operator, target_type,
+                node != mir_discarded_expr,
+                mir_compound_rhs_deferred(node->b));
             }
             value = mir_lower_ident_assignment_conversion(value, node->a);
         }
@@ -4098,6 +4173,15 @@ static int mir_lower_expr_impl(const struct AstNode *node)
     return mir_emit_opaque_expr(node);
 }
 
+static void mir_lower_discarded_expr(const struct AstNode *node)
+{
+    const struct AstNode *saved = mir_discarded_expr;
+
+    mir_discarded_expr = node;
+    (void)mir_lower_expr(node);
+    mir_discarded_expr = saved;
+}
+
 static void mir_lower_stmt(const struct AstNode *node)
 {
     struct MirInsn *insn;
@@ -4123,7 +4207,7 @@ static void mir_lower_stmt(const struct AstNode *node)
         if (node->a != NULL && node->a->kind == AST_CALL &&
             mir_try_lower_inline_call_stmt(node->a))
             return;
-        (void)mir_lower_expr(node->a);
+        mir_lower_discarded_expr(node->a);
         return;
     case AST_DECL:
         insn = mir_emit(MIR_DECL_PLACEHOLDER);
@@ -4301,7 +4385,7 @@ static void mir_lower_stmt(const struct AstNode *node)
             if (node->a->kind == AST_DECL)
                 mir_lower_stmt(node->a);
             else
-                (void)mir_lower_expr(node->a);
+                mir_lower_discarded_expr(node->a);
         }
         mir.break_labels[mir.flow_depth] = end_label;
         mir.continue_labels[mir.flow_depth] = continue_label;
@@ -4317,7 +4401,7 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir_lower_stmt(node->d);
         mir_emit_label(continue_label);
         if (node->c != NULL)
-            (void)mir_lower_expr(node->c);
+            mir_lower_discarded_expr(node->c);
         mir_emit_jump(top_label);
         mir_emit_label(end_label);
         --mir.flow_depth;
