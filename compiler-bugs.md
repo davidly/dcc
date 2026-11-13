@@ -418,6 +418,12 @@ signed char l2 = -66;
   negated low word `0x0a3d` of `0x3f970a3d`), and `fg = (b = 1.0f) - 1;`
   stores 1.0f. `fg = (b = 1.18f);` and a function-scope `b` are right.
   Found by fuzzing (float generator, seeds 1490 and 1861).
+- A `?:` whose arms are both nested-block floats behaves like the variable:
+  `{ float b5 = 1.0f; g = 7 + (fg ? b5 : b5); }` stores 1 to an `int32_t`
+  `g` (want 8), as does `fg ? b5 : b6` with a second block float `b6`, and
+  storing to a float global. Right when either arm is a global
+  (`fg ? b5 : fg`), a constant (`fg ? b5 : 3.0f`) or `b5 + 0.0f`. Found by
+  fuzzing (float generator, seed 4750).
 
 ## BUG-016
 
@@ -1646,6 +1652,15 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   only assigning it.
 - With and without `dcc-peep`.
 - Found by fuzzing (float generator, seed 2247).
+- The test need not be constant: `for (...) l -= (c ? x : 1.0f); x = 1.0f;
+  return l;` with `float c = 2.0f` returns 0 (want `46b78578`), as does
+  `l = l - (c ? x : 1.0f)`, a `while` loop, `x = g;` after the loop, and
+  the `long` form `l -= (ic ? x : 16777216L)` (returns 0, want 23493).
+  `out[0] = (c ? x : 1.0f) - 1.0f;` in the loop is wrong as in the
+  constant case. Right, exactly as above: no assignment to `x` after the
+  loop, `x + 0.0f` as the arm, `x` in the else arm (`c ? 1.0f : x`), no
+  `?:`, reading `x` after the loop, a local copy, or no loop. Found by
+  fuzzing (float generator, seed 4294).
 
 ## BUG-053
 

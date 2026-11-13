@@ -215,8 +215,24 @@ def is_blockint(e):
 
 
 def is_blockfloat(e):
+    """A nested-block float variable, or a `?:` whose arms are all such
+    variables (`fg ? b5 : b6` behaves like `b5`, seed 4750)."""
+    if e.op == 'cond':
+        return all(is_blockfloat(a) for a in e.k[1:])
     d = block_object(e)
     return d is not None and d.t is F32
+
+
+def is_paramcond(e):
+    """A `?:` with a constant test (seed 2247) or a bare 32-bit parameter
+    as an arm (seed 4294): in a loop, with the parameter assigned afterwards,
+    the expression accumulates into the parameter (BUG-052)."""
+    if e.op != 'cond':
+        return False
+    if base.is_constant(e.k[0]):
+        return True
+    return any(a.op == 'var' and a.a.storage == 'param' and is_wide(a.a.t)
+               for a in e.k[1:])
 
 
 def is_ptrparam(e):
@@ -311,7 +327,7 @@ def known_shapes(prog):
             found.add('floopcallarg')
         if is_ptrparam(e):
             found.add('fptrparam')
-        if e.op == 'cond' and base.is_constant(e.k[0]):
+        if is_paramcond(e):
             found.add('fconstcond')
         if is_paramcmp(e):
             found.add('fparamcmp')
@@ -817,7 +833,13 @@ class Gen:
             test = self.cond(c, depth - 1)
             if not self.on('fconstcond') and base.is_constant(test):
                 return self.fexpr(c, depth - 1)     # BUG-052: a folded `?:`
-            return self.mk('cond', [test, self.fexpr(c, depth - 1), self.fexpr(c, depth - 1)])
+            e = self.mk('cond', [test, self.fexpr(c, depth - 1), self.fexpr(c, depth - 1)])
+            if not self.on('fconstcond') and is_paramcond(e):
+                # BUG-052: a parameter arm is passed through `+ 0.0f`
+                e.k[1:] = [self.mk('bin', [a, E('const', a=0.0, t=F32)], '+')
+                           if a.op == 'var' and a.a.storage == 'param' else a
+                           for a in e.k[1:]]
+            return e
         if kind == 'call':
             return self.call(c, depth, F32)
         if kind == 'mix':
