@@ -1,0 +1,7 @@
+after return 1
+for-init after return 2
+after break 1
+after goto 4
+in switch 5
+in while 6
+dead code ran 0 times

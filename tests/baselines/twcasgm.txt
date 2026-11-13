@@ -1,0 +1,4 @@
+member via pointer 205 297
+member 0 60
+array 59 -4167 205 4767
+pointer 7 3

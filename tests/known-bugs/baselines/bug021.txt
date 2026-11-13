@@ -1,0 +1,4 @@
+returned x++ 9029
+returned x-- 9029
+assigned x++ 9029
+through pointer 9029

@@ -19,7 +19,16 @@ tests/
       <name>.txt    # expected normalized dcc stderr/stdout
   extended-tests/
     c-testsuite/    # imported c89/c99/c11 single-exec corpus
+  known-bugs/
+    bugNNN.c        # reproducer for an open compiler bug; expected to fail
+    baselines/
+      bugNNN.txt    # what it should print (host compiler output)
 ```
+
+`known-bugs/` is not part of the suite: the runners only build `tests/*.c`.
+Run `python3 scripts/run-known-bugs.py` to check those reproducers, and see
+[known-bugs/README.md](known-bugs/README.md) and
+[compiler-bugs.md](../compiler-bugs.md).
 
 ## How tests and baselines relate
 

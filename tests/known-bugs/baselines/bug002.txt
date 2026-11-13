@@ -1,0 +1,4 @@
+from array 0
+from constant 0
+after add 160
+local count 0

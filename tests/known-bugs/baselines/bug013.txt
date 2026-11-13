@@ -1,0 +1,13 @@
+unary -444 -445 0
+binary 0 -653
+binary 1 -653
+binary 2 -28
+binary 3 -653
+binary 4 -308
+binary 5 -827
+binary 6 -997
+binary 7 -827
+binary 8 -308
+conditional 0 -345
+conditional 1 -654
+conditional 2 9

@@ -1,0 +1,9 @@
+unsigned from signed 34280
+signed from unsigned -15536
+compared 1
+from cast 1
+remainder 14
+divided -16666
+from constant 65436
+same-width cast 34280
+same-width cast long -3

@@ -1,0 +1,3 @@
+signed 6 6
+unsigned 6 12
+global bound 6 18

@@ -1,0 +1,4 @@
+%= constant 4 48
+%= variable 18 1148
+/= 0 164
+neighbours 33407 -11 33407 -11

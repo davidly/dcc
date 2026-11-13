@@ -1,0 +1,4 @@
+multiply 0003ae4e
+compare char 0
+compare int 0
+byte local 1
