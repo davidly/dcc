@@ -268,3 +268,120 @@ so it matters more than its size suggests. Both are one-offs.
 
 Update this table as clusters are taken, and move bugs between clusters when
 a fix shows the hypothesis was wrong.
+
+## Appendix: prompt for a fixing agent
+
+Give this to the agent once per cluster. Change only the cluster letter in
+the **Task** line.
+
+````text
+You are fixing a cluster of logged compiler bugs in dcc, a C compiler that
+emits Z80 assembly for CP/M 2.2. Use the `dcc-project` and
+`clang-oracle-testing` skills, and the `mir-migration` skill if you touch
+MIR selection, schedules, or allocation.
+
+## Task
+
+Fix cluster **K** in `fix-plan.md`. Read the cluster's table, then every
+`## BUG-NNN` entry it lists in `compiler-bugs.md`, including the bullets
+describing which neighbouring shapes are already correct — those are your
+strongest clue to the root cause and to what the fixed code should emit.
+The parked reproducers are in `tests/known-bugs/bugNNN.c` with host
+baselines in `tests/known-bugs/baselines/`.
+
+Work on a new branch from `main`, one branch for this cluster only.
+
+## Approach
+
+- Expect root-cause work, not pattern-matching. Trace the failing shape
+  through the MIR pipeline: lowering in `src/dcc/dcc_mir.c`, the general
+  emitters `dcc_mir_homed_cfg.c` and `dcc_mir_spilled_cfg.c`, selection and
+  cost policy in `dcc_mir_select.c`, and the exact schedules in
+  `dcc_mir_machine_*.c`. Front-end typing lives in `dcc_func.c`,
+  `dcc_decl.c` and `dcc_ast_*.c`; the peephole optimizer in `src/dccpeep/`;
+  the preprocessor in `dcc_preproc.c`. Find where the broken shape and the
+  neighbouring correct shape diverge, and fix at that point.
+- Work from the assembly. Before changing anything, compile the reproducer
+  and its neighbouring correct shape with `./dccmake ... dcc-peep=false`
+  and `dcc-peep=true`, and read the `.MAC` output for both. Repeat after
+  the fix: the broken shape should now emit what the correct shape emits,
+  with no change to the correct shape. Use `DCC_MIR_SELECT_CANDIDATE=<name>`
+  to force an emitter when isolating which candidate is wrong
+  (`python3 scripts/clang-oracle-fuzz.py --list-configs` lists them).
+- The easy fix is the wrong fix here. Routing the shape to a general or
+  spilled path will pass the reproducer and fail acceptance on the baseline
+  rule. If the only correct fix costs code in the new tests, say so in the
+  PR; it must cost nothing in the existing ones.
+- Budget for the verification loop; it is the larger part of the task.
+  Run long steps (runall, fuzz batch) as async shell commands logging to
+  `build/` and read the logs; do not run them inside sub-agents, which are
+  cancelled after about fifteen minutes.
+
+## Rules
+
+1. Find the root cause before changing anything. The cluster is a
+   hypothesis that these bugs share one defect. Fix that defect once. If
+   after fixing the first bug the others in the cluster still fail, STOP,
+   report what you found, and do not force separate defects into one change.
+2. The fix is the narrowest change that makes the wrong shape right. The
+   compiler already emits correct, tight Z80 for the neighbouring shapes
+   listed in each entry; the goal is to emit the same for the broken shape,
+   not to route it through a slower or larger fallback schedule.
+3. No existing row of `tests/perf_baselines.csv` may change, in either
+   direction. Every program in `tests/` compiles correctly today, so a
+   correct fix does not alter their code. If a row changes, your fix is
+   wider than the defect: understand why and narrow it. Never edit a
+   baseline to make the suite pass.
+4. Do not edit the generators' `KNOWN_BUGS`, the reproducers, or
+   `compiler-bugs.md` until the fix is proven (acceptance step 3 below).
+5. Review the effect on debug metadata (`-g`, `-gline`) if your change
+   moves statement or scope boundaries or register/stack locations, and run
+   the debug metadata tests if so.
+6. Cluster-specific:
+   - dccpeep bugs (cluster K): nopeep output is the reference. The fix is
+     to make the peephole rule decline the unsafe case it currently
+     mis-handles, not to disable or weaken the rule for the cases it gets
+     right. Run `pwsh ./scripts/run-dccpeep-tests.ps1`.
+   - Runtime bugs in `DCCRTL.MAC` (BUG-039 in cluster J): use the smallest
+     correct Z80 sequence and the idioms already in the file; avoid code
+     bloat. Run `python3 scripts/rtl-iy-safety.py` and
+     `python3 scripts/audit-runtime-coverage.py` after every runtime edit,
+     and validate both the fast path and the fallback through a linked
+     CP/M test.
+
+## Acceptance — all of these, in order
+
+1. `python3 scripts/run-known-bugs.py` reports this cluster's reproducers
+   `FIXED` in both peep and nopeep, and every other reproducer still
+   `fails`. If an unrelated reproducer flips, report it; do not hide it.
+2. Build strict and run the regression suite:
+   `DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 python3 ./scripts/runall.py -mode=full -extended`
+   must print SUCCESS with no perf_baselines.csv row changed.
+3. Remove the cluster's features from `KNOWN_BUGS` in
+   `scripts/clang_oracle_gen.py` and/or `scripts/clang_oracle_float_gen.py`
+   (the entry names the feature), then run a 300-seed batch per affected
+   generator and confirm it is clean:
+   `python3 scripts/clang-oracle-fuzz.py --seeds 1-300 --configs production --off known --timeout 6 --jobs 6`
+   (add `--gen float` for float bugs). A failure here means a facet of the
+   bug is not covered: go back to step 1.
+4. Promote each fixed reproducer following `tests/known-bugs/README.md`:
+   move it to `tests/<name>.c` with its baseline, rewrite its header comment
+   to describe the coverage, add a NEW row to `tests/perf_baselines.csv`
+   measured on the normal stack-check runall path, and confirm with
+   `pwsh ./scripts/validate-unit-test.ps1 -App <name>`.
+5. Run `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`.
+6. Close each entry in `compiler-bugs.md` (move it under the closed section,
+   update the summary table and open count), and update the Tracking table
+   in `fix-plan.md`.
+
+## Deliverable
+
+Open a pull request against `main` that lists: the root cause in two or
+three sentences; the bugs closed with `Closes #NNN` for each; the peep and
+nopeep assembly for one reproducer before and after, showing the output is
+as tight as the neighbouring correct shape; the fuzz batch tally; and an
+explicit statement that no existing perf baseline row changed. Do not fix
+bugs outside the cluster even if you see the cause — note them in the PR
+instead. If you were blocked or the cluster hypothesis was wrong, say so
+plainly and describe what you learned about the real grouping.
+````
