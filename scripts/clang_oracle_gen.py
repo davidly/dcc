@@ -489,6 +489,16 @@ def wide_block_copy(d):
         and isinstance(d.init, E) and d.init.op == 'var' and d.init.a.storage != 'global'
 
 
+def wide_block_store(lv, rhs):
+    """A 32-bit nested-block local stored as it stands to a 16-bit element,
+    pointee or member reached through a pointer: the BUG-031 shape when the
+    address is computed (seed 20149 stores 0 for a constant-initialised
+    local through a variable index)."""
+    return lv.op != 'var' and is_int(ty(lv)) and ty(lv).bits == 16 \
+        and rhs.op == 'var' and rhs.a.storage == 'block' and is_int(rhs.a.t) \
+        and rhs.a.t.bits == 32
+
+
 def const_div_zero(e):
     """e is a constant divided by a constant zero, which dcc rejects even
     where it is never evaluated: the BUG-033 shape."""
@@ -591,6 +601,8 @@ def known_shapes(prog):
                         found.add('loopcopy')
                     if lv.a.storage != 'global' and lt.bits == 16 and cross_type(rhs, lt):
                         found.add('crosstypeasg')
+                if wide_block_store(lv, rhs):
+                    found.add('blockwidecopy')
             elif is_int(lt):
                 local = lv.op == 'var' and lv.a.storage != 'global'
                 if lv.op != 'var' and lt.bits < 32 and ty(rhs).bits == 32:
@@ -1876,6 +1888,8 @@ class Gen:
         rhs = self.gen_expr(c, depth)
         if lv.op == 'var':
             rhs = self.stored(rhs, lv.a.t, lv.a.storage)
+        elif not self.on('blockwidecopy') and wide_block_store(lv, rhs):
+            rhs = self.mk('cast', [rhs], t=ty(lv))
         b.stmts.append(S('expr', [self.mk('asg', [lv, rhs], '=')]))
 
     def compound(self, lv, rhs, op):
@@ -1883,6 +1897,8 @@ class Gen:
         reject or miscompile (see KNOWN_BUGS); the operand is converted so the
         statement stays out of it and fuzzing can reach other code."""
         lt = ty(lv)
+        if op == '=' and not self.on('blockwidecopy') and wide_block_store(lv, rhs):
+            rhs = self.mk('cast', [rhs], t=lt)
         if op != '=' and is_int(lt):
             if not self.on('selfand') and lv.op == 'var' and rhs.op == 'var' and rhs.a is lv.a:
                 rhs = self.small(1, 7)

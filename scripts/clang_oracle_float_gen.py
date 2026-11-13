@@ -185,16 +185,18 @@ def is_wide(t):
 
 def is_paramcmp(e):
     """e is the BUG-020 facet shape: `v REL (param OP x)` with a 32-bit
-    binop on the right, a parameter as its left operand and a non-constant
-    as its right operand. An `if … else` with a loop, or a braced early
-    return (seed 2017), before it makes the compile fail; any function
-    counts."""
+    binop on the right, a parameter as its left operand and anything but a
+    plain float constant as its right operand (an integer constant or a
+    cast of one counts: seed 20063). An `if … else` with a loop, or a
+    braced early return (seed 2017), before it makes the compile fail; any
+    function counts."""
     if e.op != 'bin' or e.a not in CMP:
         return False
     rhs = e.k[1]
     return rhs.op == 'bin' and rhs.a in ('+', '-', '*', '/') and is_wide(ty(rhs)) \
         and rhs.k[0].op == 'var' and rhs.k[0].a.storage == 'param' \
-        and not is_anyconst(rhs.k[1])
+        and not (rhs.k[1].op == 'const' and rhs.k[1].t is F32) \
+        and not (is_anyconst(rhs.k[1]) and ty(rhs) is not F32)
 
 
 def block_object(e):

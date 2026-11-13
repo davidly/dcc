@@ -588,6 +588,14 @@ static int32_t f(int32_t x)
   x)` (parameter on the right), `x >= l`, both operands parameters, `l` a
   local assigned instead of returned, and the same with `int` or `long`
   operands. Found by fuzzing (float generator, seed 2017).
+- The right operand of the float arithmetic can be an integer constant:
+  after `if (n) { while (n5 > 0) n5 = 0; } else { }`, `if (7.0f != (x0 +
+  28))` with a float parameter `x0` is fatal, as are `x0 - 28`, `x0 * 28`,
+  `x0 / 28`, `x0 + (float)28`, `==`, `<`, an integer or float global on the
+  left, the value assigned, and an `int` function. Fine: `x0 + 28.0f`, a
+  float global in place of the parameter, the operands swapped (`(x0 + 28)
+  != 7.0f`), `7.0f != x0`, no loop in the `then` body, or the comparison
+  before the `if`. Found by fuzzing (float generator, seed 20063).
 
 ## BUG-021
 
@@ -1013,6 +1021,12 @@ dcc emits, for the store:
   `{ int32_t b = 0; b = y; a2[1] = b; }` (found by fuzzing, seed 5089).
   A different type on the right, such as `uint32_t b = 0; b = y;` with an
   `int32_t y`, is correct.
+- A constant initialiser is also wrong when the destination address is
+  computed: `{ uint32_t b = 0x30201; a2[i] = b; }` with a variable index
+  stores 0 (want `0201`), as do `*p = b` (`p` a global or local pointer)
+  and `ps->m = b`. Right with a constant index, `s.m = b`, `(uint16_t)b`,
+  `b + 1`, an initialiser that is a global or an expression, the local at
+  function scope, or the block an `if` body. Found by fuzzing (seed 20149).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
 - One more case of a nested-block local losing its declared width; see
   BUG-015 and BUG-025.
