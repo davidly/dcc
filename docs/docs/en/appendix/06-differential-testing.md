@@ -158,7 +158,11 @@ seed, so the count restarts.
 regular test — move it to `tests/<name>.c` with its baseline, add its row to
 `tests/perf_baselines.csv`, close the entry in `compiler-bugs.md`, and remove
 the bug's feature from `KNOWN_BUGS` so the fuzzer generates that form again.
-`tests/known-bugs/README.md` has the exact steps.
+`tests/known-bugs/README.md` has the exact steps. `fix-plan.md` in the
+repository root groups the open bugs by probable root cause so that related
+ones are fixed together, and the project skill
+`.github/skills/clang-oracle-testing` is the step-by-step procedure for
+running a campaign, triaging a failure and accepting a fix.
 
 ## What this does and does not find
 

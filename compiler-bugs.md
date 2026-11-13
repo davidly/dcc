@@ -17,6 +17,8 @@ has been fixed by this work; this file is the log.
   `scripts/README.md`), then narrowed by hand with one-statement probes.
 - **Reported:** each open entry is an issue on `davidly/dcc` (the Issue
   column below), with the full reproducer and expected and actual output.
+- **Fixing them:** [fix-plan.md](fix-plan.md) groups the open entries by
+  probable root cause, with the acceptance test for each fix.
 
 ## Summary
 

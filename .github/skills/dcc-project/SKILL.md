@@ -299,3 +299,7 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 For MIR selector, schedule, allocation, or cost-policy work, also use the
 `mir-migration` skill.
+
+For fuzzing the compiler against clang, triaging and logging compiler bugs,
+or verifying that a fix closes a logged bug, use the `clang-oracle-testing`
+skill.
