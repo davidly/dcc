@@ -56,8 +56,9 @@ has been fixed by this work; this file is the log.
 | [BUG-034](#bug-034) | #254 | wrong result (`dccpeep` only) | `dccpeep` turns `8 == v` into a test of bit 3 |
 | [BUG-035](#bug-035) | #255 | wrong result (`dccpeep` only) | `dccpeep` compares a 16-bit local with itself in `a > x \|\| x < k` after a struct member on the stack |
 | [BUG-036](#bug-036) | #256 | wrong result | A 32-bit local assigned in a loop and passed directly to a call keeps its old value after the loop |
+| [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 
-Thirty-four are open: twenty-two give wrong results with no diagnostic
+Thirty-five are open: twenty-three give wrong results with no diagnostic
 (BUG-030 can also hang; BUG-032, BUG-034 and BUG-035 need `dccpeep`), one
 hangs, ten stop the compile (BUG-007 can instead compile and crash), and
 one (BUG-022) turns a compile error into a broken program. BUG-026 is the
@@ -1012,6 +1013,10 @@ static int16_t f(uint16_t x)
   `c == 8` on a `char` parameter or local in an `if`, a loop, a `switch` or
   as a value (the simple forms do not produce the three-instruction pattern,
   so `if (c == '\b')` is safe as far as these probes go).
+- Also wrong when the 16-bit operand is a signed bit-field read through a
+  cast (seed 7161): `8 == (int16_t)s.m` with a 5-bit `m` of 9, 12 or 15,
+  and `uint32_t l = (8 == (int16_t)s.m) ? 0 : 1;`. A plain `int16_t` global
+  and `8 == s.m` without the cast are right.
 - The rewrite has been in the file since at least `3dd3b434` (2026-06-14).
 
 ## BUG-035
@@ -1092,6 +1097,38 @@ return l;                    /* want 1, dcc 0 */
 - Wrong with `dcc-peep` on and off. Found by fuzzing at `83dc7a91` (seed
   6826); the reduced program had a `for`-init declaration, but a counter
   declared outside the loop fails the same.
+
+## BUG-037
+
+**In a `for` or `while` loop whose counter is 32 bits wide, a copy of the
+counter taken in the body is stored after the increment.** The copy holds the
+next value, so it is one step ahead. A `do … while`, a 16-bit counter and
+straight-line code are correct.
+
+```c
+int32_t l = 0, i;
+for (i = 2; i < 3; i += 1)
+    l = i;
+return l;                    /* want 2, dcc 3 */
+```
+
+dcc emits the increment first and then the copy, which reads the new `i`:
+
+```
+    inc (ix-6)         ; i += 1, in place
+    ...
+    ld l,(ix-6)        ; l = i
+    ld h,(ix-5)
+    ld e,(ix-8)
+    ld d,(ix-7)
+    ld (ix-2),l
+```
+
+- Wrong for `i += 1` and `i++` in a `for`, and for `i += 1` at the end of a
+  `while` body (`while (i < 3) { l = i; i += 1; }`).
+- Correct for `int16_t` locals, `do … while`, `i = i + 1` and `i += 2` in a
+  `do … while`, and a copy outside a loop.
+- Found by fuzzing at `83dc7a91` (seed 7581), with and without `dcc-peep`.
 
 ---
 

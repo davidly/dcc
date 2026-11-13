@@ -512,6 +512,10 @@ def known_shapes(prog):
                     if lv.a.storage == 'block' and lt.bits == 32 and rhs.op == 'var' \
                             and rhs.a.storage != 'global':
                         found.add('blockwidecopy')
+                    if lv.a.storage != 'global' and lt.bits == 32 and rhs.op == 'var' \
+                            and rhs.a.storage != 'global' and is_int(rhs.a.t) \
+                            and rhs.a.t.bits == 32:
+                        found.add('loopcopy')
                     if lv.a.storage != 'global' and lt.bits == 16 and cross_type(rhs, lt):
                         found.add('crosstypeasg')
             elif is_int(lt):
@@ -1264,7 +1268,7 @@ FEATURES = frozenset((
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
     'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockcast',
-    'blockdec', 'loopcallarg'))
+    'blockdec', 'loopcallarg', 'loopcopy'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
@@ -1303,6 +1307,7 @@ KNOWN_BUGS = {
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',
     'loopcallarg': 'BUG-036',
+    'loopcopy': 'BUG-037',
 }
 
 
@@ -1703,6 +1708,9 @@ class Gen:
             rhs = self.small(1, 1)
         if not self.on('blockwidecopy') and storage == 'block' and t.bits == 32 \
                 and rhs.op == 'var' and rhs.a.storage != 'global':
+            rhs = self.mk('bin', [rhs, self.small(1, 1)], '^')
+        if not self.on('loopcopy') and t.bits == 32 and rhs.op == 'var' \
+                and rhs.a.storage != 'global' and is_int(rhs.a.t) and rhs.a.t.bits == 32:
             rhs = self.mk('bin', [rhs, self.small(1, 1)], '^')
         if not init and not self.on('crosstypeasg') and t.bits == 16 and cross_type(rhs, t):
             # a cast that changes width as well as type keeps the value
