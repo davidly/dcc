@@ -49,12 +49,17 @@ has been fixed by this work; this file is the log.
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
+| [BUG-030](#bug-030) | #250 | wrong result, or hang | A `for`-init declaration overlaps its enclosing block's locals on the stack (after an earlier sibling scope) |
+| [BUG-031](#bug-031) | #251 | wrong result | Nested-block 32-bit local copied from another local, stored to a 16-bit lvalue: only the low byte is loaded |
+| [BUG-032](#bug-032) | #252 | wrong result (`dccpeep` only) | `dccpeep` drops `x + K` (K from 2 to 255) when the sum is copied to another slot |
+| [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
 
-Twenty-seven are open: sixteen give wrong results with no diagnostic, one
-hangs, nine stop the compile (BUG-007 can instead compile and crash), and
+Thirty-one are open: nineteen give wrong results with no diagnostic
+(BUG-030 can also hang; BUG-032 needs `dccpeep`), one
+hangs, ten stop the compile (BUG-007 can instead compile and crash), and
 one (BUG-022) turns a compile error into a broken program. BUG-026 is the
-one most likely to be hit by ordinary code, then BUG-003, BUG-013, BUG-016
-and BUG-025.
+one most likely to be hit by ordinary code, then BUG-030 (it corrupts
+memory in C99-style code), BUG-003, BUG-013, BUG-016 and BUG-025.
 
 Two more were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -332,6 +337,10 @@ signed char l2 = -66;
   function scope.
 - These are grouped because they share the nested-block condition; they may
   have separate causes. See also BUG-008.
+- Beside a nested-block 32-bit local, another operand's cast is lost:
+  `{ int32_t b = 0; out = b + ((int16_t)((uint16_t)a6[1])); }` with `a6[1]`
+  holding -1 gives 65535, and `if (b >= ((int16_t)((uint16_t)a6[1])))` is
+  not taken. Correct with `b` at function scope, or with one cast.
 
 ## BUG-016
 
@@ -360,6 +369,10 @@ r = x / l;               /* uint16_t x = 50000: want -16666, dcc 0 */
   (`uint16_t l; l = gs;`), when the initialiser's cast also changes width
   (`(uint16_t)(int32_t)p`), for 8-bit locals, and when the local is only used
   at its own width (`l > 5`, `l / 2`).
+- A separate assignment does not help in a nested block when the value is an
+  unsigned constant: `{ short b = 0; b = (uint16_t)0xb840; out = (b % three); }`
+  with a 32-bit `three` of 3 gives 2 (`47168 % 3`), not -2. Correct with `b`
+  at function scope or a signed constant.
 
 ## BUG-017
 
@@ -782,6 +795,154 @@ L4:
   arms assigning only `l`; a `switch` or `?:` in place of the `if … else`.
 - The selected emitter is `homed-scalar-cfg` (`DCC_MIR_COST_REPORT=1`).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+
+## BUG-030
+
+**A C99 `for` initialiser declaration overlaps the locals of its enclosing
+block on the stack, when an earlier sibling scope also declares a local.**
+The loop counter overwrites part of an array, a pointer, or a variable whose
+address is taken. The sibling scopes can be the arms of an `if … else`, the
+cases of a `switch`, or two blocks inside any other block.
+
+```c
+if (sel) {
+    uint32_t a = 0;
+    n += (uint16_t)a;
+} else {
+    uint16_t x[2] = { 0x1234, 0x5678 };
+    for (uint8_t i = 5; i != 0; --i)
+        n++;
+    r = x[0] ^ x[1];         /* want 444c; dcc 124c: x[1] is now 0x0078 */
+}
+```
+
+With a pointer in place of the array, dcc emits (the pointer `q` is at
+`ix-6`/`ix-5`, and so is the counter):
+
+```
+    ld (ix-6),l        ; q = &bytes[0]
+    ld (ix-5),h
+    ...
+    ld (ix-5),5        ; for (uint8_t i = 5; ...): i is also at ix-5
+```
+
+- Wrong when the `else` arm's locals are an array, two pointers, or a
+  variable with its address taken; when the earlier arm's local is 8, 16 or
+  32 bits wide, used or not; for an 8-bit or 16-bit counter; in the `else`
+  arm of an `if` and in a later `case` of a `switch`.
+- Equally wrong for two sibling blocks inside the body of a `for`, `while`
+  or `if`, or inside a plain block:
+  `for (…) { { uint32_t a = 0; … } { uint16_t x[2] = …; for (uint8_t i = 5; …) … } }`.
+  Three generated programs that hang reduce to this form.
+- With a pointer walk (`for (; q != end; ++q) { for (uint8_t i = 5; …) … }`)
+  the counter clears the pointer's high byte on every pass and the loop never
+  ends.
+- Correct: the counter declared at the top of the block (`uint8_t i;`); a
+  plain nested block in place of the `for` (`{ uint8_t c = 5; … }`); the
+  earlier scope declaring nothing; two sibling blocks directly in the
+  function body; the earlier local declared in the enclosing block itself;
+  the two scopes in the other order; locals that do not need memory (plain
+  `uint16_t x, y;`).
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+
+## BUG-031
+
+**A 32-bit local declared in a nested block and initialised from a
+function-scope 32-bit local is stored to a 16-bit lvalue with only its low
+byte loaded.** The high byte stored is whatever was in the register.
+
+```c
+static void f(uint32_t x)              /* f(0x00030201) */
+{
+    uint32_t y = x;
+    {
+        uint32_t b = y;
+        a2[1] = b;                     /* uint16_t a2[]: want 0201, dcc fe01 */
+    }
+}
+```
+
+dcc emits, for the store:
+
+```
+    ld l,(ix+6)        ; low byte of the value; H is not loaded
+    ld (a2+2),hl
+```
+
+- Wrong when the destination is an array element (constant or variable
+  index), a struct member or `*p`; for `uint32_t` and `int32_t`; in a plain
+  block and in an `if` body.
+- Correct: the local declared at function scope; initialised from a global,
+  a constant or an expression (`x + 1`); assigned instead of initialised
+  (`uint32_t b; b = y;`); stored with a cast (`a2[1] = (uint16_t)b;`) or as
+  `b + 1`; stored to a plain global or to an 8-bit lvalue; a `for`
+  initialiser (`for (uint32_t b = y; …)`).
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+- One more case of a nested-block local losing its declared width; see
+  BUG-015 and BUG-025.
+
+## BUG-032
+
+**With `dccpeep`, a 16-bit local plus a constant from 2 to 255, copied to
+another slot, loses the sum.** The copy stores whatever HL held before the
+add. Without `dccpeep` the program is correct.
+
+```c
+static uint32_t g6 = 256;
+static uint8_t g8 = 69;
+static uint16_t f(int16_t x)
+{
+    x = x;
+    return (g6 <= 1) ? g8 : (uint16_t)(x + 200);   /* f(1): want 201, with dccpeep 0 */
+}
+```
+
+dcc's output for the false arm, and what `dccpeep` makes of it:
+
+```
+    ld l,(ix-2)            |    ld a,(ix-2) ; peep: small_const_incr_carry_skip
+    ld h,(ix-1)            |    add a,200
+    ld de,200              |    ld (ix-2),a
+    add hl,de              |    jr nc,LI0
+    ld (ix-2),l            |    inc (ix-1)
+    ld (ix-1),h            | LI0:
+    ld l,(ix-2)            |
+    ld h,(ix-1)            |
+    ld (ix-4),l            |    ld (ix-4),l      ; HL was never loaded: it still
+    ld (ix-3),h            |    ld (ix-3),h      ; holds the result of __leu
+```
+
+- The pass's guard, `hl_relied_on_after()` in `src/dccpeep/dccpeep.c`, looks
+  for the text `hl` in the lines that follow. `ld (ix-4),l` and
+  `ld (ix-3),h` read H and L separately, so they are not seen.
+- Wrong for constants 200 and 255, in `?:` and in
+  `if (…) r = g8; else r = (uint16_t)(x + 200);`, with `x = x;` or `x += 0;`
+  before it.
+- Correct with `dccpeep`: constants 1, 256, 2000 and -56; a 16-bit
+  comparison in the condition (no helper call, so HL happens to be right);
+  without `x = x;`.
+- The pass dates from `bff0d144` (2026-07-26), before v3.6.0.
+
+## BUG-033
+
+**A constant divided by a constant zero is rejected, even in code that never
+runs.** `DCC-E1002: unsupported if condition or branch` (or
+`unsupported AST statement`), a message that does not mention division.
+
+```c
+if (never)
+    return 1000 / 0;
+if (never)
+    out = 7 % 0;
+```
+
+- The division is undefined only if it is evaluated, so a program that
+  never reaches it is valid; clang compiles it with a warning.
+- Accepted: `n / 0` and `n % 0` with a variable `n`.
+- Low priority: nobody writes this on purpose. It can come out of macros
+  (`SIZE / UNITS` in a branch guarded by `if (UNITS)`), and when it does the
+  diagnostic points at the enclosing `if` rather than at the division.
+- Already present in v3.6.0 (`20290235`).
 
 ---
 

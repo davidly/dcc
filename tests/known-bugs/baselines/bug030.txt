@@ -1,0 +1,7 @@
+array in else 444c 5
+address taken 1234 5
+pointer walk 0008 40
+switch case 444c 5
+sibling blocks 444c 5
+counter in block 444c 5
+no earlier declaration 444c 5

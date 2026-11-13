@@ -1,0 +1,158 @@
+/* BUG-030: a C99 `for` initialiser declaration is given a stack slot that
+ * overlaps the locals of its enclosing block, when an earlier sibling scope
+ * (the other arm of an `if`, an earlier case of a `switch`, or an earlier
+ * block inside the same parent block) also declares a local. The loop
+ * counter then overwrites part of an array, a pointer or a variable whose
+ * address is taken. It is correct when the counter is declared at the top
+ * of the block, when no earlier scope declares anything, and for two blocks
+ * directly in the function body. */
+#include <stdint.h>
+#include <stdio.h>
+
+static int8_t bytes[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+static uint16_t n;
+static int16_t sel;
+static int16_t three = 3;
+
+static uint16_t array_in_else(void)
+{
+    uint16_t r = 0;
+    if (sel) {
+        uint32_t a = 0;
+        n += (uint16_t)a;
+    } else {
+        uint16_t x[2] = { 0x1234, 0x5678 };
+        for (uint8_t i = 5; i != 0; --i)
+            n++;
+        r = x[0] ^ x[1];
+    }
+    return r;
+}
+
+static uint16_t address_taken(void)
+{
+    uint16_t r = 0;
+    if (sel) {
+        uint32_t a = 0;
+        n += (uint16_t)a;
+    } else {
+        uint16_t x = 0x1234;
+        uint16_t *px = &x;
+        for (uint8_t i = 5; i != 0; --i)
+            n++;
+        r = *px;
+    }
+    return r;
+}
+
+/* the counter overlaps the walking pointer: without the `n < 200` bound
+ * this loop never ends */
+static uint16_t pointer_walk(void)
+{
+    uint16_t r = 0;
+    if (sel) {
+        uint32_t a = 0;
+        n += (uint16_t)a;
+    } else {
+        int8_t *q = &bytes[0];
+        int8_t *end = bytes + 8;
+        for (; q != end && n < 200; ++q) {
+            for (uint8_t i = 5; i != 0; --i)
+                n++;
+        }
+        r = (uint16_t)(q - bytes);
+    }
+    return r;
+}
+
+static uint16_t switch_case(void)
+{
+    uint16_t r = 0;
+    switch (three) {
+    case 0:
+        {
+            uint32_t a = 0;
+            n += (uint16_t)a;
+        }
+        break;
+    case 3:
+        {
+            uint16_t x[2] = { 0x1234, 0x5678 };
+            for (uint8_t i = 5; i != 0; --i)
+                n++;
+            r = x[0] ^ x[1];
+        }
+        break;
+    }
+    return r;
+}
+
+/* two sibling blocks inside a loop body, rather than arms of one statement */
+static uint16_t sibling_blocks(void)
+{
+    uint16_t r = 0;
+    int16_t k;
+    for (k = 0; k < 1; k++) {
+        {
+            uint32_t a = 0;
+            n += (uint16_t)a;
+        }
+        {
+            uint16_t x[2] = { 0x1234, 0x5678 };
+            for (uint8_t i = 5; i != 0; --i)
+                n++;
+            r = x[0] ^ x[1];
+        }
+    }
+    return r;
+}
+
+/* correct: the counter is declared at the top of the block */
+static uint16_t counter_in_block(void)
+{
+    uint16_t r = 0;
+    if (sel) {
+        uint32_t a = 0;
+        n += (uint16_t)a;
+    } else {
+        uint16_t x[2] = { 0x1234, 0x5678 };
+        uint8_t i;
+        for (i = 5; i != 0; --i)
+            n++;
+        r = x[0] ^ x[1];
+    }
+    return r;
+}
+
+/* correct: the first arm declares nothing */
+static uint16_t no_earlier_declaration(void)
+{
+    uint16_t r = 0;
+    if (sel) {
+        n += 1;
+    } else {
+        uint16_t x[2] = { 0x1234, 0x5678 };
+        for (uint8_t i = 5; i != 0; --i)
+            n++;
+        r = x[0] ^ x[1];
+    }
+    return r;
+}
+
+static void show(const char *name, uint16_t r)
+{
+    printf("%s %04x %u\n", name, (unsigned)r, (unsigned)n);
+    n = 0;
+}
+
+int main(void)
+{
+    show("array in else", array_in_else());
+    show("address taken", address_taken());
+    show("pointer walk", pointer_walk());
+    show("switch case", switch_case());
+    show("sibling blocks", sibling_blocks());
+    show("counter in block", counter_in_block());
+    show("no earlier declaration", no_earlier_declaration());
+    return 0;
+}

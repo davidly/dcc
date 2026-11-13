@@ -403,6 +403,26 @@ def byte_arm(s):
     return False
 
 
+def block_return(ret, e):
+    """`return e;` to return type ret, where e is a nested-block object that
+    needs converting: the BUG-025 shape."""
+    return block_object(e) and (ret.bits == 8 or (ret.bits == 32 and ty(e).bits < 32))
+
+
+def wide_block_copy(d):
+    """d is a 32-bit nested-block local initialised from a local or a
+    parameter by name: the BUG-031 shape."""
+    return d.storage == 'block' and is_int(d.t) and d.t.bits == 32 \
+        and isinstance(d.init, E) and d.init.op == 'var' and d.init.a.storage != 'global'
+
+
+def const_div_zero(e):
+    """e is a constant divided by a constant zero, which dcc rejects even
+    where it is never evaluated: the BUG-033 shape."""
+    return e.op == 'bin' and e.a in DIV and e.k[1].op == 'const' and e.k[1].a == 0 \
+        and is_constant(e.k[0])
+
+
 def block_object(e):
     """e names, or assigns to, an object declared in a nested block: as the
     operand of `return` in a function returning an 8-bit type, the BUG-025
@@ -528,6 +548,8 @@ def known_shapes(prog):
         elif op == 'bin':
             if same_variable(e.k[0], e.k[1]):
                 found.add('selfoperand')
+            if const_div_zero(e):
+                found.add('constdivzero')
         elif op == 'call':
             if e.a.via_ptr and any(is_int(p.t) and ty(a) is not p.t
                                    for a, p in zip(e.k, e.a.params)):
@@ -536,6 +558,8 @@ def known_shapes(prog):
             expr(k, False)
 
     def decl(d):
+        if wide_block_copy(d):
+            found.add('blockwidecopy')
         if isinstance(d.init, E):
             if is_int(d.t):
                 stored(d.init, d)
@@ -561,13 +585,25 @@ def known_shapes(prog):
 
     def returns(f, b):
         for s in b.stmts:
-            if s.op == 'ret' and s.e and f.ret.bits == 8 and block_object(s.e[0]):
+            if s.op == 'ret' and s.e and block_return(f.ret, s.e[0]):
                 found.add('blockret')
             for sub in s.b:
                 if sub is not None:
                     returns(f, sub)
 
+    def arms(b, inside):
+        """A `for` that declares its counter, anywhere inside another
+        statement: the BUG-030 shape when an earlier sibling scope declares
+        a local too."""
+        for s in b.stmts:
+            if inside and s.op == 'for' and s.a is not None:
+                found.add('armfordecl')
+            for sub in s.b:
+                if sub is not None:
+                    arms(sub, True)
+
     for f in prog.funcs:
+        arms(f.body, False)
         if f.ret is not None and is_int(f.ret):
             returns(f, f.body)
     return found & prog.off
@@ -1161,6 +1197,7 @@ class Ctx:
         self.used, self.banned = set(), set()
         self.loop = 0
         self.in_if = 0
+        self.arm = 0
         self.nosfx = 0
         self.names = 0
         self.labels = 0
@@ -1201,7 +1238,8 @@ FEATURES = frozenset((
     'bfdivasg', 'wideidxincdec', 'logicinit', 'blockwidediv', 'ptrcallconv',
     'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'blockptr', 'inittype',
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg',
-    'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm'))
+    'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
+    'armfordecl', 'blockwidecopy', 'constdivzero'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
@@ -1233,6 +1271,9 @@ KNOWN_BUGS = {
     'nestedifelse': 'BUG-027',
     'bytesarcount': 'BUG-028',
     'bytearm': 'BUG-029',
+    'armfordecl': 'BUG-030',
+    'blockwidecopy': 'BUG-031',
+    'constdivzero': 'BUG-033',
 }
 
 
@@ -1252,6 +1293,11 @@ class Gen:
     def mk(self, op, k=(), a=None, t=None):
         if op == 'bin' and not self.on('selfoperand') and same_variable(k[0], k[1]):
             # one variable is never both operands of an operator
+            self.prog.nid += 1
+            k = [k[0], E('const', (), 1, I16, self.prog.nid)]
+        if op == 'bin' and a in DIV and not self.on('constdivzero') \
+                and k[1].op == 'const' and k[1].a == 0 and is_constant(k[0]):
+            # the checking layer only repairs a division that runs
             self.prog.nid += 1
             k = [k[0], E('const', (), 1, I16, self.prog.nid)]
         self.prog.nid += 1
@@ -1562,12 +1608,14 @@ class Gen:
     def gen_block(self, c, depth, n, decls=0):
         b = Block()
         mark = c.mark()
+        c.arm += 1
         if not self.on('blockdecl'):
             decls = 0
         for _ in range(decls):
             self.block_decl(c, b, depth)
         for _ in range(n):
             self.gen_stmt(c, depth, b)
+        c.arm -= 1
         c.release(mark)
         return b
 
@@ -1618,6 +1666,10 @@ class Gen:
         starts as expr. With `inittype` off, an expr that is not already of
         exactly type t is assigned by a following statement instead."""
         expr = self.stored(expr, t, storage)
+        if not self.on('blockwidecopy') and storage == 'block' and t.bits == 32 \
+                and expr.op == 'var' and expr.a.storage != 'global':
+            # assigned by a following statement instead
+            return mk_const(0, t), expr
         if self.on('inittype') or init_keeps_type(expr, t):
             return expr, None
         return mk_const(0, t if t.bits >= 16 else I16), expr
@@ -1756,7 +1808,10 @@ class Gen:
         lo = r.randint(0, 3)
         n = r.randint(1, 5)
         hi = lo + n
-        c99 = self.on('c99for') and r.random() < 0.35
+        # with `armfordecl` off a `for` declares its counter only when it is
+        # directly in the function body, not inside any other statement
+        c99 = self.on('c99for') and r.random() < 0.35 \
+            and (self.on('armfordecl') or not c.arm)
         down = r.random() < 0.35
         if c99:
             d = Decl(c.name('i'), t, 'block', cname=self.spelled(t))
@@ -1905,7 +1960,7 @@ class Gen:
     def returned(self, fn, e):
         """e as the operand of `return` in fn. With `blockret` off a
         nested-block object returned to an 8-bit type goes through a cast."""
-        if not self.on('blockret') and fn.ret.bits == 8 and block_object(e):
+        if not self.on('blockret') and block_return(fn.ret, e):
             return self.mk('cast', [e], t=fn.ret)
         return e
 
