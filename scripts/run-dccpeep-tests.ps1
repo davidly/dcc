@@ -26,6 +26,7 @@ try {
         $again = Join-Path $tempRoot "$stem.again.mac"
         $options = @()
         if ($stem.EndsWith(".os")) { $options += "-Os" }
+        if ($stem.EndsWith(".closed")) { $options += "-closed-program" }
 
         & $DccPeep @options $input.FullName $actual
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path $actual)) {

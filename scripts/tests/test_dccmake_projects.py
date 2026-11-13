@@ -62,6 +62,19 @@ class CompositeProjectTests(unittest.TestCase):
         self.assertFalse((second / "build").exists())
         self.assertNotIn("built composite", result.stdout)
 
+    def test_multimodule_build_does_not_claim_closed_callers(self):
+        child = self.leaf(
+            "child", "MULTI",
+            "int helper(void);\nint main(void) { return helper(); }\n")
+        (child / "MODULE.C").write_text("int helper(void) { return 0; }\n")
+        config = child / "dccmake.txt"
+        config.write_text(config.read_text().replace(
+            "dcc-input=MAIN.C\n", "dcc-input=MAIN.C,MODULE.C\n"))
+        (self.folder / "dccmake.txt").write_text("dcc-projects=child\n")
+        result = self.build()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("-closed-program", result.stdout)
+
     def test_nested_projects_resolve_paths_from_their_own_directory(self):
         self.leaf("one", "ONE")
         self.leaf("two", "TWO")

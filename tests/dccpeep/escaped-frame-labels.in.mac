@@ -1,0 +1,36 @@
+; static function escaped
+_escaped:
+push ix
+pop hl
+ld de,4
+add hl,de
+ld (ix-2),l
+ld (ix-1),h
+jp z,LS0
+nop
+LS0:
+ld (ix+4),1
+ld l,(ix-2)
+ld h,(ix-1)
+ld e,(hl)
+jp z,LI0
+nop
+LI0:
+ld (ix+4),2
+ld e,(hl)
+jp z,LR0
+nop
+LR0:
+ld (ix+4),3
+ld e,(hl)
+jp z,Lskrl_0
+nop
+Lskrl_0:
+ld (ix+4),4
+ld e,(hl)
+ret
+; static function unescaped
+_unescaped:
+ld (ix+4),5
+ret
+end

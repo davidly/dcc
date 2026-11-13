@@ -1,0 +1,56 @@
+; static function left_operand
+_left:
+	ld l,(ix-2)
+	ld h,(ix-1)
+	push hl ; peep: preserve_ix_word_signed_range
+	ld e,(ix+4)
+	ld d,(ix+5)
+	or a
+	sbc hl,de
+	jp nc,LR0 ; peep: preserve_ix_word_signed_range
+	pop hl
+	jp L1
+LR0:
+	pop hl ; peep: preserve_ix_word_signed_range
+	ld de,1
+	or a
+	sbc hl,de
+	jp nc,L2
+L1:
+	ld hl,1
+	ret
+L2:
+	ld hl,0
+	ret
+; static function stacked_right_operand
+_right:
+	push ix
+	pop hl
+	ld de,4
+	add hl,de
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	push hl
+	ld l,(ix-2)
+	ld h,(ix-1)
+	push hl
+	pop de
+	pop hl
+	ex de,hl
+	or a
+	sbc hl,de
+	jp c,L3
+	ld l,(ix-2)
+	ld h,(ix-1)
+	ld de,1
+	sbc hl,de
+	jp nc,L4
+L3:
+	ld hl,1
+	ret
+L4:
+	ld hl,0
+	ret
+	end
