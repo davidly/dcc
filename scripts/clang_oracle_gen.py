@@ -403,6 +403,22 @@ def byte_arm(s):
     return False
 
 
+def word_arm(s):
+    """s is an `if … else` with a plain assignment to a 16-bit local directly
+    in one of its arms, or as the condition of an `if` there: the BUG-038
+    shape when the local is updated and an early return follows."""
+    if s.op != 'if' or len(s.b) < 2 or s.b[1] is None:
+        return False
+    for arm in s.b:
+        for t in arm.stmts:
+            e = t.e[0] if t.e and t.op in ('expr', 'if') else None
+            if e is not None and e.op == 'asg' and e.a == '=' and e.k[0].op == 'var' \
+                    and e.k[0].a.storage != 'global' and is_int(e.k[0].a.t) \
+                    and e.k[0].a.t.bits == 16:
+                return True
+    return False
+
+
 def block_return(ret, e):
     """`return e;` to return type ret, where e is a nested-block object that
     needs converting: the BUG-025 shape."""
@@ -605,6 +621,8 @@ def known_shapes(prog):
                 found.add('nestedifelse')
             if byte_arm(s):
                 found.add('bytearm')
+            if word_arm(s):
+                found.add('wordarm')
             if s.op == 'for' and s.a is not None:
                 decl(s.a)
             for e in s.e:
@@ -1268,7 +1286,7 @@ FEATURES = frozenset((
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
     'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockcast',
-    'blockdec', 'loopcallarg', 'loopcopy'))
+    'blockdec', 'loopcallarg', 'loopcopy', 'wordarm'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
@@ -1308,6 +1326,7 @@ KNOWN_BUGS = {
     'blockdec': 'BUG-015',
     'loopcallarg': 'BUG-036',
     'loopcopy': 'BUG-037',
+    'wordarm': 'BUG-038',
 }
 
 
@@ -1824,6 +1843,8 @@ class Gen:
             blocks.append(self.gen_block(c, depth - 1, r.randint(1, 2), decls=r.random() < 0.2))
         c.in_if -= 1
         s = S('if', [cond], blocks)
+        if not self.on('wordarm') and word_arm(s):
+            del s.b[1:]
         if not self.on('bytearm') and byte_arm(s):
             # keep the assignment, lose the other arm
             del s.b[1:]

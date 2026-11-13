@@ -57,8 +57,9 @@ has been fixed by this work; this file is the log.
 | [BUG-035](#bug-035) | #255 | wrong result (`dccpeep` only) | `dccpeep` compares a 16-bit local with itself in `a > x \|\| x < k` after a struct member on the stack |
 | [BUG-036](#bug-036) | #256 | wrong result | A 32-bit local assigned in a loop and passed directly to a call keeps its old value after the loop |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
+| [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
 
-Thirty-five are open: twenty-three give wrong results with no diagnostic
+Thirty-six are open: twenty-four give wrong results with no diagnostic
 (BUG-030 can also hang; BUG-032, BUG-034 and BUG-035 need `dccpeep`), one
 hangs, ten stop the compile (BUG-007 can instead compile and crash), and
 one (BUG-022) turns a compile error into a broken program. BUG-026 is the
@@ -1129,6 +1130,39 @@ dcc emits the increment first and then the copy, which reads the new `i`:
 - Correct for `int16_t` locals, `do … while`, `i = i + 1` and `i += 2` in a
   `do … while`, and a copy outside a loop.
 - Found by fuzzing at `83dc7a91` (seed 7581), with and without `dcc-peep`.
+
+## BUG-038
+
+**A 16-bit local that is assigned in one arm of an `if … else` and then
+updated loses the assignment when an `if` that can return early follows.**
+The update is applied to the old value. It is the loss in BUG-027 with no
+outer `if` and no loop.
+
+```c
+unsigned short l = 0;
+if (z == 0) {            /* volatile int16_t z = 1 */
+} else {
+    l = 1;
+}
+l -= 129;
+if (!arr[1]) {           /* arr[1] is 5 */
+    return 1;
+}
+sink = l;                /* unsigned char sink: want 128, dcc 127 */
+return sink;
+```
+
+- Wrong for `l -= 129`, `l += 2` (want 3, dcc 2), an `int16_t` local, an
+  assignment that is the condition of a nested `if` (`if (l = 1) { }`), and
+  with and without `dcc-peep`.
+- Correct without the update (`if (!arr[1]) return 1; sink = l;`).
+- Without the early-return `if`, `dcc-peep` is still wrong and plain `dcc` is
+  correct in a standalone program. In a larger file with other functions the
+  same code gave different answers, so the result depends on what else is in
+  the file.
+- Found by fuzzing at `83dc7a91` (seed 9056). The reduced program had
+  `if ((int32_t)0) { } else { if (l2 = 1) { } }`, which fails in every
+  configuration including the forced MIR candidates.
 
 ---
 
