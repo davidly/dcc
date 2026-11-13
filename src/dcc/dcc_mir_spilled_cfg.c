@@ -33582,6 +33582,13 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                  * value. */
                 mir_forwarded_hl_value = -1;
                 mir_forwarded_hl_instruction = -1;
+                /* A fused selfstore adjust works on memory and never reads
+                 * this value; persisting it would push a stack forward that
+                 * nothing pops. */
+                if (insn->dst >= 0 && mir.backend_slots != NULL &&
+                    mir.backend_slots[insn->dst] < 0 &&
+                    mir_value_is_selfstore_incdec_source(insn->dst))
+                    break;
                 mir_emit_virtual_store(out, insn->dst);
                 if (mir_value_has_direct_named_home(insn->dst) &&
                     mir_can_forward_hl_to_next(insn->dst)) {
