@@ -75,6 +75,16 @@ arguments, bounded recursion, calls through function pointers, compound
 assignment and `++`/`--` on every kind of lvalue, and assignments used as
 values. The generator and renderers are in `clang_oracle_gen.py`.
 
+`--gen float` switches to `clang_oracle_float_gen.py`, which builds on the
+same model to exercise dcc's only floating type: `float` globals, locals,
+parameters, arrays and struct members; arithmetic, negation, comparison,
+truth tests, `?:`, `++`/`--`, compound assignment, conversions to and from
+every integer width, and mixed integer/float arithmetic. Every operation is
+clamped so no value overflows, and floats are printed and checksummed as
+their IEEE bits with `-0` folded to `0`, so a difference is a difference in
+the arithmetic rather than in formatting. Its failures and reductions go
+under `build/clang-oracle-fuzz-float/`.
+
 The same source is compiled by clang and by dcc. It can be, because it never
 spells `int` or `long`, and the renderer inserts the casts and masks that
 make an expression mean the same with a 16-bit and a 32-bit `int`. What a
@@ -96,6 +106,8 @@ python3 scripts/clang-oracle-fuzz.py --seeds 1-300 --off known --configs all
 python3 scripts/clang-oracle-fuzz.py --reduce 17,42 --config nopeep --off known
 python3 scripts/clang-oracle-fuzz.py --generate 17 prog.c --off known
 python3 scripts/clang-oracle-fuzz.py --list-configs
+python3 scripts/clang-oracle-fuzz.py --gen float --seeds 1-300 --off known
+python3 scripts/clang-oracle-fuzz.py --gen float --reduce 36 --config nopeep --off known
 ```
 
 - `--configs production` builds with and without `dccpeep` and with and
@@ -105,8 +117,12 @@ python3 scripts/clang-oracle-fuzz.py --list-configs
   latent, not shipped behaviour.
 - `--off known` leaves out every form that hits a bug already logged in
   `compiler-bugs.md`, so a run reports new failures instead of the same ones
-  again. `KNOWN_BUGS` in `clang_oracle_gen.py` maps each such form to its
-  entry; delete a line when its bug is fixed. `--off` also takes individual
+  again. `KNOWN_BUGS` in `clang_oracle_gen.py` (and in
+  `clang_oracle_float_gen.py` for `--gen float`) maps each such form to its
+  entry; delete a line when its bug is fixed. The float generator also
+  rewrites a few logged shapes after generation (`Gen.steer`) when they are
+  easier to see in the finished tree, for example by swapping the operands
+  of a `+` whose right side is a product. `--off` also takes individual
   generator features (`-h` lists them) to narrow a search by hand. A program
   whose undefined-behaviour repair rebuilt one of those forms is dropped and
   counted as `INVALID`.

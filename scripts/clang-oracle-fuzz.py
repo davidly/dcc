@@ -41,7 +41,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import clang_oracle_gen as gen  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-HOST_FLAGS = ['-std=gnu99', '-w', '-fsigned-char', '-fno-common']
+# -ffp-contract=off: clang would otherwise fuse a*b+c into one rounding
+HOST_FLAGS = ['-std=gnu99', '-w', '-fsigned-char', '-fno-common', '-ffp-contract=off']
 SANITIZE = ['-fsanitize=address,undefined', '-fno-sanitize-recover=all']
 CANDIDATES = ['homed', 'homed-lazy', 'hybrid', 'regional', 'spilled-baseline', 'spilled-all',
               'spilled-all-no-prepack', 'spilled-address-remat', 'spilled-boolean-phi-branch',
@@ -576,7 +577,7 @@ class Reducer:
         for i, (slot, parent, index) in enumerate(parented_slots(prog)):
             node = gen.slot_get(slot)
             t = gen.ty(node)
-            if not gen.is_int(t) or is_lvalue_slot(parent, index) or node.op == 'const':
+            if not gen.is_scalar(t) or is_lvalue_slot(parent, index) or node.op == 'const':
                 continue
             options = []
             # a cast is only ever dropped ('plain'): replacing it by a cast of
@@ -585,7 +586,7 @@ class Reducer:
                 for k, kid in enumerate(node.k):
                     if node.op in ('asg', 'incdec') and k == 0:
                         continue
-                    if gen.is_int(gen.ty(kid)):
+                    if gen.is_scalar(gen.ty(kid)):
                         options.append(('kid', k))
             options += [('const', 1), ('const', 0)]
             if node.op == 'cast' or (node.op == 'asg' and node.a != '='):
@@ -600,8 +601,7 @@ class Reducer:
                         if gen.ty(new) is not t:
                             new = gen.E('cast', [new], t=t)
                     elif what == 'const':
-                        ct = t if t.bits >= 16 else (gen.I16 if t.signed else gen.U16)
-                        new = gen.mk_const(k, ct)
+                        new = gen.simple_const(k, t)
                     elif node.op == 'cast':
                         new = node.k[0]
                     else:
@@ -663,11 +663,10 @@ class Reducer:
         out = []
         for bi, b in enumerate(gen.all_blocks(prog)):
             for di, d in enumerate(b.decls):
-                if isinstance(d.init, gen.E) and d.init.op != 'const' and gen.is_int(d.t):
+                if isinstance(d.init, gen.E) and d.init.op != 'const' and gen.is_scalar(d.t):
                     def plain(p, bi=bi, di=di):
                         dd = gen.all_blocks(p)[bi].decls[di]
-                        ct = dd.t if dd.t.bits >= 16 else (gen.I16 if dd.t.signed else gen.U16)
-                        dd.init = gen.mk_const(1, ct)
+                        dd.init = gen.simple_const(1, dd.t)
                     out.append(plain)
         return out
 
@@ -732,8 +731,13 @@ def parse_seeds(text):
 
 
 def main():
+    global gen
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--gen', default='int', choices=('int', 'float'),
+                        help='program generator: integer (clang_oracle_gen) or float '
+                             '(clang_oracle_float_gen); float defaults --work to '
+                             'build/clang-oracle-fuzz-float')
     parser.add_argument('--seeds', default='1-100', help='seeds to run, e.g. 1-100,250')
     parser.add_argument('--configs', default='default',
                         help='production, default (production + no exact schedules), all, '
@@ -748,7 +752,7 @@ def main():
     parser.add_argument('--jobs', type=int, default=os.cpu_count() or 1)
     parser.add_argument('--reduce-jobs', type=int, default=16,
                         help='candidate edits tried at once per reduction')
-    parser.add_argument('--work', type=Path, default=REPO / 'build' / 'clang-oracle-fuzz')
+    parser.add_argument('--work', type=Path, default=None)
     parser.add_argument('--emulator', default='ntvcm')
     parser.add_argument('--stack', type=int, default=4096, help='target stack bytes')
     parser.add_argument('--timeout', type=int, default=20, help='seconds to run a program')
@@ -761,6 +765,11 @@ def main():
     parser.add_argument('--reduce', help='seeds whose failure to reduce')
     parser.add_argument('--config', default='nopeep', help='config to reduce under')
     args = parser.parse_args()
+    if args.gen == 'float':
+        import clang_oracle_float_gen
+        gen = clang_oracle_float_gen
+    if args.work is None:
+        args.work = REPO / 'build' / ('clang-oracle-fuzz' + ('-float' if args.gen == 'float' else ''))
     args.off = frozenset(x for x in args.off.split(',') if x)
     if 'known' in args.off:
         args.off = (args.off - {'known'}) | frozenset(gen.KNOWN_BUGS)

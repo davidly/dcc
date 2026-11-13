@@ -58,13 +58,30 @@ has been fixed by this work; this file is the log.
 | [BUG-036](#bug-036) | #256 | wrong result | A 32-bit local assigned in a loop and passed directly to a call keeps its old value after the loop |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 | [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
+| [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
+| [BUG-040](#bug-040) | #260 | compile error | A static-storage float initializer must be a bare constant: `(2.5f)`, `-(2.5f)` and `1.0f + 2.0f` are rejected |
+| [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
+| [BUG-042](#bug-042) | #262 | compile error | A float constant that must be folded or tested for truth is rejected: `-(-2.5f)`, `!2.5f`, `2.5f && n`, `if (2.3f)` |
+| [BUG-043](#bug-043) | #263 | compile error | Compound assignment to an integer lvalue with a float right operand is rejected (`l *= f`, `n += 1.5f`) |
+| [BUG-044](#bug-044) | #264 | wrong result | `++`/`--` on a float is a no-op on a scalar and a 16-bit integer increment on an array element |
+| [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
+| [BUG-046](#bug-046) | #266 | compile error | `return` of a 32-bit integer from a `float` function, or of a float from a 32-bit integer function, is rejected; the cast is implicit everywhere else |
+| [BUG-047](#bug-047) | #267 | wrong result | `f + (x * y)` drops the product when `x` is an integer, or when `y` is a local/parameter and `x` is a global, array element, member or sub-expression |
+| [BUG-048](#bug-048) | #268 | wrong result | `(uint32_t)x` converted to float, with `x` a signed 32-bit expression, converts the signed value (`-72` → `-72.0f`, not `4294967224.0f`) |
+| [BUG-049](#bug-049) | #269 | wrong result | `!f` is 0 when `f` is negative zero; `if (f)`, `f ? :` and `f == 0.0f` treat `-0.0f` as zero correctly |
+| [BUG-050](#bug-050) | #270 | wrong result | `(int32_t)(uint32_t)x` converted to float, with `x` a signed 8- or 16-bit value, converts the unsigned value (`-121` → `4294967175.0f`) |
+| [BUG-051](#bug-051) | #271 | compile error | A macro parameter named like a constant's suffix (`f`, `u`, `L`) is substituted inside the constant: `#define T(f) g = 9.0f; f(1)` gives `g = 9.0a1` |
+| [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
+| [BUG-053](#bug-053) | #273 | wrong result (`dccpeep` only) | `float *p = &x; { for (...) {} } x = 1.0f; return *p;` returns the old parameter: `dccpeep` forgets the escaped address at its own `LS<n>:` label and deletes the store |
 
-Thirty-six are open: twenty-four give wrong results with no diagnostic
-(BUG-030 can also hang; BUG-032, BUG-034 and BUG-035 need `dccpeep`), one
-hangs, ten stop the compile (BUG-007 can instead compile and crash), and
-one (BUG-022) turns a compile error into a broken program. BUG-026 is the
-one most likely to be hit by ordinary code, then BUG-030 (it corrupts
-memory in C99-style code), BUG-003, BUG-013, BUG-016 and BUG-025.
+Fifty-one are open: thirty-two give wrong results with no diagnostic
+(BUG-030 can also hang; BUG-032, BUG-034, BUG-035 and BUG-053 need `dccpeep`;
+BUG-039 is in the runtime), one hangs, seventeen stop the compile (BUG-007
+can instead compile and crash), and one (BUG-022) turns a compile error into
+a broken program. BUG-026 is the
+one most likely to be hit by ordinary code, then BUG-044 (every float `++`
+is wrong), BUG-047 (`f + n * g` is `f`), BUG-030 (it corrupts memory in C99-style code), BUG-003,
+BUG-013, BUG-016 and BUG-025.
 
 Two more were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -366,6 +383,41 @@ signed char l2 = -66;
   `{ uint16_t b = 0; --b; g9 = b; }` with a 32-bit `g9` gives -1, not 65535;
   `b--` and `(uint16_t)b` are wrong too, `b -= 1`, `b = 5; --b`, a store to a
   16-bit target and a function-scope `b` are right.
+- Unary `-` of a nested-block `float` is computed on its low 16 bits as an
+  integer (float generator, seed 30): `{ float b = 1.0f; fg = -b; }` stores
+  0.0f, `{ float b = 1.1f; fg = -b; }` stores 13107.0f (the negated low word
+  0xcccd of 0x3f8ccccd), `-b - b` is -1.0f and `-(-b)` is 0.0f. Right:
+  `0.0f - b`, `-(b + z)`, `float c = -b;`, `-b` of a function-scope float.
+- A nested-block integer local used directly as the operand of float
+  arithmetic is not converted: its bits are taken as a float (so a small
+  integer is a denormal, about zero). `{ int16_t b = 3; fg = b + 1.0f; }`
+  gives 1.0f, `b * 2.0f` gives 0.0f, `b - 1.0f` gives -1.0f, and
+  `b + c * 1.0f` with two block locals gives the integer 7 in the low word.
+  The same for `int32_t` and `uint8_t` locals and for a C99 `for
+  (int16_t i = 0; …)` loop variable (`fg = i + 1.0f`). `(float)b + 1.0f`,
+  `(b + 0) * 1.0f` and `fg = b;` are right. Found by fuzzing (float
+  generator, seeds 20 and 41).
+- The same missing conversion in other float contexts: `fg *= b` gives 0
+  and `fg += b` leaves `fg` unchanged; a store to a float array element,
+  struct member or through a pointer (`fa[0] = b`, `s.m = b`, `*p = b`)
+  stores the integer bits (`00000003`); `b == 3.0f` is 0; `fg > 0.0f ? b :
+  fg` is `40400003`. A store to a plain float global or local (`fg = b`,
+  `float l = b`), a float call argument, `(float)b` and `b < 3.5f` are
+  right. Found by fuzzing (float generator, seeds 79 and 108).
+- The mirror case: a nested-block *float* local in arithmetic with an
+  integer operand (constant or variable) is wrong — `{ float b = 1.0f; fg
+  = b * 2; }` gives 0.0f, `1 + b` gives 1.0f, `b + 2` gives 1.0f,
+  `(int32_t)1 - b` gives -1.0f, `b - (uint32_t)1` gives 1.0f, `b * gl`
+  (32-bit global) gives 0.0f, and `b -= (int32_t)1` leaves `80000001`.
+  `b * 2.0f`, `b * (float)2` and a function-scope `b` are right. Found by
+  fuzzing (float generator, 20 of 1200 seeds, e.g. 292, 303, 370, 381,
+  435, 682, 689, 698, 722, 789, 1031, 1036, 1052, 1105, 1131, 1144, 1154,
+  1248, 1328, 1428).
+- The value of an assignment to a nested-block float behaves the same way:
+  `{ float b = 1.0f; fg = -(b = 1.18f); }` stores `c523d000` (-2621.0f, the
+  negated low word `0x0a3d` of `0x3f970a3d`), and `fg = (b = 1.0f) - 1;`
+  stores 1.0f. `fg = (b = 1.18f);` and a function-scope `b` are right.
+  Found by fuzzing (float generator, seeds 1490 and 1861).
 
 ## BUG-016
 
@@ -398,6 +450,19 @@ r = x / l;               /* uint16_t x = 50000: want -16666, dcc 0 */
   unsigned constant: `{ short b = 0; b = (uint16_t)0xb840; out = (b % three); }`
   with a 32-bit `three` of 3 gives 2 (`47168 % 3`), not -2. Correct with `b`
   at function scope or a signed constant.
+- With floats: `{ uint32_t b = (int32_t)1 - 78; fg = b; }` converts the
+  signed value (`c29a0000` instead of `4f800000`), as does `float c = b;`
+  in the block; and `{ uint16_t b = h(); fg = (float)b; }` with `h()`
+  returning `int16_t -180` gives `-180.0f` instead of `65356.0f` (also in
+  `8.1f > (float)b`). Found by fuzzing (float generator, seeds 456, 863,
+  1203 and 1215).
+- An `int32_t` local initialised from a `uint32_t` converts to float as
+  unsigned even after it has been read correctly as an integer:
+  `{ int32_t t = (int32_t)gu; fg = (float)t; }` with `gu = 0xffffffbd`
+  gives `4f800000`, not `c2860000` (`-67.0f`); the same with `int32_t t =
+  gu;` and `fg = t;`, and after `printf("%ld", (long)t)` has shown -67.
+  Right: `int32_t t; t = (int32_t)gu;` or `(float)(t + 0)`. Found by
+  fuzzing (float generator, seed 3792).
 
 ## BUG-017
 
@@ -466,6 +531,10 @@ if (sel) {
   block); dead code with no declaration (`return 1; { low += 1; }`); a
   `for` loop whose counter is declared at function scope; a conditional jump
   on a variable (`if (sel) continue;`, `if (1 || sel) break;`).
+- The constant may be a folded cast: `if ((int16_t)(-1.0f)) { return 1; }`
+  or `if ((int16_t)((int32_t)1000)) { return 1.0f; }` followed by `{ float
+  b = 1.0f; }` in the same block is fatal. Found by fuzzing (float
+  generator, seed 1957).
 - Dead code like this is rare in hand-written programs, so this is low
   priority; it is still valid C.
 
@@ -496,6 +565,23 @@ static int32_t f(int32_t x)
 - Upstream commit `81937302` ("Don't pair a wide helper operand with an
   unpushed parameter or constant") fixed `if (x < n / x)`, which fails with
   the same message; this looks like a neighbouring shape.
+- An `if … else` whose *then* branch contains a loop triggers it as well
+  (the `switch` is not essential), and floats are affected: after
+  `if (n) { while (n) n--; } else { }`, `if (fg2 < x0 * fg1)` with `x0` a
+  float parameter and `fg1` a float global is fatal, as is
+  `if (gl < xl * gl)` with 32-bit `xl`. `x0 * 2.0f`, `x0 - 2.0f`, `xl * 2`
+  (a constant right factor), `fg1 * x0` (parameter on the right), the
+  operands swapped (`x0 * fg1 > fg2`), no `else`, a loop in the `else`
+  instead, or a non-loop `then` body are all fine. Found by fuzzing (float
+  generator, seed 26).
+- No loop or `switch` is needed either: a braced early return is enough.
+  `int f(float x) { float l = -2.0f; if (x) { return 1; } return 1.0f >=
+  (x - l); }` is fatal, with any condition (`if (n)`, `if (g)`, `if ((int)
+  (-1.0f))`) and with `>=`, `>`, `==`, `+` or `*`. Fine: `if (x) return 1;`
+  without braces, `return (x - l) <= 1.0f;` (constant on the right), `(l -
+  x)` (parameter on the right), `x >= l`, both operands parameters, `l` a
+  local assigned instead of returned, and the same with `int` or `long`
+  operands. Found by fuzzing (float generator, seed 2017).
 
 ## BUG-021
 
@@ -703,6 +789,21 @@ dcc emits, for `sq`:
 - Not a regression: the v3.6.0 compiler (`20290235`) emits the same code.
 - BUG-017 (`x &= x` on a parameter) also has one variable as both operands
   and may be the same defect.
+- A nested-block `float` or `long` local initialised from a global or a
+  converted integer has it too, and there the result is the first operand
+  rather than garbage: `{ float b = fg; g = b + b; }` with `fg` 2.0f gives
+  2.0f; `{ float b = c8; g = b + b; }` with `signed char c8` 3 gives 3.0f,
+  `b - b` gives 3.0f and `b * b` is garbage; `{ long b = c8; g = b + b; }`
+  is garbage. Right: `float b = 1.0f;`, `float b; b = c8;` (assigned, not
+  initialised), `(b + 0.0f) + b`, a call between the two statements, and a
+  function-scope `b`. Found by fuzzing (float generator, seed 1681).
+- Also for a plain (function-scope) `float` local whose last assignment was
+  a converted integer: `float l = 3.14159f; l = (uint16_t)0xdcc7;
+  return (l * l) + (int32_t)1;` returns 1.0f (the product reads as 0) and
+  `(l + l) + (int32_t)1` is wrong; `(l * l) + 1.0f`, `(l * l) + (int16_t)1`,
+  `((int32_t)1) + (l * l)` and `l * l` alone are right, as is `l = 56519.0f`
+  (the same value as a float constant) or dropping the dead `float l1`
+  declaration next to `l`. Found by fuzzing (float generator, seed 3223).
 
 ## BUG-027
 
@@ -1098,6 +1199,18 @@ return l;                    /* want 1, dcc 0 */
 - Wrong with `dcc-peep` on and off. Found by fuzzing at `83dc7a91` (seed
   6826); the reduced program had a `for`-init declaration, but a counter
   declared outside the loop fails the same.
+- The `float` form is worse than stale: after `for (...) id((l0 = fg2));`,
+  `{ l0 = fg2; id(l0); }`, `g = id((l0 = fg2));` or `l0 += fg2` inside the
+  argument, `l0` is byte-scrambled (`7f74f6c5` for `c57f7400`) or stale.
+  Right: no loop, a constant assigned (`l0 = 7.0f`), no initialiser on
+  `l0`, `id((l0 = fg2) + 0.0f)`, or a `long` local in the same shape. Found
+  by fuzzing (float generator, seed 3025).
+- A compound assignment leaves the local equal to the constant operand:
+  `while (n > 0) { l *= 2.0f; id(l); n = 0; }` with `l = 0.5f` returns
+  2.0f (`l += 1.0f` returns 1.0f), for `float` and `long` and in `for` and
+  `while` loops. Right when the call result is used (`fa[1] = id(l);`),
+  when the argument is an expression (`id(l + 0.0f)`), with no call, or
+  with no loop. Found by fuzzing (float generator, seed 3288).
 
 ## BUG-037
 
@@ -1163,6 +1276,411 @@ return sink;
 - Found by fuzzing at `83dc7a91` (seed 9056). The reduced program had
   `if ((int32_t)0) { } else { if (l2 = 1) { } }`, which fails in every
   configuration including the forced MIR candidates.
+
+## BUG-039
+
+**Float division is off by one unit in the last place in about a fifth of
+cases, in both directions.** Addition, subtraction, multiplication, the
+comparisons and every integer/float conversion are bit-exact against IEEE
+single precision (484 operand pairs each), so this is the rounding in the
+runtime's `__fdiv` (`DCCRTL.MAC`), not a general precision limit.
+
+```c
+volatile float va = 1.0f, vb = 3.0f;
+union { float f; uint32_t u; } b;
+b.f = va / vb;      /* want 3eaaaaab, dcc 3eaaaaaa */
+va = 10.0f;         /* 10/3: want 40555555, dcc 40555556 */
+va = 1.0f; vb = 1.85f;  /* want 3f0a60dd, dcc 3f0a60de */
+```
+
+- 80 of 400 quotients over a 20-value table are wrong, all by exactly one
+  ulp; 44 are too low and 36 too high, so it is not a missing round-up.
+- Division by a power of two is exact.
+- `1.0f / 3.0f` with constant operands is wrong too: dcc does not fold float
+  division, it calls the runtime (`__fdf`, the fast-call entry of `__fdiv`),
+  so every float quotient goes through the one routine.
+- Also at v3.6.0 (`20290235`) with today's runtime.
+- Found by hand probing (the float generator excludes `/` as `fdivround`).
+
+## BUG-040
+
+**The initializer of a float with static storage must be a bare floating
+constant, optionally negated, or `(float)` of an integer constant.** A
+parenthesised constant, a negated parenthesised constant or a constant
+expression is rejected: `DCC-E1102 expected ';'` at file scope, `DCC-E0912
+float initializer must be constant` for an element of a static array.
+
+```c
+static float a = (2.5f);              /* rejected */
+static float b = -(2.5f);             /* rejected */
+static float c = 1.0f + 2.0f;         /* rejected */
+static float arr[2] = { (0.5f), 1.0f - 0.75f };   /* rejected */
+static int ok = (-2) + 1 * 3;         /* accepted */
+```
+
+- Accepted: `-2.5f`, `(float)3`, every form as an automatic initializer
+  (`float la = (2.5f);`) and as an assignment.
+- The conformance table lists global initializers as supported without a
+  float exception.
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seeds 1, 2, 4, 5, …): it rendered
+  negative constants in parentheses.
+
+## BUG-041
+
+**The value of a float `++` or `--` expression is rejected.** `DCC-E1002`
+("unsupported expression statement", "unsupported if condition or branch",
+"unsupported while condition or body"), reported against the enclosing
+statement, wherever the value is used.
+
+```c
+g = f++;                      /* rejected; float f, g */
+g = ++f + 1.0f;
+if (f-- > 3.0f) g = 7.0f;
+if (--f) n = 1;
+n = f++ > 1.0f;
+g = (f-- > 10.0f) ? 1.0f : 2.0f;
+while (f-- > 0.0f) g += 1.0f;
+if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
+```
+
+- Accepted: `f++;` as a statement; the value of `f += 1.0f`; the value of
+  an integer `++`/`--` in every one of these positions.
+- The limitation is not documented.
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seed 3).
+
+## BUG-042
+
+**A floating constant that has to be folded or tested for truth is
+rejected.** `DCC-E1002`, reported against the enclosing statement: unary `-`
+of a negated or computed float constant, `!`, `&&` or `||` with a float
+constant operand, and a float constant as the condition of `if` or `while`.
+
+```c
+g = -(-2.5f);              /* rejected; -(2.5f) is accepted */
+g = -(1.0f + 2.0f);        /* rejected; -(1.0f + f) is accepted */
+n = !255.0f;               /* rejected; !f is accepted */
+n = 2.5f && 1;             /* rejected; 2.5f ? 1 : 2 is accepted */
+if (2.3f) n = 7;           /* rejected; if (f), if (1.0f + f), if (1.0f > 2.0f) accepted */
+while (1.0f) { break; }    /* rejected */
+```
+
+- Integer constants in every one of these positions are accepted, so it is
+  the float constant folder that lacks `-` of a folded value and the truth
+  test; compare BUG-012 (`-`/`~` of `!`, `&&`, `||` of integer constants).
+- `&&`/`||` whose operands are *all* constant is also rejected when at least
+  one operand is a float comparison: `if ((1.0f > 2.0f) && (0.0f == 0.0f))`,
+  `if ((1.0f > 2.0f) && (1 == 1))`, `n = (1.0f > 2.0f) && 1`. Each
+  comparison alone (`if (1.0f > 2.0f)`), a non-constant operand
+  (`(1.0f > 2.0f) && n`), and the all-integer form (`(1 > 2) && (0 == 0)`)
+  are accepted. Found by fuzzing (float generator, seed 30).
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seeds 3, 13, 16).
+
+## BUG-043
+
+**A compound assignment to an integer lvalue whose right operand is a float
+is rejected.** `DCC-E1002 unsupported expression statement`, for every
+integer width (8, 16 and 32 bits, signed and unsigned), every operator tried
+(`+= -= *= /=`), a global or a local lvalue, and a variable or constant
+right operand.
+
+```c
+int32_t l = 5; float f = 2.5f;
+l *= f;                    /* rejected; want 12 */
+n += f;                    /* int n */
+u -= f;                    /* uint32_t u */
+c8 += f;                   /* int8_t c8 */
+l -= 1.5f;
+```
+
+- Accepted: the expanded form `l = l * f`; a float lvalue with an integer
+  right operand (`f *= l`); `l %= 2`.
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seeds 7, 10, 25).
+
+## BUG-044
+
+**`++` and `--` on a float do the wrong thing with no diagnostic.** On a
+scalar (a local, a global, a struct member, `*p`) the statement is a no-op.
+On an array element (`fa[1]++`, `fa[i]--`, `p[3]++`, a local array too) the
+element is treated as a 16-bit integer: the low word is incremented or
+decremented and the result sign-extended over the high word.
+
+```c
+float l = 1.0f;
+l++;            /* want 2.0f (40000000), dcc 1.0f (unchanged) */
+fg++;           /* static float fg = 1.0f: unchanged */
+s.m++;          /* unchanged */
+(*p)++;         /* unchanged */
+fa[1]++;        /* 2.0f: want 40400000, dcc 00000001 */
+fa[2]--;        /* 3.0f: want 40000000, dcc ffffffff (a NaN) */
+```
+
+- Correct: `l += 1.0f`, `l = l + 1`.
+- The value of a float `++` (`g = f++`) is rejected (BUG-041), so only the
+  statement form reaches code generation, and it is always wrong.
+- With and without `dcc-peep`.
+- Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
+- Found by fuzzing (float generator, seed 14: `la3[3]++; fg1 = la3[3];`).
+
+## BUG-045
+
+**A comparison whose right operand is a negative float constant combined
+with a second operand stops the compile.** `dcc: fatal: MIR emission is
+required`, with no line number. The shape is `x REL (-C OP y)` where `-C`
+is a negative float constant (including `-0.0f`, `(-1.0f)` and `-(1.0f)`),
+`OP` is `+ - * /` and `y` is an integer variable or constant of any width, a
+cast, or a float global. The relation can be any of `< <= > >= == !=` and
+the expression can be an `if`/`while` condition, a `?:` test or an
+assigned value.
+
+```c
+if (x < -1.0f - n) r = 1;     /* fatal: n is int, int32_t, uint16_t, char... */
+if (x < -1.0f - 2) r = 1;     /* fatal: even an integer constant */
+if (x < -1.0f - fg) r = 1;    /* fatal: fg a float global */
+if (x < -1.0f - (float)n) r = 1;   /* fatal */
+if (x == -1.0f * n) r = 1;    /* fatal: so are + and / */
+r = (x < -1.0f - n);          /* fatal */
+```
+
+- Accepted: a positive constant (`x < 1.0f - n`), the constant on the right
+  (`x < n - 1.0f`, `x < -n - 1.0f`), the whole thing on the left
+  (`-1.0f - n < x`), a float local/parameter/array element as `y`
+  (`x < -1.0f - fl`), a wider `y` (`x < -1.0f - 2 * n`), or storing to a
+  float first (`t = -1.0f - n; if (x < t)`). The bare value `-1.0f - n`
+  outside a comparison is fine too.
+- Also at v3.6.0 (`20290235`) and every later compiler checked.
+- Found by fuzzing (float generator, seed 28:
+  `(la3[3] - 100.0f) < ((-108.885f) - g1)`).
+- The constant need not be negative: any comparison whose right operand is
+  a float binop with a *constant* left operand is fatal — `1.0f <= (3.0f *
+  fg2)`, `fg < (3.0f * fg2)`, `2 < (3.0f * fg2)`, `1.0f < (1174.3f + 1)`.
+  `1.0f < (fg2 + 1)`, `1.0f < (fg2 * fg)`, `(3.0f * fg2) >= 1.0f` and
+  `1.0f < -fg2` are accepted. Found by fuzzing (float generator, seeds 477
+  and 1347).
+
+## BUG-046
+
+**`return` does not convert between `float` and a 32-bit integer.** A
+function returning `float` cannot `return` any `int32_t`/`uint32_t`
+expression, and a function returning a 32-bit integer cannot `return` a
+float expression: `DCC-E1002: unsupported return expression`. When the
+`return` is inside an `if`, the error is reported against the `if`.
+
+```c
+static float a(int32_t x) { return x; }        /* rejected */
+static float c(void) { return gl; }            /* rejected: int32_t global */
+static float g(void) { return ff(); }          /* rejected: ff returns int32_t */
+static float b(uint32_t x) { return x + 1; }   /* rejected */
+static int32_t d(float x) { return x; }        /* rejected */
+static uint32_t e(float x) { return x * 2.0f; } /* rejected */
+```
+
+- Accepted: `return (float)x;`, `float r = x; return r;`, `fg = x; return fg;`,
+  and 8- and 16-bit integers in either direction (`float j(int16_t x)
+  { return x; }`, `int16_t k(float x) { return x; }`).
+- The same implicit conversion is accepted in assignments, initialisers and
+  arguments, so only the return-value path lacks the long/float widening.
+- Also at v3.6.0 (`20290235`) and every later compiler checked.
+- Found by fuzzing (float generator, seeds 30 and 35:
+  `return h0(...)` with `h0` returning `int32_t` in a `float` function).
+
+## BUG-047
+
+**`f + (x * y)` drops the product.** When the right operand of a float `+`
+is a product, the result is just the left operand (whatever `f` is: global,
+local, constant or parameter) in two families of factor kinds:
+
+- the left factor `x` is an integer (a constant, `int`, `int32_t`,
+  `uint16_t`, or `(float)128`), with any float right factor; or
+- the right factor `y` is a local or parameter and `x` is a global, array
+  element, struct member or sub-expression (`fv * l1`, `fa[1] * l1`,
+  `s.m * p`, `fv * l1 * l1`). A few forms give other garbage instead of
+  `f` (`(fv + 0.0f) * l1` is `-inf` in one context; the sum in `t()` of the
+  reproducer is `5.0028`).
+
+```c
+fg + (2 * 3.0f)            /* want 7.0f, dcc 1.0f (fg) */
+fg + (i * 3.0f)            /* 1.0f */
+1.0f + (128 * 1.0f)        /* want 129.0f, dcc 1.0f */
+r = fg; r += 2 * 3.0f;     /* 1.0f */
+fg + (fv * l1)             /* l1 a local: want 10.0f, dcc 1.0f */
+fg + (fv * p)              /* p a parameter: 1.0f */
+```
+
+- Right: `fg - (x * y)`, `fg * (x * y)`, `(x * y) + fg` (product on the
+  left), `fg + (l1 * fv)` and `fg + (p * fv)` (local/parameter left
+  factor), `fg + (fv * fv)`, `fg + (2.0f * fv)`, `fg + (float)i * 3.0f`,
+  `fg + (x * y) * 1.0f`, `fg + (x + y)`, `fg + (x - y)`, `fg + (x / y)`.
+- It is a per-function matter: the same expressions all compute correctly
+  inside one 256-statement function, so the operands' register or stack
+  placement decides it.
+- With and without `dcc-peep`.
+- Also at tag 3.8.0 (`5f733050`) and `32d3e46d`; v3.6.0 (`20290235`) cannot
+  compile the reproducer at all (`MIR emission is required`).
+- Found by fuzzing (float generator, seeds 7, 27, 31, 42 and 49).
+
+## BUG-048
+
+**`(uint32_t)x` converted to float converts the signed value.** With `x` a
+signed 32-bit expression, `(float)(uint32_t)x`, `m = (uint32_t)x;`,
+`(uint32_t)x * 1.0f` and `0.0f + (uint32_t)x` all produce the signed
+conversion: `-72` becomes `-72.0f` (`c2900000`) instead of
+`4294967224.0f` (`4f800000`).
+
+```c
+m = (uint32_t)g2;          /* g2 = -72: want 4f800000, dcc c2900000 */
+m = (uint32_t)(g2 + 1);    /* want 4f800000, dcc c28e0000 */
+```
+
+- Right: the cast stored in a `uint32_t` variable first (`u = (uint32_t)g2;
+  m = u;`), a `uint32_t` global, `(uint32_t)gs` with a 16- or 8-bit signed
+  operand, `(uint16_t)gs`, and integer uses of the cast (`(uint32_t)g2 / 2`
+  is 2147483612).
+- With and without `dcc-peep`.
+- Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
+- Found by fuzzing (float generator, seeds 12, 33, 56 and 60).
+
+## BUG-049
+
+**`!f` is 0 when `f` is negative zero.** `!` on a float tests the raw bits,
+so `-0.0f` (`80000000`) counts as true. The other truth tests are right:
+`if (f)`, `f ? 1 : 0`, `f && 1`, `f || 0` and `f == 0.0f` all treat
+`-0.0f` as zero.
+
+```c
+m0 = -((float)g5);         /* g5 == 0, so m0 is -0.0f */
+n = !m0;                   /* want 1, dcc 0 */
+if (!m0) puts("yes");      /* want yes, dcc no */
+```
+
+- `-0.0f` arises from negating a zero and from `0.0f * -1.0f`, so a
+  `!` guard after a multiplication or negation can misfire.
+- With and without `dcc-peep`.
+- Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
+- Found by fuzzing (float generator, seed 45).
+
+## BUG-050
+
+**`(int32_t)(uint32_t)x` converted to float converts the unsigned value.**
+With `x` a signed 8- or 16-bit value, the outer `(int32_t)` cast is lost
+when the result is converted to float: `-121` becomes `4294967175.0f`
+(`4f800000`) instead of `-121.0f` (`c2f20000`). The mirror image of
+BUG-048, where `(uint32_t)` of a signed 32-bit expression converts as
+signed.
+
+```c
+fg = (int32_t)((uint32_t)g4);        /* int8_t g4 = -121: want c2f20000, dcc 4f800000 */
+fg = (int32_t)((uint32_t)g5);        /* int16_t g5: same */
+fg = (int32_t)((uint32_t)g4 + 1);    /* want c2f00000, dcc 4f800000 */
+```
+
+- Right: a 32-bit `x` (`(int32_t)(uint32_t)g6`), `(int32_t)g4` alone, and
+  `(uint32_t)g4` alone (which is correctly `4f800000`).
+- With and without `dcc-peep`.
+- Found by fuzzing (float generator, seed 911).
+- Also wrong when `x` is 32-bit arithmetic, including arithmetic that folds:
+  `(float)((int32_t)(2147483647L + 1UL))` gives `4f000000`
+  (2147483648.0f), not `cf000000`; `(float)((int32_t)(gl + 2147483647UL))`
+  with `long gl` 7 is wrong too. Only a bare 32-bit variable,
+  `(int32_t)(uint32_t)gl`, is right. Found by fuzzing (float generator, seed
+  2036).
+- A bare `uint32_t` variable with its top bit set is wrong too:
+  `fg = (float)(int32_t)gu;` with `uint32_t gu = 0xffffffbd` (so -67)
+  gives `4f800000` (4294967229.0f), not `c2860000`, for a global, a local
+  or a parameter, with the cast explicit or implicit (`fg = (int32_t)gu;`);
+  `g2 = (float)(int32_t)gu;` then stores -1 in the `int32_t`. Found by
+  fuzzing (float generator, seed 3792).
+
+## BUG-051
+
+**A function-like macro parameter whose name is the suffix of a numeric
+constant in the replacement list is substituted inside that constant.** The
+suffix letters are lexed as an identifier separate from the number, so
+`f`, `u`, `l`, `L`, `U`, `F` and their combinations (`ul`) are all open to
+substitution.
+
+```c
+#define T(f) g = 9.0f; f(1)
+#define U(u) n = 10u; u
+T(a1);        /* expands to `g = 9.0a1; a1(1);`: error DCC-E1003 malformed statement near 'g' */
+U(n += 2;)    /* expands to `n = 10n += 2;; n += 2;` */
+```
+
+- A suffix that is not a parameter name is fine, and so are `1e5` with a
+  parameter `e` and `0x10` with a parameter `x`: only the trailing
+  integer/float suffix letters are detached.
+- The result is normally a compile error; a replacement that happens to
+  stay valid would silently change meaning.
+- Found while writing a probe for the float fuzzer's seed 2247 (a `T(f)`
+  test macro with `9.0f` in its body).
+
+## BUG-052
+
+**In a loop, an expression with a folded `?:` on a 32-bit parameter is
+accumulated into the parameter when the parameter is assigned after the
+loop.** `fa[1] = (0 ? 2.0f : x) - 1.0f;` run three times stores `x - 3`
+instead of `x - 1`: the parameter is treated as the expression's own
+temporary and the subtraction is written back into it. In a `for` loop the
+float's low word is overwritten by the counter as well.
+
+```c
+static void f1(float x) { int i; for (i = 0; i < 3; ++i) fa[1] = (0 ? 2.0f : x) - 1.0f; x = -1.0f; }
+/* f1(-0.35f): want bfaccccd (-1.35f); dcc c0560002 (about -3.35f with the low word 0002) */
+static void f3(float x) { int i; i = 0; while (i < 3) { fa[1] = (0 ? 2.0f : x) - 1.0f; i++; } x = g; }
+/* dcc c0566666 (-3.35f) */
+static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1L; x = -1L; }
+/* f4(5): want 4; dcc 1 */
+```
+
+- Wrong with `0 ? K : x` and `1 ? x : K`, for `float` and `long`
+  parameters, with a `for` or `while` loop, storing to an array element or
+  a struct member, and whatever the parameter is assigned afterwards (a
+  constant or a global).
+- Right: an `int` parameter; a local copy of the parameter in place of it;
+  `(x + 0.0f) - 1.0f` or `(float)x - 1.0f` (no `?:`); a store target that
+  varies with the counter (`fa[i]`); a plain global target; no loop; and
+  reading `x` after the loop (`fa[2] = x;` or `x = x + 1.0f;`) instead of
+  only assigning it.
+- With and without `dcc-peep`.
+- Found by fuzzing (float generator, seed 2247).
+
+## BUG-053
+
+**With `dccpeep`, a 32-bit parameter whose address is held in a pointer,
+assigned after an empty counted loop and then read through the pointer,
+returns its old value.** `pass_elim_dead_ix_stores` records that `&x0`
+escaped (`push ix / pop hl / ld de,4 / add hl,de`) and protects stores to
+`(ix+4..7)` from the escape onwards, but any label that is not `L<digits>:`
+is taken as a new function and resets that protection. The empty loop's
+signed compare is rewritten by `fold_signed_cmp_via_bytes` with an `LS<n>:`
+label, so at `ret` the four `ld (ix+4..7)` stores of `x0 = 1.0f` look
+dead and are deleted; `*p` then reads the caller's argument.
+
+```c
+static float f(float x0)
+{
+    float *p = &x0;
+    {
+        int16_t i;
+        for (i = 0; i < 2; ++i) {}
+    }
+    x0 = 1.0f;
+    return *p;              /* f(0.3f): want 3f800000 (1.0f); dccpeep 3e99999a (0.3f) */
+}
+```
+
+- Wrong for `float` and `int32_t` parameters, with the loop in a plain
+  block, under `if ((int32_t)12)`, `if (1)` or `if (g == 0.0f)`.
+- Right: an `int16_t` parameter; no loop; a loop with a body (`s += i;`)
+  or a `while` loop (no `LS` label is produced); `return x0` instead of
+  `*p`; `*p = 1.0f; return x0;`.
+- Right without `dccpeep` (`dcc-peep=false`). Any peep pass that
+  introduces an `LS`, `LI` or `LR` label between the escape and the store
+  should expose the same thing.
+- Found by fuzzing (float generator, seed 3036).
 
 ---
 

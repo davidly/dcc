@@ -1,0 +1,12 @@
+local ++ 40000000
+local -- 3f800000
+global ++ 40000000
+member ++ 40000000
+deref ++ 40000000
+element ++ 40400000
+element -- 40000000
+pointer index ++ c01f6c8b
+local element ++ 40600000
+local element ++ 3f800000
++= (correct) 40000000
++ 1 (correct) 40400000

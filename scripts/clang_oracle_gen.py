@@ -33,6 +33,7 @@ build reports no trips, so its natural source is defined for both compilers.
 from __future__ import annotations
 
 import random
+import struct
 
 CMP = ('<', '>', '<=', '>=', '==', '!=')
 LOGIC = ('&&', '||')
@@ -86,6 +87,57 @@ INT_TYPES = (I8, U8, I16, U16, I32, U32)
 UNSIGNED_OF = {I8: U8, I16: U16, I32: U32, U8: U8, U16: U16, U32: U32}
 
 
+class FloatType:
+    """dcc's only floating type: 32-bit IEEE single. Only clang_oracle_float_gen
+    creates values of it; integer programs never contain one."""
+    __slots__ = ('name', 'bits', 'signed', 'cnames')
+
+    def __init__(self):
+        self.name, self.bits, self.signed, self.cnames = 'f32', 32, True, ('float',)
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __copy__(self):
+        return self
+
+    @property
+    def cname(self):
+        return 'float'
+
+    def wrap(self, v):
+        return struct.unpack('f', struct.pack('f', float(v)))[0]
+
+    def __repr__(self):
+        return self.name
+
+
+F32 = FloatType()
+
+
+def is_float(t):
+    return t is F32
+
+
+def is_scalar(t):
+    return isinstance(t, IntType) or t is F32
+
+
+def float_text(v):
+    """A float constant: shortest decimal that round-trips to the single v."""
+    v = F32.wrap(v)
+    if v == 0:
+        return '0.0f'
+    for digits in range(6, 10):
+        s = '%.*g' % (digits, v)
+        if F32.wrap(float(s)) == v:
+            break
+    if 'e' not in s and '.' not in s:
+        s += '.0'
+    s += 'f'
+    return '(%s)' % s if v < 0 else s
+
+
 class PtrType:
     __slots__ = ('to',)
 
@@ -124,6 +176,8 @@ def promote(t):
 
 def common(a, b):
     """dcc's usual arithmetic conversions (int 16 bits, long 32 bits)."""
+    if a is F32 or b is F32:
+        return F32
     a, b = promote(a), promote(b)
     if a.bits == 32 or b.bits == 32:
         return U32 if U32 in (a, b) else I32
@@ -213,13 +267,14 @@ class Func:
 
 
 class Program:
-    __slots__ = ('seed', 'structs', 'globals', 'funcs', 'nid', 'off')
+    __slots__ = ('seed', 'structs', 'globals', 'funcs', 'nid', 'off', 'floats')
 
     def __init__(self, seed, off=frozenset()):
         self.seed = seed
         self.off = frozenset(off)   # generator features left out; the renderer honours some
         self.structs, self.globals, self.funcs = [], [], []
         self.nid = 1
+        self.floats = False         # uses F32: emit the float harness and checks
 
     @property
     def tests(self):
@@ -257,6 +312,8 @@ def ty(e):
         return common(ta, ty(e.k[2])) if is_int(ta) else ta
     if op == 'call':
         return e.a.ret
+    if op == 'fclamp':
+        return F32
     if op in ('asg', 'incdec'):
         return ty(e.k[0])
     raise ValueError(op)
@@ -661,6 +718,12 @@ def mk_const(v, t):
     return E('const', a=t.wrap(v), t=t)
 
 
+def simple_const(v, t):
+    """A constant of type t worth v (the reducer's replacement value)."""
+    ct = t if t.bits >= 16 else (I16 if t.signed else U16)
+    return mk_const(v, ct)
+
+
 def wrap_unsigned(node):
     """Rewrite a signed bin/un node in place as the same operation carried out
     in the unsigned type of its width, converted back to the signed type."""
@@ -794,7 +857,49 @@ static void mix(uint32_t v)
 '''
 
 
+FLOAT_CHECK_PRELUDE = r'''
+/* float programs: a result must be finite and, unless zero, of moderate
+ * magnitude, so neither compiler meets infinities, NaNs or subnormals; a
+ * conversion to an integer type must be in range (C leaves it undefined). */
+#include <math.h>
+static float ck_f(int id, float v)
+{
+    if (!isfinite(v) || (v != 0.0f && (fabsf(v) < 1e-18f || fabsf(v) > 1e18f))) ck_hit(id);
+    return v;
+}
+#define CK_F2I(name, type, lo, hi) \
+    static type name(int id, float v) { if (!(v > lo && v < hi)) { ck_hit(id); return 0; } return (type)v; }
+CK_F2I(ck_f2i8, int8_t, -129.0f, 128.0f)
+CK_F2I(ck_f2u8, uint8_t, -1.0f, 256.0f)
+CK_F2I(ck_f2i16, int16_t, -32769.0f, 32768.0f)
+CK_F2I(ck_f2u16, uint16_t, -1.0f, 65536.0f)
+CK_F2I(ck_f2i32, int32_t, -2147483904.0f, 2147483648.0f)
+CK_F2I(ck_f2u32, uint32_t, -1.0f, 4294967296.0f)
+static float ck_fpost(int id, float *p, float d) { float v = *p; *p = ck_f(id, v + d); return v; }
+'''
+
+FLOAT_HARNESS = r'''
+static float fclamp(float x, float b) { return x > b ? b : (x < -b ? -b : x); }
+/* a float is shown by its IEEE bits; -0 is shown as 0 */
+static void showf(uint16_t id, float f)
+{
+    union { float f; uint32_t u; } u;
+    u.f = (f == 0.0f) ? 0.0f : f;
+    show(id, u.u);
+}
+
+static void mixf(float f)
+{
+    union { float f; uint32_t u; } u;
+    u.f = (f == 0.0f) ? 0.0f : f;
+    mix(u.u);
+}
+'''
+
+
 def const_text(v, t):
+    if t is F32:
+        return float_text(v)
     if t is I16 or t.bits < 16:
         if t is not I16:
             return '((%s)%d)' % (t.cname, v)
@@ -814,6 +919,9 @@ def const_text(v, t):
 
 def static_text(v, t):
     """A constant for a static initializer."""
+    if t is F32:
+        # bare, not parenthesised: BUG-040
+        return float_text(v).strip('()')
     if t.signed:
         if v == -(1 << 31):
             return '(-2147483647 - 1)'
@@ -1160,6 +1268,8 @@ class Renderer:
                 for f in t.fields:
                     leaf('%s.%s' % (text, f.name), f.t, f.dims, ind + '    ', 'j')
                 out.append(ind + '}')
+            elif t is F32:
+                out.append('%smixf(%s);' % (ind, text))
             else:
                 out.append('%smix((uint32_t)%s);' % (ind, text))
 
@@ -1176,6 +1286,8 @@ class Renderer:
         if self.checked:
             out.append(CHECK_PRELUDE % {'nid': prog.nid})
             out.append('#define ck_idx(v, n) ((v) < 0 || (v) >= (n) ? (abort(), 0) : (v))')
+            if prog.floats:
+                out.append(FLOAT_CHECK_PRELUDE)
         out.append('')
         for st in prog.structs:
             out.append('struct %s {' % st.name)
@@ -1188,6 +1300,8 @@ class Renderer:
         for g in prog.globals:
             out.append('%s;' % self.decl(g))
         out.append(HARNESS)
+        if prog.floats:
+            out.append(FLOAT_HARNESS)
         self.state(prog, out)
         out.append('')
         for f in prog.funcs:
@@ -1214,6 +1328,8 @@ class Renderer:
                 call = '%s(%s)' % (f.name, ', '.join(self.ex(a) for a in args))
                 if is_int(f.ret):
                     out.append('    show(%d, (uint32_t)%s);' % (n, call))
+                elif f.ret is F32:
+                    out.append('    showf(%d, %s);' % (n, call))
                 else:
                     out.append('    %s;' % call)
                 out.append('    show(%d, state());' % (n + 0x4000))
