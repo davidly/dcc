@@ -55,8 +55,9 @@ has been fixed by this work; this file is the log.
 | [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
 | [BUG-034](#bug-034) | #254 | wrong result (`dccpeep` only) | `dccpeep` turns `8 == v` into a test of bit 3 |
 | [BUG-035](#bug-035) | #255 | wrong result (`dccpeep` only) | `dccpeep` compares a 16-bit local with itself in `a > x \|\| x < k` after a struct member on the stack |
+| [BUG-036](#bug-036) | #256 | wrong result | A 32-bit local assigned in a loop and passed directly to a call keeps its old value after the loop |
 
-Thirty-three are open: twenty-one give wrong results with no diagnostic
+Thirty-four are open: twenty-two give wrong results with no diagnostic
 (BUG-030 can also hang; BUG-032, BUG-034 and BUG-035 need `dccpeep`), one
 hangs, ten stop the compile (BUG-007 can instead compile and crash), and
 one (BUG-022) turns a compile error into a broken program. BUG-026 is the
@@ -359,6 +360,10 @@ signed char l2 = -66;
   `a2[1]` = 0x8001 and `g1` = 239 gives 255, not 1, and `(*q) / (g1 & 15)`
   gives 120, not 136. `*q >> 15` is wrong too; `r = (*q)` and `&` or `+`
   are right, and so is a pointer declared at function scope.
+- A nested-block `uint16_t` that wraps is widened as signed (seed 6648):
+  `{ uint16_t b = 0; --b; g9 = b; }` with a 32-bit `g9` gives -1, not 65535;
+  `b--` and `(uint16_t)b` are wrong too, `b -= 1`, `b = 5; --b`, a store to a
+  16-bit target and a function-scope `b` are right.
 
 ## BUG-016
 
@@ -1061,6 +1066,32 @@ What `dccpeep` makes of the first test (`pop hl` / `pop de` read the same word):
   the `switch`, without the assignment after the loop, or with one test
   instead of two.
 - Reproduces with `5f733050`, `32d3e46d` and `5bcac74e`.
+
+## BUG-036
+
+**A 32-bit local that is assigned inside a loop and passed directly to a call
+keeps its old value after the loop.** The call gets the constant, but the
+store to the local is dropped; the local is then reloaded from a stack slot
+that was never written.
+
+```c
+int32_t l = 0;
+uint16_t i;
+for (i = 5; i != 0; i--) {
+    l = 1;
+    take32(l);               /* static uint32_t take32(int32_t x) */
+}
+return l;                    /* want 1, dcc 0 */
+```
+
+- Wrong for `for`, `while` and counted loops, a constant or a variable
+  (`l = i;`), and with the call result stored or ignored; `l == 1` after the
+  loop is false.
+- Correct when the argument is an expression (`take32(l + 1)`), when the call
+  does not take `l`, or when it takes a 16-bit parameter (`take16((int16_t)l)`).
+- Wrong with `dcc-peep` on and off. Found by fuzzing at `83dc7a91` (seed
+  6826); the reduced program had a `for`-init declaration, but a counter
+  declared outside the loop fails the same.
 
 ---
 

@@ -6,6 +6,8 @@ cast compare 0
 cast shift compare 0
 cast sum -32768
 cast compare outer 0
+wrapped decrement 0000ffff
+wrapped decrement outer 0000ffff
 shift u16 1
 divide u16 136
 shift outer 1

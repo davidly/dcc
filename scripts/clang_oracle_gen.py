@@ -542,6 +542,8 @@ def known_shapes(prog):
         elif op == 'incdec':
             lv = e.k[0]
             lt = ty(lv)
+            if lv.op == 'var' and lv.a.storage == 'block' and lt is U16:
+                found.add('blockdec')
             local = lv.op == 'var' and lv.a.storage != 'global'
             if is_int(lt) and lt.bits == 32:
                 if lv.op in ('idx', 'pidx') or (lv.op == 'fld' and lv.a.dims):
@@ -568,6 +570,9 @@ def known_shapes(prog):
             if const_div_zero(e):
                 found.add('constdivzero')
         elif op == 'call':
+            if any(a.op == 'var' and a.a.storage != 'global' and is_int(a.a.t)
+                   and a.a.t.bits == 32 for a in e.k):
+                found.add('loopcallarg')
             if e.a.via_ptr and any(is_int(p.t) and ty(a) is not p.t
                                    for a, p in zip(e.k, e.a.params)):
                 found.add('ptrcallconv')
@@ -1258,7 +1263,8 @@ FEATURES = frozenset((
     'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'blockptr', 'inittype',
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
-    'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockcast'))
+    'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockcast',
+    'blockdec', 'loopcallarg'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
@@ -1295,6 +1301,8 @@ KNOWN_BUGS = {
     'constdivzero': 'BUG-033',
     'peepsum': 'BUG-032',
     'blockcast': 'BUG-015',
+    'blockdec': 'BUG-015',
+    'loopcallarg': 'BUG-036',
 }
 
 
@@ -1321,6 +1329,14 @@ class Gen:
             # the checking layer only repairs a division that runs
             self.prog.nid += 1
             k = [k[0], E('const', (), 1, I16, self.prog.nid)]
+        if op == 'incdec' and not self.on('blockdec') and k[0].op == 'var' \
+                and k[0].a.storage == 'block' and ty(k[0]) is U16:
+            # a nested-block unsigned 16-bit local is changed with a compound assignment
+            return self.mk('asg', [k[0], self.small(1, 1)], a[0][0] + '=')
+        if op == 'call' and not self.on('loopcallarg'):
+            k = [self.mk('bin', [x, self.small(1, 1)], '^') if x.op == 'var'
+                 and x.a.storage != 'global' and is_int(x.a.t) and x.a.t.bits == 32 else x
+                 for x in k]
         if op == 'bin' and not self.on('blockcast'):
             for i in (0, 1):
                 c = k[i]

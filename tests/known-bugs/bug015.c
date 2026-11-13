@@ -100,6 +100,25 @@ static int32_t cast_compare_outer(void)
     return r;
 }
 
+static uint32_t wrapped_decrement(void)
+{
+    uint32_t r;
+    {
+        uint16_t b = 0;
+        --b;
+        r = b;
+    }
+    return r;
+}
+
+/* correct: the local is declared at function scope */
+static uint32_t wrapped_decrement_outer(void)
+{
+    uint16_t b = 0;
+    --b;
+    return b;
+}
+
 static uint8_t shift_through_u16_pointer(void)
 {
     uint8_t r;
@@ -138,6 +157,8 @@ int main(void)
     printf("cast shift compare %ld\n", (long)cast_shift_compare());
     printf("cast sum %ld\n", (long)cast_sum());
     printf("cast compare outer %ld\n", (long)cast_compare_outer());
+    printf("wrapped decrement %08lx\n", (unsigned long)wrapped_decrement());
+    printf("wrapped decrement outer %08lx\n", (unsigned long)wrapped_decrement_outer());
     printf("shift u16 %u\n", (unsigned)shift_through_u16_pointer());
     printf("divide u16 %u\n", (unsigned)divide_through_u16_pointer());
     printf("shift outer %u\n", (unsigned)shift_through_outer_pointer());
