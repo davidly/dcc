@@ -3,3 +3,5 @@ if else 201 300
 add 255 256 355
 add 256 257 356
 narrow test 201 300
+compound divide 1
+compound modulo 105

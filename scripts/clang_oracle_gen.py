@@ -503,6 +503,9 @@ def known_shapes(prog):
             if is_int(lt) and e.a == '=':
                 if lv.op == 'var':
                     stored(rhs, lv.a)
+                    if lv.a.storage == 'block' and lt.bits == 32 and rhs.op == 'var' \
+                            and rhs.a.storage != 'global':
+                        found.add('blockwidecopy')
                     if lv.a.storage != 'global' and lt.bits == 16 and cross_type(rhs, lt):
                         found.add('crosstypeasg')
             elif is_int(lt):
@@ -527,6 +530,9 @@ def known_shapes(prog):
                 if local and lt.bits == 32 and e.a == '+=' and rhs.op == 'const' and rhs.a == 1 \
                         and id(e) not in steps:
                     found.add('widelocalinc')
+                if local and lt.bits == 16 and e.a == '+=' and rhs.op == 'const' \
+                        and 2 <= rhs.a <= 255:
+                    found.add('peepsum')
         elif op == 'incdec':
             lv = e.k[0]
             lt = ty(lv)
@@ -561,6 +567,8 @@ def known_shapes(prog):
     def decl(d):
         if wide_block_copy(d):
             found.add('blockwidecopy')
+        if d.storage == 'block' and isinstance(d.t, PtrType) and d.t.to is U16:
+            found.add('blockptr')
         if isinstance(d.init, E):
             if is_int(d.t):
                 stored(d.init, d)
@@ -1240,7 +1248,7 @@ FEATURES = frozenset((
     'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'blockptr', 'inittype',
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
-    'armfordecl', 'blockwidecopy', 'constdivzero'))
+    'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
@@ -1275,6 +1283,7 @@ KNOWN_BUGS = {
     'armfordecl': 'BUG-030',
     'blockwidecopy': 'BUG-031',
     'constdivzero': 'BUG-033',
+    'peepsum': 'BUG-032',
 }
 
 
@@ -1658,6 +1667,9 @@ class Gen:
         if not self.on('blockwideneg') and storage == 'block' and t.bits == 32 \
                 and negative_constant(rhs, t):
             rhs = self.small(1, 1)
+        if not self.on('blockwidecopy') and storage == 'block' and t.bits == 32 \
+                and rhs.op == 'var' and rhs.a.storage != 'global':
+            rhs = self.mk('bin', [rhs, self.small(1, 1)], '^')
         if not init and not self.on('crosstypeasg') and t.bits == 16 and cross_type(rhs, t):
             # a cast that changes width as well as type keeps the value
             rhs = self.mk('cast', [self.mk('cast', [rhs], t=I32)], t=t)
@@ -1670,8 +1682,8 @@ class Gen:
         expr = self.stored(expr, t, storage)
         if not self.on('blockwidecopy') and storage == 'block' and t.bits == 32 \
                 and expr.op == 'var' and expr.a.storage != 'global':
-            # assigned by a following statement instead
-            return mk_const(0, t), expr
+            # an expression, not a copy of the variable
+            expr = self.mk('bin', [expr, self.small(1, 1)], '^')
         if self.on('inittype') or init_keeps_type(expr, t):
             return expr, None
         return mk_const(0, t if t.bits >= 16 else I16), expr
@@ -1701,6 +1713,10 @@ class Gen:
                     and lv.a.storage != 'global' and op == '+=' and rhs.op == 'const' \
                     and rhs.a == 1:
                 rhs = self.small(2, 2)
+            if not self.on('peepsum') and lv.op == 'var' and lt.bits == 16 \
+                    and lv.a.storage != 'global' and op == '+=' and rhs.op == 'const' \
+                    and 2 <= rhs.a <= 255:
+                rhs = self.small(1, 1)
             if not self.on('structbytecasg') and lv.op == 'fld' and lv.a.dims \
                     and lt.bits == 8:
                 op = '='
@@ -2017,7 +2033,8 @@ class Gen:
     def st_walk(self, c, depth, b):
         r = self.rng
         arrs = [d for d in c.arrs if len(d.dims) == 1 and (not c.pure or d.storage != 'global')
-                and (d.t.bits < 32 or self.on('blockptr'))]
+                and (d.t.bits < 32 or self.on('blockptr'))
+                and (d.t is not U16 or self.on('blockptr'))]
         if not arrs:
             return self.st_assign(c, depth, b)
         arr = r.choice(arrs)

@@ -54,9 +54,10 @@ has been fixed by this work; this file is the log.
 | [BUG-032](#bug-032) | #252 | wrong result (`dccpeep` only) | `dccpeep` drops `x + K` (K from 2 to 255) when the sum is copied to another slot |
 | [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
 | [BUG-034](#bug-034) | #254 | wrong result (`dccpeep` only) | `dccpeep` turns `8 == v` into a test of bit 3 |
+| [BUG-035](#bug-035) | #255 | wrong result (`dccpeep` only) | `dccpeep` compares a 16-bit local with itself in `a > x \|\| x < k` after a struct member on the stack |
 
-Thirty-two are open: twenty give wrong results with no diagnostic
-(BUG-030 can also hang; BUG-032 and BUG-034 need `dccpeep`), one
+Thirty-three are open: twenty-one give wrong results with no diagnostic
+(BUG-030 can also hang; BUG-032, BUG-034 and BUG-035 need `dccpeep`), one
 hangs, ten stop the compile (BUG-007 can instead compile and crash), and
 one (BUG-022) turns a compile error into a broken program. BUG-026 is the
 one most likely to be hit by ordinary code, then BUG-030 (it corrupts
@@ -347,6 +348,12 @@ signed char l2 = -66;
   `{ int32_t b = 0; out = b + ((int16_t)((uint16_t)a6[1])); }` with `a6[1]`
   holding -1 gives 65535, and `if (b >= ((int16_t)((uint16_t)a6[1])))` is
   not taken. Correct with `b` at function scope, or with one cast.
+- A nested-block pointer to a `uint16_t` element with the top bit set is
+  shifted and divided as signed (found by fuzzing at `83dc7a91`; seeds
+  4245 and later): `{ uint16_t *q = &a2[1]; r = (*q) >> (g1 & 15); }` with
+  `a2[1]` = 0x8001 and `g1` = 239 gives 255, not 1, and `(*q) / (g1 & 15)`
+  gives 120, not 136. `*q >> 15` is wrong too; `r = (*q)` and `&` or `+`
+  are right, and so is a pointer declared at function scope.
 
 ## BUG-016
 
@@ -879,10 +886,14 @@ dcc emits, for the store:
   index), a struct member or `*p`; for `uint32_t` and `int32_t`; in a plain
   block and in an `if` body.
 - Correct: the local declared at function scope; initialised from a global,
-  a constant or an expression (`x + 1`); assigned instead of initialised
-  (`uint32_t b; b = y;`); stored with a cast (`a2[1] = (uint16_t)b;`) or as
+  a constant or an expression (`x + 1`); declared without an initialiser and
+  then assigned (`uint32_t b; b = y;`); stored with a cast (`a2[1] = (uint16_t)b;`) or as
   `b + 1`; stored to a plain global or to an 8-bit lvalue; a `for`
   initialiser (`for (uint32_t b = y; …)`).
+- Also wrong: initialised with a constant and then assigned the other local,
+  `{ int32_t b = 0; b = y; a2[1] = b; }` (found by fuzzing, seed 5089).
+  A different type on the right, such as `uint32_t b = 0; b = y;` with an
+  `int32_t y`, is correct.
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
 - One more case of a nested-block local losing its declared width; see
   BUG-015 and BUG-025.
@@ -927,6 +938,10 @@ dcc's output for the false arm, and what `dccpeep` makes of it:
 - Correct with `dccpeep`: constants 1, 256, 2000 and -56; a 16-bit
   comparison in the condition (no helper call, so HL happens to be right);
   without `x = x;`.
+- The sum can also be the operand of a helper call, not only a copy:
+  `while ((w++) < 1) sink = (l += 225) / 121;` with `int16_t l = 1` gives 0,
+  not 1, with `dccpeep`, because `ld l,(ix-2)` / `ld h,(ix-1)` before
+  `call __q2s` is removed (the same for `%`). Without the loop it is correct.
 - The pass dates from `bff0d144` (2026-07-26), before v3.6.0.
 
 ## BUG-033
@@ -989,6 +1004,59 @@ static int16_t f(uint16_t x)
   so `if (c == '\b')` is safe as far as these probes go).
 - The rewrite has been in the file since at least `3dd3b434` (2026-06-14).
 
+## BUG-035
+
+**With `dccpeep`, a test of a 16-bit local as the right operand, after a
+struct member that is already on the stack, compares the local with itself.**
+Without `dccpeep` the program is correct.
+
+```c
+struct S1 { int16_t m0; uint16_t m1; uint8_t m2; };
+static struct S1 s1 = { 0, 292, 255 };     /* x1 = s1 */
+static int32_t a3[4] = { 32766, 32768, 147, -1682854718 };
+
+static uint8_t f(struct S1 x1)
+{
+    uint16_t l2 = 0;
+    uint32_t i8;
+    l2 = (uint32_t)1550294082;             /* 0x9c42 */
+    for (i8 = 3; i8 > 1; i8 -= 1) {
+        if (((uint16_t)x1.m0 > l2) || (l2 < (uint16_t)1))
+            a3[1] = 1;                     /* 0 > 0x9c42 and 0x9c42 < 1 are false: want 32768, dccpeep 1 */
+        switch ((uint32_t)1) { case 100: break; default: break; case 10: break; }
+    }
+    l2 = (uint16_t)1;
+    return 1;
+}
+```
+
+What `dccpeep` makes of the first test (`pop hl` / `pop de` read the same word):
+
+```
+    push hl                ; x1.m0
+    ld l,(ix-2)
+    ld h,(ix-1)
+    push hl ; peep: preserve_ix_word_signed_range   (inserted)
+    push hl                ; the original push of l2
+    pop de
+    pop hl                 ; was x1.m0, is now l2
+    ex de,hl
+    or a
+    sbc hl,de              ; l2 - l2
+```
+
+- `pass_preserve_ix_word_across_signed_range()` in `src/dccpeep/dccpeep.c`
+  is written for `x < low || x > high`, where the word is the left operand of
+  the `sbc hl,de`. It scans from the `ld l,(ix-N)` / `ld h,(ix-M)` pair to
+  the next `sbc hl,de` / `jp c` and accepts a `push hl` / `pop de` /
+  `pop hl` shuffle in between, so it also fires when the word is the right
+  operand.
+- Wrong for the loop with a `switch` on a constant or on the counter, and
+  with a `uint8_t` or `uint32_t` counter. Correct: the same function without
+  the `switch`, without the assignment after the loop, or with one test
+  instead of two.
+- Reproduces with `5f733050`, `32d3e46d` and `5bcac74e`.
+
 ---
 
 ## Fixed upstream
@@ -1006,11 +1074,14 @@ they were reported. Their reproducers now pass.
 
 ## Not yet confirmed
 
-- **`a1` hangs with the regional emitter forced.** With
-  `DCC_MIR_PREFER_REGIONAL=1` the `a1` test's `6502fun` scenario
-  (`-x -a:400 6502FUN.HEX`) runs past 30 s in both peep modes. That variable
-  is diagnostic-only, so this is latent at most, and it has not been
-  investigated. It was observed at `aa9b2f1c` and not rechecked since.
+- **`a1` is 5.7 times slower with the regional emitter forced.** With
+  `DCC_MIR_PREFER_REGIONAL=1`, at `83dc7a91`, `runall.py -apps a1 -mode=full`
+  no longer hangs and the output is correct, but it is a performance
+  regression: peep 10,329,123 -> 67,385,816 cycles and nopeep 12,162,933 ->
+  69,161,297 cycles, with `.COM` 19,072 -> 22,400 and 21,120 -> 24,576 bytes.
+  The `6502fun` scenario runs well inside 30 s. That variable is
+  diagnostic-only, so this is latent at most, and it has not been
+  investigated further.
 - **A module larger than 64K is not diagnosed as such.** Without `dccpeep`,
   a 1,100-line generated program whose code passes 64K assembles with
   `No Fatal error(s)` and then fails in the linker with

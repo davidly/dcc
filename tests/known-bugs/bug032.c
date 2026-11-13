@@ -10,6 +10,7 @@
 static uint32_t g6 = 256;
 static uint16_t g16 = 256;
 static uint8_t g8 = 69;
+static int16_t sink;
 
 static uint16_t conditional(int16_t x)
 {
@@ -34,6 +35,26 @@ static uint16_t add_255(int16_t x)
     return ((g6 * g6) <= 1) ? g8 : (uint16_t)(x + 255);
 }
 
+/* the sum is the operand of a helper call (a division by a constant) that
+ * expects it in HL; it needs the loop and a global destination */
+static int16_t compound_then_divide(void)
+{
+    int16_t l = 1;
+    uint8_t w = 0;
+    while ((w++) < 1)
+        sink = (l += 225) / 121;
+    return sink;
+}
+
+static int16_t compound_then_modulo(void)
+{
+    int16_t l = 1;
+    uint8_t w = 0;
+    while ((w++) < 1)
+        sink = (l += 225) % 121;
+    return sink;
+}
+
 /* correct: 256 does not fit the 8-bit add */
 static uint16_t add_256(int16_t x)
 {
@@ -55,5 +76,7 @@ int main(void)
     printf("add 255 %u %u\n", (unsigned)add_255(1), (unsigned)add_255(100));
     printf("add 256 %u %u\n", (unsigned)add_256(1), (unsigned)add_256(100));
     printf("narrow test %u %u\n", (unsigned)narrow_test(1), (unsigned)narrow_test(100));
+    printf("compound divide %d\n", (int)compound_then_divide());
+    printf("compound modulo %d\n", (int)compound_then_modulo());
     return 0;
 }

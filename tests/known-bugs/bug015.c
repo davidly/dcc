@@ -1,13 +1,16 @@
 /* BUG-015: locals declared in a nested block lose their declared type in
  * further shapes. Through a nested-block pointer to a 32-bit object, `*q *= k`
  * is computed in 16 bits and `c <= *q` is compared as signed; a nested-block
- * unsigned char is compared as unsigned int. Each is correct when the local
- * is declared at function scope. */
+ * unsigned char is compared as unsigned int. A nested-block pointer to a
+ * uint16_t with the top bit set is shifted and divided as signed. Each is
+ * correct when the local is declared at function scope. */
 #include <stdint.h>
 #include <stdio.h>
 
 struct S { uint16_t m5 : 6; };
 static struct S s = { 24 };
+static uint16_t a2[2] = { 21930, 0x8001 };
+static uint8_t g1 = 239;
 static uint32_t a4[8] = { 1, 0xaa55, 7, 100, 21930, 1, 0xf941ce65, 257 };
 
 static void multiply_through_pointer(void)
@@ -53,6 +56,33 @@ static int32_t byte_local(void)
     return 3;
 }
 
+static uint8_t shift_through_u16_pointer(void)
+{
+    uint8_t r;
+    {
+        uint16_t *q = &a2[1];
+        r = (*q) >> (g1 & 15);
+    }
+    return r;
+}
+
+static uint8_t divide_through_u16_pointer(void)
+{
+    uint8_t r;
+    {
+        uint16_t *q = &a2[1];
+        r = (*q) / (g1 & 15);
+    }
+    return r;
+}
+
+/* correct: the pointer is declared at function scope */
+static uint8_t shift_through_outer_pointer(void)
+{
+    uint16_t *q = &a2[1];
+    return (*q) >> (g1 & 15);
+}
+
 int main(void)
 {
     multiply_through_pointer();
@@ -60,5 +90,8 @@ int main(void)
     printf("compare char %ld\n", (long)compare_through_pointer());
     printf("compare int %ld\n", (long)compare_int_through_pointer());
     printf("byte local %ld\n", (long)byte_local());
+    printf("shift u16 %u\n", (unsigned)shift_through_u16_pointer());
+    printf("divide u16 %u\n", (unsigned)divide_through_u16_pointer());
+    printf("shift outer %u\n", (unsigned)shift_through_outer_pointer());
     return 0;
 }

@@ -1,0 +1,6 @@
+loop 32768
+byte counter 32768
+switch on counter 32768
+no switch 32768
+no tail 32768
+single test 32768

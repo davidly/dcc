@@ -231,8 +231,9 @@ def judge(kind, detail, output, expected):
         return 'ok', ''
     if 'stack overflow' in output:
         return 'STACK', 'stack overflow'
-    if 'out of ram' in output:
-        # the runtime's start-up check: code and stack do not fit in the TPA
+    if 'out of ram' in output or 'too large to fit in memory' in output:
+        # the runtime's start-up check, or the emulator refusing the image:
+        # code and stack do not fit in the TPA
         return 'TOOBIG', 'program does not fit in memory'
     want, got = expected.splitlines(), output.splitlines()
     wrong = [w.split()[0] for w, g in zip(want, got) if w != g]
