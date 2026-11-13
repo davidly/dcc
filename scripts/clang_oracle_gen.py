@@ -543,7 +543,8 @@ def known_shapes(prog):
                     and id(e) not in steps:
                 found.add('postincvalue')
         elif op == 'un':
-            if e.a in ('-', '~') and logic_value(e.k[0]):
+            if e.a in ('-', '~') and (logic_value(e.k[0]) or (
+                    e.k[0].op != 'const' and is_constant(e.k[0]))):
                 found.add('negnotconst')
         elif op == 'bin':
             if same_variable(e.k[0], e.k[1]):
@@ -1553,7 +1554,8 @@ class Gen:
         if kind == 'un':
             op = r.choice(('-', '~', '!'))
             operand = sub()
-            if op in ('-', '~') and logic_value(operand) and not self.on('negnotconst'):
+            if op in ('-', '~') and not self.on('negnotconst') and (logic_value(operand) or (
+                    operand.op != 'const' and is_constant(operand))):
                 return operand
             return self.mk('un', [operand], op)
         if kind == 'cast':

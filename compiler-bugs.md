@@ -53,9 +53,10 @@ has been fixed by this work; this file is the log.
 | [BUG-031](#bug-031) | #251 | wrong result | Nested-block 32-bit local copied from another local, stored to a 16-bit lvalue: only the low byte is loaded |
 | [BUG-032](#bug-032) | #252 | wrong result (`dccpeep` only) | `dccpeep` drops `x + K` (K from 2 to 255) when the sum is copied to another slot |
 | [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
+| [BUG-034](#bug-034) | #254 | wrong result (`dccpeep` only) | `dccpeep` turns `8 == v` into a test of bit 3 |
 
-Thirty-one are open: nineteen give wrong results with no diagnostic
-(BUG-030 can also hang; BUG-032 needs `dccpeep`), one
+Thirty-two are open: twenty give wrong results with no diagnostic
+(BUG-030 can also hang; BUG-032 and BUG-034 need `dccpeep`), one
 hangs, ten stop the compile (BUG-007 can instead compile and crash), and
 one (BUG-022) turns a compile error into a broken program. BUG-026 is the
 one most likely to be hit by ordinary code, then BUG-030 (it corrupts
@@ -277,6 +278,11 @@ if (n > (~(1 && 2))) r = 1;
 
 - Accepted: `-(!p)`, `~(!p)` and `~(p || 2)` with a variable;
   `r = !(-128); r = -r;`; `~(3 > 2)`; `!(1 || 2)`; `(1 || 2) + 1`.
+- Two unary operators over a constant binary expression are rejected the
+  same way: `~(-(7 >> 13))`, `-(~(7 >> 13))`, `-(-(7 >> 13))`,
+  `~(+(7 >> 13))`, `~(-(8 - 8))`, `~(-(1 > 2))`. One unary operator
+  (`~(7 >> 13)`), two over a literal (`~(-5)`) and a variable inside
+  (`~(-(n >> 13))`) are accepted.
 
 ## BUG-013
 
@@ -943,6 +949,45 @@ if (never)
   (`SIZE / UNITS` in a branch guarded by `if (UNITS)`), and when it does the
   diagnostic points at the enclosing `if` rather than at the division.
 - Already present in v3.6.0 (`20290235`).
+
+## BUG-034
+
+**With `dccpeep`, `8 == v` can become a test of bit 3**, so 9, 12, 47 and
+every other value with that bit set compares equal to 8. Without `dccpeep`
+the program is correct.
+
+```c
+static uint8_t g8 = 47;
+static int16_t f(uint16_t x)
+{
+    if (8 == (uint16_t)g8) {     /* false; with dccpeep it is taken */
+        x = 100;
+    }
+    return x;
+}
+```
+
+`dccpeep` output for the test (`g8`, zero-extended, is in `ix-2`/`ix-1`):
+
+```
+    bit 3,(ix-2) ; peep: cp8_to_bit3
+    jr z,L3
+    ld a,(ix-1)
+    or a
+    jr nz,L3
+```
+
+- The rewrite is in `pass_and1_ix_to_bit()` in `src/dccpeep/dccpeep.c`:
+  `ld a,(ix+K) / cp 8 / jp nz,L` becomes `bit 3,(ix+K) / jp z,L`. Its
+  comment says "Valid for depth values 0-8: bit3 is set only at depth=8",
+  but nothing checks that the value is in that range.
+- Wrong for `8 == (uint16_t)g8` and `8 != (uint16_t)g8` in an `if` with no
+  `else`, for the values 9, 12 and 47.
+- Correct with `dccpeep`: the values 7, 8 and 16; a comparison with 16;
+  `c == 8` on a `char` parameter or local in an `if`, a loop, a `switch` or
+  as a value (the simple forms do not produce the three-instruction pattern,
+  so `if (c == '\b')` is safe as far as these probes go).
+- The rewrite has been in the file since at least `3dd3b434` (2026-06-14).
 
 ---
 
