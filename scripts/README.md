@@ -43,12 +43,17 @@ accumulation). Expected values come from a model of C's conversions with dcc's
 type sizes, not from a host compiler, whose 32-bit `int` promotes differently.
 Every program is built and run with and without `dccpeep`. `--mode tree`
 generates nested expressions instead (binary operators, unary `-` `~` `!`,
-casts and `?:` over three typed operands), and `--mode mixed` both. A build
-that runs past `--build-timeout` seconds is reported as a hang.
+casts and `?:` over three typed operands), and `--mode mixed` both.
+`--mode store` checks the values of stores instead: `=` then a compound
+assignment, a compound assignment's own value, and pre/post `++`/`--`, on a
+global, array element, struct member, pointer target, static, local or
+nested-block local. A build that runs past `--build-timeout` seconds is
+reported as a hang.
 
 ```sh
 python3 scripts/typed-expr-fuzz.py --seeds 1-500
 python3 scripts/typed-expr-fuzz.py --seeds 1-500 --mode tree
+python3 scripts/typed-expr-fuzz.py --seeds 1-500 --mode store
 python3 scripts/typed-expr-fuzz.py --seeds 1-200 --env DCC_MIR_SELECT_CANDIDATE=homed-lazy
 python3 scripts/typed-expr-fuzz.py --generate 7 prog.c prog.expected
 ```

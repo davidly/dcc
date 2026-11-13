@@ -12,6 +12,7 @@ host compiler is involved; inputs that would be undefined are skipped.
 
   typed-expr-fuzz.py --seeds 1-200            fuzz 200 programs, peep and nopeep
   typed-expr-fuzz.py --seeds 1-200 --mode tree   nested expression trees instead
+  typed-expr-fuzz.py --seeds 1-200 --mode store  stored values of updates instead
   typed-expr-fuzz.py --seeds 7 --keep         keep seed 7's program and outputs
   typed-expr-fuzz.py --generate 7 prog.c prog.expected
 
@@ -287,6 +288,144 @@ class Case:
                 n * 10 + k, n, literal(a, self.ta), literal(b, self.tb), k % 3, pa, pb))
 
 
+COMPOUND_OPS = ['+', '-', '*', '/', '%', '&', '|', '^', '<<', '>>']
+LVALUES = ['global', 'array', 'member', 'ptr', 'static', 'local', 'block']
+STORE_CONTEXTS = ['cmem', 'cvalue', 'preinc', 'predec', 'postinc', 'postdec']
+
+
+class StoreCase:
+    """One update of an lvalue of a chosen type and storage: a compound
+    assignment (its stored value, or the assignment's own value) or a pre/post
+    increment or decrement."""
+
+    def __init__(self, n, rng):
+        self.n = n
+        self.ctx = rng.choice(STORE_CONTEXTS)
+        self.op = rng.choice(COMPOUND_OPS)
+        self.ta = rng.choice(NAMES)
+        self.tb = rng.choice(SHIFT_COUNT_TYPES if self.op in ('<<', '>>') else NAMES)
+        self.ls = rng.choice(LVALUES)
+        self.sb = rng.choice(STORES)
+        self.rt = rng.choice(NAMES)
+        self.cb = rng.randint(0, 9) if self.op in ('<<', '>>') else interesting(self.tb, rng)
+        self.inputs = []
+        for _ in range(60):
+            if len(self.inputs) == INPUTS:
+                break
+            a = interesting(self.ta, rng)
+            b = self.cb if self.sb == 'const' else interesting(self.tb, rng)
+            if self.op in ('<<', '>>') and self.sb != 'const' and rng.random() < 0.7:
+                b = rng.randint(0, 17)
+            try:
+                self.expected(a, b)
+            except Undefined:
+                continue
+            self.inputs.append((a, b))
+
+    def step(self, a, delta):
+        """The lvalue after ++ or --: computed in the promoted type, then
+        converted back."""
+        pt = promote(self.ta)
+        v = wrap(a, pt) + delta
+        if signed(pt) and not lo(pt) <= v <= hi(pt):
+            raise Undefined
+        return wrap(v, self.ta)
+
+    def expected(self, a, b):
+        a = wrap(a, self.ta)
+        if self.ctx in ('cmem', 'cvalue'):
+            v, _ = binop(self.op, a, self.ta, b, self.tb)
+            return wrap(wrap(v, self.ta), self.rt)
+        if self.ctx in ('preinc', 'predec'):
+            return wrap(self.step(a, 1 if self.ctx == 'preinc' else -1), self.rt)
+        after = self.step(a, 1 if self.ctx == 'postinc' else -1)
+        v, _ = binop('^', a, self.ta, after, self.ta)  # old value ^ new value
+        return wrap(v, self.rt)
+
+    def expected_for(self, k):
+        return self.expected(*self.inputs[k])
+
+    def lvalue(self):
+        n = self.n
+        return {'global': 'h%d' % n, 'array': 'q%d[i]' % n, 'member': 'mm%d.c' % n,
+                'ptr': '(*pa)', 'static': 'sl', 'local': 'll', 'block': 'kl'}[self.ls]
+
+    def operand_b(self):
+        n = self.n
+        return {'param': 'b', 'local': 'lb', 'block': 'kb', 'global': 'g%db' % n,
+                'static': 'sb', 'array': 'r%db[i]' % n, 'member': 'm%d.b' % n,
+                'ptr': '(*pb)', 'const': literal(self.cb, self.tb)}[self.sb]
+
+    def emit(self, out):
+        n, ta, tb, rt = self.n, self.ta, self.tb, self.rt
+        if self.ls == 'global':
+            out.append('%s h%d;' % (ta, n))
+        elif self.ls == 'array':
+            out.append('%s q%d[3];' % (ta, n))
+        elif self.ls == 'member':
+            out.append('struct { char pad; %s c; } mm%d;' % (ta, n))
+        if self.sb == 'global':
+            out.append('%s g%db;' % (tb, n))
+        elif self.sb == 'array':
+            out.append('%s r%db[3];' % (tb, n))
+        elif self.sb == 'member':
+            out.append('struct { char pad; %s b; } m%d;' % (tb, n))
+        out.append('%s t%d(%s a, %s b, int i, %s *pa, %s *pb)' % (rt, n, ta, tb, ta, tb))
+        out.append('{')
+        if self.ls == 'local':
+            out.append('    %s ll;' % ta)
+        elif self.ls == 'static':
+            out.append('    static %s sl;' % ta)
+        if self.sb == 'local':
+            out.append('    %s lb;' % tb)
+        elif self.sb == 'static':
+            out.append('    static %s sb;' % tb)
+        if self.sb in ('local', 'static'):
+            out.append('    %sb = b;' % self.sb[0])
+        out.append('    {')
+        if self.ls == 'block':
+            out.append('        %s kl;' % ta)
+        if self.sb == 'block':
+            out.append('        %s kb = b;' % tb)
+        if self.ctx in ('postinc', 'postdec'):
+            out.append('        %s v;' % ta)
+        lv, b = self.lvalue(), self.operand_b()
+        out.append('        %s = a;' % lv)
+        out.extend('        ' + line for line in {
+            'cmem': ['%s %s= %s;' % (lv, self.op, b), 'return (%s)%s;' % (rt, lv)],
+            'cvalue': ['return (%s)(%s %s= %s);' % (rt, lv, self.op, b)],
+            'preinc': ['return (%s)(++%s);' % (rt, lv)],
+            'predec': ['return (%s)(--%s);' % (rt, lv)],
+            'postinc': ['v = %s++;' % lv, 'return (%s)(v ^ %s);' % (rt, lv)],
+            'postdec': ['v = %s--;' % lv, 'return (%s)(v ^ %s);' % (rt, lv)],
+        }[self.ctx])
+        out.append('    }')
+        out.append('}')
+        out.append('')
+
+    def emit_take(self, out):
+        pass
+
+    def emit_calls(self, out):
+        n = self.n
+        for k, (a, b) in enumerate(self.inputs):
+            setup = []
+            if self.sb == 'global':
+                setup.append('g%db = %s;' % (n, literal(b, self.tb)))
+            elif self.sb == 'array':
+                setup.append('r%db[%d] = %s;' % (n, k % 3, literal(b, self.tb)))
+            elif self.sb == 'member':
+                setup.append('m%d.b = %s;' % (n, literal(b, self.tb)))
+            elif self.sb == 'ptr':
+                setup.append('vb = %s;' % literal(b, self.tb))
+            out.append('    { %s va; %s vb;' % (self.ta, self.tb))
+            out.extend('      ' + line for line in setup)
+            pa = '&va' if self.ls == 'ptr' else '0'
+            pb = '&vb' if self.sb == 'ptr' else '0'
+            out.append('      show(%d, (unsigned long)t%d(%s, %s, %d, %s, %s)); }' % (
+                n * 10 + k, n, literal(a, self.ta), literal(b, self.tb), k % 3, pa, pb))
+
+
 TREE_LEAVES = 3
 TREE_STORES = ['param', 'local', 'block', 'global', 'static', 'array', 'member', 'ptr', 'const']
 TREE_CONTEXTS = ['return', 'if', 'arg', 'global']
@@ -509,8 +648,11 @@ def generate(seed, count, mode='binary'):
     rng = random.Random(seed)
     cases = []
     while len(cases) < count:
-        kind = Case if mode == 'binary' or (mode == 'mixed' and rng.random() < 0.5) \
-            else TreeCase
+        if mode == 'store':
+            kind = StoreCase
+        else:
+            kind = Case if mode == 'binary' or (mode == 'mixed' and rng.random() < 0.5) \
+                else TreeCase
         case = kind(len(cases), rng)
         if case.inputs:
             cases.append(case)
@@ -588,8 +730,9 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--seeds', default='1-100', help='seeds to run, e.g. 1-100,250')
     parser.add_argument('--count', type=int, default=40, help='cases per program')
-    parser.add_argument('--mode', choices=('binary', 'tree', 'mixed'), default='binary',
-                        help='one binary operation per case, nested expression trees, or both')
+    parser.add_argument('--mode', choices=('binary', 'tree', 'mixed', 'store'), default='binary',
+                        help='one binary operation per case, nested expression trees, both, '
+                             'or updates of lvalues (compound assignment, ++, --)')
     parser.add_argument('--jobs', type=int, default=os.cpu_count() or 1)
     parser.add_argument('--work', type=Path, default=REPO / 'build' / 'typed-expr-fuzz')
     parser.add_argument('--emulator', default='ntvcm')
