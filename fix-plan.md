@@ -279,7 +279,7 @@ so it matters more than its size suggests. Both are one-offs.
 | H | | open | |
 | I | | open | |
 | J | | open | |
-| K | `fix/cluster-k-peephole` | fixed; review pending | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
+| K | [fix/cluster-k-peephole / #278](https://github.com/davidly/dcc/pull/278) | fixed; review pending | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | L | | open | |
 | M | | open | |
 
