@@ -1,9 +1,5 @@
-/* BUG-034: with dccpeep, `8 == v` can become a test of bit 3. dccpeep's
- * cp8_to_bit3 rewrite turns `ld a,(ix+K) / cp 8 / jp nz,L` into
- * `bit 3,(ix+K) / jp z,L`, which is only the same thing for values 0 to 8
- * (its own comment says so). Any other value with bit 3 set, such as 9, 12
- * or 47, then compares equal to 8. The program is correct without dccpeep
- * (dcc-peep=false). */
+/* Equality with 8 distinguishes other values with bit 3 set. Covers == and
+ * !=, zero-extended bytes, cast signed bit-fields, and comparison with 16. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -35,7 +31,7 @@ static int16_t sixteen(uint16_t x)
     return x;
 }
 
-/* wrong too: a signed bit-field read through a cast */
+/* signed bit-field read through a cast */
 static int16_t bitfield_equal(uint16_t x)
 {
     if (8 == (int16_t)bf.m) {

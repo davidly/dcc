@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has fifty-one open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has forty-seven open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -9,8 +9,10 @@ fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. They have not been confirmed in
-the source. If the first fix in a cluster does not clear its siblings, stop
-and report; do not force unrelated defects into one change.
+the source, except K, whose four independent rules have now been fixed.
+If the first fix in another cluster does not clear its siblings, stop and
+report; do not force unrelated defects into one change. The maintainer
+explicitly approved K as a four-rule exception.
 
 ## Rules
 
@@ -214,8 +216,23 @@ change: keep it small, follow the existing `DCCRTL.MAC` idioms, and run
 | BUG-053 | #273 | `pass_elim_dead_ix_stores` forgets an escaped address at its own `LS<n>:` label |
 
 Four unrelated peephole rules, each with a precise description in its entry.
-Confirm nopeep is right, fix the rule, and run
-`pwsh ./scripts/run-dccpeep-tests.ps1`. Isolated from the compiler clusters.
+Fixed on `fix/cluster-k-peephole`, with the maintainer's explicit approval
+to keep all four independent fixes together. Regressions are now
+`tpeepsum`, `tpeeq8`, `tpeerng`, and `tpeesc`. The cp8 proof also required an
+approved `dccmake`/`dccpeep` closed-program contract, restricted to single-source
+applications, to preserve the existing `ttt` schedule without guessing public
+parameter bounds from per-module callers. All existing performance rows and
+compared corpus assembly are unchanged, apart from `tstdc`'s embedded `__TIME__`.
+
+Both production regression modes, 72 optimizer fixtures (also sanitized),
+debugger/metadata checks, and 300 seeds per affected generator passed. Five
+Python failures reproduce identically on a clean, rebuilt `main` at
+`d6586aa0`; the sixth test's initial timeout did not recur on `main` or in an
+isolated branch recheck. The maintainer approved documenting unrelated
+Python-gate failures without changing their baselines or skipping them.
+At the maintainer's later request, the two macOS harness fixes from
+[#276](https://github.com/davidly/dcc/pull/276) are also included. Any remaining
+pre-existing Python-gate failures should be fixed separately.
 
 ### L. Preprocessor
 
@@ -262,7 +279,7 @@ so it matters more than its size suggests. Both are one-offs.
 | H | | open | |
 | I | | open | |
 | J | | open | |
-| K | | open | |
+| K | `fix/cluster-k-peephole` | fixed; review pending | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | L | | open | |
 | M | | open | |
 
