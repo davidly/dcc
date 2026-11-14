@@ -1,67 +1,71 @@
-/* BUG-004: an unsigned 16-bit local initialised from && or ||, then stored
- * to a 32-bit lvalue, leaves garbage in the high word. Storing the logical
- * result directly, or a local initialised from anything else, is correct. */
+/* BUG-004 remaining byte-local facet, reduced from integer seed 133.
+ * Word locals and nested-block long assignments now pass (tests/tlogblk.c).
+ * Forwarding this signed-byte logical result still leaves a wide store's
+ * high word uninitialized; the checksum observes the incorrect array value. */
 #include <stdint.h>
 #include <stdio.h>
 
-struct S { uint16_t m0; uint32_t m1; };
-static struct S s = { 255, 0x5dd1d183 };
-static uint32_t u[2] = { 0x80000000, 0x12345678 };
-static uint32_t g = 0xdeadbeef;
-static uint32_t g2 = 0xdeadbeef;
-static uint16_t one = 1;
-static uint16_t zero = 0;
+struct S0 {
+    int16_t m0;
+    int32_t m1;
+    int32_t m2;
+    uint32_t m3;
+    int16_t m4 : 15;
+    uint32_t m5[4];
+};
+struct S1 {
+    uint16_t m0 : 3;
+    int16_t m1 : 2;
+    int16_t m2;
+    uint16_t m3;
+};
 
-static void show(const char *name, uint32_t v)
+static uint32_t a4[8] = { 0xa279b3d8, 0xffff7fff, 0xaa55, 0xffffff80, 0x80000001, 0x8000, 0x95b10ca, 0x8001 };
+
+static void hex4(uint16_t v)
 {
-    printf("%s %04x%04x\n", name, (unsigned)(v >> 16), (unsigned)(v & 0xffff));
+    int8_t k;
+    for (k = 12; k >= 0; k -= 4)
+        putchar("0123456789abcdef"[(v >> k) & 15]);
 }
 
-static void or_to_member(void)
+static void show(uint16_t id, uint32_t v)
 {
-    uint16_t l = one || zero;
-    s.m1 = l;
+    hex4(id);
+    putchar(' ');
+    hex4((uint16_t)(v >> 16));
+    hex4((uint16_t)v);
+    putchar('\n');
 }
 
-static void and_to_element(void)
+static uint32_t ck;
+
+static void mix(uint32_t v)
 {
-    uint16_t l = one && one;
-    u[0] = l;
+    ck = ((ck << 5) | (ck >> 27)) ^ v;
+    ck = ck + (uint32_t)0x9e3779b1;
 }
 
-static void or_to_global(void)
+static uint32_t state(void)
 {
-    uint16_t l = zero || zero;
-    g = l;
+    uint8_t i, j;
+    ck = 0;
+    for (i = 0; i < 8; i++)
+        mix((uint32_t)a4[i]);
+    return ck;
 }
 
-static void constant_or(void)
-{
-    uint16_t l = ((uint16_t)1) || ((uint16_t)1);
-    u[1] = l;
-}
 
-/* the same un-widened result, assigned to a 32-bit nested-block local */
-static void block_local(uint16_t x)
+static int16_t f0(void)
 {
-    {
-        int32_t b = 0;
-        b = ((--x) || 1);
-        g2 = (uint32_t)b;
-    }
+    signed char l2 = 1 && ((uint16_t)1);
+    a4[3] = l2;
+    return 1;
 }
 
 int main(void)
 {
-    or_to_member();
-    and_to_element();
-    or_to_global();
-    constant_or();
-    block_local(1);
-    show("|| to member", s.m1);
-    show("&& to element", u[0]);
-    show("|| to global", g);
-    show("constant ||", u[1]);
-    show("block local", g2);
+    show(1, (uint32_t)f0());
+    show(16385, state());
     return 0;
 }
