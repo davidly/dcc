@@ -1455,7 +1455,6 @@ KNOWN_BUGS = {
     'logicinit': 'BUG-004',
     'bfdivasg': 'BUG-006',
     'blockptr': 'BUG-015',
-    'wideincadd': 'BUG-057',
     'nestedifelse': 'BUG-027',
     'bytearm': 'BUG-029',
     'blockcast': 'BUG-015',

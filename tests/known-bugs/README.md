@@ -13,6 +13,9 @@ Diagnostic-masker BUG-022 was closed by restoring the compiler error, not by
 fixing the unsupported function that triggers it. Its re-established source
 and host baseline are in `tests/diagnostics/fixtures/`, checked by
 `scripts/tests/test_mir_diagnostics.py` with normal/strict and debug variants.
+After H fixed the initial BUG-020 supplier, the current negative source
+uses a valid local aggregate initializer from va_arg. It is host-proven and
+rejects in every debug mode; only a copy with the old M-b guards masks it.
 The historical runnable program was already fixed by BUG-008/019 and is kept
 as `tests/tlbreuse.c` alongside that negative regression.
 
@@ -64,8 +67,8 @@ regular test:
 `tests/tpephl.c`, `tests/tpost16.c`, `tests/tpostbr.c`, `tests/tpost32.c`,
 `tests/tflcnot.c`, `tests/tflcini.c`, `tests/tconstdz.c`, `tests/tdeadblk.c`,
 `tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c`, `tests/tflncmp.c`,
-`tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tndwide.c` and
-`tests/tlbreuse.c`
+`tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tndwide.c`,
+`tests/tlbreuse.c` and `tests/twincadd.c`
 were promoted this way.
 
 ## Adding one

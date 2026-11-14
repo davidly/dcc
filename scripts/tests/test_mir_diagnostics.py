@@ -73,11 +73,10 @@ class MirDiagnosticsTests(unittest.TestCase):
                                  str(input_path), "-o", str(path / "PROBE.MAC")],
                                 env=environment, capture_output=True, text=True, timeout=30,
                             )
-                            if options == ("-g",):
-                                # Full-debug selection can emit this BUG-020 trigger.
-                                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                            else:
-                                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                                expected = ("DCC_MIR_REQUIRE_EMIT requires MIR emission"
-                                            if strict else "MIR emission is required")
-                                self.assertIn(expected, result.stderr)
+                            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                            expected = ("DCC_MIR_REQUIRE_EMIT requires MIR emission"
+                                        if strict else "MIR emission is required")
+                            self.assertIn(expected, result.stderr)
+                            if strict:
+                                self.assertIn("function third: no generated candidate (reason=selector)",
+                                              result.stderr)

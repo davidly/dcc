@@ -7,7 +7,7 @@ wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
 source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `bb67b78e` plus cluster M fixes
+- **Compiler under test:** `902aca64` plus cluster M fixes
   (`fix/cluster-m-diag`, 2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
@@ -39,15 +39,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
-| [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 
-Thirteen are open: eleven give wrong results with no diagnostic
+Twelve are open: ten give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
 BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
 promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Forty-two reported bugs are fixed: [one in cluster M-b](#fixed-in-cluster-m-b),
-[one in cluster M-a](#fixed-in-cluster-m-a),
+Forty-three reported bugs are fixed: [one in cluster M-b](#fixed-in-cluster-m-b),
+[two in cluster M-a](#fixed-in-cluster-m-a),
 [two in cluster E2-shift](#fixed-in-cluster-e2-shift),
 [two in cluster H](#fixed-in-cluster-h),
 [one in cluster E1](#fixed-in-cluster-e1),
@@ -515,12 +514,22 @@ The probe counter must keep those complaints for constant-expression
 attempts, but they must not veto an unrelated later emission diagnostic.
 Label IDs, selection and all accepted function bodies are unchanged.
 
-The reproducer was re-established before the fix: reused nested labels ahead
-of BUG-020's switch/32-bit remainder comparison exited zero with an empty
-`third` body, while renamed and function-scope label controls correctly
-failed. It now fails with `MIR emission is required` in both peep and nopeep;
-strict mode restores its detailed required-emission diagnostic. BUG-020 is
-not fixed. Full debug can emit that shape and its output agrees with the host.
+The original M-b proof used reused nested labels before BUG-020's switch/
+wide remainder comparison. H #308 subsequently fixed that trigger. After
+merging `902aca64`, the fixture was re-established using a local aggregate
+initialized by `va_arg(ap, struct S)` in a variadic function. The fixed-width
+last named parameter is compatible with its default argument promotion, and
+host O0/O2/ASan/UBSan all print the same baseline; this is valid C.
+
+Current release, stack, line debug and full debug all decline that initializer
+with `MIR emission is required` (strict diagnostics name `third`, reason
+`selector`). An isolated copy of the merged compiler with only the two
+`errors > 0` guards regressed to `g_diag_error_count > 0` still exits zero and
+emits an empty `third` body for reused nested labels in all eight normal/
+strict/debug combinations. Renamed and flat controls, and all fixed-compiler
+cases, correctly reject: 48 cases total, eight masked and forty diagnosed.
+This replaces the obsolete BUG-020 dependency without a skip or a new
+compiler change. Aggregate `va_arg` initialization itself is not fixed here.
 
 `DCC-EXPECT-ERROR` headers let the known-bugs runner classify a diagnostic fix
 as `FIXED` only for a failed build with the actual expected primary diagnostic,
@@ -585,8 +594,9 @@ succeeded and the program failed at run time.
 - This only matters while some function cannot be emitted, but then it turns
   a compile error into a silently broken program.
 - Its historical program already passed after BUG-008/019 were fixed.
-  M-b re-established the mask using BUG-020's still-unsupported release
-  shape, proved the restored diagnostic, and retained the old program as
+  M-b originally re-established the mask using BUG-020's then-unsupported
+  release shape; after H fixed it, the aggregate `va_arg` trigger supplies
+  the same proof. The old program is retained as
   `tlbreuse` rather than mistaking that incidental fixture pass for a fix.
 
 
@@ -620,6 +630,7 @@ recorded under M-b. No expectations, timeouts or skips were changed.
 | ID | Issue | Regression |
 | --- | --- | --- |
 | [BUG-009](#bug-009) | #229 | [tndwide](tests/tndwide.c) |
+| [BUG-057](#bug-057) | #304 | [twincadd](tests/twincadd.c) |
 
 ### BUG-009
 
@@ -642,6 +653,67 @@ instead of 6, which shows the comparison is the part that is wrong.
   with `++d` in the body or in the condition.
 - Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
   `d != n`; `n` set from a constant; a 16-bit `d`.
+
+
+### M-a follow-up after merging main
+
+BUG-057/#304 flips with the existing M-a fix: direct wide addition and direct
+wide comparison share `mir_direct_wide_location()`. Its missing fused-result
+home proof is the same stale-slot defect, not a separate H or B2c fix.
+The parked prefix/compound/reversed-operand cases and their decrement,
+literal and no-loop controls are promoted as `twincadd`; no compiler code
+was changed in this follow-up. `wideincadd` is restored to production fuzzing;
+the generator test now checks that `--off known` preserves those additions
+while retaining the optional explicit feature control.
+
+Restored integer production seeds 1-300 give **290 ok, nine INVALID, one
+target-limit-only, zero FAIL**. Before promotion thirteen parked programs
+give one `FIXED` (057) and twelve `fails`; afterwards the twelve remaining
+programs fail. Both merged-baseline censuses preserve all **3,589 existing
+functions**, adding only the seven twincadd functions. All **533 merged
+performance rows** are unchanged; only twincadd adds a measured normal-stack
+row. The replacement diagnostic fixture is independently host-proven and
+masked only by the old guards, as described under M-b. Final build, known-bug,
+strict full+extended stack/no-stack and all 44 selected Python tests pass.
+The after-census launch collided with the canonical linker replacing dcc;
+an unchanged retry after rebuilding confirms both modes. No existing
+expectation, timeout or skip changed. Previously recorded exhaustive-Python
+#277/serial-scheduler exceptions are not refreshed by this targeted follow-up.
+
+### BUG-057
+
+**A fused 32-bit local increment used as an addition operand reads an
+unwritten backend slot instead of the updated named home.** A later loop
+retains the spilled/PHI schedule even when it never runs.
+
+```c
+static int8_t g = -2;
+int32_t x = 0;
+uint16_t limit = 0;
+if ((int32_t)1) { x = 1; }
+g = (++x) + (g ^ (int32_t)63);   /* expected -61, actual -62 */
+for (int8_t i = 2; (uint16_t)i < limit; ++i) --x;
+```
+
+- Prefix `++`, `+= 1`, and either addition-operand order fail in peep and
+  nopeep, with or without stack checking. The parked test has three failing
+  cases and three passing controls: prefix decrement, a literal right
+  operand, and no later loop.
+- MIR correctly uses the increment's updated result. The fused schedule
+  increments the authoritative named local home, but
+  `mir_direct_wide_location()` tries to resolve that `MIR_BINARY` through
+  `mir_direct_named_home_location()` and falls through to a reused backend
+  slot. `mir_emit_direct_wide_add()` reads the stale slot byte by byte.
+  The ordinary wide loader already resolves this fused result's named home.
+- Related to BUG-014's named-home context, but a distinct direct-add consumer
+  defect. This is independent of H's helper-comparison stack handoff:
+  the minimal function has no compound comparison RHS or wide parameter.
+- Found during H acceptance, integer seed 52: only `g0` differs after the
+  three calls of `f3`; reduction gives the example above. Parked and filed
+  as #304, not fixed in H. No historical compiler checks were run.
+- Steered by `wideincadd`: replace only integer additions with a nonconstant
+  peer and a prefix-wide-local `++`/`+= 1` value (including same-width casts)
+  with subtraction, retaining the side effect and all neighboring forms.
 
 
 ## Fixed in cluster E2-bitfield
@@ -850,40 +922,6 @@ float out[2];
   keeps the unsafe shape disabled together with BUG-041. It must stay
   disabled until both admission and this downstream typing defect are fixed.
 
-## BUG-057
-
-**A fused 32-bit local increment used as an addition operand reads an
-unwritten backend slot instead of the updated named home.** A later loop
-retains the spilled/PHI schedule even when it never runs.
-
-```c
-static int8_t g = -2;
-int32_t x = 0;
-uint16_t limit = 0;
-if ((int32_t)1) { x = 1; }
-g = (++x) + (g ^ (int32_t)63);   /* expected -61, actual -62 */
-for (int8_t i = 2; (uint16_t)i < limit; ++i) --x;
-```
-
-- Prefix `++`, `+= 1`, and either addition-operand order fail in peep and
-  nopeep, with or without stack checking. The parked test has three failing
-  cases and three passing controls: prefix decrement, a literal right
-  operand, and no later loop.
-- MIR correctly uses the increment's updated result. The fused schedule
-  increments the authoritative named local home, but
-  `mir_direct_wide_location()` tries to resolve that `MIR_BINARY` through
-  `mir_direct_named_home_location()` and falls through to a reused backend
-  slot. `mir_emit_direct_wide_add()` reads the stale slot byte by byte.
-  The ordinary wide loader already resolves this fused result's named home.
-- Related to BUG-014's named-home context, but a distinct direct-add consumer
-  defect. This is independent of H's helper-comparison stack handoff:
-  the minimal function has no compound comparison RHS or wide parameter.
-- Found during H acceptance, integer seed 52: only `g0` differs after the
-  three calls of `f3`; reduction gives the example above. Parked and filed
-  as #304, not fixed in H. No historical compiler checks were run.
-- Steered by `wideincadd`: replace only integer additions with a nonconstant
-  peer and a prefix-wide-local `++`/`+= 1` value (including same-width casts)
-  with subtraction, retaining the side effect and all neighboring forms.
 
 ## Fixed in cluster H
 

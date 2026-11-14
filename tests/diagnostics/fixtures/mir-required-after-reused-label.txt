@@ -1,2 +1,2 @@
 labels 1 2
-third 0 1
+third 7
