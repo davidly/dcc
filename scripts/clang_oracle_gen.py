@@ -1427,7 +1427,6 @@ FEATURES = frozenset((
 # that each one would otherwise keep rediscovering. Remove a feature from this
 # table when its bug is fixed.
 KNOWN_BUGS = {
-    'bytevarshl': 'BUG-002',
     'logicinit': 'BUG-004',
     'bfdivasg': 'BUG-006',
     'nestedwideless': 'BUG-009',
@@ -1436,7 +1435,6 @@ KNOWN_BUGS = {
     'widehelperparam': 'BUG-020',
     'duplabel': 'BUG-022',
     'nestedifelse': 'BUG-027',
-    'bytesarcount': 'BUG-028',
     'bytearm': 'BUG-029',
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',

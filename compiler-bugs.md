@@ -26,7 +26,6 @@ and their historical diagnoses are retained separately below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-002](#bug-002) | #223 | wrong result | `unsigned char` local `<<=` an `unsigned char` variable is not truncated on return |
 | [BUG-004](#bug-004) | #225 | wrong result | Nested-block 32-bit local assigned from `&&`/`\|\|` leaves a garbage high word |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
@@ -35,7 +34,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
-| [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 | [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
@@ -46,14 +44,15 @@ and their historical diagnoses are retained separately below.
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 
-Nineteen are open: fourteen give wrong results with no diagnostic
+Seventeen are open: eleven give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
 BUG-041 admission, one hangs, three stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The highest-priority ordinary-code defect remaining is
 BUG-013.
 
-Thirty-five reported bugs are fixed: [one in cluster E1](#fixed-in-cluster-e1),
+Thirty-seven reported bugs are fixed: [two in cluster E2-shift](#fixed-in-cluster-e2-shift),
+[one in cluster E1](#fixed-in-cluster-e1),
 [one in cluster D2c](#fixed-in-cluster-d2c),
 [one in cluster B2b](#fixed-in-cluster-b2b),
 [one in cluster D2b](#fixed-in-cluster-d2b),
@@ -94,24 +93,6 @@ The wrong-result bugs and the hang also show with the v3.6.0 compiler, but it
 was only tried with today's runtime, which is not a reliable pairing.
 
 ---
-
-## BUG-002
-
-**An `unsigned char` local shifted left by an `unsigned char` variable is not
-truncated to 8 bits when returned from a function returning `unsigned char`.**
-
-```c
-static uint8_t a1[4] = { 200, 2, 3, 4 };
-static uint8_t count = 5;
-static uint8_t f(void) { uint8_t x = a1[0]; x <<= count; return x; }
-/* f() is 0 (6400 truncated to 8 bits); dcc returns 6400 */
-```
-
-- Wrong whether the count is a global or a local `unsigned char`, and
-  whether `x` starts from memory or a constant.
-- Correct with a constant count, an `int16_t` count, `count & 7`,
-  `x = x << count`, a `signed char x`, or a `uint16_t` return type.
-- Selected emitter for `f`: `spilled-scalar-cfg`.
 
 ## BUG-004
 
@@ -426,32 +407,6 @@ L5:
 - The symptom is BUG-023's (an update applied to a stale value), but nothing
   here is assigned from another type, so it is logged separately.
 
-## BUG-028
-
-**`>>=` on a signed 8-bit object with a count of type `unsigned int` shifts
-logically instead of arithmetically.** The left operand is promoted to
-`int`, which is signed, so the count's type must not matter.
-
-```c
-signed char g = -34;
-unsigned n = 11;
-g >>= n;                 /* want -1, dcc 31 */
-g >>= 11u;               /* want -1, dcc 31 */
-```
-
-dcc sign-extends `g` to 16 bits and then shifts it with `srl h` / `rr l`
-(`sra h` is needed), so zeros come in at the top: `0xffde >> 11` is `0x1f`.
-
-- Wrong for a global, a local, an array element (`a[7] >>= 11u;`) and
-  through a pointer; with the count a constant (`11u`, `(uint16_t)11`,
-  `((uint16_t)20155) & 15`) or an `unsigned int` variable.
-- The result only differs for counts 9 to 15: for 1 to 8 the low 8 bits of
-  the logical and the arithmetic shift are the same.
-- Correct: a count of type `int`, `unsigned char` or `unsigned long`;
-  `g = g >> n;`; a 16-bit or 32-bit left operand; `<<=`.
-- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
-- Low priority: shifting an 8-bit value right by more than 8 is unusual.
-
 ## BUG-029
 
 **An 8-bit local is assigned in one arm of an `if … else` and another
@@ -710,6 +665,111 @@ in-range float-to-`int32_t` conversion and retains the failing context.
   constant-index and other indexed stores remain enabled.
 
 ---
+
+## Fixed in cluster E2-shift
+
+BUG-002 and BUG-028 share the discarded-byte compound-shift promotion/narrowing
+contract in `mir_lower_compound_value`. Byte counts previously left a word
+shift result nominally byte-typed, so object promotion forwarded high bits
+through a byte return. Unsigned word counts instead widened the computation
+in `mir_resolve_deferred_metadata` to unsigned, producing a logical right
+shift on a promoted negative byte. Materializing the promoted-left operation
+and a distinct narrowed result clears both without a separate repair fix.
+Already-correct signed-word and wide-count shapes retain their lowering.
+
+Promoted as `tbcshl` and `tbcsar`, preserving every original host baseline line
+and adding defined target-width boundary/count and consumed-result coverage.
+Both original reproducers and the expanded fixtures are host/ASan/UBSan-proven
+and **FIXED in peep/nopeep**. Final parked tally: **17 reproducers, 1 FIXED,
+16 fails**; the untouched BUG-022 fixture still passes while its diagnostic
+masking defect remains open. No other parked reproducer newly flips.
+
+Integer production seeds 1-300 with `bytevarshl` and `bytesarcount` restored:
+**297 ok, 1 INVALID, 2 target-limit-only, zero FAIL**. Seeds 82 and 178 exceed
+CP/M TPA. Remaining-known-shape steering proof: 3,000 seeds clean. No float
+generator feature is affected.
+
+Both MIR censuses are byte-identical across **3,545 existing functions**, and
+all **526 existing performance rows** are unchanged; only two new rows are
+measured on the normal stack-check path. Strict Python full+extended and both
+final strict PowerShell stack/no-stack full+extended suites pass. Fixed
+function bodies match the already-correct expanded-assignment controls in
+both pipelines; their selected spilled candidate is unchanged, with no new
+fallback. The extra temporary/frame cost is confined to the previously
+incorrect new tests and matches those established correct controls.
+
+Canonical/CMake builds, MIR 6/6, debugger-host 10/10, focused compiler/metadata
+44/44, the new equivalence test, require-emit diagnostics and ASan/UBSan
+compiler probes pass. Both promoted apps pass all release/line/full-debug
+pipeline combinations: line-debug COMs are release-identical; full debug
+retains correct output and nonempty adjacent metadata. Source scopes/types
+are unchanged; conversion temporaries use the normal selected-frame metadata.
+
+The full Python gate runs **327 tests**, retaining two existing skips and
+approved #277 golden failures. Initial additional exceptions are two mock
+mutation timeouts, a survivor teardown race, and two process-supervision
+failures. Each affected method was retried separately: both process methods
+and the survivor/error-recording method pass; the default serial/parallel
+mock mutation method still times out after 180 seconds and remains
+**unverified**. No expectation, timeout, fixture, baseline or skip is changed.
+No old-compiler/dating checks or `prepush.ps1` run were made.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-002](#bug-002) | #223 | [tbcshl](tests/tbcshl.c) |
+| [BUG-028](#bug-028) | #248 | [tbcsar](tests/tbcsar.c) |
+
+### BUG-002
+
+**Fixed:** Byte compound shifts compute in promoted int and keep a distinct narrowed store/SSA result.
+Regression: [tbcshl.c](tests/tbcshl.c),
+[baseline](tests/baselines/tbcshl.txt).
+
+**An `unsigned char` local shifted left by an `unsigned char` variable is not
+truncated to 8 bits when returned from a function returning `unsigned char`.**
+
+```c
+static uint8_t a1[4] = { 200, 2, 3, 4 };
+static uint8_t count = 5;
+static uint8_t f(void) { uint8_t x = a1[0]; x <<= count; return x; }
+/* f() is 0 (6400 truncated to 8 bits); dcc returns 6400 */
+```
+
+- Wrong whether the count is a global or a local `unsigned char`, and
+  whether `x` starts from memory or a constant.
+- Correct with a constant count, an `int16_t` count, `count & 7`,
+  `x = x << count`, a `signed char x`, or a `uint16_t` return type.
+- Selected emitter for `f`: `spilled-scalar-cfg`.
+
+### BUG-028
+
+**Fixed:** The promoted left operand, not an unsigned word count, determines signed-byte compound shift arithmetic.
+Regression: [tbcsar.c](tests/tbcsar.c),
+[baseline](tests/baselines/tbcsar.txt).
+
+**`>>=` on a signed 8-bit object with a count of type `unsigned int` shifts
+logically instead of arithmetically.** The left operand is promoted to
+`int`, which is signed, so the count's type must not matter.
+
+```c
+signed char g = -34;
+unsigned n = 11;
+g >>= n;                 /* want -1, dcc 31 */
+g >>= 11u;               /* want -1, dcc 31 */
+```
+
+dcc sign-extends `g` to 16 bits and then shifts it with `srl h` / `rr l`
+(`sra h` is needed), so zeros come in at the top: `0xffde >> 11` is `0x1f`.
+
+- Wrong for a global, a local, an array element (`a[7] >>= 11u;`) and
+  through a pointer; with the count a constant (`11u`, `(uint16_t)11`,
+  `((uint16_t)20155) & 15`) or an `unsigned int` variable.
+- The result only differs for counts 9 to 15: for 1 to 8 the low 8 bits of
+  the logical and the arithmetic shift are the same.
+- Correct: a count of type `int`, `unsigned char` or `unsigned long`;
+  `g = g >> n;`; a 16-bit or 32-bit left operand; `<<=`.
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+- Low priority: shifting an 8-bit value right by more than 8 is unusual.
 
 ## Fixed in cluster E1
 

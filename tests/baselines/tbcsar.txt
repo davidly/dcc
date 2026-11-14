@@ -4,3 +4,4 @@ local -1
 pointer -1
 int count -1
 16-bit object -1
+edge counts 1
