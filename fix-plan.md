@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has thirty-eight open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has thirty-seven open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -9,7 +9,8 @@ fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), B1 (#286),
-K (#278) and L (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
+K (#278) and L (#279) are confirmed and fixed. B3 confirms the common
+forwarded-operand defect in BUG-026 and the formerly E-grouped BUG-017. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
 B was likewise disproved and split into B1–B4. I was disproved and split
 with maintainer approval into I1 (return admission) and I2 (cast signedness);
@@ -278,11 +279,40 @@ and split if the first fix clears only one.
 | Bug | Issue | Shape |
 | --- | --- | --- |
 | BUG-026 | #246 | `d = a - b; return d * d;` reads a stack slot the function never allocates |
+| BUG-017 | #237 | `x &= x` on a parameter, returned through a widening cast, gives 0 |
 
-Standalone. Maintainer's first priority among ordinary-code bugs. Both
-operands of one binary operator are the same value; start in the spilled
-emitter's operand materialization for a value consumed twice by one
-instruction.
+Confirmed shared root: the first operand consumes a just-forwarded value,
+then the second use reloads its unwritten or unallocated spill home. The
+spilled emitter now snapshots the repeated-forward identity and duplicates
+HL into DE, or retains DE:HL after saving the first wide copy. The unrelated
+BUG-017 flip is the same `binary v0,v0` defect before widening, not a typing
+fix; it is moved here from E and promoted too.
+
+Regressions: `tselfop` (word/long and nested/mixed float facets) and
+`tandself` (parameter self-AND, casts and controls). Original neighbouring
+controls are unchanged in both modes, as are 3,394 existing census functions
+in both stack modes and all 504 existing checked performance rows. Only the
+two new tests add measured normal-stack-check rows. Strict full+extended
+stack/no-stack, host/sanitizer and debug checks pass.
+
+Final production seeds 1-300, `--off known`: integers **213 ok, 85 INVALID,
+two target-limit-only, zero FAIL**; floats **267 ok, 33 INVALID, zero FAIL**.
+The integer seed-255 peep-only failure reproduces with unchanged current
+main and is independently parked as BUG-054 / #288 (K2 below), not fixed or
+masked by B3. Its byte-only `peepbyteself` steer leaves word/long/float
+self-operands restored; 3,000 generated seeds contain no disabled shapes.
+After promotion all 37 remaining parked reproducers still fail; the final
+censuses add only the 29 new test functions. Both strict full+extended gates
+pass (545 applications), including the focused stack-check performance gate.
+The Python suite runs 312 tests: two #277 failures have identical payloads
+with unchanged current main; three unmodified mutation-harness errors remain
+(two 180-second timeouts and a missing watchdog-child file), with two existing
+skips. The timeouts also occurred in the unchanged-main fixture check. A
+separate cleanup-case check fails on both clean current-main scripts and the
+branch, though its nondeterministic symptom differs (8-second time budget
+versus the missing child file). The full Python gate is therefore not green;
+no expectation, skip or harness fix is included. The 25 focused integer,
+generator and line-debug tests pass, as do all ten debugger-host tests.
 
 ### B4. Loop-local store dropped when the value is also a call argument
 
@@ -338,7 +368,6 @@ both. BUG-044 is the maintainer's second priority.
 | BUG-006 | #226 | `/=`, `%=`, `>>=` on an unsigned bit-field sign-extend it |
 | BUG-028 | #248 | `signed char >>= unsigned int count` shifts logically |
 | BUG-002 | #223 | `unsigned char <<= unsigned char` not truncated on return |
-| BUG-017 | #237 | `x &= x` on a parameter, returned through a widening cast, gives 0 |
 | BUG-004 | #225 | 16-bit local from `&&`/`||` stored to 32-bit lvalue: garbage high word |
 
 Each is a result typed from the wrong operand: initialiser instead of
@@ -519,6 +548,18 @@ At the maintainer's later request, the two macOS harness fixes from
 [#276](https://github.com/davidly/dcc/pull/276) are also included. Any remaining
 pre-existing Python-gate failures should be fixed separately.
 
+### K2. Live HL deleted by a deferred global reload
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-054 | #288 | `pass_defer_global_push_reload` removes the load that still supplies a byte self-operation's resident HL operand |
+
+Found while verifying B3, integer seed 255. The reduced program fails with
+unchanged current-main compiler and optimizer in peep and peep-nosc, but
+passes in nopeep. Independently parked, not part of B3's compiler repair;
+`peepbyteself` steers only byte binary self-operands. A future fix must prove
+HL dead before deleting its original load, without weakening safe cases.
+
 ### L. Preprocessor
 
 | Bug | Issue | Shape |
@@ -573,7 +614,7 @@ so it matters more than its size suggests. Both are one-offs.
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | | open | BUG-014/019 bookkeeping fatals; unconfirmed shared cause |
-| B3 | | open | BUG-026 same-value operands |
+| B3 | `fix/cluster-b3-same-operand` | verified; PR pending | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | | open | BUG-036; check overlap with C/D first |
 | C | | open | |
 | D | | open | |
@@ -585,6 +626,7 @@ so it matters more than its size suggests. Both are one-offs.
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |
 | J | | open | |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
+| K2 | | open | BUG-054/#288 independently found during B3; live HL lost by deferred global reload |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
 | M | | open | |
 

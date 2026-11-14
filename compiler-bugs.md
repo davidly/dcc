@@ -1,8 +1,8 @@
 # dcc compiler bugs
 
 Defects found by differential testing against the host C compiler (Apple
-clang). Every open entry reproduces with the shipped configuration: no
-diagnostic environment variables, with and without `dccpeep`. Fixed entries
+clang). Every open entry reproduces with a shipped configuration: no
+diagnostic environment variables (some require `dccpeep`). Fixed entries
 and their historical diagnoses are retained separately below.
 
 - **Compiler under test:** `83dc7a91` (upstream `main` on 2026-11-13).
@@ -36,7 +36,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-014](#bug-014) | #234 | rejects valid C | 32-bit local with two definitions, incremented, stored to a global |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
-| [BUG-017](#bug-017) | #237 | wrong result | Parameter `x &= x` returned through a widening cast gives 0 |
 | [BUG-018](#bug-018) | #238 | rejects valid C | 32-bit value compound-assigned to a bit-field or to an element of a 16-bit array member |
 | [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
@@ -44,7 +43,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-023](#bug-023) | #243 | wrong result | `if (x++ > K) x = v;` leaves `x` as 1 when not taken (local assigned from another type) |
 | [BUG-024](#bug-024) | #244 | wrong result | `if (x++)` in a loop tests the incremented value (8-bit local, later `do … while`) |
-| [BUG-026](#bug-026) | #246 | wrong result | `d = a - b; return d * d;`: the second operand is read from an unallocated stack slot |
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
@@ -62,18 +60,19 @@ and their historical diagnoses are retained separately below.
 | [BUG-047](#bug-047) | #267 | wrong result | `f + (x * y)` drops the product when `x` is an integer, or when `y` is a local/parameter and `x` is a global, array element, member or sub-expression |
 | [BUG-049](#bug-049) | #269 | wrong result | `!f` is 0 when `f` is negative zero; `if (f)`, `f ? :` and `f == 0.0f` treat `-0.0f` as zero correctly |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
+| [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 
-Thirty-eight are open: twenty-three give wrong results with no diagnostic
+Thirty-seven are open: twenty-two give wrong results with no diagnostic
 (BUG-039 is in the runtime), one hangs, thirteen stop the compile,
 and one (BUG-022) turns a compile error into
-a broken program. BUG-026 is the
-one most likely to be hit by ordinary code, then BUG-044 (every float `++`
-is wrong), BUG-047 (`f + n * g` is `f`), BUG-003,
+a broken program. The most likely ordinary-code defects remaining are
+BUG-044 (every float `++` is wrong), BUG-047 (`f + n * g` is `f`), BUG-003,
 BUG-013 and BUG-016.
 
-Thirteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Fifteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
+[two in cluster B3](#fixed-in-cluster-b3),
 [four in cluster K](#fixed-in-cluster-k),
 [one in cluster L](#fixed-in-cluster-l),
 [one in cluster I1](#fixed-in-cluster-i1) and
@@ -426,20 +425,6 @@ r = x / l;               /* uint16_t x = 50000: want -16666, dcc 0 */
   Right: `int32_t t; t = (int32_t)gu;` or `(float)(t + 0)`. Found by
   fuzzing (float generator, seed 3792).
 
-## BUG-017
-
-**An `unsigned short` parameter and-assigned with itself and returned through
-a widening cast returns 0.**
-
-```c
-static int16_t f(unsigned short x) { x &= x; return (uint32_t)x; }   /* f(1) is 1; dcc 0 */
-```
-
-- With `dccpeep` a second form is also wrong: `x &= x; return (int32_t)x;`
-  returns garbage for 40000 (2112 or 5184, depending on build options).
-- Correct: `return x;`; `x |= x`; `x &= 3`; a local copy of the parameter.
-- Unlikely in hand-written code; logged because the result is silently wrong.
-
 ## BUG-018
 
 **Compound assignment of a 32-bit value to a bit-field, or to an element of
@@ -667,73 +652,6 @@ do { l--; } while (++d < 2);
 - Correct: a 16-bit local; no later `do … while` (a plain `l--;`, or a
   `while` loop, after the first loop is fine); the `if` not in a loop.
 - BUG-021 is another case where a post-increment yields the new value.
-
-## BUG-026
-
-**A variable that is assigned a computed value and is then, in the next
-statement, both operands of one binary operator is read from a stack slot
-the function never allocates.** The result is garbage.
-
-```c
-int sq(int a, int b)
-{
-    int d = a - b;
-    return d * d;            /* sq(10, 1) is 81 and sq(20, 2) is 324; dcc returned 0 and 16578 */
-}
-```
-
-dcc emits, for `sq`:
-
-```
-    push ix
-    ld ix,0
-    add ix,sp          ; no frame is allocated
-    ...
-    sbc hl,de          ; a - b
-    push hl            ; first operand: forwarded
-    ld l,(ix-10)       ; second operand: read from below the stack pointer
-    ld h,(ix-9)
-    ex de,hl
-    pop hl
-    call __mulu
-```
-
-- Wrong for a local with an initialiser (`int d = a - b;`) or assigned
-  (`d = a - b;`), and for a parameter (`a = a ^ b; return a - a;`); assigned
-  from an expression or from a global (`a = g; return a + a;`).
-- Wrong for `+ - * & | ^ << >> == != < > <= >=`; in `return d * d;`,
-  `g = d + d;`, `d = d * d;`, `return (d + d) * 2;`, `return d * d + 1;` and
-  `if (d + d > 3)`; when the second operand is a copy
-  (`int e = d; return d * e;`). A `long` local is wrong for `*`, `<<` and
-  `>>`.
-- `int`, `unsigned`, `short`, `int16_t` and `uint16_t` behave the same, in
-  `static` and external functions.
-- Correct: `d / d`, `d % d`, `d && d`, `d || d`; a different second operand
-  (`d * a`, `d * (d + 1)`, `d + a + d`, `d + d + d`); another statement
-  between the assignment and the use (`int d = a - b; calls++; return d * d;`);
-  `int d = a;` or `int d = 7;` (nothing computed); a `char` local; a
-  `register` local; another initialised local declared first
-  (`int t = 1; int d = a - b; return d * d + t;`).
-- The selected emitter is `spilled-scalar-cfg`, which reports `frame=0
-  slots=0` for `sq` (`DCC_MIR_COST_REPORT=1`).
-- Not a regression: the v3.6.0 compiler (`20290235`) emits the same code.
-- BUG-017 (`x &= x` on a parameter) also has one variable as both operands
-  and may be the same defect.
-- A nested-block `float` or `long` local initialised from a global or a
-  converted integer has it too, and there the result is the first operand
-  rather than garbage: `{ float b = fg; g = b + b; }` with `fg` 2.0f gives
-  2.0f; `{ float b = c8; g = b + b; }` with `signed char c8` 3 gives 3.0f,
-  `b - b` gives 3.0f and `b * b` is garbage; `{ long b = c8; g = b + b; }`
-  is garbage. Right: `float b = 1.0f;`, `float b; b = c8;` (assigned, not
-  initialised), `(b + 0.0f) + b`, a call between the two statements, and a
-  function-scope `b`. Found by fuzzing (float generator, seed 1681).
-- Also for a plain (function-scope) `float` local whose last assignment was
-  a converted integer: `float l = 3.14159f; l = (uint16_t)0xdcc7;
-  return (l * l) + (int32_t)1;` returns 1.0f (the product reads as 0) and
-  `(l + l) + (int32_t)1` is wrong; `(l * l) + 1.0f`, `(l * l) + (int16_t)1`,
-  `((int32_t)1) + (l * l)` and `l * l` alone are right, as is `l = 56519.0f`
-  (the same value as a float constant) or dropping the dead `float l1`
-  declaration next to `l`. Found by fuzzing (float generator, seed 3223).
 
 ## BUG-027
 
@@ -1252,6 +1170,184 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   loop, `x + 0.0f` as the arm, `x` in the else arm (`c ? 1.0f : x`), no
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
+
+## BUG-054
+
+**With `dccpeep`, a byte local loaded from a global and used twice by
+a binary operator loses a live register.** The result can select
+the wrong array element. Without `dccpeep` the output is correct.
+
+```c
+uint32_t sub(int8_t p)
+{
+    uint8_t a = 0, b = 0;
+    uint32_t c = 0;
+    a = s.c;                         /* a global struct's uint16_t member, 1 */
+    b = a - a;
+    c = a6[a1[b & 7] & 7];
+    return c;                       /* want 127; peep gives 0xffffffa4 */
+}
+```
+
+- `pass_defer_global_push_reload()` replaces `ld hl,(global) / push hl`
+  and the matching `pop de` with a delayed `ld de,(global)`, but does not
+  prove that HL is overwritten before its next use, including uses after
+  that pop. After earlier spill cleanup, the right operand is still in HL
+  from that same load; deleting it leaves HL stale. The subtraction becomes
+  `stale_hl - global` instead of `global - global`.
+- Confirmed for signed and unsigned byte locals, subtraction, addition and
+  bitwise AND, a plain global or a global struct member as the source,
+  with and without stack checking. The nested array lookup/32-bit result in the
+  reproducer retains the failing schedule; a simple byte result or single
+  byte-array lookup does not.
+- Right: a parameter or a literal instead of the global load; every
+  reproducer case with `dcc-peep=false`. A stale HL may coincidentally
+  produce the correct result, so which operator visibly fails can change
+  with link layout or optional runtime support.
+- Found while verifying B3, integer generator seed 255 after removing
+  BUG-026's broad `selfoperand` steer. Independently reproduced with an
+  unchanged `972ce024` compiler and unchanged upstream `dccpeep`; it is not
+  caused by B3's forwarded-operand repair. Parked, not fixed, in B3.
+- Steered by `peepbyteself`: non-logical byte binary self-operands
+  (including compound spellings), leaving word/long/float self-operands
+  enabled for B3 coverage.
+
+## Fixed in cluster B3
+
+BUG-017 and BUG-026 now pass with and without `dccpeep`. A repeated binary
+operand could consume its just-forwarded register value for the first use,
+then reload the second use from a spill home that had never been written
+(and might not even be allocated). The emitter now recognizes that identity
+before consuming either operand: copy HL into DE for words, or keep the
+resident DE:HL after saving the first wide operand. No fallback, frame,
+allocation or candidate-selection change is needed.
+
+BUG-017 is the same defect, not a widening-cast typing fix: its unchanged
+MIR is `binary v3 = v0,v0` followed by conversions, and both functions read
+uninitialized `(ix-2..-1)` for the second operand before this repair.
+Only these two existing reproducers flipped. The separately discovered
+peep-only BUG-054 (#288), independently reproduced with unchanged current
+main, remains parked and is steered by the byte-only `peepbyteself` feature.
+
+`selfoperand`, `selfand`, and `fselfop` are restored. Final production seeds
+1-300 with `--off known` give **213 ok, 85 INVALID, two target-limit-only,
+zero FAIL** for integers and **267 ok, 33 INVALID, zero FAIL** for floats.
+A separate 3,000-seed generator proof finds no remaining disabled shapes.
+The reproducers are promoted as `tandself` and `tselfop`, including neighbouring
+controls and the logged wide/float facets. Only their two new stack-check
+performance rows are added: all 504 existing rows remain unchanged.
+Both original-corpus censuses are identical across 3,394 existing functions;
+the neighbouring other-operand and separated-statement assembly is unchanged
+in both peep modes. Strict full+extended stack/no-stack, host/sanitizer,
+line metadata and debugger-host checks pass; `-gline` retains release-identical
+binaries and full `-g` runs give correct output in both modes.
+
+After promotion all 37 remaining parked reproducers still fail; the final
+censuses add only the 29 new test functions. Both strict full+extended gates
+pass (545 applications), including the focused stack-check performance gate.
+The Python suite runs 312 tests: two #277 failures have identical payloads
+with unchanged current main; three unmodified mutation-harness errors remain
+(two 180-second timeouts and a missing watchdog-child file), with two existing
+skips. The timeouts also occurred in the unchanged-main fixture check. A
+separate cleanup-case check fails on both clean current-main scripts and the
+branch, though its nondeterministic symptom differs (8-second time budget
+versus the missing child file). The full Python gate is therefore not green;
+no expectation, skip or harness fix is included. The 25 focused integer,
+generator and line-debug tests pass, as do all ten debugger-host tests.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-017](#bug-017) | #237 | [tandself](tests/tandself.c) |
+| [BUG-026](#bug-026) | #246 | [tselfop](tests/tselfop.c) |
+
+### BUG-017
+
+**Fixed:** duplicate the resident forwarded word instead of reloading its
+uninitialized spill home. Regression: [tandself.c](tests/tandself.c),
+[stdout](tests/baselines/tandself.txt).
+
+**An `unsigned short` parameter and-assigned with itself and returned through
+a widening cast returns 0.**
+
+```c
+static int16_t f(unsigned short x) { x &= x; return (uint32_t)x; }   /* f(1) is 1; dcc 0 */
+```
+
+- With `dccpeep` a second form is also wrong: `x &= x; return (int32_t)x;`
+  returns garbage for 40000 (2112 or 5184, depending on build options).
+- Correct: `return x;`; `x |= x`; `x &= 3`; a local copy of the parameter.
+- Unlikely in hand-written code; logged because the result is silently wrong.
+
+### BUG-026
+
+**Fixed:** preserve the same just-forwarded word/wide value for both
+operands of one instruction. Regression: [tselfop.c](tests/tselfop.c),
+[stdout](tests/baselines/tselfop.txt).
+
+**A variable that is assigned a computed value and is then, in the next
+statement, both operands of one binary operator is read from a stack slot
+the function never allocates.** The result is garbage.
+
+```c
+int sq(int a, int b)
+{
+    int d = a - b;
+    return d * d;            /* sq(10, 1) is 81 and sq(20, 2) is 324; dcc returned 0 and 16578 */
+}
+```
+
+dcc emits, for `sq`:
+
+```
+    push ix
+    ld ix,0
+    add ix,sp          ; no frame is allocated
+    ...
+    sbc hl,de          ; a - b
+    push hl            ; first operand: forwarded
+    ld l,(ix-10)       ; second operand: read from below the stack pointer
+    ld h,(ix-9)
+    ex de,hl
+    pop hl
+    call __mulu
+```
+
+- Wrong for a local with an initialiser (`int d = a - b;`) or assigned
+  (`d = a - b;`), and for a parameter (`a = a ^ b; return a - a;`); assigned
+  from an expression or from a global (`a = g; return a + a;`).
+- Wrong for `+ - * & | ^ << >> == != < > <= >=`; in `return d * d;`,
+  `g = d + d;`, `d = d * d;`, `return (d + d) * 2;`, `return d * d + 1;` and
+  `if (d + d > 3)`; when the second operand is a copy
+  (`int e = d; return d * e;`). A `long` local is wrong for `*`, `<<` and
+  `>>`.
+- `int`, `unsigned`, `short`, `int16_t` and `uint16_t` behave the same, in
+  `static` and external functions.
+- Correct: `d / d`, `d % d`, `d && d`, `d || d`; a different second operand
+  (`d * a`, `d * (d + 1)`, `d + a + d`, `d + d + d`); another statement
+  between the assignment and the use (`int d = a - b; calls++; return d * d;`);
+  `int d = a;` or `int d = 7;` (nothing computed); a `char` local; a
+  `register` local; another initialised local declared first
+  (`int t = 1; int d = a - b; return d * d + t;`).
+- The selected emitter is `spilled-scalar-cfg`, which reports `frame=0
+  slots=0` for `sq` (`DCC_MIR_COST_REPORT=1`).
+- Not a regression: the v3.6.0 compiler (`20290235`) emits the same code.
+- BUG-017 (`x &= x` on a parameter) was confirmed to have the same
+  forwarded-value double-consumption defect and is closed in B3 too.
+- A nested-block `float` or `long` local initialised from a global or a
+  converted integer has it too, and there the result is the first operand
+  rather than garbage: `{ float b = fg; g = b + b; }` with `fg` 2.0f gives
+  2.0f; `{ float b = c8; g = b + b; }` with `signed char c8` 3 gives 3.0f,
+  `b - b` gives 3.0f and `b * b` is garbage; `{ long b = c8; g = b + b; }`
+  is garbage. Right: `float b = 1.0f;`, `float b; b = c8;` (assigned, not
+  initialised), `(b + 0.0f) + b`, a call between the two statements, and a
+  function-scope `b`. Found by fuzzing (float generator, seed 1681).
+- Also for a plain (function-scope) `float` local whose last assignment was
+  a converted integer: `float l = 3.14159f; l = (uint16_t)0xdcc7;
+  return (l * l) + (int32_t)1;` returns 1.0f (the product reads as 0) and
+  `(l + l) + (int32_t)1` is wrong; `(l * l) + 1.0f`, `(l * l) + (int16_t)1`,
+  `((int32_t)1) + (l * l)` and `l * l` alone are right, as is `l = 56519.0f`
+  (the same value as a float constant) or dropping the dead `float l1`
+  declaration next to `l`. Found by fuzzing (float generator, seed 3223).
 
 ## Fixed in cluster I1
 

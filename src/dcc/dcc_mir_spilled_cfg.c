@@ -35011,6 +35011,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 int mulmod_left;
                 int mulmod_right;
                 int mulmod_modulus;
+                int repeated_forwarded_operand =
+                    insn->src1 == insn->src2 &&
+                    mir_forwarded_wide_value == insn->src1 &&
+                    mir_forwarded_wide_instruction + 1 == i;
                 int stack_forwarded_left =
                     mir_forwarded_wide_stack_value == insn->src1 &&
                     mir_forwarded_wide_stack_consumer == i;
@@ -35132,7 +35136,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     if (!signed_const_relational_fastpath)
                         mir_stream_puts("\tpush de\n\tpush hl\n", out);
                 }
-                if (!stack_forwarded_right && !signed_const_relational_fastpath)
+                /* A forwarded value has no initialized spill home. Pushing
+                 * DE:HL preserves it for both operands of this instruction. */
+                if (!stack_forwarded_right && !signed_const_relational_fastpath &&
+                    !repeated_forwarded_operand)
                     mir_emit_virtual_load_wide(out, insn->src2);
                 if (!mir_emit_wide_operation(out, operation_insn))
                     goto done;
@@ -35157,6 +35164,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     mir_emit_virtual_store(out, insn->dst);
             } else {
                 int divmod_partner = mir_divmod_partner(i);
+                int repeated_forwarded_operand =
+                    insn->src1 == insn->src2 &&
+                    mir_forwarded_hl_value == insn->src1 &&
+                    mir_forwarded_hl_instruction + 1 == i;
                 const struct MirInsn *left_definition =
                     mir_definition(insn->src1);
                 const struct MirInsn *right_definition =
@@ -35478,6 +35489,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                             out, insn->src1, i, "hl"))
                         mir_planned_stack_invalid = 1;
                     planned_stack_forwarded_left = 0;
+                } else if (repeated_forwarded_operand) {
+                    /* Loading src1 consumed the forward, not a spill slot;
+                     * duplicate the still-resident value instead of reloading. */
+                    mir_stream_puts("\tld e,l\n\tld d,h\n", out);
                 } else if (materialized_zero_equality) {
                     /* HL already holds the nonzero-side operand. A framed
                      * function deliberately leaves a dynamic handoff for

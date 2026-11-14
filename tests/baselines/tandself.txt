@@ -1,2 +1,3 @@
 and self 1 1234
 and self long 40000
+controls 1234 1234 2 40000

@@ -1,9 +1,7 @@
-/* BUG-026: a 16-bit variable that is assigned a computed value and is then,
- * in the next statement, both operands of one binary operator: the second
- * operand is read from a stack slot the function never allocates, so
- * `d = a - b; return d * d;` returns garbage. Plain `int` behaves the same
- * as int16_t. It is correct when another statement comes between, when the
- * other operand is a different value, and for 8-bit variables. */
+/* Same-value binary operands after computation or integer-to-wide conversion.
+ * Covers 16-/32-bit locals, a copied value, parameter reassignment, nested
+ * float/long initializers, and mixed-width float expressions, with separated
+ * statements and different operands as controls. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -69,19 +67,85 @@ static int16_t copied(int16_t a, int16_t b)
     return d * e;
 }
 
-/* correct: the other operand is a different value */
+/* Control: the other operand is a different value */
 static int16_t other_operand(int16_t a, int16_t b)
 {
     int16_t d = a - b;
     return d * a;
 }
 
-/* correct: a statement comes between */
+/* Control: a statement comes between */
 static int16_t separated(int16_t a, int16_t b)
 {
     int16_t d = a - b;
     calls++;
     return d * d;
+}
+
+static float fg = 2.0f;
+static int8_t c8 = 3;
+static float g;
+static int32_t lg;
+
+static void block_global(void)
+{
+    { float b = fg; g = b + b; }
+}
+
+static void block_add(void)
+{
+    { float b = c8; g = b + b; }
+}
+
+static void block_sub(void)
+{
+    { float b = c8; g = b - b; }
+}
+
+static void block_mul(void)
+{
+    { float b = c8; g = b * b; }
+}
+
+static void block_long(void)
+{
+    { int32_t b = c8; lg = b + b; }
+}
+
+static void block_assigned(void)
+{
+    { float b; b = c8; g = b + b; }
+}
+
+static float mixed_mul(void)
+{
+    float l = 3.14159f;
+    float l1 = 1.0f; /* The dead local is part of the register-placement case. */
+    l = (uint16_t)0xdcc7;
+    return (l * l) + (int32_t)1;
+}
+
+static float mixed_add(void)
+{
+    float l = 3.14159f;
+    float l1 = 1.0f;
+    l = (uint16_t)0xdcc7;
+    return (l + l) + (int32_t)1;
+}
+
+static float mixed_control(void)
+{
+    float l = 3.14159f;
+    float l1 = 1.0f;
+    l = (uint16_t)0xdcc7;
+    return (l * l) + 1.0f;
+}
+
+static void show_bits(float f)
+{
+    union { float f; uint32_t u; } v;
+    v.f = f;
+    printf("%lx\n", (unsigned long)v.u);
 }
 
 int main(void)
@@ -98,5 +162,14 @@ int main(void)
         printf("%d: other operand %d separated %d\n", (int)i,
                (int)other_operand(a, i), (int)separated(a, i));
     }
+    block_global(); show_bits(g);
+    block_add(); show_bits(g);
+    block_sub(); show_bits(g);
+    block_mul(); show_bits(g);
+    block_long(); printf("%ld\n", (long)lg);
+    block_assigned(); show_bits(g);
+    show_bits(mixed_mul());
+    show_bits(mixed_add());
+    show_bits(mixed_control());
     return 0;
 }
