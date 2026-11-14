@@ -1065,7 +1065,7 @@ so it matters more than its size suggests. Both are one-offs.
 | D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
 | D2 | | split into D2a / D2b | Stored-home versus AST admission are independent |
-| D2a | `fix/cluster-d2a-postinc-home` | verified partial fix; normal PR | 021 promoted as tpost16; 024 remains independent; incidental 023 FIXED parked/open; int 227 ok/73 INVALID/zero FAIL; both 3,482 existing census rows and 516 perf rows unchanged |
+| D2a | [#300](https://github.com/davidly/dcc/pull/300) (`fix/cluster-d2a-postinc-home`) | PR open; verified partial fix | 021 promoted as tpost16; 024 remains independent; incidental 023 FIXED parked/open; int 227 ok/73 INVALID/zero FAIL; both 3,482 existing census rows and 516 perf rows unchanged |
 | D2b | | open; separate worktree | BUG-010/041 AST value admission; not changed by D2a |
 | E | | open | |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
