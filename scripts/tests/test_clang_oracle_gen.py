@@ -53,7 +53,7 @@ class IntegerKnownShapeTests(unittest.TestCase):
         self.assertEqual(stored.k[1].op, "const")
         self.assertFalse(gen.peep_byte_self(stored.a, stored.k))
 
-    def test_postfix_steer_restores_narrow_values_but_preserves_wide_guard(self):
+    def test_postfix_steer_restores_all_widths(self):
         for typ in (gen.I8, gen.U8, gen.I16, gen.U16, gen.I32, gen.U32):
             with self.subTest(typ=typ):
                 generator = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS))
@@ -65,7 +65,7 @@ class IntegerKnownShapeTests(unittest.TestCase):
                      mock.patch.object(generator.rng, "random", side_effect=(1, 0, 1)):
                     expression = generator.gen_expr(context, 1)
                 self.assertEqual(expression.op, "incdec")
-                self.assertEqual(expression.a[1], typ.bits == 32)
+                self.assertFalse(expression.a[1])
                 expression.a = ("++", False)
                 program = gen.Program(0, off={"postincvalue"})
                 function.body.stmts.append(gen.S("expr", e=[

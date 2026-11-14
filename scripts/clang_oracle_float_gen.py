@@ -55,14 +55,12 @@ FEATURES = frozenset((
 # that each one would otherwise keep rediscovering.
 KNOWN_BUGS = {
     'fdivround': 'BUG-039',
-    'fincdecval': 'BUG-041',
-    'fconstfold': 'BUG-042',
+    'fincdecval': 'BUG-041, BUG-056',
     'fblockneg': 'BUG-015',
     'fnegcmp': 'BUG-045',
     'fparamcmp': 'BUG-020',
     'fblockint': 'BUG-015',
     'finittype': 'BUG-016',
-    'fconstjump': 'BUG-019',
     'fconstcond': 'BUG-052',
     'farrloopindex': 'BUG-055',
 }

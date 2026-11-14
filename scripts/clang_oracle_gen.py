@@ -940,8 +940,7 @@ def const_text(v, t):
 def static_text(v, t):
     """A constant for a static initializer."""
     if t is F32:
-        # bare, not parenthesised: BUG-040
-        return float_text(v).strip('()')
+        return float_text(v)
     if t.signed:
         if v == -(1 << 31):
             return '(-2147483647 - 1)'
@@ -1432,17 +1431,14 @@ KNOWN_BUGS = {
     'logicinit': 'BUG-004',
     'bfdivasg': 'BUG-006',
     'nestedwideless': 'BUG-009',
-    'widepostinc': 'BUG-010',
     'bfpromo': 'BUG-013',
     'blockptr': 'BUG-015',
     'inittype': 'BUG-016',
     'widehelperparam': 'BUG-020',
     'duplabel': 'BUG-022',
-    'constjump': 'BUG-019',
     'nestedifelse': 'BUG-027',
     'bytesarcount': 'BUG-028',
     'bytearm': 'BUG-029',
-    'constdivzero': 'BUG-033',
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',
     'loopcopy': 'BUG-037',

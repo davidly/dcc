@@ -2504,15 +2504,12 @@ int ast_mixed_long_rhs_arith_supported(const struct AstNode *n)
 
 int ast_const_plain_int_binary_supported(const struct AstNode *n)
 {
-    long rhs;
-
     if (n == NULL || n->kind != AST_BINARY)
         return 0;
     if (!is_supported_binary_op(n->op) && !is_shift_op(n->op))
         return 0;
-    if ((n->op == '/' || n->op == '%') &&
-        ast_unary_int_const_fold(n->b, &rhs) && rhs == 0)
-        return 0;
+    /* Admission does not require evaluation: keep zero-divisor operations
+     * in MIR so an enclosing runtime guard can leave them unevaluated. */
     return ast_node_is_const(n) && ast_expr_supported(n->a) &&
            ast_expr_supported(n->b) && ast_value_is_plain_int(n->a) &&
            ast_value_is_plain_int(n->b);

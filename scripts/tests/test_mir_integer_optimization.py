@@ -34,6 +34,117 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_dead_scopes_compile_with_debug_and_vla_metadata(self):
+        cases = (
+            "if (sel) { return 1; { int b = 1; out += b; } } return 0;",
+            "if (sel) { return 1; for (unsigned char k = 3; k < 5; ++k) out++; } return 0;",
+            "while (sel) { break; { int b = 1; out += b; } } return 0;",
+            "if (sel) { goto end; if (sel) { int b = 1; out += b; } } end: return 0;",
+            "while (sel) { if (7) continue; { int n = sel + 1; int a[n]; a[0] = 1; } } return 0;",
+            "if (sel) { if (7) return 1; { int b = ++out; out += b; } } return 0;",
+            "if (sel) { return 1; int b = 1; out += b; return b; } return 0;",
+            "if (sel) { if ((int)(-1.0f)) return 1; { float b = 1.0f; out++; } } return 0;",
+        )
+        for body in cases:
+            source = "int sel, out; int probe(void) { " + body + " }"
+            release = self.code(self.compile(source))
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(body=body, options=options):
+                    actual = self.code(self.compile(source, options))
+                    if options == ("-gline",):
+                        self.assertEqual(actual, release)
+
+    def test_dead_scope_keeps_label_reentry_and_vla_diagnostics(self):
+        source = ("int out; int probe(void) { { goto entry; return 0; "
+                  "{ int b; entry: b = 7; out = b; } } return out; }")
+        release = self.code(self.compile(source))
+        for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+            with self.subTest(options=options):
+                actual = self.code(self.compile(source, options))
+                if options == ("-gline",):
+                    self.assertEqual(actual, release)
+        invalid = ("int probe(int n) { { goto entry; return 0; "
+                   "{ int a[n]; entry: a[0] = 7; } } return 0; }")
+        with tempfile.TemporaryDirectory(dir=ROOT / "build", prefix="dead-vla-") as directory:
+            path = Path(directory)
+            source_path = path / "probe.c"
+            source_path.write_text(invalid, encoding="ascii")
+            result = subprocess.run(
+                [str(ROOT / "dcc"), "-I", str(ROOT), str(source_path),
+                 "-o", str(path / "PROBE.MAC")],
+                env=ENV, capture_output=True, text=True, timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("goto into a variable-length array scope", result.stderr)
+
+
+    def test_guarded_constant_zero_divisors_remain_runtime_operations(self):
+        for op, helper in (("/", "__divs"), ("%", "__mods")):
+            source = ("int probe(int run) { if (run) return 1000 " +
+                      op + " (1 - 1); return 7; }\n")
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(op=op, options=options):
+                    assembly, diagnostics = self.compile_report(source, options)
+                    self.assertEqual(diagnostics, "")
+                    self.assertIn("call " + helper, assembly)
+                    self.assertIn("ld de,0", assembly)
+                    self.assertRegex(assembly, r"ld hl,1000")
+
+    def test_static_float_arithmetic_matches_literal_data(self):
+        cases = (
+            ("(2.5f)", "2.5f"),
+            ("-(2.5f)", "-2.5f"),
+            ("1.0f + 2.0f * 3.0f", "7.0f"),
+            ("(1.0f + 2.0f) * 3.0f", "9.0f"),
+            ("3 * (0.5f + 0.25f) / 2 - 0.125f", "1.0f"),
+            ("(16777216.0f + 1.0f) - 16777216.0f", "0.0f"),
+            ("(1 / 2) + 0.25f", "0.25f"),
+            ("((float)(3 + 2)) * 0.5f", "2.5f"),
+            ("((int)2.75f)", "2.0f"),
+            ("(float)((int)(1.25f + 2.0f)) + 0.5f", "3.5f"),
+            ("((int)1.75f + (int)2.5f) * 0.5f", "1.5f"),
+            ("(float)((_Bool)0.25f)", "1.0f"),
+            ("(float)sizeof(\"ab\")", "3.0f"),
+            ("0.0f ? 1.0f : 2.5f", "2.5f"),
+            ("(float)(uint16_t)65535.75f", "65535.0f"),
+            ("(float)(int16_t)-32768.75f", "-32768.0f"),
+            ("(float)(uint32_t)4000000000.0f", "4000000000.0f"),
+            ("(float)(int8_t)-128.75f", "-128.0f"),
+        )
+        for expression, literal in cases:
+            source = "#include <stdint.h>\nfloat probe = " + expression + ";\n"
+            neighbor = "#include <stdint.h>\nfloat probe = " + literal + ";\n"
+            with self.subTest(expression=expression):
+                self.assertEqual(self.code(self.compile(source)),
+                                 self.code(self.compile(neighbor)))
+
+    def test_nested_float_constant_unary_matches_literal(self):
+        for expression in ("-(-2.5f)", "+(-(-2.5f))"):
+            source = "float out; void probe(void) { out = " + expression + "; }\n"
+            neighbor = "float out; void probe(void) { out = 2.5f; }\n"
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(expression=expression, options=options):
+                    self.assertEqual(self.code(self.compile(source, options)),
+                                     self.code(self.compile(neighbor, options)))
+
+    def test_float_constant_truth_matches_integer_literal(self):
+        cases = (
+            ("return !0.25f;", "return 0;"),
+            ("return !(-0.0f);", "return 1;"),
+            ("return !!0.25f;", "return 1;"),
+            ("return 2.5f && 1;", "return 1;"),
+            ("return (1.0f > 2.0f) || (1 == 1);", "return 1;"),
+            ("if (2.3f) return 7; return 0;", "if (1) return 7; return 0;"),
+            ("if (0.0f) return 7; return 0;", "if (0) return 7; return 0;"),
+            ("while (1.0f) { break; } return 7;", "while (1) { break; } return 7;"),
+        )
+        for body, control in cases:
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(body=body, options=options):
+                    source = "int probe(void) { " + body + " }\n"
+                    neighbor = "int probe(void) { " + control + " }\n"
+                    self.assertEqual(self.code(self.compile(source, options)),
+                                     self.code(self.compile(neighbor, options)))
     def test_integer_compound_lvalues_match_expanded_assignment(self):
         cases = (
             ("struct S { unsigned char b[4]; } s;", "s.b[2]", "^", "1"),
@@ -86,6 +197,19 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                     for options in ((), ("-fstack-check",), ("-gline",)):
                         with self.subTest(value_type=value_type, update=update,
                                           prefix=prefix, options=options):
+                            self.assertEqual(self.code(self.compile(source, options)),
+                                             self.code(self.compile(control, options)))
+
+    def test_narrowed_long_postfix_matches_direct_assignment(self):
+        for value_type in ("long", "unsigned long"):
+            for update in ("++", "--"):
+                body = value_type + " value; int probe(void) { "
+                control = body + "int old; old = value" + update + "; return old; }\n"
+                for result in ("(int)(value" + update + ")", "value" + update):
+                    source = body + "return " + result + "; }\n"
+                    for options in ((), ("-fstack-check",), ("-gline",)):
+                        with self.subTest(value_type=value_type, result=result,
+                                          options=options):
                             self.assertEqual(self.code(self.compile(source, options)),
                                              self.code(self.compile(control, options)))
 
