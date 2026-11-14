@@ -1,11 +1,7 @@
-/* BUG-030: a C99 `for` initialiser declaration is given a stack slot that
- * overlaps the locals of its enclosing block, when an earlier sibling scope
- * (the other arm of an `if`, an earlier case of a `switch`, or an earlier
- * block inside the same parent block) also declares a local. The loop
- * counter then overwrites part of an array, a pointer or a variable whose
- * address is taken. It is correct when the counter is declared at the top
- * of the block, when no earlier scope declares anything, and for two blocks
- * directly in the function body. */
+/* C99 for-init storage after sibling scopes: arrays, address-taken locals,
+ * pointers, switch cases, loop bodies, and 8/16/32-bit counters must keep
+ * independent homes. Block-declared counters and a scope with no earlier
+ * declaration are controls. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -29,6 +25,36 @@ static uint16_t array_in_else(void)
     return r;
 }
 
+static uint16_t array_in_else_word(void)
+{
+    uint16_t r = 0;
+    if (sel) {
+        uint32_t a = 0;
+        n += (uint16_t)a;
+    } else {
+        uint16_t x[2] = { 0x1234, 0x5678 };
+        for (uint16_t i = 300; i != 0; --i)
+            n++;
+        r = x[0] ^ x[1];
+    }
+    return r;
+}
+
+static uint16_t array_in_else_wide(void)
+{
+    uint16_t r = 0;
+    if (sel) {
+        uint32_t a = 0;
+        n += (uint16_t)a;
+    } else {
+        uint16_t x[2] = { 0x1234, 0x5678 };
+        for (uint32_t i = 300; i != 0; --i)
+            n++;
+        r = x[0] ^ x[1];
+    }
+    return r;
+}
+
 static uint16_t address_taken(void)
 {
     uint16_t r = 0;
@@ -45,8 +71,7 @@ static uint16_t address_taken(void)
     return r;
 }
 
-/* the counter overlaps the walking pointer: without the `n < 200` bound
- * this loop never ends */
+/* Bound the walk so a counter/pointer alias is reported rather than hanging. */
 static uint16_t pointer_walk(void)
 {
     uint16_t r = 0;
@@ -148,6 +173,8 @@ static void show(const char *name, uint16_t r)
 int main(void)
 {
     show("array in else", array_in_else());
+    show("word counter", array_in_else_word());
+    show("wide counter", array_in_else_wide());
     show("address taken", address_taken());
     show("pointer walk", pointer_walk());
     show("switch case", switch_case());

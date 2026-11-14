@@ -48,7 +48,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
-| [BUG-030](#bug-030) | #250 | wrong result, or hang | A `for`-init declaration overlaps its enclosing block's locals on the stack (after an earlier sibling scope) |
 | [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
 | [BUG-036](#bug-036) | #256 | wrong result | A 32-bit local assigned in a loop and passed directly to a call keeps its old value after the loop |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
@@ -66,16 +65,17 @@ and their historical diagnoses are retained separately below.
 | [BUG-050](#bug-050) | #270 | wrong result | `(int32_t)(uint32_t)x` converted to float, with `x` a signed 8- or 16-bit value, converts the unsigned value (`-121` → `4294967175.0f`) |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 
-Forty-one are open: twenty-six give wrong results with no diagnostic
-(BUG-030 can also hang; BUG-039 is in the runtime), one hangs, thirteen stop the compile,
+Forty are open: twenty-five give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, thirteen stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. BUG-026 is the
 one most likely to be hit by ordinary code, then BUG-044 (every float `++`
-is wrong), BUG-047 (`f + n * g` is `f`), BUG-030 (it corrupts memory in C99-style code), BUG-003,
+is wrong), BUG-047 (`f + n * g` is `f`), BUG-003,
 BUG-013 and BUG-016.
 
-Ten reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Eleven reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
+[one in cluster B1](#fixed-in-cluster-b1),
 [four in cluster K](#fixed-in-cluster-k),
 [one in cluster L](#fixed-in-cluster-l) and
 [one in cluster I1](#fixed-in-cluster-i1). Two more
@@ -853,55 +853,6 @@ L4:
 - The selected emitter is `homed-scalar-cfg` (`DCC_MIR_COST_REPORT=1`).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
 
-## BUG-030
-
-**A C99 `for` initialiser declaration overlaps the locals of its enclosing
-block on the stack, when an earlier sibling scope also declares a local.**
-The loop counter overwrites part of an array, a pointer, or a variable whose
-address is taken. The sibling scopes can be the arms of an `if … else`, the
-cases of a `switch`, or two blocks inside any other block.
-
-```c
-if (sel) {
-    uint32_t a = 0;
-    n += (uint16_t)a;
-} else {
-    uint16_t x[2] = { 0x1234, 0x5678 };
-    for (uint8_t i = 5; i != 0; --i)
-        n++;
-    r = x[0] ^ x[1];         /* want 444c; dcc 124c: x[1] is now 0x0078 */
-}
-```
-
-With a pointer in place of the array, dcc emits (the pointer `q` is at
-`ix-6`/`ix-5`, and so is the counter):
-
-```
-    ld (ix-6),l        ; q = &bytes[0]
-    ld (ix-5),h
-    ...
-    ld (ix-5),5        ; for (uint8_t i = 5; ...): i is also at ix-5
-```
-
-- Wrong when the `else` arm's locals are an array, two pointers, or a
-  variable with its address taken; when the earlier arm's local is 8, 16 or
-  32 bits wide, used or not; for an 8-bit or 16-bit counter; in the `else`
-  arm of an `if` and in a later `case` of a `switch`.
-- Equally wrong for two sibling blocks inside the body of a `for`, `while`
-  or `if`, or inside a plain block:
-  `for (…) { { uint32_t a = 0; … } { uint16_t x[2] = …; for (uint8_t i = 5; …) … } }`.
-  Three generated programs that hang reduce to this form.
-- With a pointer walk (`for (; q != end; ++q) { for (uint8_t i = 5; …) … }`)
-  the counter clears the pointer's high byte on every pass and the loop never
-  ends.
-- Correct: the counter declared at the top of the block (`uint8_t i;`); a
-  plain nested block in place of the `for` (`{ uint8_t c = 5; … }`); the
-  earlier scope declaring nothing; two sibling blocks directly in the
-  function body; the earlier local declared in the enclosing block itself;
-  the two scopes in the other order; locals that do not need memory (plain
-  `uint16_t x, y;`).
-- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
-
 ## BUG-033
 
 **A constant divided by a constant zero is rejected, even in code that never
@@ -1413,6 +1364,86 @@ static uint32_t e(float x) { return x * 2.0f; } /* rejected */
 - Found by fuzzing (float generator, seeds 30 and 35:
   `return h0(...)` with `h0` returning `int32_t` in a `float` function).
 
+## Fixed in cluster B1
+
+BUG-030 now passes in peep and nopeep. A support probe could intern a
+`for`-init scalar before preceding sibling scopes reserved their storage;
+real declaration replay corrected the declaration table but not the MIR
+object preferred by named-home resolution. Real `for`-init replay now repairs
+that object only when its stale byte range overlaps another still-live local.
+Expired for-init renames and unrelated declarations do not trigger repair, so
+harmless existing homes and exact schedules remain unchanged.
+
+Before promotion, BUG-030 alone flipped: one `FIXED`, 41 `fails`. The two
+neighbouring controls are byte-identical in both modes. Both censuses retain
+all 3,366 existing functions unchanged; strict full+extended stack-check and
+no-stack-check suites pass with all 500 existing performance rows unchanged.
+The integer generator's `armfordecl` steering entry was removed: production
+seeds 1-300 finish with **216 ok, 83 INVALID, one target-limit-only, zero FAIL**.
+
+The reproducer was promoted as `tforhome`, with extra 16-/32-bit counter
+cases, a host/sanitizer-proven baseline, and one new measured stack-check
+performance row. After promotion all 41 remaining parked reproducers still
+fail. The full Python gate runs 307 tests with only the two approved #277
+failures (failure payloads identical to unchanged main); the #280 mutation
+fixture passes in this run and remains unmodified.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-030](#bug-030) | #250 | [tforhome](tests/tforhome.c) |
+
+### BUG-030
+
+**Fixed:** overlapping probe-created for-init homes are reconciled during
+real declaration replay. Regression: [tforhome.c](tests/tforhome.c),
+[baseline](tests/baselines/tforhome.txt).
+
+**A C99 `for` initialiser declaration overlaps the locals of its enclosing
+block on the stack, when an earlier sibling scope also declares a local.**
+The loop counter overwrites part of an array, a pointer, or a variable whose
+address is taken. The sibling scopes can be the arms of an `if … else`, the
+cases of a `switch`, or two blocks inside any other block.
+
+```c
+if (sel) {
+    uint32_t a = 0;
+    n += (uint16_t)a;
+} else {
+    uint16_t x[2] = { 0x1234, 0x5678 };
+    for (uint8_t i = 5; i != 0; --i)
+        n++;
+    r = x[0] ^ x[1];         /* want 444c; dcc 124c: x[1] is now 0x0078 */
+}
+```
+
+With a pointer in place of the array, dcc emits (the pointer `q` is at
+`ix-6`/`ix-5`, and so is the counter):
+
+```
+    ld (ix-6),l        ; q = &bytes[0]
+    ld (ix-5),h
+    ...
+    ld (ix-5),5        ; for (uint8_t i = 5; ...): i is also at ix-5
+```
+
+- Wrong when the `else` arm's locals are an array, two pointers, or a
+  variable with its address taken; when the earlier arm's local is 8, 16 or
+  32 bits wide, used or not; for an 8-bit or 16-bit counter; in the `else`
+  arm of an `if` and in a later `case` of a `switch`.
+- Equally wrong for two sibling blocks inside the body of a `for`, `while`
+  or `if`, or inside a plain block:
+  `for (…) { { uint32_t a = 0; … } { uint16_t x[2] = …; for (uint8_t i = 5; …) … } }`.
+  Three generated programs that hang reduce to this form.
+- With a pointer walk (`for (; q != end; ++q) { for (uint8_t i = 5; …) … }`)
+  the counter clears the pointer's high byte on every pass and the loop never
+  ends.
+- Correct: the counter declared at the top of the block (`uint8_t i;`); a
+  plain nested block in place of the `for` (`{ uint8_t c = 5; … }`); the
+  earlier scope declaring nothing; two sibling blocks directly in the
+  function body; the earlier local declared in the enclosing block itself;
+  the two scopes in the other order; locals that do not need memory (plain
+  `uint16_t x, y;`).
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
 
 ## Fixed in cluster A2a
 

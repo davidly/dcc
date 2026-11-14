@@ -42,8 +42,7 @@ test:
 
 `tests/twcasgm.c`, `tests/tblkdiv.c`, `tests/tcastasg.c`, `tests/tblkabi.c`,
 `tests/tblkret.c`, `tests/tblkcopy.c`, `tests/tblkneg.c` and
-`tests/tfltret.c` were promoted
-this way.
+`tests/tforhome.c` and `tests/tfltret.c` were promoted this way.
 
 ## Adding one
 
