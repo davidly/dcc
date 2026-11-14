@@ -26,7 +26,7 @@ and their historical diagnoses are retained separately below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-004](#bug-004) | #225 | wrong result | Nested-block 32-bit local assigned from `&&`/`\|\|` leaves a garbage high word |
+| [BUG-004](#bug-004) | #225 | wrong result | Byte local initialized from `&&`/`\|\|`, forwarded into 32-bit consumers loses its source type |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
@@ -94,12 +94,44 @@ was only tried with today's runtime, which is not a reliable pairing.
 
 ## BUG-004
 
-**Partially corrected by E1:** the four function-scope word-local cases now
-pass, because SSA forwarding preserves the local's declared interpretation
-before widening an untyped logical result. The nested-block 32-bit assignment
-still fails: its canonical conversion is repaired to long without typing its
-source boolean PHI. The complete issue and `logicinit` steering remain open.
-The following original diagnosis includes the now-correct function-scope cases.
+**Partially corrected by E1 and A2b-1:** all five original reproducer lines
+now pass, including the nested-block long assignment. E1 retains a word
+local's interpretation during SSA forwarding; A2b-1 reapplies
+`mir_type_untyped_widened_value()` when the canonical block assignment's
+conversion target becomes known. Those cleared facets and additional false,
+true and nested logical paths are covered by the new host/sanitizer-proven
+[tests/tlogblk.c](tests/tlogblk.c).
+
+**Still open: byte-local logical SSA forwarding.** Restored integer fuzzing
+(seeds 133, 143, 153, 286) reduces to signed or unsigned 8-bit locals initialized
+from `&&`/`||`, then used in a long store, initializer or comparison:
+
+```c
+int8_t b = 1 && (uint16_t)1;
+a4[3] = b;                  /* uint32_t array: stale high word */
+uint8_t b = -191 && (uint32_t)0;
+int32_t c = b;
+g = c++;                    /* stale high word of the zero value */
+uint8_t b = (uint16_t)1 || (uint32_t)1;
+s.m1 = b;                   /* uint32_t member: stale high word */
+int32_t returns_minus_one_long(void);
+int8_t byte_compare = (uint16_t)1 && 29464;
+g = returns_minus_one_long() >= byte_compare;  /* wrong: true instead of false */
+```
+
+`mir_promote_objects()` forwards the typed byte load to its untyped boolean
+PHI after metadata repair. The E1 typed-view guard only covers same-width
+2/4-byte representations; the existing long conversion then sees an untyped
+source and omits the extension. This is independent of A2b-1's repaired
+canonical assignment target; the stop rule forbids a second compiler fix.
+The exact reduced seed-133 case is now the parked reproducer: host and
+ASan/UBSan agree, both dcc modes give one wrong checksum line out of two.
+The broad `logicinit` feature is restored; only the new `logicbyteinit`
+(non-global byte logical stores/initializers) remains steered. #225 stays
+open; no partial reproducer is promoted and no additional issue is filed.
+
+The following original diagnosis describes the now-correct word and block
+long cases.
 
 **An unsigned 16-bit local initialised from `&&` or `||`, then stored to a
 32-bit lvalue, leaves garbage in the high word.**

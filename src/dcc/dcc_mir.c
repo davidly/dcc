@@ -8669,8 +8669,12 @@ void mir_resolve_deferred_metadata(void)
         else if (insn->opcode == MIR_ADDRESS)
             insn->type = type_add_ptr(named_type);
         else if (insn->opcode == MIR_UNARY &&
-                 (insn->memory_flags & 512) != 0)
+                 (insn->memory_flags & 512) != 0) {
             insn->type = named_type;
+            /* Replay the widening contract now that a block assignment's
+             * destination type is known. */
+            mir_type_untyped_widened_value(insn->src1, named_type);
+        }
         else if (insn->opcode == MIR_STORE && insn->immediate == 0 &&
                  !type_is_struct_object(named_type)) {
             insn->type = named_type;

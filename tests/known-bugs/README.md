@@ -56,6 +56,10 @@ test:
 `tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tflidx.c`,
 `tests/tmerge16.c` and `tests/tearly16.c` were promoted this way.
 
+`tests/tlogblk.c` separately covers BUG-004's host-proven word and block-long
+facets cleared by E1/A2b-1. BUG-004 stays open with its newly reduced byte-local
+logical SSA facet; that partial issue's reproducer is not promoted.
+
 ## Adding one
 
 Write a small program that prints one line per shape of the bug, using

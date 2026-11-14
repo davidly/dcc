@@ -34,6 +34,35 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_block_logical_widening_matches_resolved_assignment(self):
+        for target in ("int32_t", "uint32_t"):
+            for operator in ("&&", "||"):
+                source = ("#include <stdint.h>\nuint32_t out; "
+                          "void probe(uint16_t x) { { " + target +
+                          " b = 0; b = (--x) " + operator +
+                          " 1; out = (uint32_t)b; } }\n")
+                control = source.replace("{ { " + target, "{ " + target).replace(
+                    "; } }", "; }")
+                for options in ((), ("-fstack-check",), ("-gline",),
+                                ("-gline", "-fstack-check")):
+                    with self.subTest(target=target, operator=operator, options=options):
+                        self.assertEqual(self.code(self.compile(source, options)),
+                                         self.code(self.compile(control, options)))
+
+    def test_block_logical_float_assignment_keeps_numeric_conversion(self):
+        for operator in ("&&", "||"):
+            source = ("#include <stdint.h>\nfloat out; "
+                      "void probe(uint16_t x, uint16_t y) { { float b = 0.0f; "
+                      "b = x " + operator + " y; out = b; } }\n")
+            for stack in ((), ("-fstack-check",)):
+                release = self.code(self.compile(source, stack))
+                for debug in ((), ("-gline",), ("-g",)):
+                    with self.subTest(operator=operator, stack=stack, debug=debug):
+                        assembly = self.compile(source, stack + debug)
+                        self.assertIn("call __fif", assembly)
+                        if debug == ("-gline",):
+                            self.assertEqual(self.code(assembly), release)
+
     def test_dead_scopes_compile_with_debug_and_vla_metadata(self):
         cases = (
             "if (sel) { return 1; { int b = 1; out += b; } } return 0;",
