@@ -1,8 +1,5 @@
-/* BUG-028: `>>=` on a signed 8-bit object with a count of type unsigned int
- * shifts logically instead of arithmetically. The 8-bit value is promoted to
- * a 16-bit int, so the difference shows for counts 9 to 15, where a negative
- * value must become -1. It is correct with an int, unsigned char or unsigned
- * long count, for `x = x >> n`, and for a 16-bit object. */
+/* Signed byte compound right shifts use the promoted left operand's
+ * signedness, independent of the count; cover direct and indirect lvalues. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -54,6 +51,28 @@ static int16_t wider(void)
     return g16;
 }
 
+static int16_t shifted(int8_t x, uint16_t n)
+{
+    x >>= n;
+    return x;
+}
+
+static int edge_counts(void)
+{
+    static int8_t values[6] = { -128, -34, -1, 0, 1, 127 };
+    uint16_t n;
+    int i;
+    int8_t x = -128;
+    for (n = 0; n < 16; ++n)
+        for (i = 0; i < 6; ++i)
+            if (shifted(values[i], n) != (int16_t)((int16_t)values[i] >> n))
+                return 0;
+    x >>= 15u;
+    if (x != -1)
+        return 0;
+    return (int16_t)(x >>= 9u) == -1;
+}
+
 int main(void)
 {
     printf("array element %d\n", array_element());
@@ -62,5 +81,6 @@ int main(void)
     printf("pointer %d\n", through_pointer());
     printf("int count %d\n", int_count());
     printf("16-bit object %d\n", wider());
+    printf("edge counts %d\n", edge_counts());
     return 0;
 }
