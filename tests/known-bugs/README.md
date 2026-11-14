@@ -54,7 +54,7 @@ test:
 `tests/tflcnot.c`, `tests/tflcini.c`, `tests/tconstdz.c`, `tests/tdeadblk.c`,
 `tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c`, `tests/tflncmp.c`,
 `tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tflidx.c`,
-`tests/tmerge16.c` and `tests/tearly16.c` were promoted this way.
+`tests/tmerge16.c`, `tests/tearly16.c` and `tests/tphiarm.c` were promoted this way.
 
 ## Adding one
 
