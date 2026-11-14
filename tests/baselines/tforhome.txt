@@ -1,4 +1,6 @@
 array in else 444c 5
+word counter 444c 300
+wide counter 444c 300
 address taken 1234 5
 pointer walk 0008 40
 switch case 444c 5
