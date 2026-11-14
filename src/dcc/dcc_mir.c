@@ -21,7 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "dcc.h"
-#include "dcc_ast.h"
+#include "dcc_ast_internal.h"
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
@@ -3193,6 +3193,31 @@ static int mir_lower_simple_unary_chain(const struct AstNode *node)
     return value;
 }
 
+static int mir_fold_new_scalar_constant(const struct AstNode *node, long *out)
+{
+    long old_value;
+    const struct AstNode *operand;
+
+    if (!ast_node_is_const(node) || ast_const_condition_fold(node, &old_value) ||
+        !ast_const_scalar_fold(node, out))
+        return 0;
+    if (node->kind == AST_LOGAND || node->kind == AST_LOGOR)
+        return 1;
+    if (node->kind != AST_UNARY || node->a == NULL)
+        return 0;
+    operand = node->a;
+    if (node->op == '!' && type_is_float(ast_expr_type_for_sizeof(operand)))
+        return 1;
+    if (operand->kind == AST_UNARY || operand->kind == AST_LOGAND ||
+        operand->kind == AST_LOGOR)
+        return 1;
+    /* Direct ! of a float comparison was already accepted; keep its output. */
+    return node->op != '!' && operand->kind == AST_BINARY &&
+           is_cmp_op(operand->op) &&
+           (type_is_float(ast_expr_type_for_sizeof(operand->a)) ||
+            type_is_float(ast_expr_type_for_sizeof(operand->b)));
+}
+
 static int mir_lower_expr_impl(const struct AstNode *node)
 {
     struct MirInsn *insn;
@@ -3209,6 +3234,20 @@ static int mir_lower_expr_impl(const struct AstNode *node)
     int then_exit_label;
     int else_exit_label;
     int i;
+
+    /* The new float logical/unary admission proofs have integer results.
+     * Materialize them like literal neighbors, keeping old fold/compare paths. */
+    {
+        long constant;
+        if (mir_fold_new_scalar_constant(node, &constant)) {
+            value = mir_new_value();
+            insn = mir_emit(MIR_CONST);
+            insn->dst = value;
+            insn->type = node->type;
+            insn->immediate = constant;
+            return value;
+        }
+    }
 
     switch (node->kind) {
     case AST_INT_LIT:
@@ -3392,6 +3431,26 @@ static int mir_lower_expr_impl(const struct AstNode *node)
         return value;
     case AST_CAST:
     case AST_UNARY:
+        /* Newly admitted nested float constants must retain the literal
+         * candidate's frameless output, not leave redundant unary MIR nodes.
+         * Keep the existing single-literal, identifier and cast paths intact. */
+        if (node->kind == AST_UNARY && (node->op == '+' || node->op == '-') &&
+            type_is_float(node->type) && node->a != NULL &&
+            (node->a->kind == AST_UNARY || node->a->kind == AST_BINARY) &&
+            ast_node_is_const(node->a)) {
+            union { float f; unsigned char b[4]; } folded;
+            if (ast_const_float_fold(node, &folded.f)) {
+                value = mir_new_value();
+                insn = mir_emit(MIR_FLOAT_CONST);
+                insn->dst = value;
+                insn->type = node->type;
+                insn->immediate = (long)(((unsigned long)folded.b[0]) |
+                    ((unsigned long)folded.b[1] << 8) |
+                    ((unsigned long)folded.b[2] << 16) |
+                    ((unsigned long)folded.b[3] << 24));
+                return value;
+            }
+        }
         if (node->kind == AST_UNARY && node->op == '*') {
             int argument_type;
             if (ast_va_arg_deref_type(node, &argument_type)) {
@@ -4201,6 +4260,25 @@ static void mir_lower_discarded_expr(const struct AstNode *node)
     mir_discarded_expr = saved;
 }
 
+static int mir_lower_statement_condition(const struct AstNode *node)
+{
+    union { float f; unsigned char b[4]; } value;
+    struct MirInsn *insn;
+    int result;
+
+    /* Constant floats were not accepted as statement controls. Cast-containing
+     * controls and ternary conditions were: preserve those existing paths. */
+    if (node == NULL || !type_is_float(node->type) || !ast_node_is_const(node) ||
+        !ast_const_float_fold(node, &value.f))
+        return mir_lower_expr(node);
+    result = mir_new_value();
+    insn = mir_emit(MIR_CONST);
+    insn->dst = result;
+    insn->type = TYPE_INT;
+    insn->immediate = value.f != 0.0f;
+    return result;
+}
+
 static void mir_lower_stmt(const struct AstNode *node)
 {
     struct MirInsn *insn;
@@ -4273,7 +4351,7 @@ static void mir_lower_stmt(const struct AstNode *node)
     case AST_IF:
         else_label = mir_new_label();
         end_label = mir_new_label();
-        condition = mir_lower_expr(node->a);
+        condition = mir_lower_statement_condition(node->a);
         insn = mir_emit(MIR_BRANCH_FALSE);
         insn->src1 = condition;
         insn->label = else_label;
@@ -4374,7 +4452,7 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir_emit_label(top_label);
         mir_emit_object_merges();
         if (node->kind == AST_WHILE) {
-            condition = mir_lower_expr(node->a);
+            condition = mir_lower_statement_condition(node->a);
             insn = mir_emit(MIR_BRANCH_FALSE);
             insn->src1 = condition;
             insn->label = end_label;
@@ -4382,7 +4460,7 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir_lower_stmt(node->b);
         mir_emit_label(continue_label);
         if (node->kind == AST_DOWHILE) {
-            condition = mir_lower_expr(node->a);
+            condition = mir_lower_statement_condition(node->a);
             insn = mir_emit(MIR_BRANCH_FALSE);
             insn->src1 = condition;
             insn->label = end_label;
@@ -4414,7 +4492,7 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir_emit_label(top_label);
         mir_emit_object_merges();
         if (node->b != NULL) {
-            condition = mir_lower_expr(node->b);
+            condition = mir_lower_statement_condition(node->b);
             insn = mir_emit(MIR_BRANCH_FALSE);
             insn->src1 = condition;
             insn->label = end_label;

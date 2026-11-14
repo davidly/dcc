@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has thirty open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twenty-nine open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -529,22 +529,24 @@ neighbors, with no instruction or frame cost.
   constant zero divisor; the integer folder correctly declines its evaluation.
   The generic constant-binary gate consequently rejected the expression.
   The admission fix retains the unevaluated `/` or `%` operation,
-  as clang does, never fold it to a made-up value. The variable-numerator
+  as clang does, without inventing a result. The variable-numerator
   neighbor uses the nonconstant arithmetic path.
 - **G2b BUG-040 — fixed:** the compact `parse_float_init_literal()` parser
   accepts only bare literals and narrow cast/product chains. Static data
   recording now falls back to a bounded temporary expression AST and typed
   host-float arithmetic. Existing compact and automatic initializer paths
   remain unchanged; new arithmetic emits data only, matching literal neighbors.
-  Numeric float-to-integer casts are range-checked and truncated at the target
-  width, including parenthesized/computed casts; their private evaluation does
-  not admit BUG-042 function-body forms before G2c.
-- **BUG-042:** `ast_const_scalar_fold()` has no floating-literal result and
-  its binary evaluator is integer-only. Constant unary/logical gates need
-  that fold proof, while `ast_cond_generic()` explicitly excludes constant
-  floats from its runtime truth-test path. Float comparisons alone have their
-  own condition gate, explaining the accepted neighbors. Extending the
-  integer unary admission proof cannot admit these float forms.
+  Parenthesized/computed numeric casts use target-width range checks and
+  truncation; private static evaluation does not admit function-body forms
+  before G2c.
+- **G2c BUG-042 — fixed:** the integer-only folder had no float result or
+  float truth/comparison proof. Typed float and integer-result scalar proofs
+  now admit these unary/logical/truth forms. MIR materializes only the newly
+  admitted constants using existing literal candidates; single-unary literal,
+  direct-comparison, cast and ternary paths and integer-only exit facts stay
+  unchanged. Admission alone was rejected: it left redundant unary/logical
+  MIR and an unnecessary IX frame; the typed literal lowering removes that
+  cost without changing selectors or existing output.
 
 G2a acceptance: **1 FIXED, 31 fails**, with no out-of-cluster flips. Both
 censuses retain **3,465 existing functions byte-identically** with zero hash,
@@ -564,25 +566,49 @@ G2b acceptance: **1 FIXED, 30 fails**, with no out-of-cluster flips. All
 rows remain unchanged**. Strict Python full+extended is SUCCESS; all 23
 focused optimizer/line-debug tests pass. Sanitized compiler probes pass.
 The original reproducer's complete peep/nopeep MACs match accepted literal
-neighbors byte-for-byte; parenthesized/computed numeric casts, Boolean casts,
-sizeof and constant selections match literal data, and eight extra IEEE-bit
-cases match clang and host
+neighbors byte-for-byte; twenty literal-data variants, ten numeric
+cast/selection/sizeof IEEE-bit cases and eight arithmetic IEEE-bit cases
+match clang and host
 ASan/UBSan in both target modes. Promoted as `tflcini`; production float seeds 1–300 are clean: **288 ok,
 12 INVALID, zero FAIL**. Both strict PowerShell full+extended stack/no-stack
 gates pass; the extended census covers 274 functions in each mode. All
 10 debugger-host tests pass.
 
-G2b completion additionally checks twenty literal-data spellings and ten
-exact IEEE-bit numeric-cast/selection/sizeof cases against clang and host
-ASan/UBSan, including signed/unsigned fractional conversion endpoints.
-All target cases pass in both modes. A fresh 300-seed float batch remains
-**288 ok, 12 INVALID, zero FAIL**; both censuses and both strict stack modes
-remain unchanged/passing. BUG-042 still fails before its separate G2c fix.
-The full Python gate ran 314 tests with the two approved #277 failures,
-two existing skips and load-sensitive mutation/process-supervision failures.
-Isolated retries leave the serial fixture/survivor timeouts and watchdog/grace
-timing assertions unresolved; the child-timeout diagnostic test passes alone.
-No harness code, skips or expectations were changed.
+G2c acceptance: **1 FIXED, 29 fails**, with no out-of-cluster flips. Both
+ordinary censuses retain **all 3,465 original functions byte-identically**;
+only promoted tests add functions. All **513 existing performance rows**
+remain unchanged. The extended census retains all **548 rows** (274 functions
+per mode) with identical hashes, selectors and metrics. Strict Python
+full+extended is SUCCESS, and all 25 focused optimizer/line-debug tests pass.
+New unary/logical/truth controls match their accepted literal neighbors in
+release, stack-check and `-gline` output, without spill/frame overhead.
+Clang and host ASan/UBSan prove nine extra facets; both target modes agree.
+Sanitized compiler probes, independent release CMake build, MIR require-emit
+contract, and all 10 debugger-host tests pass. Production float seeds 1–300:
+**289 ok, 11 INVALID, zero FAIL**. Promoted as `tflcnot`.
+
+Final G2 acceptance retains **511 original performance rows unchanged**,
+with only three measured new rows (`tconstdz`, `tflcini`, `tflcnot`). All
+**29 remaining reproducers fail** after promotion. Final ordinary censuses cover **3,470 functions per mode**,
+with only five newly promoted functions and **zero changes to all 3,465
+original rows**. All **548 extended rows** remain identical. Strict Python
+application full+extended and PowerShell full+extended stack/no-stack gates
+pass; all 25 focused optimizer/line-debug tests and 10 debugger-host tests
+pass. Independent CMake and ASan/UBSan compiler checks pass. No G2 fix is skipped.
+
+The full Python gate's approved #277 failures (`test_mir_campaign_baselines`,
+`test_mir_exact_controls`) were not fixed, skipped or refreshed. The unchanged
+mutation-runner fixture also timed out at 180 seconds in the original gate,
+in an isolated default-generator retry and in an isolated Ninja retry; the
+original/Ninja runs additionally raced teardown. The completed final Python
+gate ran **316 tests: two approved #277 failures, three timing/teardown errors,
+and two pre-existing skips**. Its additional exited-worker cleanup error
+passes in isolation (22.6 seconds), as does the earlier child-timeout diagnostic
+test. A G2b completion gate also saw survivor-fixture timeouts, watchdog timing
+and process-supervisor grace assertions; each additional selector was retried
+alone. Serial/survivor timeouts and watchdog/grace timing remain unverified
+after unchanged default/Ninja isolation attempts. No harness code, skips or
+expectations were changed. The full Python suite is therefore not green.
 
 G1 acceptance: **1 FIXED, 33 fails** before promotion, no out-of-cluster
 flips. Integer `negnotconst` is restored; production seeds 1–300 give
@@ -933,9 +959,9 @@ so it matters more than its size suggests. Both are one-offs.
 | D | | open | |
 | E | | open | |
 | F | | open | |
-| G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
+| G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1/G2 fixed | G1 clears 012; approved G2 fixes 033/040/042 independently |
 | G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |
-| G2 | `fix/cluster-g2-const-fold-rest` | in progress; G2a/G2b fixed | Three approved independent commits; 033/040 promoted as tconstdz/tflcini; 042 pending; both 3,465-function censuses unchanged |
+| G2 | `fix/cluster-g2-const-fold-rest` | fixed; three independent commits | 033/040/042 promoted as tconstdz/tflcini/tflcnot; 900 programs: 806 ok/94 INVALID/zero FAIL; 511 original perf rows and both 3,465-function censuses unchanged |
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |

@@ -74,6 +74,34 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                 self.assertEqual(self.code(self.compile(source)),
                                  self.code(self.compile(neighbor)))
 
+    def test_nested_float_constant_unary_matches_literal(self):
+        for expression in ("-(-2.5f)", "+(-(-2.5f))"):
+            source = "float out; void probe(void) { out = " + expression + "; }\n"
+            neighbor = "float out; void probe(void) { out = 2.5f; }\n"
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(expression=expression, options=options):
+                    self.assertEqual(self.code(self.compile(source, options)),
+                                     self.code(self.compile(neighbor, options)))
+
+    def test_float_constant_truth_matches_integer_literal(self):
+        cases = (
+            ("return !0.25f;", "return 0;"),
+            ("return !(-0.0f);", "return 1;"),
+            ("return !!0.25f;", "return 1;"),
+            ("return 2.5f && 1;", "return 1;"),
+            ("return (1.0f > 2.0f) || (1 == 1);", "return 1;"),
+            ("if (2.3f) return 7; return 0;", "if (1) return 7; return 0;"),
+            ("if (0.0f) return 7; return 0;", "if (0) return 7; return 0;"),
+            ("while (1.0f) { break; } return 7;", "while (1) { break; } return 7;"),
+        )
+        for body, control in cases:
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(body=body, options=options):
+                    source = "int probe(void) { " + body + " }\n"
+                    neighbor = "int probe(void) { " + control + " }\n"
+                    self.assertEqual(self.code(self.compile(source, options)),
+                                     self.code(self.compile(neighbor, options)))
+
     def test_float_conversion_retains_cast_signedness(self):
         cases = (
             ("long x", "(unsigned long)x", "__fulf"),

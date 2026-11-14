@@ -48,21 +48,20 @@ and their historical diagnoses are retained separately below.
 | [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
-| [BUG-042](#bug-042) | #262 | compile error | A float constant that must be folded or tested for truth is rejected: `-(-2.5f)`, `!2.5f`, `2.5f && n`, `if (2.3f)` |
 | [BUG-043](#bug-043) | #263 | compile error | Compound assignment to an integer lvalue with a float right operand is rejected (`l *= f`, `n += 1.5f`) |
 | [BUG-044](#bug-044) | #264 | wrong result | `++`/`--` on a float is a no-op on a scalar and a 16-bit integer increment on an array element |
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 
-Thirty are open: nineteen give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, nine stop the compile,
+Twenty-nine are open: nineteen give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, eight stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Twenty-two reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Twenty-three reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [one in cluster B2a](#fixed-in-cluster-b2a),
@@ -73,7 +72,7 @@ Twenty-two reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster I1](#fixed-in-cluster-i1),
 [two in cluster I2](#fixed-in-cluster-i2),
 [one in cluster G1](#fixed-in-cluster-g1),
-[two in cluster G2](#fixed-in-cluster-g2) and
+[three in cluster G2](#fixed-in-cluster-g2) and
 [two in cluster J](#fixed-in-cluster-j). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -842,34 +841,6 @@ if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
 - Also at v3.6.0 (`20290235`).
 - Found by fuzzing (float generator, seed 3).
 
-## BUG-042
-
-**A floating constant that has to be folded or tested for truth is
-rejected.** `DCC-E1002`, reported against the enclosing statement: unary `-`
-of a negated or computed float constant, `!`, `&&` or `||` with a float
-constant operand, and a float constant as the condition of `if` or `while`.
-
-```c
-g = -(-2.5f);              /* rejected; -(2.5f) is accepted */
-g = -(1.0f + 2.0f);        /* rejected; -(1.0f + f) is accepted */
-n = !255.0f;               /* rejected; !f is accepted */
-n = 2.5f && 1;             /* rejected; 2.5f ? 1 : 2 is accepted */
-if (2.3f) n = 7;           /* rejected; if (f), if (1.0f + f), if (1.0f > 2.0f) accepted */
-while (1.0f) { break; }    /* rejected */
-```
-
-- Integer constants in every one of these positions are accepted, so it is
-  the float constant folder that lacks `-` of a folded value and the truth
-  test; compare BUG-012 (`-`/`~` of `!`, `&&`, `||` of integer constants).
-- `&&`/`||` whose operands are *all* constant is also rejected when at least
-  one operand is a float comparison: `if ((1.0f > 2.0f) && (0.0f == 0.0f))`,
-  `if ((1.0f > 2.0f) && (1 == 1))`, `n = (1.0f > 2.0f) && 1`. Each
-  comparison alone (`if (1.0f > 2.0f)`), a non-constant operand
-  (`(1.0f > 2.0f) && n`), and the all-integer form (`(1 > 2) && (0 == 0)`)
-  are accepted. Found by fuzzing (float generator, seed 30).
-- Also at v3.6.0 (`20290235`).
-- Found by fuzzing (float generator, seeds 3, 13, 16).
-
 ## BUG-043
 
 **A compound assignment to an integer lvalue whose right operand is a float
@@ -1071,9 +1042,9 @@ compact static initializer are preserved. Both complete reproducer MAC files
 are byte-identical to their accepted literal neighbors. Promoted as `tflcini`,
 including precedence, mixed integer arithmetic, casts and exact float-bit
 rounding controls proven by clang and ASan/UBSan. Parenthesized/computed
-float-to-integer casts, Boolean casts and constant selections use the private
-typed evaluator, with target-width range checks before conversion. The
-function-body gates remain unchanged until G2c.
+float-to-integer casts, Boolean casts and constant selections use private
+typed evaluation with target-width range checks. Function-body admission
+remains a separate G2c change.
 
 ## BUG-040
 
@@ -1099,6 +1070,43 @@ static int ok = (-2) + 1 * 3;         /* accepted */
 - Found by fuzzing (float generator, seeds 1, 2, 4, 5, …): it rendered
   negative constants in parentheses.
 
+G2c fixes BUG-042 (#262): typed float and integer-result truth/logical
+proofs admit the formerly rejected constants. MIR materializes only these
+newly admitted unary/logical values and statement controls as literal
+constants, so the existing literal candidates remain frameless and concise.
+Already accepted single-unary literals, direct float comparisons, cast forms
+and ternary controls, and the old integer-only exit/return facts, are preserved.
+Promoted as `tflcnot`, with fractional/signed-zero truth, nested unary,
+constant-comparison logicals and short-circuit side-effect controls.
+
+## BUG-042
+
+**A floating constant that has to be folded or tested for truth is
+rejected.** `DCC-E1002`, reported against the enclosing statement: unary `-`
+of a negated or computed float constant, `!`, `&&` or `||` with a float
+constant operand, and a float constant as the condition of `if` or `while`.
+
+```c
+g = -(-2.5f);              /* rejected; -(2.5f) is accepted */
+g = -(1.0f + 2.0f);        /* rejected; -(1.0f + f) is accepted */
+n = !255.0f;               /* rejected; !f is accepted */
+n = 2.5f && 1;             /* rejected; 2.5f ? 1 : 2 is accepted */
+if (2.3f) n = 7;           /* rejected; if (f), if (1.0f + f), if (1.0f > 2.0f) accepted */
+while (1.0f) { break; }    /* rejected */
+```
+
+- Integer constants in every one of these positions are accepted, so it is
+  the float constant folder that lacks `-` of a folded value and the truth
+  test; compare BUG-012 (`-`/`~` of `!`, `&&`, `||` of integer constants).
+- `&&`/`||` whose operands are *all* constant is also rejected when at least
+  one operand is a float comparison: `if ((1.0f > 2.0f) && (0.0f == 0.0f))`,
+  `if ((1.0f > 2.0f) && (1 == 1))`, `n = (1.0f > 2.0f) && 1`. Each
+  comparison alone (`if (1.0f > 2.0f)`), a non-constant operand
+  (`(1.0f > 2.0f) && n`), and the all-integer form (`(1 > 2) && (0 == 0)`)
+  are accepted. Found by fuzzing (float generator, seed 30).
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seeds 3, 13, 16).
+
 ## Fixed in cluster G1
 
 BUG-012's constant logical and nested-binary unary forms now pass in both
@@ -1112,9 +1120,9 @@ pipelines, with no added instructions or frame cost.
 
 The first fix flips only BUG-012 (**1 FIXED, 33 fails** before promotion).
 Per the approved stop rule, cluster G is split into G1 (BUG-012 fixed) and
-G2 (BUG-042 still parked; BUG-033/040 are fixed above). G2 needs separate zero-divisor admission,
-static float token parsing, and floating-constant truth/folding work; its
-traces are in [fix-plan.md](fix-plan.md#g-constant-expressions-in-the-front-end).
+G2 (all three are fixed above). Their independent fixes use zero-divisor admission,
+static float parsing/evaluation, and floating-constant truth/folding work;
+their traces are in [fix-plan.md](fix-plan.md#g-constant-expressions-in-the-front-end).
 In particular, BUG-033 must retain the unevaluated division, not fabricate a
 constant result. No out-of-cluster reproducer flips.
 

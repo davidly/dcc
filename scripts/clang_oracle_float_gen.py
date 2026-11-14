@@ -57,7 +57,6 @@ KNOWN_BUGS = {
     'fdivround': 'BUG-039',
     'fincdecval': 'BUG-041',
     'fincdec': 'BUG-044',
-    'fconstfold': 'BUG-042',
     'icasgf': 'BUG-043',
     'fblockneg': 'BUG-015',
     'fnegcmp': 'BUG-045',
