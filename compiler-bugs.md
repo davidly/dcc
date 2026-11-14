@@ -119,6 +119,14 @@ should print `32768`, and `(unsigned long)(sizeof(large) / 8)` should print
   4404 division results agreed even before the harness repair.
 - Regression is parked as [bug061.c](tests/known-bugs/bug061.c); host O0/O2,
   ASan and UBSan agree. No compiler code is changed in cluster R1.
+- S1 traced the defect to the signed result type at all three `sizeof` AST
+  construction/inference sites. A single unsigned-result correction clears
+  this reproducer and high-bit division/shift/comparison, type/object, array
+  bound and R1 loop-count probes, but changes 173 existing functions in each
+  regular MIR census (including 36 exact-to-spilled moves). The hard-gate
+  stop withdrew the compiler trial; BUG-061 remains open and parked pending
+  a maintainer ruling. See [S1 in the fix plan](fix-plan.md#s1-stopped-the-unsigned-sizeof-result-changes-existing-output)
+  for the full affected-function list. No other sizeof defect was fixed.
 
 
 ## BUG-004

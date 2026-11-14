@@ -25,6 +25,13 @@ BUG-041 admission; neither parked fixture is promoted by D2e-1.
 `tests/tupdprov.c` separately covers the already-admitted wide update
 provenance repaired by that safe subset.
 
+BUG-061 remains parked after the stopped S1 experiment. Correcting the AST
+`sizeof` result to unsigned clears the reproducer, but changes existing
+function output and selector choices; the trial was withdrawn, so a passing
+experimental compiler is not grounds for promotion. The complete affected
+list and pending maintainer ruling are recorded in
+[fix-plan.md](../../fix-plan.md#s1-stopped-the-unsigned-sizeof-result-changes-existing-output).
+
 ## Checking them
 
 ```sh
