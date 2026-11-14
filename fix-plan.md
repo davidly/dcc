@@ -333,7 +333,7 @@ so it matters more than its size suggests. Both are one-offs.
 
 | Cluster | Branch / PR | Status | Notes |
 | --- | --- | --- | --- |
-| A1 | `fix/cluster-a1-deferred-conversions` | verified | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
+| A1 | [#281](https://github.com/davidly/dcc/pull/281) (`fix/cluster-a1-deferred-conversions`) | PR open | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
 | A2 | | open: hypothesis unconfirmed | 004/008/015 still fail after A1 experiment; separate branch/PR; stop and split again if necessary |
 | B | | open | |
 | C | | open | |
