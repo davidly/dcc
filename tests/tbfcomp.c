@@ -1,7 +1,6 @@
-/* BUG-006: /=, %= and >>= on an unsigned bit-field store the wrong value
- * when the field's top bit is set: the field is sign-extended from its
- * width before the operation. `bf = bf % x` and += are correct, as are these
- * operators on a signed bit-field or on a value with the top bit clear. */
+/* Unsigned bit-field compound division, remainder and right shift: high
+ * and low top bits, negative divisors, local/pointer fields, live results,
+ * and full-width unsigned fields. Neighbouring members remain intact. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -46,6 +45,27 @@ static void top_bit_clear(void)
     e.m2 >>= 3;
 }
 
+struct W { uint16_t u : 16; };
+static struct W full = { 0x8421 };
+static uint16_t edge[5];
+
+static void promoted_and_live(void)
+{
+    struct S local = { 0x827f, 1149, -11, 18 };
+    struct S *p = &local;
+    {
+        int16_t negative = -7;
+        p->m5 /= negative;
+        p->m2 %= negative;
+    }
+    edge[0] = local.m5;
+    edge[1] = local.m2;
+    local.m5 = 18;
+    edge[2] = (p->m5 >>= three);
+    edge[3] = (full.u >>= three);
+    edge[4] = local.m4 == -11 && local.m1 == 0x827f;
+}
+
 int main(void)
 {
     modulo_constant();
@@ -53,11 +73,15 @@ int main(void)
     divide();
     shift_right();
     top_bit_clear();
+    promoted_and_live();
     printf("%%= constant %u %u\n", (unsigned)a.m5, (unsigned)a.m2);
     printf("%%= variable %u %u\n", (unsigned)b.m5, (unsigned)b.m2);
     printf("/= %u %u\n", (unsigned)c.m5, (unsigned)c.m2);
     printf(">>= %u %u\n", (unsigned)d.m5, (unsigned)d.m2);
     printf("top bit clear %u %u\n", (unsigned)e.m5, (unsigned)e.m2);
     printf("neighbours %u %d %u %d\n", (unsigned)a.m1, (int)a.m4, (unsigned)c.m1, (int)c.m4);
+    printf("promotion %u %u live %u %u neighbours %u\n", (unsigned)edge[0],
+           (unsigned)edge[1], (unsigned)edge[2], (unsigned)edge[3],
+           (unsigned)edge[4]);
     return 0;
 }

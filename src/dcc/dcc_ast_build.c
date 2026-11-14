@@ -351,6 +351,9 @@ static int ast_expr_base_ident_unresolved(const struct AstNode *n)
         switch (n->kind) {
         case AST_INDEX:
         case AST_MEMBER:
+        case AST_POSTFIX:
+            n = n->a;
+            break;
         case AST_ASSIGN:
             /* A chained assignment `a = y->b2` yields a's value/type (see
              * ast_value_is_plain_int's AST_ASSIGN case), so its base
@@ -358,7 +361,7 @@ static int ast_expr_base_ident_unresolved(const struct AstNode *n)
             n = n->a;
             break;
         case AST_UNARY:
-            if (n->op != '*')
+            if (n->op != '*' && n->op != TOK_INC && n->op != TOK_DEC)
                 return 0;
             n = n->a;
             break;
@@ -847,8 +850,8 @@ static int binop_level(int k)
 }
 
 /* Whether n's type is unknown at build: its value derives from a nested-block
- * local, directly, through - or ~, or through a binary whose own operand
- * types were. */
+ * local, directly, through an update or unary +, - or ~, or through a binary
+ * whose own operand types were. */
 static int ast_types_deferred(const struct AstNode *n)
 {
     if (n == NULL)

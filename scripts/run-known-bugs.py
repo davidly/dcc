@@ -12,13 +12,17 @@ For every reproducer this script:
      and requires the output to equal the baseline, and requires a build with
      ASan and UBSan to agree, so the baseline is proven and the test defined;
   2. builds and runs it with dcc, with and without dccpeep, and reports
-     whether dcc still fails it.
+     whether dcc still fails it. Diagnostic-masking reproducers can declare
+     ` * DCC-EXPECT-ERROR: message` in their header: those pass only when dcc
+     rejects the source with that diagnostic, not when it runs successfully.
 
   run-known-bugs.py             check every reproducer
   run-known-bugs.py bug003      check some
   run-known-bugs.py --update    rewrite baselines from the host compiler
 
-A reproducer reported FIXED passes in both modes: move it and its baseline to
+A reproducer reported FIXED passes in both modes. Diagnostic reproducers move
+to tests/diagnostics/fixtures/ with their host baseline and a diagnostic matrix
+in scripts/tests/; runnable reproducers move to
 tests/ and tests/baselines/, add a tests/perf_baselines.csv row, and close the
 entry in compiler-bugs.md. The exit status is 1 only when a baseline is not
 proven by the host compiler.
@@ -28,6 +32,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -69,6 +74,15 @@ def dcc_verdict(source, work, peep, expected, args):
     notes = [ln.strip() for ln in log.splitlines()
              if not ln.startswith('+')
              and ('error DCC' in ln or 'dcc: fatal' in ln or ln.startswith('; MIR '))]
+    diagnostic = re.search(r'^ \* DCC-EXPECT-ERROR: (.+)$',
+                           source.read_text(), re.MULTILINE)
+    if diagnostic is not None:
+        primary_error = re.compile(
+            r"(?:^dcc: fatal: |: error DCC-[A-Z][0-9]+: )" +
+            re.escape(diagnostic.group(1)) + r"(?:$| near ')")
+        if r.returncode and any(primary_error.search(note) for note in notes):
+            return 'pass'
+        return 'missing expected compile error: ' + diagnostic.group(1)
     if r.returncode:
         text = notes[0] if notes else 'build failed'
         return 'does not compile: ' + text.replace(str(source) + ':', 'line ')[:110]

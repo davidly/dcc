@@ -34,6 +34,21 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_nested_wide_increment_compare_reads_the_incremented_home(self):
+        for typename in ("int32_t", "uint32_t"):
+            source = ("#include <stdint.h>\n" + typename + " limit = 3; " +
+                      typename + " probe(void) { " + typename +
+                      " d = 0, n = 0; int i; for (i = 0; i < 4; ++i) { "
+                      "n = limit; do { ++d; } while (d < n); } return d; }")
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(typename=typename, options=options):
+                    assembly = self.compile(source, options)
+                    home = re.search(r"inc \(ix(-\d+)\)", assembly)
+                    self.assertIsNotNone(home, assembly)
+                    offset = int(home.group(1))
+                    for byte in range(4):
+                        self.assertIn("ld a,(ix%+d)" % (offset + byte), assembly)
+
     def test_block_logical_widening_matches_resolved_assignment(self):
         for target in ("int32_t", "uint32_t"):
             for operator in ("&&", "||"):
@@ -645,6 +660,30 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             if value_type == "char":
                 assembly = self.compile("int probe(char v) { return v; }\n")
                 self.assertIn("sbc a,a", assembly)
+
+    def test_interleaved_byte_phi_keeps_incoming_parameter_live(self):
+        for byte_type, expression in (
+            ("signed char", "(int)l - x"),
+            ("unsigned char", "(int)l + x"),
+            ("signed char", "-l - x"),
+        ):
+            source = ("int sel; unsigned int probe(unsigned int x) { " +
+                      byte_type + " l = 0; "
+                      "if (sel) x = 1; else l = 100; "
+                      "return " + expression + "; }\n")
+            release = self.code(self.compile(source))
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(byte_type=byte_type, expression=expression,
+                                  options=options), mock.patch.dict(
+                                      ENV, DCC_MIR_REPORT="1",
+                                      DCC_MIR_LIVENESS_VERIFY="1"):
+                    assembly, report = self.compile_report(source, options)
+                    # Full debug keeps these objects in memory, without PHIs.
+                    if options != ("-g",):
+                        self.assertRegex(
+                            report, r"param\s+v0 = x .* live in=0 out=[1-9]")
+                    if options == ("-gline",):
+                        self.assertEqual(self.code(assembly), release)
 
     def test_line_debug_preserves_optimized_code(self):
         source = (

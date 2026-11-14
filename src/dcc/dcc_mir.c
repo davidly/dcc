@@ -2510,8 +2510,17 @@ static int mir_lower_compound_value(int left, int right, int operation,
 {
     struct MirInsn *insn;
     const struct MirInsn *right_definition;
+    const struct MirInsn *left_definition = mir_mutable_definition(left);
     int computation_type = target_type;
     int value;
+
+    /* Extraction and arithmetic have different types: an unsigned field
+     * narrower than int zero-extends, then promotes to signed int. Only
+     * division, remainder and right shift depend on the extended high bits;
+     * the other compound operations preserve the stored low bits. */
+    if (left_definition != NULL && left_definition->bit_width > 0 &&
+        (operation == '/' || operation == '%' || operation == TOK_SHR))
+        computation_type = mir_promoted_operand_type(left_definition);
 
     if (type_ptr_depth(target_type) > 0 &&
         (operation == '+' || operation == '-')) {
@@ -2555,7 +2564,7 @@ static int mir_lower_compound_value(int left, int right, int operation,
 
         right_definition = mir_mutable_definition(right);
         computation_type = common_arith_type(
-            target_type, right_definition != NULL
+            computation_type, right_definition != NULL
                 ? right_definition->type : target_type);
         /* With a nested-block rhs these conversions target an assumed type;
          * mark them so repair retypes them with the operation. */
@@ -3944,10 +3953,14 @@ static int mir_lower_expr_impl(const struct AstNode *node)
                 insn->dst = left;
                 insn->src1 = address;
                 insn->type = node->a->type;
-                /* With a nested-block rhs, repair derives the operation from
-                 * this load, so it needs the field's type up front. */
-                if (field != NULL && field->bit_width == 0 &&
-                    mir_compound_rhs_deferred(node->b))
+                /* High-bit-sensitive operations need declared extraction
+                 * signedness; a deferred non-field rhs also needs this type. */
+                if (field != NULL &&
+                    ((field->bit_width > 0 &&
+                      (binary_operator == '/' || binary_operator == '%' ||
+                       binary_operator == TOK_SHR)) ||
+                     (field->bit_width == 0 &&
+                      mir_compound_rhs_deferred(node->b))))
                     insn->type = field->type;
                 if (field != NULL)
                     mir_set_field_memory(insn, field);
@@ -14049,14 +14062,11 @@ static int mir_compute_liveness_bytes(unsigned char *live_in,
                                         mir.next_value + value];
                     if (successor_is_phi[successor]) {
                         int first = successor_phi_first[successor];
-                        while (first < mir.count) {
+                        /* Widenings can separate PHIs in the same header. */
+                        for (; first >= 0;
+                             first = mir_next_phi_in_block(
+                                 insn->successors[successor], first + 1)) {
                             const struct MirInsn *phi = &mir.insns[first];
-                            if (phi->opcode == MIR_NOP) {
-                                ++first;
-                                continue;
-                            }
-                            if (phi->opcode != MIR_PHI)
-                                break;
                             if ((predecessor_label == phi->phi_pred1 &&
                                  value == phi->src1) ||
                                 (predecessor_label == phi->phi_pred2 &&
@@ -14064,7 +14074,6 @@ static int mir_compute_liveness_bytes(unsigned char *live_in,
                                 next_out = 1;
                                 break;
                             }
-                            ++first;
                         }
                     }
                 }
@@ -14200,13 +14209,12 @@ static int mir_compute_liveness_bitsets(MirLiveWord *live_in,
                 predecessor_label = mir_block_label_before(i);
                 predecessor_label_known = 1;
             }
-            for (; first < count; ++first) {
+            /* Match the emitter's block-bounded, interleaved PHI scan. */
+            for (; first >= 0;
+                 first = mir_next_phi_in_block(
+                     insn->successors[successor], first + 1)) {
                 const struct MirInsn *phi = &mir.insns[first];
 
-                if (phi->opcode == MIR_NOP)
-                    continue;
-                if (phi->opcode != MIR_PHI)
-                    break;
                 if (predecessor_label == phi->phi_pred1 &&
                     phi->src1 >= 0 && phi->src1 < values)
                     phi_row[phi->src1 / 64] |= 1ULL << (phi->src1 % 64);

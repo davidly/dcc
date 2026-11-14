@@ -1,4 +1,4 @@
-"""Steer parked byte and fused-wide shapes while preserving restored value forms."""
+"""Keep parked byte shapes separate from restored wide and scalar value forms."""
 
 from pathlib import Path
 import sys
@@ -13,7 +13,36 @@ finally:
 
 
 class IntegerKnownShapeTests(unittest.TestCase):
-    def test_fused_wide_increment_add_steer_is_narrow(self):
+    def test_block_word_initializer_steer_keeps_passing_controls(self):
+        cases = ((gen.I16, gen.U16, 'block', True),
+                 (gen.U16, gen.I16, 'block', True),
+                 (gen.I16, gen.I16, 'block', False),
+                 (gen.U16, gen.U16, 'block', False),
+                 (gen.I16, gen.U16, 'local', False),
+                 (gen.I32, gen.U32, 'block', False))
+        for target, source, storage, blocked in cases:
+            for cast in (False, True):
+                with self.subTest(target=target, source=source,
+                                  storage=storage, cast=cast):
+                    expression = gen.E('var', a=gen.Decl('x', source, 'param'))
+                    if cast:
+                        expression = gen.E('cast', [expression], t=target)
+                    enabled = gen.Gen(0).initialiser(None, target, expression, storage)
+                    steered = gen.Gen(0, off={'blockwordinit'}).initialiser(
+                        None, target, expression, storage)
+                    self.assertIsNone(enabled[1])
+                    self.assertEqual(steered[1] is expression, blocked)
+                    program = gen.Program(0, off={'blockwordinit'})
+                    function = gen.Func('probe', gen.I16, [], 'helper')
+                    function.body.decls.append(gen.Decl(
+                        'b', target, storage, init=expression))
+                    program.funcs.append(function)
+                    self.assertEqual(gen.known_shapes(program),
+                                     {'blockwordinit'} if blocked else set())
+                    function.body.decls[0].init = steered[0]
+                    self.assertEqual(gen.known_shapes(program), set())
+
+    def test_restored_wide_increment_add_preserves_operands(self):
         cases = ((gen.I32, 'local', '++', True, False, True),
                  (gen.U32, 'param', '++', True, False, True),
                  (gen.I32, 'local', '+=', True, False, True),
@@ -34,7 +63,7 @@ class IntegerKnownShapeTests(unittest.TestCase):
                     other = (gen.E('const', a=7, t=gen.I32) if literal else
                              gen.E('var', a=gen.Decl('y', gen.I32, 'global')))
                     operands = [other, update] if reverse else [update, other]
-                    enabled = gen.Gen(0).mk('bin', operands, '+')
+                    enabled = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS)).mk('bin', operands, '+')
                     steered = gen.Gen(0, off={'wideincadd'}).mk('bin', operands, '+')
                     self.assertEqual(enabled.a, '+')
                     self.assertEqual(steered.a, '-' if blocked else '+')
