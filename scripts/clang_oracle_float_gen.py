@@ -72,7 +72,6 @@ KNOWN_BUGS = {
     'fselfop': 'BUG-026',
     'fconstcond': 'BUG-052',
     'floopcallarg': 'BUG-036',
-    'fptrparam': 'BUG-053',
 }
 
 
@@ -327,8 +326,6 @@ def known_shapes(prog):
             found.add('fselfop')
         if is_loopcallarg(e):
             found.add('floopcallarg')
-        if is_ptrparam(e):
-            found.add('fptrparam')
         if is_paramcond(e):
             found.add('fconstcond')
         if is_paramcmp(e):

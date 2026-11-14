@@ -1,0 +1,44 @@
+; static function byte_copy
+_copy:
+ld l,(ix-2)
+ld h,(ix-1)
+ld de,200
+add hl,de
+ld (ix-2),l
+ld (ix-1),h
+ld (ix-4),l
+ld (ix-3),h
+call _observe
+ld e,(ix-2)
+ld d,(ix-1)
+ld l,(ix-4)
+ld h,(ix-3)
+ret
+; static function helper_input
+_helper:
+ld l,(ix-2)
+ld h,(ix-1)
+ld de,225
+add hl,de
+ld (ix-2),l
+ld (ix-1),h
+ld de,121
+call __q2s
+ld e,(ix-2)
+ld d,(ix-1)
+ret
+; static function byte_overwrite
+_overwrite:
+ld l,(ix-2)
+ld h,(ix-1)
+ld de,200
+add hl,de
+ld (ix-2),l
+ld (ix-1),h
+ld l,0
+ld h,0
+call _sink
+ld e,(ix-2)
+ld d,(ix-1)
+ret
+end

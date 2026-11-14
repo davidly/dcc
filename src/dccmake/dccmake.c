@@ -2490,6 +2490,9 @@ static int run_build(struct Config *cfg)
             }
             cmd_init(cmd, sizeof(cmd));
             if (!cmd_arg(cmd, sizeof(cmd), cfg->dccpeep)) return 0;
+            if (!cfg->library_mode && cfg->input_count == 1 &&
+                !cmd_arg(cmd, sizeof(cmd), "-closed-program"))
+                return 0;
             if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
             if (!cmd_arg(cmd, sizeof(cmd), tmp)) return 0;
             t0 = now_ms();

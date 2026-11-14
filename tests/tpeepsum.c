@@ -1,9 +1,6 @@
-/* BUG-032: with dccpeep, a 16-bit local plus a constant from 2 to 255 that
- * is then copied to another slot loses the sum: the copy stores whatever HL
- * held before. dccpeep's small_const_incr_carry_skip pass turns the add into
- * an 8-bit add on the stack slot, which no longer leaves the result in HL,
- * but the following `ld (ix-N),l` / `ld (ix-M),h` still store HL. The
- * program is correct without dccpeep (dcc-peep=false). */
+/* Small 16-bit constant additions keep their result available to byte-wise
+ * copies and register-ABI division/modulo helpers. Covers conditional and
+ * if/else forms, carry boundaries, and neighbouring arithmetic controls. */
 #include <stdint.h>
 #include <stdio.h>
 
