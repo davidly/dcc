@@ -51,6 +51,15 @@ explicitly approved K as a four-rule exception.
   `.github/skills/dcc-project/SKILL.md`).
 - A fix that flips a reproducer outside its cluster is information: record
   which, and move that bug into the cluster in this file.
+- Cluster pull requests are **not** gated on `pwsh ./scripts/prepush.ps1`.
+  That exhaustive proof suite (compiler mutants, sanitizers, instrumented
+  coverage) takes five to six hours and is the maintainer's periodic manual
+  check, run on `main` after a batch of clusters has merged. The gate for a
+  cluster PR is the acceptance list above plus the regular script unit
+  tests; do not run or wait for prepush. Two of those unit tests
+  (`test_mir_campaign_baselines`, `test_mir_exact_controls`) fail on `main`
+  today for reasons unrelated to any cluster (#277); report them as
+  pre-existing, do not refresh their expectations in a cluster PR.
 
 ## Clusters
 
@@ -216,7 +225,7 @@ change: keep it small, follow the existing `DCCRTL.MAC` idioms, and run
 | BUG-053 | #273 | `pass_elim_dead_ix_stores` forgets an escaped address at its own `LS<n>:` label |
 
 Four unrelated peephole rules, each with a precise description in its entry.
-Fixed on `fix/cluster-k-peephole`, with the maintainer's explicit approval
+Fixed in [#278](https://github.com/davidly/dcc/pull/278), with the maintainer's explicit approval
 to keep all four independent fixes together. Regressions are now
 `tpeepsum`, `tpeeq8`, `tpeerng`, and `tpeesc`. The cp8 proof also required an
 approved `dccmake`/`dccpeep` closed-program contract, restricted to single-source
@@ -279,7 +288,7 @@ so it matters more than its size suggests. Both are one-offs.
 | H | | open | |
 | I | | open | |
 | J | | open | |
-| K | [fix/cluster-k-peephole / #278](https://github.com/davidly/dcc/pull/278) | fixed; review pending | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
+| K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | L | | open | |
 | M | | open | |
 
@@ -386,7 +395,11 @@ Work on a new branch from `main`, one branch for this cluster only.
    to describe the coverage, add a NEW row to `tests/perf_baselines.csv`
    measured on the normal stack-check runall path, and confirm with
    `pwsh ./scripts/validate-unit-test.ps1 -App <name>`.
-5. Run `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`.
+5. Run `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`. Do
+   NOT run `scripts/prepush.ps1`; it takes five to six hours and is the
+   maintainer's periodic check on `main`, not a gate for this PR. If a test
+   fails, confirm it fails identically on an unchanged `main` checkout
+   before reporting it as pre-existing; never refresh its expectation here.
 6. Close each entry in `compiler-bugs.md` (move it under the closed section,
    update the summary table and open count), and update the Tracking table
    in `fix-plan.md`.
