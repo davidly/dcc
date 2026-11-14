@@ -4,7 +4,8 @@
  *
  * @par Role
  * Caches expression-shape admission, validates call/argument, pointer,
- * aggregate, and assignment forms, folds target-width constants, and proves
+ * aggregate, and assignment forms, folds target-width integers and host-float
+ * constants, and proves
  * reusable loop/address transformations used by MIR capture and metadata
  * planning.
  *
@@ -156,11 +157,16 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
                 is_cmp_op(n->a->op) && ast_expr_supported(n->a) &&
                 (ast_value_is_float_word(n->a->a) || ast_value_is_float_word(n->a->b)))
                 return 1;
-            /* Admit foldable integer unary expressions regardless of the
+            /* Admit foldable scalar unary expressions regardless of the
              * operand's shape, including logicals and nested binary folds. */
             {
                 long cv;
+                float fv;
                 if (ast_const_scalar_fold(n, &cv))
+                    return 1;
+                if ((n->op == '+' || n->op == '-') &&
+                    type_is_float(ast_expr_type_for_sizeof(n)) &&
+                    ast_const_float_fold(n, &fv))
                     return 1;
             }
             if (ast_node_is_const(n->a))
@@ -971,7 +977,7 @@ static int ast_other_supported_uncached(const struct AstNode *n)
             int pointer_type;
             int no_deref;
 
-            return ast_postfix_plain_int(n) ||
+            return ast_postfix_plain_int(n) || ast_value_is_long_word(n) ||
                    (ast_pointer_expr_type(n, &pointer_type, &no_deref) &&
                     !no_deref);
         }
@@ -1996,7 +2002,7 @@ static int ast_fold_binary_target(int op, int type_a, int type_b,
     }
 }
 
-int ast_const_scalar_fold(const struct AstNode *n, long *out)
+static int ast_const_integer_fold(const struct AstNode *n, long *out)
 {
     long a;
     long b;
@@ -2026,7 +2032,7 @@ int ast_const_scalar_fold(const struct AstNode *n, long *out)
         }
         return 0;
     case AST_UNARY:
-        if (!ast_const_scalar_fold(n->a, &a))
+        if (!ast_const_integer_fold(n->a, &a))
             return 0;
         switch (n->op) {
         case '+': *out = a; return 1;
@@ -2036,7 +2042,7 @@ int ast_const_scalar_fold(const struct AstNode *n, long *out)
         default: return 0;
         }
     case AST_CAST:
-        if (!ast_const_scalar_fold(n->a, &a))
+        if (!ast_const_integer_fold(n->a, &a))
             return 0;
         if (type_is_float(n->type) || type_ptr_depth(n->type) > 0)
             return 0;
@@ -2045,7 +2051,7 @@ int ast_const_scalar_fold(const struct AstNode *n, long *out)
     case AST_BINARY:
     case AST_LOGAND:
     case AST_LOGOR:
-        if (!ast_const_scalar_fold(n->a, &a) || !ast_const_scalar_fold(n->b, &b))
+        if (!ast_const_integer_fold(n->a, &a) || !ast_const_integer_fold(n->b, &b))
             return 0;
         if (n->kind == AST_LOGAND) { *out = (a != 0) && (b != 0); return 1; }
         if (n->kind == AST_LOGOR)  { *out = (a != 0) || (b != 0); return 1; }
@@ -2062,6 +2068,212 @@ int ast_const_scalar_fold(const struct AstNode *n, long *out)
     default:
         return 0;
     }
+}
+
+static int ast_const_float_to_int(float value, int type, long *out)
+{
+    double limit;
+    int size = type_size(type);
+
+    if (type_is_float(type) || type_ptr_depth(type) > 0 || (type & TYPE_STRUCT) ||
+        (type & 15) == TYPE_VOID || (size != 1 && size != 2 && size != 4))
+        return 0;
+    if (type_is_bool(type)) {
+        *out = value != 0.0f;
+        return 1;
+    }
+    limit = size == 1 ? 128.0 : size == 2 ? 32768.0 : 2147483648.0;
+    /* Conversion truncates before the range test applies. Use double bounds
+     * so a 32-bit endpoint cannot itself round to an out-of-range float. */
+    if (type & TYPE_UNSIGNED) {
+        if (!((double)value > -1.0 && (double)value < limit * 2.0))
+            return 0;
+        *out = (long)(unsigned long)value;
+    } else {
+        if (!((double)value > -limit - 1.0 && (double)value < limit))
+            return 0;
+        *out = (long)value;
+    }
+    *out = ast_const_apply_int_cast(*out, type);
+    return 1;
+}
+
+/* Keep floating values separate from the integer folder: converting a float
+ * to long loses both fractional truth values and single-precision rounding. */
+static int ast_const_scalar_extended(const struct AstNode *n, long *out, int depth);
+
+static int ast_const_float_value(const struct AstNode *n, float *out, int depth)
+{
+    float a;
+    float b;
+    long iv;
+    int type;
+    struct Sym *s;
+    union { float f; unsigned char b[4]; } u;
+    unsigned long bits;
+
+    if (n == NULL || depth > 64)
+        return 0;
+    type = ast_expr_type_for_sizeof(n);
+    if (type_ptr_depth(type) != 0 || (type & TYPE_STRUCT) ||
+        (type & 15) == TYPE_VOID)
+        return 0;
+    if (!type_is_float(type)) {
+        if (!ast_const_scalar_extended(n, &iv, depth + 1))
+            return 0;
+        if (type & TYPE_UNSIGNED) {
+            unsigned long mask = type_size(type) == 4 ? 0xffffffffUL :
+                                 type_size(type) == 1 ? 0xffUL : 0xffffUL;
+            *out = (float)((unsigned long)iv & mask);
+        } else {
+            *out = (float)iv;
+        }
+        return 1;
+    }
+    switch (n->kind) {
+    case AST_FLOAT_LIT:
+        bits = n->uval;
+        break;
+    case AST_IDENT:
+        s = find_sym(n->sval);
+        if (s == NULL || !s->is_const_value || !type_is_float(s->type))
+            return 0;
+        bits = s->const_value;
+        break;
+    case AST_CAST:
+        return ast_const_float_value(n->a, out, depth + 1);
+    case AST_COND:
+        if (!ast_const_float_value(n->a, &a, depth + 1))
+            return 0;
+        return ast_const_float_value(a != 0.0f ? n->b : n->c, out, depth + 1);
+    case AST_UNARY:
+        if ((n->op != '+' && n->op != '-') ||
+            !ast_const_float_value(n->a, &a, depth + 1))
+            return 0;
+        *out = n->op == '-' ? -a : a;
+        return 1;
+    case AST_BINARY:
+        if (!ast_const_float_value(n->a, &a, depth + 1) ||
+            !ast_const_float_value(n->b, &b, depth + 1))
+            return 0;
+        switch (n->op) {
+        case '+': *out = a + b; return 1;
+        case '-': *out = a - b; return 1;
+        case '*': *out = a * b; return 1;
+        case '/':
+            if (b == 0.0f)
+                return 0;
+            *out = a / b;
+            return 1;
+        default: return 0;
+        }
+    default:
+        return 0;
+    }
+    u.b[0] = (unsigned char)bits;
+    u.b[1] = (unsigned char)(bits >> 8);
+    u.b[2] = (unsigned char)(bits >> 16);
+    u.b[3] = (unsigned char)(bits >> 24);
+    *out = u.f;
+    return 1;
+}
+
+static int ast_const_scalar_extended(const struct AstNode *n, long *out, int depth)
+{
+    long a;
+    long b;
+    float fa;
+    float fb;
+
+    if (n == NULL || depth > 64)
+        return 0;
+    if (ast_const_integer_fold(n, out))
+        return 1;
+    switch (n->kind) {
+    case AST_SIZEOF_EXPR:
+        if (ast_sizeof_whole_vla_sym(n->a) != NULL)
+            return 0;
+        *out = ast_sizeof_expr_value(n->a);
+        return *out > 0;
+    case AST_COND:
+        if (!ast_const_float_value(n->a, &fa, depth + 1) ||
+            !ast_const_scalar_extended(fa != 0.0f ? n->b : n->c, &a, depth + 1))
+            return 0;
+        *out = ast_const_apply_int_cast(a, n->type);
+        return 1;
+    case AST_UNARY:
+        if (n->op == '!' && type_is_float(ast_expr_type_for_sizeof(n->a))) {
+            if (!ast_const_float_value(n->a, &fa, depth + 1))
+                return 0;
+            *out = fa == 0.0f;
+            return 1;
+        }
+        if (!ast_const_scalar_extended(n->a, &a, depth + 1))
+            return 0;
+        switch (n->op) {
+        case '+': *out = ast_const_apply_int_cast(a, n->type); return 1;
+        case '-': return ast_fold_binary_target('-', n->type, n->type, 0, a, out);
+        case '~': *out = ast_const_apply_int_cast((long)~(unsigned long)a, n->type); return 1;
+        case '!': *out = !a; return 1;
+        default: return 0;
+        }
+    case AST_CAST:
+        if (type_is_float(n->type) || type_ptr_depth(n->type) > 0 ||
+            (n->type & TYPE_STRUCT) || (n->type & 15) == TYPE_VOID)
+            return 0;
+        if (type_is_float(ast_expr_type_for_sizeof(n->a))) {
+            if (!ast_const_float_value(n->a, &fa, depth + 1))
+                return 0;
+            return ast_const_float_to_int(fa, n->type, out);
+        }
+        if (!ast_const_scalar_extended(n->a, &a, depth + 1))
+            return 0;
+        *out = ast_const_apply_int_cast(a, n->type);
+        return 1;
+    case AST_LOGAND:
+    case AST_LOGOR:
+        if (!ast_const_float_value(n->a, &fa, depth + 1) ||
+            !ast_const_float_value(n->b, &fb, depth + 1))
+            return 0;
+        *out = n->kind == AST_LOGAND ? (fa != 0.0f && fb != 0.0f) :
+                                      (fa != 0.0f || fb != 0.0f);
+        return 1;
+    case AST_BINARY:
+        if (type_is_float(ast_expr_type_for_sizeof(n->a)) ||
+            type_is_float(ast_expr_type_for_sizeof(n->b))) {
+            if (!is_cmp_op(n->op) ||
+                !ast_const_float_value(n->a, &fa, depth + 1) ||
+                !ast_const_float_value(n->b, &fb, depth + 1))
+                return 0;
+            switch (n->op) {
+            case '<': *out = fa < fb; return 1;
+            case '>': *out = fa > fb; return 1;
+            case TOK_LE: *out = fa <= fb; return 1;
+            case TOK_GE: *out = fa >= fb; return 1;
+            case TOK_EQ: *out = fa == fb; return 1;
+            case TOK_NE: *out = fa != fb; return 1;
+            default: return 0;
+            }
+        }
+        if (!ast_const_scalar_extended(n->a, &a, depth + 1) ||
+            !ast_const_scalar_extended(n->b, &b, depth + 1))
+            return 0;
+        return ast_fold_binary_target(n->op,
+                                     ast_expr_type_for_sizeof(n->a),
+                                     ast_expr_type_for_sizeof(n->b), a, b, out);
+    default:
+        return 0;
+    }
+}
+
+int ast_const_scalar_fold(const struct AstNode *n, long *out)
+{
+    return ast_const_scalar_extended(n, out, 0);
+}
+
+int ast_const_float_fold(const struct AstNode *n, float *out)
+{
+    return ast_const_float_value(n, out, 0);
 }
 
 long ast_const_apply_int_cast(long v, int type)
@@ -2092,7 +2304,9 @@ long ast_const_apply_int_cast(long v, int type)
 
 int ast_const_condition_fold(const struct AstNode *n, long *out)
 {
-    return ast_const_scalar_fold(n, out);
+    /* Exit/return metadata keeps its existing integer-only facts. Extended
+     * float folding is an admission proof, not a new control-flow optimizer. */
+    return ast_const_integer_fold(n, out);
 }
 
 int ast_global_byte_array_const_store(const struct AstNode *n,

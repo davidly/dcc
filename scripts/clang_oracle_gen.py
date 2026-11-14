@@ -650,7 +650,7 @@ def known_shapes(prog):
                         found.add('widepostinc')
                     if local and e.a[0] == '++':
                         found.add('widelocalinc')
-            if is_int(lt) and lv.op == 'var' and not e.a[1] and not root \
+            if is_int(lt) and lt.bits == 8 and lv.op == 'var' and not e.a[1] and not root \
                     and id(e) not in steps:
                 found.add('postincvalue')
         elif op == 'un':
@@ -940,8 +940,7 @@ def const_text(v, t):
 def static_text(v, t):
     """A constant for a static initializer."""
     if t is F32:
-        # bare, not parenthesised: BUG-040
-        return float_text(v).strip('()')
+        return float_text(v)
     if t.signed:
         if v == -(1 << 31):
             return '(-2147483647 - 1)'
@@ -1432,18 +1431,15 @@ KNOWN_BUGS = {
     'logicinit': 'BUG-004',
     'bfdivasg': 'BUG-006',
     'nestedwideless': 'BUG-009',
-    'widepostinc': 'BUG-010',
     'bfpromo': 'BUG-013',
     'blockptr': 'BUG-015',
     'inittype': 'BUG-016',
     'widehelperparam': 'BUG-020',
-    'postincvalue': 'BUG-021, BUG-023, BUG-024',
+    'postincvalue': 'BUG-024',
     'duplabel': 'BUG-022',
-    'crosstypeasg': 'BUG-023',
     'nestedifelse': 'BUG-027',
     'bytesarcount': 'BUG-028',
     'bytearm': 'BUG-029',
-    'constdivzero': 'BUG-033',
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',
     'loopcopy': 'BUG-037',
@@ -1766,9 +1762,9 @@ class Gen:
         x = r.random()
         if x < 0.45:
             # with `widepostinc` off a 32-bit victim is only pre-incremented:
-            # its old value could reach a narrower type. With `postincvalue`
-            # off nothing uses the value of a post-increment at all.
-            prefix = r.random() < 0.5 or not self.on('postincvalue') \
+            # its old value could reach a narrower type. `postincvalue` now
+            # steers only byte updates (BUG-024); word values are restored.
+            prefix = r.random() < 0.5 or (d.t.bits == 8 and not self.on('postincvalue')) \
                 or (d.t.bits == 32 and not self.on('widepostinc'))
             op = r.choice(('++', '--'))
             if d.t.bits == 32 and not self.on('widelocalinc'):
