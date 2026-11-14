@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has twenty open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has nineteen open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -18,8 +18,9 @@ with maintainer approval into I1 (return admission) and I2 (cast signedness);
 both are now fixed. Other remaining clusters are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
-explicitly approved K as a four-rule exception, and J2 as two independent
-fixes with narrowly specified existing-baseline exceptions. J2's numeric
+explicitly approved K as a four-rule exception, J2 as two independent
+fixes with narrowly specified existing-baseline exceptions, and M as two
+independent single-bug commits. J2's numeric
 stdout refreshes still require independent host-clang proof.
 
 ## Rules
@@ -1351,7 +1352,8 @@ require-emit, ten debugger-host and six sanitized MIR host tests pass.
 The 327-test Python gate has the approved two #277 failures plus two mock
 scheduler timeouts and two existing skips. Individual Ninja retries still
 time out; the survivor retry also has a cleanup error. Those harness checks
-remain unverified; nothing was skipped, refreshed or fixed.
+were unverified at the M-a checkpoint; final retry outcomes are below.
+Nothing was skipped, refreshed or fixed.
 
 #### M-b trace: BUG-022
 
@@ -1370,6 +1372,33 @@ nonzero value to suppress their fatal diagnostic. The appropriate guard is
 independent of BUG-009 and does not require changing label IDs or body output.
 BUG-020 remains outside scope: diagnostic acceptance must require rejection,
 not silently admit that separate unsupported emission shape.
+
+M-b acceptance: the re-established trigger reports `FIXED` in both modes
+by rejecting compilation, not by fixing BUG-020. Before promotion the twenty
+parked programs give one `FIXED` and nineteen `fails`; after promotion all
+nineteen remaining programs fail. The negative source and host baseline are
+in `tests/diagnostics/fixtures/`, tested by the regular Python diagnostic
+matrix; the already-correct historical program is promoted as tlbreuse.
+Its MAC/COM are unchanged by M-b in both modes and all debug pipelines pass.
+
+The second integer batch gives 255 ok, 45 INVALID, zero FAIL with `duplabel`
+restored. Combined M tally: 600 programs, 510 ok, 90 INVALID, zero FAIL.
+Both final censuses preserve all 3,527 original functions and add only the
+nine functions in tndwide/tlbreuse. All 524 original perf rows and all 525
+rows present before M-b are unchanged; each new app has its own measured
+normal-stack row and passes host validation. Both final strict full+extended
+stack/no-stack gates pass, as do each fix's strict Python full+extended gate,
+CMake, six sanitized MIR host tests, two sanitized probes, ten debugger-host
+tests, require-emit and focused metadata/diagnostic checks.
+
+The final regular Python gate runs 329 tests with five failures, six errors
+and two existing skips. Two failures are approved #277; the other results
+are seven loaded scheduler/supervision checks, including teardown races.
+After heavy M jobs ended, each was retried individually with Ninja: six pass;
+only the mock serial/parallel equality test still times out at 180 seconds.
+That check remains unverified. No expectation, timeout or skip was changed,
+and prepush was not run. No out-of-cluster reproducer flipped; BUG-020 remains
+the unsupported release trigger, not a fix bundled with this diagnostic work.
 
 ## Suggested order
 
@@ -1419,7 +1448,7 @@ not silently admit that separate unsupported emission shape.
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | K2 | [#298](https://github.com/davidly/dcc/pull/298) | PR open | BUG-054 promoted as tpephl; 228 ok/72 INVALID/zero FAIL; all 3,047 MAC files per stack mode and 514 existing perf rows unchanged (except clock literal); #277 and isolated harness retries documented |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
-| M | `fix/cluster-m-diag` | M-a fixed; M-b traced | M-a promotes 009 as tndwide; 255 ok/45 INVALID/zero FAIL; 3,527 existing functions and 524 perf rows unchanged; M-b diagnostic trigger re-established |
+| M | `fix/cluster-m-diag` | fixed; two independent commits | 009 as tndwide; 022 as diagnostic matrix + tlbreuse; two integer batches total 510 ok/90 INVALID/zero FAIL; 3,527 original functions and 524 original perf rows unchanged; approved #277 and one isolated mock serial-scheduler timeout remain |
 
 Update this table as clusters are taken, and move bugs between clusters when
 a fix shows the hypothesis was wrong.

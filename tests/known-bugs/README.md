@@ -9,9 +9,12 @@ kept out of `tests/*.c` so the regression suite (`scripts/runall.py`,
 `baselines/bugNNN.txt` is the output the program should print. It is the host
 compiler's output, not dcc's.
 
-BUG-022 remains open, but its historical reproducer now passes because its
-BUG-008/BUG-019 emission-failure triggers were fixed. The diagnostic-masking
-defect still reproduces with another failing function; see its bug-log entry.
+Diagnostic-masker BUG-022 was closed by restoring the compiler error, not by
+fixing the unsupported function that triggers it. Its re-established source
+and host baseline are in `tests/diagnostics/fixtures/`, checked by
+`scripts/tests/test_mir_diagnostics.py` with normal/strict and debug variants.
+The historical runnable program was already fixed by BUG-008/019 and is kept
+as `tests/tlbreuse.c` alongside that negative regression.
 
 ## Checking them
 
@@ -31,8 +34,16 @@ dating a regression.
 
 ## When a bug is fixed
 
-A reproducer reported `FIXED` passes in both modes. Promote it to a regular
-test:
+A diagnostic-masking reproducer can declare ` * DCC-EXPECT-ERROR: message`
+in its header. The host baseline must still be proven, but dcc passes only
+when it exits nonzero with that actual primary diagnostic; successful output
+or incidental message text is not a fix. Promote such a source and its host
+baseline to `tests/diagnostics/fixtures/` with an explicit Python matrix, and
+retain a runnable neighbouring control with a new measured performance row.
+This avoids requiring a separate unsupported-emission defect to be fixed.
+
+A runnable reproducer reported `FIXED` passes in both modes. Promote it to a
+regular test:
 
 1. Move `bugNNN.c` to `tests/<name>.c` and `baselines/bugNNN.txt` to
    `tests/baselines/<name>.txt`, with a name that says what it covers, and
@@ -51,7 +62,7 @@ test:
 `tests/twincg.c`, `tests/tlpcall.c`, `tests/tconstun.c`, `tests/tcmbyte.c`,
 `tests/tcmwide.c`, `tests/tcmfloat.c`, `tests/tinc32a.c`, `tests/tflinc.c`,
 `tests/tpephl.c`, `tests/tpost16.c`, `tests/tpostbr.c`, `tests/tpost32.c`,
-`tests/tflcnot.c`, `tests/tflcini.c`, `tests/tconstdz.c`, `tests/tdeadblk.c` and `tests/tndwide.c`
+`tests/tflcnot.c`, `tests/tflcini.c`, `tests/tconstdz.c`, `tests/tdeadblk.c`, `tests/tndwide.c` and `tests/tlbreuse.c`
 were promoted this way.
 
 ## Adding one

@@ -7,7 +7,8 @@ wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
 source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `83dc7a91` (upstream `main` on 2026-11-13).
+- **Compiler under test:** `bb67b78e` plus cluster M fixes
+  (`fix/cluster-m-diag`, 2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -33,7 +34,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
-| [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-024](#bug-024) | #244 | wrong result | `if (x++)` in a loop tests the incremented value (8-bit local, later `do … while`) |
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
@@ -47,14 +47,13 @@ and their historical diagnoses are retained separately below.
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 
-Twenty are open: fifteen give wrong results with no diagnostic
+Nineteen are open: fifteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
-BUG-041 admission, three stop the compile,
-and one (BUG-022) turns a compile error into
-a broken program. The most likely ordinary-code defects remaining are
-BUG-013 and BUG-016.
+BUG-041 admission, and three stop the compile. The most likely ordinary-code
+defects remaining are BUG-013 and BUG-016.
 
-Thirty-four reported bugs are fixed: [one in cluster M-a](#fixed-in-cluster-m-a),
+Thirty-five reported bugs are fixed: [one in cluster M-b](#fixed-in-cluster-m-b),
+[one in cluster M-a](#fixed-in-cluster-m-a),
 [one in cluster B2b](#fixed-in-cluster-b2b),
 [one in cluster D2b](#fixed-in-cluster-d2b),
 [two in cluster D2a](#fixed-in-cluster-d2a),
@@ -359,34 +358,6 @@ static int32_t f(int32_t x)
   != 7.0f`), `7.0f != x0`, no loop in the `then` body, or the comparison
   before the `if`. Found by fuzzing (float generator, seed 20063).
 
-## BUG-022
-
-**When a label name used in one function is reused inside a nested block of
-a later function, dcc stops reporting `MIR emission is required` for the
-functions after it.** It exits 0, and the program hangs or restarts in a
-loop when the function it could not emit is called.
-
-```c
-static uint16_t first(void)  { L1:; return 1; }
-static uint16_t second(void) { { L1:; } return 2; }       /* same name, nested block */
-static int8_t third(void)    { { int32_t b = 0; b = -8305; low = (uint16_t)b; } return 3; }
-```
-
-`third` is a function dcc cannot emit (BUG-008). Without `first` and
-`second` the compile stops with the fatal error. With them it succeeds and
-the program fails at run time.
-
-- Needs the same label name in both functions and the second one inside a
-  nested block. With the second label renamed, or at function scope, the
-  fatal error is reported as usual.
-- Shown with the functions of BUG-008 and BUG-019. Functions that fail with
-  `missing direct MIR named-home offset` (BUG-014) still stop the compile.
-- This only matters while some function cannot be emitted, but then it turns
-  a compile error into a silently broken program.
-- Its historical parked program now passes after BUG-008/019 were fixed.
-  This does not close BUG-022: the same reused-label prefix before a BUG-020
-  failing function still exits zero with empty function bodies. Steering and
-  the historical reproducer are retained for the separate diagnostic fix.
 
 ## BUG-024
 
@@ -744,6 +715,90 @@ in-range float-to-`int32_t` conversion and retains the failing context.
 
 ---
 
+## Fixed in cluster M-b
+
+BUG-022 is fixed by checking reported `errors`, not `g_diag_error_count`, in
+both required-MIR failure paths. Frame-sizing probes can inherit a prior
+function's label table and count a suppressed duplicate-label complaint.
+The probe counter must keep those complaints for constant-expression
+attempts, but they must not veto an unrelated later emission diagnostic.
+Label IDs, selection and all accepted function bodies are unchanged.
+
+The reproducer was re-established before the fix: reused nested labels ahead
+of BUG-020's switch/32-bit remainder comparison exited zero with an empty
+`third` body, while renamed and function-scope label controls correctly
+failed. It now fails with `MIR emission is required` in both peep and nopeep;
+strict mode restores its detailed required-emission diagnostic. BUG-020 is
+not fixed. Full debug can emit that shape and its output agrees with the host.
+
+`DCC-EXPECT-ERROR` headers let the known-bugs runner classify a diagnostic fix
+as `FIXED` only for a failed build with the actual expected primary diagnostic,
+not an incidental occurrence of its text. The proven source and host stdout
+baseline are promoted to
+[the diagnostic fixture](tests/diagnostics/fixtures/mir-required-after-reused-label.c).
+The regular Python matrix proves it at host O0/O2/ASan/UBSan and tests reused,
+renamed and flat labels with normal/strict, release/stack/line/full debug.
+The fixtures subdirectory is tested explicitly because normal and strict
+backend diagnostic wording differs; no existing diagnostic fixture is skipped.
+The historical runnable control is promoted as [tlbreuse](tests/tlbreuse.c)
+with a new normal-stack performance row. Its MAC and COM are byte-identical
+before/after this fix in both modes; line debug remains release-identical.
+
+Integer production seeds 1-300, with `duplabel` restored, give **255 ok,
+45 INVALID, zero FAIL**. M-a and M-b together tested **600 programs: 510 ok,
+90 INVALID, zero FAIL**. Before this promotion 20 parked programs gave
+**one FIXED, 19 fails**; afterwards all **19 remaining reproducers fail**.
+There are no unrelated flips. Both final censuses preserve all **3,527
+original functions byte-identically** and add only nine functions in the two
+new apps. All **524 original performance rows**, and the **525 rows already
+present at the M-b checkpoint**, are unchanged; only tlbreuse adds a row here.
+
+Both final strict full+extended stack/no-stack gates pass (565 apps, 541
+passed, 24 existing skips). Each fix also passed the strict Python full+
+extended gate. Independent CMake, six sanitized MIR host tests, both sanitized
+probes, ten debugger-host tests, debug pipelines and require-emit checks pass.
+The regular Python gate ran 329 tests: five failures, six errors, two existing
+skips. Two failures are approved #277; the rest are seven distinct loaded
+scheduler/process-supervision checks (two also failed teardown). After all
+heavy M jobs finished, individual Ninja retries passed **six of seven**.
+Only `test_default_serial_and_parallel_are_equal_and_bounded` still times out
+at 180 seconds and remains unverified. No expectation, timeout or skip was
+changed; the periodic prepush suite was not run.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-022](#bug-022) | #242 | [diagnostic matrix](scripts/tests/test_mir_diagnostics.py), [tlbreuse](tests/tlbreuse.c) |
+
+### BUG-022
+
+**When a label name used in one function is reused inside a nested block of
+a later function, dcc stops reporting `MIR emission is required` for the
+functions after it.** It exits 0, and the program hangs or restarts in a
+loop when the function it could not emit is called.
+
+```c
+static uint16_t first(void)  { L1:; return 1; }
+static uint16_t second(void) { { L1:; } return 2; }       /* same name, nested block */
+static int8_t third(void)    { { int32_t b = 0; b = -8305; low = (uint16_t)b; } return 3; }
+```
+
+In the original report, `third` could not be emitted (BUG-008). Without
+`first` and `second` compilation stopped with the fatal error; with them it
+succeeded and the program failed at run time.
+
+- Needs the same label name in both functions and the second one inside a
+  nested block. With the second label renamed, or at function scope, the
+  fatal error is reported as usual.
+- Shown with the functions of BUG-008 and BUG-019. Functions that fail with
+  `missing direct MIR named-home offset` (BUG-014) still stop the compile.
+- This only matters while some function cannot be emitted, but then it turns
+  a compile error into a silently broken program.
+- Its historical program already passed after BUG-008/019 were fixed.
+  M-b re-established the mask using BUG-020's still-unsupported release
+  shape, proved the restored diagnostic, and retained the old program as
+  `tlbreuse` rather than mistaking that incidental fixture pass for a fix.
+
+
 ## Fixed in cluster M-a
 
 BUG-009 is fixed by resolving the fused wide self-store increment's named
@@ -768,8 +823,8 @@ sanitized reproducer and require-emit diagnostics pass. The regular Python
 gate ran 327 tests: the two approved #277 failures, two mock-scheduler timeout
 errors and two existing skips. Both timeout checks were retried individually
 with Ninja and still timed out (the survivor retry also hit teardown cleanup);
-these harness checks remain unverified. No expectations, timeouts or skips
-were changed.
+those checks were unverified at the M-a checkpoint; final retry status is
+recorded under M-b. No expectations, timeouts or skips were changed.
 
 | ID | Issue | Regression |
 | --- | --- | --- |
