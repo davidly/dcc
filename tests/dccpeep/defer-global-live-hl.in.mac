@@ -1,0 +1,87 @@
+; An unlabelled entry also retains its resident HL operand.
+	ld hl,(_word)
+	push hl
+	pop de
+	or a
+	sbc hl,de
+	ret
+
+_live_after_pop:
+	ld hl,(_word)
+	push hl
+	pop de
+	or a
+	sbc hl,de
+	ret
+
+_live_before_pop:
+	ld hl,(_word)
+	push hl
+	ld a,l
+	ld (_byte),a
+	ld hl,3
+	pop de
+	add hl,de
+	ret
+
+_partial_overwrite:
+	ld hl,(_word)
+	push hl
+	ld h,0
+	pop de
+	add hl,de
+	ret
+
+_live_high_byte:
+	ld hl,(_word)
+	push hl
+	pop bc
+	ld a,h
+	ld (_byte),a
+	ld hl,3
+	add hl,bc
+	ret
+
+_safe_overwrite:
+	ld hl,(_word)
+	push hl
+	ld hl,(_other)
+	add hl,hl
+	pop de
+	add hl,de
+	ret
+
+_safe_nested_push:
+	ld hl,(_word)
+	push hl
+	ld hl,(_other)
+	push hl
+	ld hl,(_third)
+	add hl,hl
+	pop bc
+	add hl,bc
+	pop de
+	add hl,de
+	ret
+
+_safe_pop_hl:
+	ld hl,(_word)
+	push hl
+	ld a,7
+	ld (_byte),a
+	pop hl
+	ret
+
+_safe_split_sign_extension:
+	ld hl,(_word)
+	push hl
+	ld a,(_byte)
+	ld l,a
+	rlca
+	sbc a,a
+	ld h,a
+	push hl
+	pop de
+	pop hl
+	add hl,de
+	ret

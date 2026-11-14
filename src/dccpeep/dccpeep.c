@@ -6108,6 +6108,39 @@ static int decline_af_or_frame_reg(const char *reg)
     return !strcmp(reg, "af") || !strcmp(reg, "ix") || !strcmp(reg, "iy");
 }
 
+/* The shared CFG proof treats accumulator rotates as opaque. Keep this
+ * rule's straight-line byte-kill proof local so safe sign-extension loads
+ * remain deferrable without changing other passes' effect classification. */
+static int deferred_global_hl_dead_after_push(int push_line)
+{
+    unsigned live = PEEP_REG_HL;
+    int j;
+
+    if (peep_registers_dead_after(push_line, live))
+        return 1;
+    for (j = push_line + 1; j < nlines; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+
+        if (starts_label(lines[j]) || line_starts_function_marker(lines[j]))
+            return 0;
+        if (info->effects.unknown) {
+            if (info->kind != PEEP_LINE_OPAQUE &&
+                (eq(j, "rlca") || eq(j, "rrca") ||
+                 eq(j, "rla") || eq(j, "rra")))
+                continue;
+            return 0;
+        }
+        if (info->effects.reads & live)
+            return 0;
+        live &= ~info->effects.writes;
+        if (!live)
+            return 1;
+        if (info->effects.control_flow)
+            return 0;
+    }
+    return 0;
+}
+
 /*
  * pass_defer_global_push_reload:
  *
@@ -6138,6 +6171,8 @@ static int decline_af_or_frame_reg(const char *reg)
  * after them.
  *
  * Declines (leaves the push/pop alone) on:
+ *   - any use of the original HL value other than the removed push,
+ *     including uses after a matching pop into another register pair,
  *   - anything that writes NAME in between (symbol_written_in_range, the
  *     same whole-word-store text match pass_cache_global_word_reload
  *     already relies on for the identical reason: a write through an
@@ -6217,6 +6252,10 @@ static int pass_defer_global_push_reload(void)
         if (pop_line < 0 || decline_af_or_frame_reg(pop_reg))
             continue;
         if (symbol_written_in_range(sym, i + 2, pop_line))
+            continue;
+        /* The push carries only one use of the load; resident HL may still
+         * supply another operand even after the matching pop. */
+        if (!deferred_global_hl_dead_after_push(i + 1))
             continue;
 
         {

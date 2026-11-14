@@ -45,7 +45,8 @@ test:
 `tests/tfltret.c`, `tests/tflucast.c`, `tests/tflscast.c`,
 `tests/tandself.c`, `tests/tselfop.c`, `tests/tflmadd.c`, `tests/tflnot.c`,
 `tests/twincg.c`, `tests/tlpcall.c`, `tests/tconstun.c`, `tests/tcmbyte.c`,
-`tests/tcmwide.c`, `tests/tcmfloat.c`, `tests/tinc32a.c`, `tests/tflinc.c` and `tests/tpost32.c`
+`tests/tcmwide.c`, `tests/tcmfloat.c`, `tests/tinc32a.c`, `tests/tflinc.c`,
+`tests/tpephl.c`, `tests/tpost16.c`, `tests/tpostbr.c` and `tests/tpost32.c`
 were promoted this way.
 
 ## Adding one

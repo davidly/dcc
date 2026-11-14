@@ -437,7 +437,7 @@ def same_variable(a, b):
 
 
 def peep_byte_self(op, operands):
-    """A byte binary self-use can lose a live global load (BUG-054)."""
+    """Detect byte binary self-use for optional coverage steering."""
     return op not in (*LOGIC, '=') and same_variable(*operands) \
         and is_int(ty(operands[0])) and ty(operands[0]).bits == 8
 
@@ -650,7 +650,7 @@ def known_shapes(prog):
                         found.add('widepostinc')
                     if local and e.a[0] == '++':
                         found.add('widelocalinc')
-            if is_int(lt) and lv.op == 'var' and not e.a[1] and not root \
+            if is_int(lt) and lt.bits == 8 and lv.op == 'var' and not e.a[1] and not root \
                     and id(e) not in steps:
                 found.add('postincvalue')
         elif op == 'un':
@@ -1436,9 +1436,8 @@ KNOWN_BUGS = {
     'blockptr': 'BUG-015',
     'inittype': 'BUG-016',
     'widehelperparam': 'BUG-020',
-    'postincvalue': 'BUG-021, BUG-023, BUG-024',
+    'postincvalue': 'BUG-024',
     'duplabel': 'BUG-022',
-    'crosstypeasg': 'BUG-023',
     'constjump': 'BUG-019',
     'nestedifelse': 'BUG-027',
     'bytesarcount': 'BUG-028',
@@ -1448,7 +1447,6 @@ KNOWN_BUGS = {
     'blockdec': 'BUG-015',
     'loopcopy': 'BUG-037',
     'wordarm': 'BUG-038',
-    'peepbyteself': 'BUG-054',
 }
 
 
@@ -1767,9 +1765,9 @@ class Gen:
         x = r.random()
         if x < 0.45:
             # with `widepostinc` off a 32-bit victim is only pre-incremented:
-            # its old value could reach a narrower type. With `postincvalue`
-            # off nothing uses the value of a post-increment at all.
-            prefix = r.random() < 0.5 or not self.on('postincvalue') \
+            # its old value could reach a narrower type. `postincvalue` now
+            # steers only byte updates (BUG-024); word values are restored.
+            prefix = r.random() < 0.5 or (d.t.bits == 8 and not self.on('postincvalue')) \
                 or (d.t.bits == 32 and not self.on('widepostinc'))
             op = r.choice(('++', '--'))
             if d.t.bits == 32 and not self.on('widelocalinc'):
