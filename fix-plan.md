@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has twelve open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has thirteen open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -738,6 +738,7 @@ keeps that proof bounded without perturbing existing loop schedules.
 | BUG-010 | #230 | Cast or narrowing return of a 32-bit post-increment: rejected |
 | BUG-041 | #261 | Value of a float `++`/`--` rejected |
 | BUG-056 | #299 | Latent integer unary consumer of a float update value after admission |
+| BUG-058 | #316 | Latent missing implicit float operand conversion after deferred update type repair |
 
 **Confirmed split: D1 (003/044) and D2 (021/023/024/010/041).** The first
 root-cause change fixes D1 only; do not extend it with independent D2 fixes.
@@ -772,7 +773,9 @@ D1 acceptance is recorded below and in Tracking. D2 is split into **D2a
 (021/023: assignment-value lifetime)**, **D2c (024: byte-PHI lifetime)**
 and **D2b (010/041: AST admission)**. D2b shipped only the safe long
 admission for 010; **D2d (041/056: float update-value consumer typing and
-admission)** remains stopped as recorded below.
+admission)** remains stopped as recorded below. **D2e** splits the safe AST
+update-provenance repair (D2e-1) from the still-unsafe float admission and
+implicit binary conversion materialization (D2e-2, BUG-041/056/058).
 
 #### D2c byte-PHI lifetime proof (BUG-024)
 
@@ -1178,6 +1181,119 @@ committed file is `fix-plan.md`; counts remain **twenty open / thirty-four
 fixed**. No issues are closed. All code, admission and generator edits are
 withdrawn, with the stopped-trial patch and probe artifacts retained only
 under `build/` for inspection.
+
+#### D2e. Update provenance ships separately; float admission stops again
+
+**D2e-1:** `ast_expr_base_ident_unresolved()` now follows `AST_POSTFIX`
+and prefix `TOK_INC`/`TOK_DEC` to the stored lvalue, just as it already follows
+member/index/dereference and assignment results. A block-local update therefore
+retains unknown-type provenance through unary expressions, mixed arithmetic,
+comparisons and conditional consumers. Casts keep their authoritative types.
+The new host-proven `tupdprov` exercises already-admitted wide updates, a
+resolved global control, both update forms, operand order, comparisons and an
+explicit cast fence. No float admission, MIR, emitter, selector, schedule or
+runtime change ships; BUG-041 and BUG-056 remain open and parked.
+
+**D2e-2:** the first provenance-plus-admission trial additionally derived unary
+`+`/`-` types from their lowered float operands, reused deferred scalar type
+repair after lvalue/update repair, and admitted float updates only through a
+non-recursive stored-lvalue type proof. That made **041/056 both FIXED** in
+peep/nopeep, including both parked 056 facets. Seeds 9 and 81 pass. However,
+**restored float seed 224 still fails all four production configurations**.
+The stop rule is followed: all admission and MIR changes are withdrawn, not
+extended with another compiler fix.
+
+The trace now differs from stopped D2d: the unary and dependent binary really
+are float (`type=5`, `off2=5`), but an integer operand has no implicit float
+conversion. Lowering emits no conversion for an operand already matching the
+assumed common type; deferred repair only retags conversions that exist. An
+explicit `uint16_t` cast remains authoritative, and its representation-identity
+cleanup leaves an integer constant at the float binary. Integer-only deferred
+constant widening cannot fix that. This is independently parked and filed as
+**BUG-058 / [#316](https://github.com/davidly/dcc/issues/316)**; the exact
+unshipped trial patch is on that issue. Future work must preserve and discharge
+implicit operand conversion obligations after common-type repair, rather than
+retyping explicit casts or pretending integer bits are IEEE bits.
+
+```c
+float result;
+{ float local = 1.5f; result = -(local++) + (uint16_t)1; }
+/* host bf000000 (-0.5f), D2e trial bfc00000 (-1.5f) */
+```
+
+The trial emits `xor 128` and `__faf`, but omits the integer-to-float `__fuf`
+used by the correct parameter control. Prefix decrement, reversed operands and
+chained arithmetic fail too; host clang + ASan/UBSan prove the parked baseline.
+The original seed reduces to **81 lines / 110 reduction tests**. `fincdecval`
+remains steered for **041/056/058**. No original out-of-cluster verdict changes;
+BUG-022's already-FIXED historical reproducer stays with cluster M.
+
+Trial verification before withdrawal:
+
+- Restored float production **1-300: 289 ok, 10 INVALID, 1 FAIL (224)**.
+  Only 224 fails, in all four configurations; this is not a clean batch.
+- Trial integer cross-generator proof **1-300: 293 ok, 7 INVALID, zero FAIL**.
+- Original **12 reproducers: 3 FIXED (022/041/056), 9 fails**. New 058 fails
+  with wrong output in peep/nopeep; final shipped admission will reject it.
+- Both strict **3,613-function** census TSVs are byte-identical to the initial
+  canonical build; zero existing-function changes in either mode. All **535
+  existing performance rows** are untouched.
+- Strict Python full+extended gate: **550 passed, 24 skipped, zero failures**;
+  extended, diagnostic, dccpeep and checked performance gates pass.
+- Newly admitted 056 prints correctly in release, full-debug and line-debug
+  nopeep. However, its line-debug binary is **not release-identical**, with
+  redundant `exx; exx` pairs surrounding metadata at calls, as D2d recorded.
+  That additional unshipped interaction is not fixed or claimed as passing;
+  peep identity was not reached after the nopeep comparison stopped.
+
+Final D2e-1 independent verification (the canonical release gates follow):
+
+- Final isolated compiler: **13 reproducers, 1 FIXED (pre-existing 022),
+  12 fails**. 041/056 and new 058 are rejected again; every original verdict
+  is unchanged. None of their parked sources/baselines is moved or refreshed.
+- Both final isolated compiler censuses preserve every one of the **3,613
+  original function rows byte-for-byte**. Only the new `tupdprov:main` row is
+  added in each mode. The 535 original performance rows, including their
+  bytes and order, are unchanged; one new `tupdprov` row is appended:
+  **102,812 / 102,976 cycles**, **5,504 / 5,504 bytes**, peep/nopeep, measured
+  on the normal stack-check PowerShell path. Host validation passes.
+- Both original `tflinc` MAC controls are byte-identical. New wide consumers
+  use the incumbent generated MIR emitter; resolved constant results are
+  `ld hl,1; ld de,65535`, with no word narrowing or new runtime/helper path.
+- Final independent CMake/MIR host CTest **6/6**, ASan/UBSan compiler probe,
+  targeted compiler/line-debug/AST/float-generator tests **32/32**, and
+  debugger-host CTest **10/10** pass. The standalone new regression prints
+  correctly under release, full-debug and line-debug in both pipelines;
+  its `-gline` COM is byte-identical to release in both. AST provenance only
+  affects deferred type tags, not source/statement or scope boundaries;
+  existing symbols, frame/register locations and code hashes are unchanged.
+Final blocked-shape float production health **1-300: 283 ok, 17 INVALID,
+zero FAIL** after restoring `fincdecval`. Final integer production health
+**1-300: 293 ok, 7 INVALID, zero FAIL** also passes on the canonical shipped
+subset. This is deliberately not described
+as restored admission coverage; the restored trial above remains a failure.
+
+Canonical release verification also passes: both final censuses exactly match
+those isolated snapshots, including the new function, and both strict
+PowerShell full+extended stack/no-stack runs pass **551 apps, 24 skipped,
+zero failures**, with extended, diagnostic and dccpeep gates passed. Normal
+stack checked performance and the final new-unit validation pass.
+
+Regular Python discovery on the canonical subset runs **333 tests**: the two
+approved #277 campaign-assembly/exact-control failures remain, with exactly
+the same failure evidence as the trial. One mock mutation-scheduler test
+(`test_default_serial_and_parallel_are_equal_and_bounded`) additionally times
+out at its existing 180-second fixture bound under load. A fresh-process
+isolated retry **passes 1/1** after all long jobs finish, without changing any
+harness, timeout, expectation, skip or compiler code. The two built-in skips
+are unchanged. Initial trial discovery also had that timeout and a teardown
+race (two errors); canonical discovery has only the one timeout error.
+No additional Python/MI case remains unverified; #277 stays explicitly
+pre-existing and untouched.
+
+No BUG-041/056 reproducer is promoted and no issue is closed. Counts are
+**thirteen open / forty-three fixed**, including newly filed latent BUG-058.
+No prepush or compiler-dating checks are run.
 
 #### D1 acceptance
 
@@ -2126,11 +2242,14 @@ addresses require the normal full/line debug pipeline checks.
 | C2 | | open; traced | BUG-029/#249: interleaved PHI edge liveness; BUG-037/#257: old wide PHI edge use missed before in-place update; BUG-052/#272: loop-live solitary PHI source coalescing/slot lifetime truncation; distinct from BUG-057/#304 |
 | D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/023/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
-| D2 | | split into D2a / D2b / D2c / D2d | Assignment-value lifetime, AST admission, byte-PHI lifetime and float consumer typing are independent |
+| D2 | | split into D2a / D2b / D2c / D2d / D2e | Assignment-value lifetime, AST admission, byte-PHI lifetime and float consumer typing are independent |
 | D2a | [#300](https://github.com/davidly/dcc/pull/300) (`fix/cluster-d2a-postinc-home`) | merged | 021/023 promoted as tpost16/tpostbr; 023 moved from C, same root; 024 remains independent (D2c); 3,487 pre-follow-up functions and 517 perf rows unchanged |
 | D2b | [#301](https://github.com/davidly/dcc/pull/301) (`fix/cluster-d2b-postinc-admit`) | merged | 010 promoted as tpost32; 041 admission withdrawn after new BUG-056/#299; int 227/73, blocked float 281/19, zero FAIL; 3,482 existing functions and 516 perf rows byte-identical; strict release gates pass; #277 plus five isolated harness exceptions documented |
 | D2c | [#305](https://github.com/davidly/dcc/pull/305) (`fix/cluster-d2c-byte-phi-home`) | PR open; verified compiler gates | 024 promoted as tpost8; 266 ok/34 INVALID/zero FAIL; 3,503 existing functions and 519 perf rows unchanged; 24 parked reproducers all fail; approved #277 and four isolated harness failures documented |
 | D2d | [#307](https://github.com/davidly/dcc/pull/307) (`fix/cluster-d2d-float-incdec-value`) | draft PR; stopped; admission withdrawn | 041/056 trial FIXED; dependent block-local float update arithmetic/comparison still wrong; restored float 288 ok/11 INVALID/1 FAIL (224); full trial withdrawn; final 20 reproducers: pre-existing 022 FIXED, 19 fails; both 3,532-function censuses and all 525 existing perf rows unchanged |
+| D2e | `fix/cluster-d2e-incdec-provenance` | split under stop rule | D2e-1 retains AST update provenance only; D2e-2 float admission/MIR trial clears 041/056 but restored seed 224 exposes missing implicit operand conversion (new BUG-058/#316) |
+| D2e-1 | `fix/cluster-d2e-incdec-provenance` | verified compiler gates; partial scope | Safe update provenance only; tupdprov added; 3,613 existing functions/mode and 535 perf rows unchanged; final float 283/17 and int 293/7, zero FAIL; strict 551/24 gates; #277 untouched, isolated fixture retry passes |
+| D2e-2 | [#316](https://github.com/davidly/dcc/issues/316) | open; trial withdrawn | 041/056/058 remain steered by fincdecval; unary/binary float types repaired but assumed-identity implicit conversions are absent; no second compiler fix |
 | E | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | split into E1 / E2 | Single SSA forwarding fix clears 016; 004 function facet and 015 word-widening facet improve, complete issues still open |
 | E1 | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | PR open; verified compiler gates; documented harness exceptions | 016 promoted as tinittyp; int 297/2/1 limit, float 281/19, zero FAIL; 3,509 functions and 520 perf rows unchanged; #277 and three isolated synthetic-fixture timing failures |
 | E2 | | split; E2-shift fixed; E2-bitfield partial | 013 fixed in E2-bitfield; 006 stopped (incumbent tcmwide output encodes the defect); 002/028 fixed in E2-shift; 004 repaired boolean conversion remains in A2b |

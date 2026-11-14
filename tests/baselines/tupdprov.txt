@@ -1,0 +1,7 @@
+global ffff0001 00010001
+block post ffff0001
+block pre ffff0001
+reverse ffff0001
+compare 1
+neg compare 0
+cast fence 00000001

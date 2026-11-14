@@ -13,6 +13,12 @@ BUG-022 remains open, but its historical reproducer now passes because its
 BUG-008/BUG-019 emission-failure triggers were fixed. The diagnostic-masking
 defect still reproduces with another failing function; see its bug-log entry.
 
+BUG-058 records the independent missing implicit float conversion exposed by
+the stopped D2e admission trial. Like BUG-056, it remains latent behind
+BUG-041 admission; neither parked fixture is promoted by D2e-1.
+`tests/tupdprov.c` separately covers the already-admitted wide update
+provenance repaired by that safe subset.
+
 ## Checking them
 
 ```sh
