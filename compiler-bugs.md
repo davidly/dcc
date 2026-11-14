@@ -28,7 +28,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-003](#bug-003) | #224 | wrong result | `++`/`--` on a 32-bit array element is done in 16 bits |
 | [BUG-004](#bug-004) | #225 | wrong result | 16-bit local set from `&&`/`\|\|`, stored to a 32-bit lvalue, leaves a garbage high word |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
-| [BUG-008](#bug-008) | #228 | rejects valid C | Negative constant assigned to a 32-bit nested-block local |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-010](#bug-010) | #230 | rejects valid C | Cast or narrowing return of a 32-bit post-increment or post-decrement |
 | [BUG-011](#bug-011) | #231 | rejects valid C | Compound assignment to an element of a byte array inside a struct |
@@ -68,15 +67,16 @@ and their historical diagnoses are retained separately below.
 | [BUG-050](#bug-050) | #270 | wrong result | `(int32_t)(uint32_t)x` converted to float, with `x` a signed 8- or 16-bit value, converts the unsigned value (`-121` → `4294967175.0f`) |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 
-Forty-three are open: twenty-six give wrong results with no diagnostic
-(BUG-030 can also hang; BUG-039 is in the runtime), one hangs, fifteen stop the compile,
+Forty-two are open: twenty-six give wrong results with no diagnostic
+(BUG-030 can also hang; BUG-039 is in the runtime), one hangs, fourteen stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. BUG-026 is the
 one most likely to be hit by ordinary code, then BUG-044 (every float `++`
 is wrong), BUG-047 (`f + n * g` is `f`), BUG-030 (it corrupts memory in C99-style code), BUG-003,
 BUG-013 and BUG-016.
 
-Eight reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Nine reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+[one in cluster A2a](#fixed-in-cluster-a2a),
 [four in cluster K](#fixed-in-cluster-k) and
 [one in cluster L](#fixed-in-cluster-l). Two more
 were found and then fixed upstream before they were reported; see
@@ -182,22 +182,6 @@ s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
 - Correct: the same statements when the field's top bit is clear;
   `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
   (their low bits do not depend on the extension); a signed bit-field.
-
-## BUG-008
-
-**Assigning a negative constant to a 32-bit local declared in a nested block
-stops the compile.** `dcc: fatal: MIR emission is required`.
-
-```c
-{ uint32_t b = 201; b = -3; }
-```
-
-- Fails for `int32_t` and `uint32_t`, with `-3` or `(int32_t)-3`. An
-  `int32_t` local also fails with a constant whose value has the top bit set:
-  `b = 0x80000000;`, `b = (uint32_t)0xfffffffe;`.
-- Correct: the local at function scope; a positive constant; a 16-bit local;
-  `uint32_t b; b = 0xfffffffe;`.
-- Regression since v3.6.0; first-parent bisect: first bad `d49e3d7f`.
 
 ## BUG-009
 
@@ -1397,6 +1381,52 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   loop, `x + 0.0f` as the arm, `x` in the else arm (`c ? 1.0f : x`), no
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
+
+## Fixed in cluster A2a
+
+BUG-008 now passes in peep and nopeep. The spilled-CFG preflight excludes
+`MIR_CONST` from object-displacement validation: declaration repair can
+retain an object's metadata on a folded constant, whose `immediate` is a
+32-bit payload, not an address offset. No lowering or emission schedule
+changed.
+
+Before promotion, only BUG-008 flipped: one `FIXED`, 42 `fails`. The fixed
+signed and unsigned functions exactly match the function-scope controls'
+assembly in both modes; positive, uninitialized and 16-bit controls are
+unchanged. Both censuses are byte-identical across 3,363 existing functions.
+Strict full+extended stack-check and no-stack-check runs pass; all 499
+existing performance rows are unchanged.
+
+The integer generator's `blockwideneg` steering entry was removed. Production
+seeds 1-300 with `--off known` finished with **215 ok, 84 INVALID, one
+target-limit-only, zero FAIL**. The unchanged host baseline was promoted with
+one new measured PowerShell stack-check performance row.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-008](#bug-008) | #228 | [tblkneg](tests/tblkneg.c) |
+
+### BUG-008
+
+**Fixed:** constant payloads are no longer checked as object displacements.
+Regression: [tblkneg.c](tests/tblkneg.c),
+[stdout](tests/baselines/tblkneg.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**Assigning a negative constant to a 32-bit local declared in a nested block
+stops the compile.** `dcc: fatal: MIR emission is required`.
+
+```c
+{ uint32_t b = 201; b = -3; }
+```
+
+- Fails for `int32_t` and `uint32_t`, with `-3` or `(int32_t)-3`. An
+  `int32_t` local also fails with a constant whose value has the top bit set:
+  `b = 0x80000000;`, `b = (uint32_t)0xfffffffe;`.
+- Correct: the local at function scope; a positive constant; a 16-bit local;
+  `uint32_t b; b = 0xfffffffe;`.
+- Regression since v3.6.0; first-parent bisect: first bad `d49e3d7f`.
 
 ## Fixed in cluster A1
 

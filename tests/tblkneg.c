@@ -1,6 +1,5 @@
-/* BUG-008: assigning a negative constant to a 32-bit local declared in a
- * nested block stops the compile with "MIR emission is required". A
- * function-scope local, or a positive constant, compiles. */
+/* Negative 32-bit constants assigned to initialized nested-block locals,
+ * with signed/unsigned storage and low-word truncation. */
 #include <stdint.h>
 #include <stdio.h>
 

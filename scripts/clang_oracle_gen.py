@@ -1424,7 +1424,6 @@ KNOWN_BUGS = {
     'wideidxincdec': 'BUG-003',
     'logicinit': 'BUG-004',
     'bfdivasg': 'BUG-006',
-    'blockwideneg': 'BUG-008',
     'nestedwideless': 'BUG-009',
     'widepostinc': 'BUG-010',
     'structbytecasg': 'BUG-011',
