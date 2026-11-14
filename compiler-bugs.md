@@ -489,7 +489,8 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
 
 ## Fixed in cluster R1
 
-BUG-039's runtime rounding defect is **fixed in cluster R1**. Acceptance of
+BUG-039's runtime rounding defect is **fixed in cluster R1**
+([PR #325](https://github.com/davidly/dcc/pull/325)). Acceptance of
 this runtime change is still **blocked**, not complete: two existing tests
 embed obsolete expected bits in C, and updating those constants would violate
 R1's requirement that all existing MIR function streams remain byte-identical.
