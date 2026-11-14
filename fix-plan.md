@@ -11,7 +11,7 @@ The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), K (#278)
 and L (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
-remaining clusters are still hypotheses.
+B was likewise disproved and split into B1–B4. The remaining clusters are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
 explicitly approved K as a four-rule exception.
@@ -175,22 +175,87 @@ Trace expression typing, conversion insertion and deferred metadata repair in
 anything. The stop rule applies: if a first fix clears one facet of BUG-015
 but not the others, report rather than stack independent fixes.
 
-### B. Stack slot and home allocation
+### B. Disproved: split into B1–B4
+
+The original B group (BUG-014, 019, 026, 030, 036) was attempted on
+`fix/cluster-b-stack-homes` from main `38952e7a`. Repairing BUG-030 cleared
+only that reproducer; the other four failed identically and no outside-cluster
+reproducer flipped. The grouping was wrong, and the experiment itself was
+rejected because it changed six existing functions. The maintainer approved
+the split below.
+
+### B1. Stale probe offset for a `for`-init declaration
 
 | Bug | Issue | Shape |
 | --- | --- | --- |
-| BUG-026 | #246 | `d = a - b; return d * d;` reads an unallocated stack slot |
 | BUG-030 | #250 | C99 `for`-init declaration overlaps enclosing block's locals after an earlier sibling scope |
-| BUG-014 | #234 | 32-bit local with two definitions, incremented, stored to a global: `missing direct MIR named-home offset` |
-| BUG-036 | #256 | 32-bit local assigned in a loop and passed directly to a call: store dropped, reloaded from a slot never written |
-| BUG-019 | #239 | Unreachable declaration after `return`/`break`/`goto` in a nested scope: fatal |
 
-Common thread: a home or slot that exists in one view of the function and not
-in another (allocator vs emitter, reachable vs unreachable scope, sibling
-scope sizes). Start in frame layout and home assignment in
-`dcc_mir_homed_cfg.c` / `dcc_mir_spilled_cfg.c` and the scope-size
-accounting for `for`-init declarations. BUG-030 corrupts memory in ordinary
-C99 code, so it goes first.
+**Confirmed root cause:** AST support probes replay a `for`-init declaration
+before earlier sibling scopes have reserved their storage. In
+`array_in_else`, the probe creates `i#0#0` at offset -7; real declaration
+replay later records its final offset as -11. `mir_get_object` retains the
+first object's offset and `mir_scalar_memory_location` prefers it over the
+corrected declaration table, so the counter overwrites the array at `ix-7`.
+LLDB confirmed both offsets and their probe/replay origins.
+
+The first experiment refreshed the object's offset from
+`mir_note_declared_symbol` during real declaration replay. It fixed BUG-030
+in both modes with controls byte-identical, but **changed six of 3,366
+existing functions** across `catalan`, `tcmpabi`, `tforblk`, `tforsco` and
+`tstr`; four lost their exact schedule and fell back to
+`spilled-scalar-cfg`. That is not acceptable. It also shows that those
+existing functions carry probe-stale offsets today — harmless ones that do
+not overlap — and their layouts are what the exact schedules match.
+
+Constraint for the real fix: existing functions must keep their current
+frame layout byte-for-byte. Candidate placements, in order of preference:
+
+1. Stop the probe from creating or retaining the object (or make probe and
+   replay reserve storage in the same order), so no post-hoc offset repair is
+   needed and existing layouts are untouched.
+2. If a repair after replay is unavoidable, apply it only when the stale
+   offset actually overlaps another live object in the same frame; emit the
+   current layout otherwise.
+
+Whichever is chosen, re-run both censuses and require zero existing-function
+changes before acceptance. The rejected patch, LLDB trace, assembly and
+census comparisons from the first attempt are in the agent's
+`build/cluster-b/` (not committed); re-derive rather than reuse.
+
+### B2. Declaration and home bookkeeping fatals (unconfirmed)
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-014 | #234 | 32-bit local with two definitions, incremented, stored to a global: `missing direct MIR named-home offset` |
+| BUG-019 | #239 | Unreachable declaration after `return`/`break`/`goto` in a nested scope: `MIR emission is required` |
+
+Both are compile-time fatals where a declared local has no home in the view
+the emitter uses. Not the B1 offset defect (unchanged by it). Trace where the
+named home is looked up for BUG-014 and where an unreachable scope's
+declaration is dropped for BUG-019 before assuming they share a cause; stop
+and split if the first fix clears only one.
+
+### B3. Same-value binary operands read an unallocated slot
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-026 | #246 | `d = a - b; return d * d;` reads a stack slot the function never allocates |
+
+Standalone. Maintainer's first priority among ordinary-code bugs. Both
+operands of one binary operator are the same value; start in the spilled
+emitter's operand materialization for a value consumed twice by one
+instruction.
+
+### B4. Loop-local store dropped when the value is also a call argument
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-036 | #256 | 32-bit local assigned in a loop and passed directly to a call: store dropped, reloaded from a slot never written |
+
+Standalone. The call gets the constant but the store to the local is lost.
+Compare with C (merges/loop-carried values) and D (dead-store elimination)
+before starting; if it turns out to share a cause with one of them, fold it
+there rather than fixing independently.
 
 ### C. Assignments lost across control-flow merges and loop-carried values
 
@@ -368,8 +433,8 @@ so it matters more than its size suggests. Both are one-offs.
    acceptance loop.
 2. **A1** — merged (#281). **A2a** — fixed and verified.
    **A2b** is deferred until after E.
-3. **B** — BUG-030 corrupts memory; BUG-026 is the maintainer's first
-   priority.
+3. **B1** (BUG-030 memory corruption), **B3** (BUG-026, maintainer's first
+   priority), then **B2**, **B4**.
 4. **D** — BUG-044 and BUG-003.
 5. **E**, then **A2b**, then **C** — E and C are in the emitter's
    typing/merge paths; A2b waits for E's BUG-004 facet; C is the least
@@ -384,7 +449,11 @@ so it matters more than its size suggests. Both are one-offs.
 | A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
 | A2b | | open; after E | BUG-004/015; unconfirmed shared cause |
-| B | | open | |
+| B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
+| B1 | | open | BUG-030: stale probe offset; fix must leave existing frame layouts untouched |
+| B2 | | open | BUG-014/019 bookkeeping fatals; unconfirmed shared cause |
+| B3 | | open | BUG-026 same-value operands |
+| B4 | | open | BUG-036; check overlap with C/D first |
 | C | | open | |
 | D | | open | |
 | E | | open | |
@@ -413,7 +482,7 @@ MIR selection, schedules, or allocation.
 
 ## Task
 
-Fix cluster **A2a** in `fix-plan.md`. Read the cluster's table, then every
+Fix cluster **B1** in `fix-plan.md`. Read the cluster's table, then every
 `## BUG-NNN` entry it lists in `compiler-bugs.md`, including the bullets
 describing which neighbouring shapes are already correct — those are your
 strongest clue to the root cause and to what the fixed code should emit.
