@@ -1,0 +1,19 @@
+unsigned from signed 34280
+signed from unsigned -15536
+compared 1
+from cast 1
+remainder 14
+divided -16666
+from constant 65436
+same-width cast 34280
+same-width cast long -3
+block remainder -2
+block unsigned float 4f800000
+block float local 4f800000
+word float 477f4c00
+word float compare 0
+long cast float c2860000
+long signed read -67
+long signed float c2860000
+separate unsigned 34280
+separate signed -15536
