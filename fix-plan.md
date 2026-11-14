@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has twenty-eight open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twenty-seven open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -920,11 +920,50 @@ pre-existing Python-gate failures should be fixed separately.
 | --- | --- | --- |
 | BUG-054 | #288 | `pass_defer_global_push_reload` removes the load that still supplies a byte self-operation's resident HL operand |
 
-Found while verifying B3, integer seed 255. The reduced program fails with
-unchanged current-main compiler and optimizer in peep and peep-nosc, but
-passes in nopeep. Independently parked, not part of B3's compiler repair;
-`peepbyteself` steers only byte binary self-operands. A future fix must prove
-HL dead before deleting its original load, without weakening safe cases.
+Found while verifying B3, integer seed 255; independently reproduced on
+unchanged current main in peep and peep-nosc, with nopeep correct. This was
+parked separately from B3's compiler repair.
+
+Fixed on `fix/cluster-k3-peep-live-reg`, with acceptance PR
+[#298](https://github.com/davidly/dcc/pull/298). Deferral now proves that the original
+H and L are dead after the removed push, including beyond the matching pop.
+The shared CFG proof alone conservatively rejected `tcaslv`'s safe split
+sign extension because accumulator rotates are opaque there; a local
+byte-kill scan recognizes only accumulator rotations while preserving
+unknown/user-assembly barriers and leaving shared effects unchanged.
+
+BUG-054 is promoted as `tpephl`; it passes in both stack modes and both
+pipelines, and all 29 other parked reproducers remain unchanged. Removing
+`peepbyteself` from integer `KNOWN_BUGS` restores production seeds 1-300:
+**228 ok, 72 INVALID, zero FAIL/target limits** across peep/nopeep and
+stack/no-stack. No float steering is affected.
+
+Strict full+extended suites pass in both stack modes: 529 runnable apps,
+24 existing ignored apps and 196 runnable extended tests. Whole-suite
+before/after comparisons preserve **3,047 generated MAC files per stack
+mode**, apart from `tstdc`'s embedded `__TIME__`. All **514 existing perf
+rows**, including the 509 requested rows and five already present on
+`4bba5188`, are unchanged. Only the new test's measured normal-stack row
+is added. All 72 existing optimizer checks plus the new nine-shape fixture
+pass, also sanitized. `.COM`/`.DBG` pairs and release-identical `-gline`
+code pass both pipelines; all ten debugger-host checks pass. No MIR or
+compiler emission changes, baseline refreshes, historical compiler checks
+or `prepush.ps1` run.
+
+The final full Python gate ran **314 tests: 310 passed, two existing skips,
+and only the two approved #277 failures** (`test_mir_campaign_baselines`,
+`test_mir_exact_controls`). Neither expectation was changed. The initial
+loaded run also had five mutation-harness timing failures: four passed an
+isolated Ninja retry, while the default fixture's parallel mock CMake build
+then hit exit 139 (#280). All five pass in the final full Ninja run;
+no harness code was changed or skipped. The byte-steering unit tests now
+explicitly disable the optional feature and exercise self-operands with
+`--off known`; their old open-bug assumption was updated with the closure.
+Pre-fix corpus runs passed apps, performance and extended tests; their
+expected failure was solely the new negative optimizer fixture added
+while those captures were running. No out-of-cluster compiler defect
+flipped or was newly confirmed; only the approved #277 Python gate remains
+non-green.
 
 ### L. Preprocessor
 
@@ -999,7 +1038,7 @@ so it matters more than its size suggests. Both are one-offs.
 | J | [#290](https://github.com/davidly/dcc/pull/290) | merged; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; existing output unchanged; 049 fixed in J2, 039 still blocked by host-output proof |
 | J2 | [#291](https://github.com/davidly/dcc/pull/291) | PR open; partial fix | 049 promoted as tflnot; 300 float seeds 269 ok/31 INVALID/zero FAIL; only three one-instruction census changes and two approved perf rows; 039 reverted because all five complete numeric baselines fail host-clang proof |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
-| K2 | | open | BUG-054/#288 independently found during B3; live HL lost by deferred global reload |
+| K2 | [#298](https://github.com/davidly/dcc/pull/298) | PR open | BUG-054 promoted as tpephl; 228 ok/72 INVALID/zero FAIL; all 3,047 MAC files per stack mode and 514 existing perf rows unchanged (except clock literal); #277 and isolated harness retries documented |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
 | M | | open | |
 
