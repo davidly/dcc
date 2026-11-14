@@ -5,7 +5,8 @@
  * @par Role
  * Parses scalar, array, struct/union, bitfield, string, compound-literal, and
  * designated initializers into each symbol's byte-and-relocation image,
- * including padding, overwrites, and inferred array bounds.
+ * including padding, overwrites, inferred array bounds, and host-float
+ * constant arithmetic.
  *
  * @par Key entry points
  * parse_global_init_list(),
@@ -17,11 +18,82 @@
  * objects. This module records data and emits no function body.
  */
 #include "dcc.h"
+#include "dcc_ast.h"
 
 static void parse_global_init_type_at(struct Sym *s, int type, int size, int baseoff);
 static void parse_global_init_array_at(struct Sym *s, int elem_type, int count, int elem_size, int baseoff);
 static void parse_global_init_field_array_at(struct Sym *s, struct FieldDef *fd, int level, int baseoff);
 static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff);
+
+static int parse_float_static_init(unsigned long *bits)
+{
+    LexState saved;
+    struct AstArena arena;
+    struct AstNode *expr;
+    float value;
+    int ok;
+    int depth;
+    int tokens;
+    int saved_long;
+    int saved_unsigned;
+    union { float f; unsigned char b[4]; } u;
+
+    /* Preserve every existing compact initializer, including automatic ones.
+     * Only static-storage callers may try the wider constant-expression path. */
+    saved = lex_save();
+    saved_long = g_tok_long_suffix;
+    saved_unsigned = g_tok_unsigned_suffix;
+    if (parse_float_init_literal(bits))
+        return 1;
+    lex_restore(&saved);
+    g_tok_long_suffix = saved_long;
+    g_tok_unsigned_suffix = saved_unsigned;
+    depth = 0;
+    tokens = 0;
+    ok = 1;
+    while (depth != 0 || (g_lex.tok.kind != ';' &&
+           g_lex.tok.kind != ',' && g_lex.tok.kind != '}')) {
+        if (++tokens > 4096 || g_lex.tok.kind == TOK_EOF ||
+            g_lex.tok.kind == ';' || g_lex.tok.kind == '}') {
+            ok = 0;
+            break;
+        }
+        if (g_lex.tok.kind == '(' && ++depth > 64) {
+            ok = 0;
+            break;
+        }
+        if (g_lex.tok.kind == ')' && --depth < 0) {
+            ok = 0;
+            break;
+        }
+        next_token();
+    }
+    lex_restore(&saved);
+    g_tok_long_suffix = saved_long;
+    g_tok_unsigned_suffix = saved_unsigned;
+    if (!ok)
+        return 0;
+    ast_arena_init(&arena);
+    expr = ast_build_assign_expr(&arena);
+    ok = ast_const_float_fold(expr, &value) &&
+         (g_lex.tok.kind == ';' || g_lex.tok.kind == ',' || g_lex.tok.kind == '}');
+    if (ok) {
+        u.f = value;
+        *bits = ((unsigned long)u.b[0]) |
+                ((unsigned long)u.b[1] << 8) |
+                ((unsigned long)u.b[2] << 16) |
+                ((unsigned long)u.b[3] << 24);
+    } else {
+        lex_restore(&saved);
+        g_tok_long_suffix = saved_long;
+        g_tok_unsigned_suffix = saved_unsigned;
+    }
+    ast_arena_reset(&arena);
+    if (arena.nblocks > 0)
+        free(arena.blocks[0]);
+    free(arena.blocks);
+    return ok;
+}
 
 static int global_compound_literal_seq;
 
@@ -1108,7 +1180,7 @@ static void parse_global_init_type_at(struct Sym *s, int type, int size, int bas
 
     if ((type & 15) == TYPE_FLOAT && type_ptr_depth(type) == 0) {
         unsigned long bits;
-        if (parse_float_init_literal(&bits))
+        if (parse_float_static_init(&bits))
             global_init_write_value_at(s, baseoff, NULL, (long)bits, 4, 0);
         else {
             error_here("float initializer must be constant");
@@ -1159,7 +1231,7 @@ void parse_global_scalar_array_init_scalar(struct Sym *s, int *np)
 
     if ((s->type & 15) == TYPE_FLOAT && type_ptr_depth(s->type) == 0) {
         unsigned long bits;
-        if (parse_float_init_literal(&bits)) {
+        if (parse_float_static_init(&bits)) {
             sprintf(s->init_labels[n], "%lu", bits);
             s->init_sizes[n] = 4;
             np[0] = n + 1;
@@ -1398,7 +1470,7 @@ void parse_global_init_list(struct Sym *s)
             grow_init_cap(s, 1);
             if ((s->type & 15) == TYPE_FLOAT && type_ptr_depth(s->type) == 0) {
                 unsigned long bits;
-                if (parse_float_init_literal(&bits)) {
+                if (parse_float_static_init(&bits)) {
                     sprintf(s->init_labels[0], "%lu", bits);
                     s->init_sizes[0] = 4;
                     s->init_count = 1;

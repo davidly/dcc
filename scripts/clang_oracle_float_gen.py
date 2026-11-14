@@ -56,12 +56,10 @@ FEATURES = frozenset((
 KNOWN_BUGS = {
     'fdivround': 'BUG-039',
     'fincdecval': 'BUG-041, BUG-056',
-    'fconstfold': 'BUG-042',
     'fblockneg': 'BUG-015',
     'fnegcmp': 'BUG-045',
     'fparamcmp': 'BUG-020',
     'fblockint': 'BUG-015',
-    'fconstjump': 'BUG-019',
     'fconstcond': 'BUG-052',
     'farrloopindex': 'BUG-055',
 }

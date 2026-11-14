@@ -1,7 +1,6 @@
-/* BUG-024: `if (x++)` inside a loop tests the incremented value instead of
- * the old one, for an 8-bit local that a later do-while loop also modifies.
- * The first pass, where x is 0, takes the branch. It is correct for a 16-bit
- * local, without the later do-while, or when the `if` is not in a loop. */
+/* Byte postfix conditions retain the old value across real local stores.
+ * Covers signed/unsigned locals, direct and compared tests, for/while loops,
+ * and later do-while updates that keep the named byte home materialized. */
 #include <stdint.h>
 #include <stdio.h>
 

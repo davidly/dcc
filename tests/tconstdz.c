@@ -1,8 +1,4 @@
-/* BUG-033: a constant divided by a constant zero is rejected with DCC-E1002
- * ("unsupported if condition or branch"), even in code that never runs. The
- * division is undefined only if it is evaluated, so the program is valid,
- * and the message does not mention division. `n / 0` with a variable `n` is
- * accepted. Low priority. */
+/* Guarded constant-zero division and remainder retain runtime operations. */
 #include <stdint.h>
 #include <stdio.h>
 

@@ -14,8 +14,9 @@
  * Nodes are arena-allocated and use fixed generic child slots plus optional
  * child lists. They carry resolved symbols, dcc type codes, operators, folded
  * literals, and source locations needed by MIR lowering and metadata replay.
- * Top-level declarations, types, structs, and preprocessing remain outside
- * this function-local representation.
+ * Static float initializer expressions also use temporary trees for folding;
+ * top-level declarations, types, structs, and preprocessing remain outside
+ * this representation.
  *
  * @par Module map
  * - dcc_ast.c: arena ownership, node construction, and small tree queries.
@@ -358,6 +359,7 @@ void ast_dump(const struct AstNode *n, int depth);
  * diagnostics to stderr.
  * ------------------------------------------------------------------------- */
 int ast_expr_supported(const struct AstNode *n);
+int ast_const_float_fold(const struct AstNode *n, float *out);
 int ast_stmt_supported(const struct AstNode *n);
 int ast_stmt_has_reentry_label(const struct AstNode *n);
 int ast_stmt_exits(const struct AstNode *n);

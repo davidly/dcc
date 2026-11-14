@@ -4,4 +4,10 @@ after break 1
 after goto 4
 in switch 5
 in while 6
+after continue 3
+scalar effect 7
+VLA effect 8
+label reentry 9
+for reentry 10
+declaration before label 11
 dead code ran 0 times

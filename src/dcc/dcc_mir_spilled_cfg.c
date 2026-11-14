@@ -6169,11 +6169,29 @@ static int mir_phi_uses_scalar_object_home(int value)
         object->offset < -effective_local_bytes ||
         object->offset + size - 1 >= 0)
         return 0;
-    /* Preserve the established byte-phi path exactly.  Word homes need the
-     * stronger proof that both incoming values were really materialized in
-     * the local; promoted word objects may retain only analysis-only stores. */
-    if (size == 1)
+    /* A byte PHI may reload its object only until a materialized store
+     * overwrites the old SSA value. Analysis-only dead stores do not touch
+     * that home; CFG liveness includes backedges and PHI edge uses. */
+    if (size == 1) {
+        int instruction;
+
+        if (mir.live_out == NULL ||
+            mir_object_address_taken(definition->object))
+            return 0;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+
+            if (insn->opcode == MIR_STORE &&
+                insn->object == definition->object &&
+                insn->src1 != value &&
+                mir_value_live_out_of_instruction(value, instruction) &&
+                !mir_store_is_dead(instruction))
+                return 0;
+        }
         return 1;
+    }
+    /* Word homes also require both incoming values to be materialized;
+     * promoted word objects may retain only analysis-only stores. */
     definition_index = (int)(definition - mir.insns);
     if (mir_cfg_block_count() < 100 ||
         mir_object_is_fully_promoted(definition->object))

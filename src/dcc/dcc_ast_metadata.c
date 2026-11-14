@@ -298,16 +298,12 @@ void ast_process_stmt_metadata(const struct AstNode *node)
         enter_scope();
         for (i = 0; i < body->list_len; ++i) {
             if (dead && !ast_stmt_has_reentry_label(body->list[i])) {
-                int j;
-
-                if (body->list[i]->kind == AST_DECL)
-                    for (j = i + 1; j < body->list_len; ++j)
-                        if (ast_stmt_has_reentry_label(body->list[j])) {
-                            ++asm_suppress_depth;
-                            ast_process_stmt_metadata(body->list[i]);
-                            --asm_suppress_depth;
-                            break;
-                        }
+                /* MIR still contains this subtree. Replay its declarations
+                 * and scopes without executing their initializers, including
+                 * neutralizing initializer instructions from support probes. */
+                ++asm_suppress_depth;
+                ast_process_stmt_metadata(body->list[i]);
+                --asm_suppress_depth;
                 continue;
             }
             ast_process_stmt_metadata(body->list[i]);
