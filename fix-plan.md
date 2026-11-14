@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has twenty-one open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twenty open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -543,8 +543,87 @@ BUG-044 is the maintainer's second priority.
   those rejected expressions reach MIR. This needs separate admission work.
 
 D1 acceptance is recorded below and in Tracking. D2 is split into **D2a
-(021/023/024: stored-value lifetime)** and **D2b (010/041: AST admission)**;
+(021/023: assignment-value lifetime)**, **D2c (024: byte-PHI lifetime)**
+and **D2b (010/041: AST admission)**;
 D2b is being investigated independently.
+
+#### D2c byte-PHI lifetime proof (BUG-024)
+
+The byte case of `mir_phi_uses_scalar_object_home` previously admitted every
+local byte PHI. In BUG-024, the store of the incremented value remains real
+because the later do-while loads that local; the old header PHI is still live
+when the store overwrites its reload home. Require CFG liveness to prove that
+no materialized store of another value to the object occurs while the PHI is
+live afterwards. PHI edge uses and backedges are already included in that
+liveness. Address-taken objects and unavailable liveness decline the proof.
+Dead stores are analysis-only and cannot clobber the home, so preserve them.
+Word admission, selection and cost policy are unchanged.
+
+The initial all-store prototype changed three existing functions in both
+modes: `tbytepre.while_rollover_boundaries` and
+`tpeepsum.compound_then_divide/compound_then_modulo`. Their update stores are
+dead before any actual object load, so those were false lifetime kills.
+Restricting the kill to a materialized store preserves all **3,503 existing
+functions byte-identically in both censuses**. The parked BUG-024 passes all
+four output cases in peep/nopeep; all other 24 reproducers still fail.
+
+- The strict Python full+extended gate passes **534 apps** before promotion,
+  including extended, diagnostics, dccpeep and checked performance. All
+  **519 existing performance rows** are untouched.
+- The fixed `signed_byte` body measures **246 -> 250 bytes nopeep** and
+  **194 -> 174 bytes peep**. The four-byte nopeep cost belongs only to the
+  previously incorrect reproducer. Its neighboring correct word-local body
+  is **254 / 172 bytes**; the fixed byte case uses the same ordinary spilled
+  and peep BC loop-value mechanism, with byte normalization as required.
+  Manual word-local and no-do-while controls print the expected output in
+  both pipelines. The initial manual control commands rejected a filename
+  longer than CP/M 8.3; renamed worktree-local probes pass, but no separate
+  before-fix control assembly comparison is claimed. Both censuses prove
+  the existing neighboring schedules unchanged.
+- Canonical and independent CMake builds pass; MIR host tests **6/6**,
+  debugger-host tests **10/10**, focused integer/line-debug tests **24/24**
+  and strict require-emit diagnostics pass. ASan/UBSan plus independent
+  byte/bitset liveness verification pass BUG-024, tbytepre and tpeepsum
+  stack-check probes. Full-debug target output and nonempty metadata pass;
+  line-debug COMs are release-identical in both pipelines. The proof changes
+  only immutable-value home eligibility, not source/scope/type boundaries.
+
+- Restored byte-postfix integer production seeds 1-300: **266 ok, 34 INVALID,
+  zero FAIL**. `postincvalue` is removed from `KNOWN_BUGS`; explicit disabling
+  remains supported. Five generator tests and a **3,000-seed** proof of the
+  remaining known-shape steers pass. No float generator changes/batch needed.
+- BUG-024 is promoted as `tpost8` with the unchanged four-line host baseline;
+  promoted host validation and normal-stack full-mode performance pass. Its
+  only new row is **61,634 peep / 64,190 nopeep cycles**, **5,888 / 6,144-byte
+  COM** respectively. All **519 original rows are byte-for-byte unchanged**.
+- Final strict PowerShell full+extended stack and no-stack gates each pass
+  **535 apps**, plus extended, diagnostics and dccpeep fixtures; checked
+  normal-stack performance passes. Both final censuses contain **3,508
+  functions**: tpost8's five are the only additions, and all **3,503 original
+  function rows are byte-identical in both modes**.
+- Final known-bug run: **24 reproducers, 24 fails, zero FIXED**. Counts agree:
+  **24 open, 29 reported fixed** in compiler-bugs.md; fix-plan.md line 3 has
+  24 open. BUG-024 alone flips; no out-of-cluster compiler fix or promotion.
+- Initial full Python run: **319 tests**, two built-in skips intact;
+  approved #277 failures in `test_mir_campaign_baselines` and
+  `test_mir_exact_controls` remain untouched. One additional error is
+  `CompilerMutationTests.test_default_serial_and_parallel_are_equal_and_bounded`,
+  whose default serial fixture exceeds its **180 s** subprocess bound.
+  Retried as the sole selected method (**1 test, 195.634 s**), it times out
+  identically with clean teardown. That harness method remains **unverified**;
+  no runner, fixture, expected result or skip was changed.
+- Final post-promotion Python run: **319 tests, two skips**, the same two
+  approved #277 failures, plus **five harness errors across four mutation-runner
+  methods** (including a survivor-fixture teardown race), **840.720 s**.
+  All four affected methods were retried alone, serially. The default method
+  remains timed out as above; exited-worker cleanup (**11.504 s**) and worker
+  watchdog (**9.142 s**) cannot find `watchdog-child`; survivor/error recording
+  (**191.036 s**) again exceeds 180 s and races directory removal in teardown.
+  **These four harness methods remain unverified**, not hidden passes. No
+  compiler mutants, timing bounds, fixtures, expectations or skips were altered.
+- No old-compiler checkout, regression-dating check, prepush run, or nested
+  agent was used. Manual control source filenames are the only rejected
+  probe setup; their renamed controls pass as noted above.
 
 #### D2a root-cause experiment
 
@@ -1356,9 +1435,10 @@ so it matters more than its size suggests. Both are one-offs.
 | C | | open | |
 | D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/023/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
-| D2 | | split into D2a / D2b | Stored-home versus AST admission are independent |
+| D2 | | split into D2a / D2b / D2c | Assignment-value lifetime, AST admission and byte-PHI lifetime are independent |
 | D2a | [#300](https://github.com/davidly/dcc/pull/300) (`fix/cluster-d2a-postinc-home`) | merged | 021/023 promoted as tpost16/tpostbr; 023 moved from C, same root; 024 remains independent (D2c); 3,487 pre-follow-up functions and 517 perf rows unchanged |
-| D2b | [#301](https://github.com/davidly/dcc/pull/301) (`fix/cluster-d2b-postinc-admit`) | PR open; verified partial fix | 010 promoted as tpost32; 041 admission withdrawn after new BUG-056/#299; int 227/73, blocked float 281/19, zero FAIL; 3,482 existing functions and 516 perf rows byte-identical; strict release gates pass; #277 plus five isolated harness exceptions documented |
+| D2b | [#301](https://github.com/davidly/dcc/pull/301) (`fix/cluster-d2b-postinc-admit`) | merged | 010 promoted as tpost32; 041 admission withdrawn after new BUG-056/#299; int 227/73, blocked float 281/19, zero FAIL; 3,482 existing functions and 516 perf rows byte-identical; strict release gates pass; #277 plus five isolated harness exceptions documented |
+| D2c | [#305](https://github.com/davidly/dcc/pull/305) (`fix/cluster-d2c-byte-phi-home`) | PR open; verified compiler gates | 024 promoted as tpost8; 266 ok/34 INVALID/zero FAIL; 3,503 existing functions and 519 perf rows unchanged; 24 parked reproducers all fail; approved #277 and four isolated harness failures documented |
 | E | | open | |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1/G2 fixed | G1 clears 012; approved G2 fixes 033/040/042 independently |
