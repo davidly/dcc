@@ -49,6 +49,29 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                     for byte in range(4):
                         self.assertIn("ld a,(ix%+d)" % (offset + byte), assembly)
 
+    def test_block_pointer_consumers_match_resolved_types(self):
+        cases = (
+            ("signed char", "*q *= 11;"),
+            ("signed char", "out = c <= *q;"),
+            ("int16_t", "out = c <= *q;"),
+        )
+        for parameter, expression in cases:
+            source = ("#include <stdint.h>\nuint32_t a; int32_t out; "
+                      "void probe(" + parameter + " c) { { uint32_t *q = &a; " +
+                      expression + " } }")
+            control = source.replace("{ { uint32_t", "{ uint32_t").replace(
+                " } }", " }")
+            for stack in ((), ("-fstack-check",)):
+                release = self.code(self.compile(source, stack))
+                for debug in ((), ("-gline",), ("-g",)):
+                    with self.subTest(parameter=parameter, expression=expression,
+                                      stack=stack, debug=debug):
+                        actual = self.code(self.compile(source, stack + debug))
+                        self.assertEqual(actual, self.code(self.compile(
+                            control, stack + debug)))
+                        if debug == ("-gline",):
+                            self.assertEqual(actual, release)
+
     def test_block_logical_widening_matches_resolved_assignment(self):
         for target in ("int32_t", "uint32_t"):
             for operator in ("&&", "||"):
@@ -63,6 +86,25 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                     with self.subTest(target=target, operator=operator, options=options):
                         self.assertEqual(self.code(self.compile(source, options)),
                                          self.code(self.compile(control, options)))
+
+    def test_forwarded_byte_logical_widening_keeps_extension(self):
+        for target, extension in (
+            ("int8_t", "ld a,h\nrlca\nsbc a,a\nld d,a\nld e,a"),
+            ("uint8_t", "ld de,0"),
+        ):
+            for expression in ("x && y", "x || y", "(x || y) && (y || x)"):
+                source = ("#include <stdint.h>\nuint32_t out; "
+                          "void probe(uint16_t x, uint16_t y) { " + target +
+                          " b = " + expression + "; out = b; }\n")
+                for stack in ((), ("-fstack-check",)):
+                    release = self.code(self.compile(source, stack))
+                    for debug in ((), ("-gline",), ("-g",)):
+                        with self.subTest(target=target, expression=expression,
+                                          stack=stack, debug=debug):
+                            assembly = self.code(self.compile(source, stack + debug))
+                            self.assertIn(extension, assembly)
+                            if debug == ("-gline",):
+                                self.assertEqual(assembly, release)
 
     def test_block_logical_float_assignment_keeps_numeric_conversion(self):
         for operator in ("&&", "||"):

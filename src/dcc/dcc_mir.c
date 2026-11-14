@@ -8732,7 +8732,31 @@ void mir_resolve_deferred_metadata(void)
                 struct MirInsn *left;
                 struct MirInsn *right;
                 int repaired_type;
-                if (insn->opcode == MIR_UNARY && insn->src1 >= 0 &&
+                /* A block pointer's load has been bound above, but its
+                 * dereference still has the AST's assumed int type. Infer
+                 * that integer pointee before repairing binary consumers and
+                 * their provisional conversions, not in the later memory pass. */
+                if (insn->opcode == MIR_LOAD_INDIRECT &&
+                    (insn->type == 0 || insn->type == TYPE_INT) &&
+                    insn->src1 >= 0 && insn->bit_width == 0 &&
+                    (insn->memory_flags & 256) == 0) {
+                    source = mir_mutable_definition(insn->src1);
+                    if (source == NULL || type_ptr_depth(source->type) == 0 ||
+                        source->opcode != MIR_LOAD ||
+                        strstr(source->name, "#b") == NULL)
+                        continue;
+                    repaired_type = type_decay_ptr(source->type);
+                    if (type_size(repaired_type) <= 0 ||
+                        type_ptr_depth(repaired_type) != 0 ||
+                        type_is_float(repaired_type) ||
+                        type_is_struct_object(repaired_type))
+                        continue;
+                    if (insn->type != repaired_type) {
+                        insn->type = repaired_type;
+                        insn->memory_size = type_size(repaired_type);
+                        changed = 1;
+                    }
+                } else if (insn->opcode == MIR_UNARY && insn->src1 >= 0 &&
                     (insn->immediate == '+' || insn->immediate == '-' ||
                      insn->immediate == '~')) {
                     source = mir_mutable_definition(insn->src1);
@@ -10818,6 +10842,20 @@ static int mir_object_value_is_defined_at_or_after(int value, int instruction)
     return definition != NULL && definition >= &mir.insns[instruction];
 }
 
+static int mir_value_is_untyped_boolean(int value, int depth)
+{
+    const struct MirInsn *source;
+
+    if (depth >= 16 || (source = mir_definition(value)) == NULL ||
+        source->type != 0)
+        return 0;
+    if (source->opcode == MIR_CONST)
+        return source->immediate == 0 || source->immediate == 1;
+    return source->opcode == MIR_PHI &&
+           mir_value_is_untyped_boolean(source->src1, depth + 1) &&
+           mir_value_is_untyped_boolean(source->src2, depth + 1);
+}
+
 /* Promote agreeing reaching definitions or construct a two-predecessor PHI.
  * Undefined entry values and unresolved joins remain memory operations. */
 static int mir_promote_objects(void)
@@ -11023,10 +11061,20 @@ static int mir_promote_objects(void)
                 continue;
             reaching = mir_resolve_alias(aliases, reaching);
             {
-                const struct MirInsn *source = mir_definition(reaching);
+                struct MirInsn *source = mir_mutable_definition(reaching);
                 int size = type_size(insn->type);
                 unsigned long sign_bit = size == 2
                     ? 0x8000UL : 0x80000000UL;
+
+                /* Forwarding happens after conversion repair. A 0/1 phi
+                 * fits either byte interpretation, but must retain a type
+                 * when it replaces the source of an existing wide cast. */
+                if (source != NULL && source->opcode == MIR_PHI &&
+                    source->type == 0 && size == 1 &&
+                    type_ptr_depth(insn->type) == 0 &&
+                    mir_value_has_signedness_use(insn->dst, TYPE_INT, 0) &&
+                    mir_value_is_untyped_boolean(reaching, 0))
+                    source->type = insn->type;
 
                 if (source != NULL && source->type != insn->type &&
                     (size == 2 || size == 4) &&

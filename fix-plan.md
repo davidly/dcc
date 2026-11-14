@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has eight open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has five open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -205,7 +205,7 @@ addition is the five-instruction, five-byte signed-word extension already
 emitted for the control: `ld a,h; rlca; sbc a,a; ld d,a; ld e,a`. No emitter,
 selector, schedule, runtime, fallback or AST admission changes.
 
-#### A2b-2. Independently traced BUG-015 consumers (not fixed)
+#### A2b-2. Independently traced BUG-015 consumers (split)
 
 | Facet | Traced cause / next file and function |
 | --- | --- |
@@ -222,6 +222,74 @@ stores); the unary, mixed arithmetic and conditional-consumer probes above
 still fail and are byte-unchanged by A2b-1. No partial BUG-015 test is promoted,
 no BUG-015 steering is removed, and #235 remains open.
 
+
+#### A4. Direct block-pointer integer repair ordering (partial BUG-015)
+
+Investigated from `8db72cbd` on `fix/cluster-a4-block-pointer-typing`.
+The A2c early-lexical-typing experiment remains withdrawn: this change stays
+inside the existing deferred metadata repair and does not bind AST locals
+early or change selectors, allocation, schedules or runtime helpers.
+
+The hypothesis is confirmed for the direct pointer facet. Named block-pointer
+loads are repaired first, but their dereferences still hold the AST's assumed
+int type when scoped binary repair runs. The later indirect-load pass repairs
+only the load; its consumers retain signed-word arithmetic and provisional
+word conversions. Infer scalar integer dereferences of repaired block-pointer
+loads in the scoped fixed-point walk before repairing those consumers. Float,
+aggregate and pointer pointees, bit-fields and pointer-array loads are excluded.
+
+- BUG-015 statement lines **22/32/44/127/137**, printed lines
+  **152/153/154/162/163**, now pass in peep and nopeep: long multiplication,
+  signed-byte/word comparisons against unsigned long, unsigned word shift
+  and unsigned word divide. The first ordering fix clears this whole facet;
+  no second consumer patch is needed.
+- The byte/bit-field facet (statement **55**, printed line **155**) already
+  passes at the starting commit: E2-bitfield #310 made
+  `mir_promoted_operand_type()` apply field-width range promotion in deferred
+  repair. A4 makes no bit-field change and records that inherited correction.
+- The parked program improves from **8 to 3 wrong lines of 13**. Cast lines
+  **156–158** remain for A3; the separately logged float facets remain outside
+  A4. **BUG-015/#235 stays open**, with its reproducer and all generator
+  steering untouched. Counts stay **eight open / fifty-one fixed**.
+- New host/ASan/UBSan-proven `tptrblk` covers the cleared pointer paths and
+  function-scope controls, plus the already-correct byte/bit-field path.
+  Its sole new normal-stack perf row measures **195016/196163 cycles** and
+  **7296/7424 bytes** (peep/nopeep). Dynamic MIR probes match fully typed
+  multiplication/comparison controls under release, stack-check, `-gline`
+  and `-g`; linked `-gline` COM bytes are release-identical in both pipelines.
+- Both censuses are byte-identical for **3,672 existing functions / 559 apps**;
+  only 13 `tptrblk` functions are added. All **544 existing perf rows** are
+  unchanged. Both strict full+extended suites pass (560 apps each), as do
+  diagnostics, peephole fixtures, independent compiler CMake and debugger
+  CTest (10/10). No existing function acquires a fallback.
+- The unsigned shift uses the same `srl h`/`rr l` loop as the already-correct
+  outer-pointer shape; both complete neighbouring-control assemblies remain
+  unchanged. Long multiplication uses the established `__lmul` path instead
+  of low-word shift/add followed by wrong sign-extension; division selects
+  `__divu`, not `__divs`. Correct long arithmetic costs only the new workload,
+  not any existing test.
+- The required steered integer batch (seeds 1–300, production configurations,
+  `--off known`) is clean: **283 ok / 14 INVALID / 3 limit-only / zero FAIL**.
+  A separate diagnostic invocation temporarily restores only `blockptr`
+  without editing the generator, and finds seed **96**. The reduced,
+  host/sanitizer-proven remainder is a plain long store:
+  `{ int32_t *q = &a3[0]; *q = x; }` stores 0 for 65536, or -1 for -65537;
+  a literal 65536 also stores 0. Function-scope pointers are correct in both
+  pipelines. Lowering inserted `MIR_UNARY type=2` for the assumed word target;
+  later repair makes the store four bytes but cannot restore the discarded
+  high word. That missing store-conversion obligation is not the load/binary
+  ordering fixed here. **Stop rule applied:** stop the diagnostic batch and
+  ship only the clean cleared sub-root; no second compiler patch, new bug
+  number, steering removal or reproducer edit. Restored 300-seed completion
+  remains unverified and BUG-015 stays open with this new documented facet.
+- Python discovery ran **338 tests**, with **6 failures / 10 errors / 2 skips**:
+  two failures are the accepted #277 campaign/exact controls; the others are
+  process-supervision, compiler-mutation and clobber-runner harness failures.
+  A focused isolated retry of the 13 affected methods leaves **1 failure /
+  6 errors** (PowerShell timeouts and lifecycle/orphan-pipe assertions).
+  Several timing failures clear, but the remaining harness contracts are
+  unverified, not fixed or skipped. The newly added dynamic pointer test
+  passes separately; debug metadata and debugger CTest pass.
 
 #### A2b-3. Restored logical-byte initializers lose their SSA source type
 
@@ -247,14 +315,61 @@ The already-built long conversion consequently acquires an untyped source
 **after** deferred metadata repair and emits no extension. This is not the
 A2b-1 canonical-assignment repair point; no second implementation is tried.
 
-BUG-004 now parks the exact reduced seed-133 byte facet (host and sanitizer
-proven, failing in both pipelines), while the original five lines and six
-additional signed/unsigned block logical paths are covered separately by
-`tlogblk`. Keep #225 open. The broad `logicinit` steer is removed from
-`KNOWN_BUGS`; only a new, narrowly detected `logicbyteinit` steer (non-global
-8-bit logical stores/initializers) remains mapped to BUG-004. Word and block
-long logical forms are genuinely restored. No new issue is manufactured for
-these additional facets of the existing logical-source bug.
+At the A2b-1 checkpoint BUG-004 parked the exact reduced seed-133 byte
+facet, while the earlier word and block-long paths were promoted separately
+as `tlogblk`. Only `logicbyteinit` remained steered at that checkpoint.
+
+**Fixed in A2b-3 on `fix/cluster-a2b3-logical-byte`.** Independent MIR and
+assembly inspection confirmed the forwarding trace: the final cast changed
+from a typed byte load to a type-zero PHI, and neither pipeline extended DE.
+The first root fix assigns the byte local's type to that PHI only when its
+constant/PHI tree proves 0/1 and an existing long/float conversion needs the
+source contract. No consumers, schedules, selectors or fallbacks are patched.
+
+- All **2/2 parked lines** pass, including checksum `4001 9971d1fc`; all four
+  reduced byte facets pass. Promoted `tlogbyte` preserves those two lines and
+  adds fourteen lines for the other consumers, false/true variable and nested
+  logical paths, assignment, short-circuit side effects and a constant control.
+- Both original censuses remain byte-identical across **3,672 existing
+  functions / 559 apps**. Final snapshots add only sixteen `tlogbyte`
+  functions. There are no new fallback/spilled selections for existing code.
+- Strict full+extended stack and no-stack gates pass: **559 apps passed,
+  24 configured skips, zero failures**. All **544 existing perf rows** are
+  byte-preserved, with only the measured `tlogbyte` row appended:
+  **272957/292634 cycles, 7040/7424 bytes** (peep/nopeep). Its checked stack
+  and no-stack runs and host validator pass.
+- Restored integer production seeds **1–300** with `--off known`:
+  **283 ok, 14 INVALID, 3 target-limit-only, zero FAIL**. Only the
+  `logicbyteinit` open-bug mapping is removed; optional manual steering is
+  retained. A 3,000-seed proof confirms the remaining known steers.
+- Original reproducer Z80 adds the usual **five-byte / twenty-T-state**
+  normalized signed word-to-long extension, in both pipelines, with no helper
+  or frame growth. The already-correct constant-byte control and `tlogblk`
+  are unchanged. Host O0/O2, ASan/UBSan and a sanitized CMake compiler pass.
+- Require-emit diagnostics and both **274/274** extended MIR census modes
+  pass. All **55 focused** arithmetic, line-debug, type-fingerprint, steering
+  and mutation-anchor tests pass; all **10 debugger-host** checks pass.
+- Before promotion: **1 FIXED, 7 fails**. After promotion: **7 reproducers,
+  7 fails**; BUG-004 closes, the other seven defects remain open. Bug-log
+  totals are **seven open / fifty-two fixed**. No new bugs are filed.
+- The regular Python run executed **339 tests**, with **6 failures,
+  9 errors and 2 existing skips**. Two failures are the pre-answered #277
+  campaign-baseline/exact-control expectations; neither is changed or skipped.
+  One typed-library invocation hit the canonical rebuild's temporary missing
+  `dcc`; it passes after restoration. The other exceptions are timing/process
+  harness checks. All thirteen non-#277 methods were retried sequentially with
+  Ninja: **nine pass; four remain unverified** (one failure, five errors,
+  including two teardown races):
+  `CompilerMutationTests.test_child_timeout_and_environment_isolation`,
+  `test_default_serial_and_parallel_are_equal_and_bounded`,
+  `test_exited_worker_cleans_nested_process_scopes`, and
+  `test_survivors_invalid_exits_builds_and_worker_errors_are_recorded`.
+  These retain lost timeout diagnostics, 180-second scheduler timeouts,
+  absent watchdog-child metadata or directory-not-empty teardown races.
+  The clobber runner, inherited-pipe regression, worker watchdog and all five
+  shared-supervisor checks pass their isolated retries. No harness code or
+  expectations are modified; the non-green Python gate is explicitly recorded.
+  No old-compiler checks, nested agents or `prepush.ps1` are run.
 
 **D2d relationship:** this is the same broad deferred-type pipeline, **not**
 one shared fix. BUG-004 loses the boolean source contract when a canonical
@@ -3292,18 +3407,704 @@ addresses require the normal full/line debug pipeline checks.
    certain cluster.
 6. **I1**, then **I2** on an independent branch; **J, H, G, F, M** in any order.
 
+### F1. Exact-bit fixed-decimal rounding
+
+**Maintainer-approved runtime correctness and stdout/performance updates.**
+[PR #330](https://github.com/davidly/dcc/pull/330), branch
+`fix/cluster-f1-printf-rounding`, based on `8db72cbd`; closes BUG-060
+#322. Only `DCCRTL.MAC` changes toolchain behavior. No compiler or math-library
+function is changed. The old formatter added a rounded binary float half-unit
+before splitting, then repeatedly multiplied a rounded residual by ten. The
+new shared `%f` handler represents the exact significand in a little-endian
+decimal vector, scales by appending precision zeros, cancels exact powers of
+two, and divides/doubles by the binary exponent. Its last discarded binary
+bit is the guard; earlier discarded bits form sticky. It rounds exactly once,
+ties to even, including decimal carries, signed zero and subnormals.
+
+The `_pffio`-to-`_pflng` span is **733 -> 731 bytes (-2)**. The transient
+vector is precision+9 bytes below 2^23, or 39 bytes for exact large integers;
+internal precision caps at 149 (all binary32 fractions terminate there) and
+requested trailing zeros extend through precision 255. IX is locally
+saved/restored; IY is untouched; BC's printf character count is restored
+before output, then retained through cleanup. No new public helper/dependency
+is introduced; the existing `pf_divu32_10` and decimal-doubling idioms are reused.
+Removing float arithmetic from formatting also lets the existing stripper
+remove unused float helpers from many linked images.
+
+Bounded alternatives, linked peep probes (cycles include output):
+
+| Sequence | Original bug060 | tpfio (normal stack path) | Formatter span |
+| --- | ---: | ---: | ---: |
+| Original rounded-float formatter (incorrect) | 240726 | 390059 | 733 |
+| Exact decimal, branchful half-digit carry | 249808 | 565361 | 683 |
+| Exact decimal, branchless `sbc a,a; and 10; ld e,a` | 245558 | 557059 | 681 |
+| **Retained: branchless + exact trailing-bit cancellation** | **212812** | **241813** | **731** |
+
+The branchless carry costs two fewer bytes and avoids a data-dependent branch.
+Canceling exact binary factors adds 50 bytes to that candidate but avoids up
+to 23 full decimal division passes for common exactly representable values.
+The retained correct implementation is smaller than the old formatter and
+substantially faster on the focused formatted-I/O workload. A float-based
+correction or a fixed guard epsilon cannot distinguish true decimal ties and
+would retain the root double-rounding error; a general bignum/64-bit library
+would be larger than this bounded vector.
+
+Proof: `python3 scripts/printf-float-proof.py` links and runs **6000 exact
+finite patterns** (5972 normals, 26 subnormals, two zeroes; 2999 negative)
+in each mode at `%f` and `%.Nf`, N=0..6: **48000 matching
+conversions/mode**. Patterns cover all finite biased exponents, randomized
+mantissas and signs, halfway ties, 0.999999x carries, five neighbors around
+powers of ten, max/min normals, zeroes and subnormals. Another **227 patterns**
+at precisions 7/9/16/32/64/149/150/255 add **1816 matching conversions/mode**:
+**99632 total, zero mismatches**. `%e`/`%g` are documented, pre-existing
+unsupported conversions: they emit literal `e`/`g` without consuming arguments;
+those fields are checked separately, not misrepresented as host agreement.
+The unchanged special-value/width/sink behavior is covered by existing printf
+regressions; new `tfpround` adds focused ties/carry/subnormal checks.
+
+Both strict MIR censuses preserve **all 3672 existing function rows byte for
+byte**, in stack and no-stack modes; only `tfpround:main` is new. Original
+bug060 peep and nopeep application `.MAC` output is byte-identical before/after.
+Runtime IY-safety and API/label coverage audits pass. The known-bug runner
+reported only bug060 FIXED before promotion; seven other reproducers still fail.
+BUG-060 is promoted as `tfpround`; current tally: **seven open / fifty-two fixed**.
+No formatter feature exists in the float fuzzer's KNOWN_BUGS: it compares raw
+bits, so no generator steering is changed.
+
+#### Every approved stdout baseline update, with clang proof
+
+A linked instrumented copy of the runtime captured exact original input bits
+before formatting; host clang `printf("%.*f", 6, promoted_float)` prints each
+new value below. In multi-float lines all fields were checked, not just the
+changed last digit. These are formatter corrections to unchanged dcc values,
+**not claims that dcc libm or the application's xsinf approximation equals
+host libm**; those existing approximation differences remain out of scope.
+
+| Baseline:line | Old complete line -> new complete line | Host clang `%f` for exact bits |
+| --- | --- | --- |
+| tfdedge:5 | `14.285715` -> `14.285714` | `41649249` -> `14.285714` |
+| tfdedge:6 | `-5.666666` -> `-5.666667` | `C0B55555` -> `-5.666667` |
+| tfdedge:7 | `-5.666666` -> `-5.666667` | `C0B55555` -> `-5.666667` |
+| tfmedge:8 | `15.185090` -> `15.185089` | `4172F620` -> `15.185089` |
+| tfmedge:9 | `8.539722` -> `8.539721` | `4108A2B3` -> `8.539721` |
+| tphi:11 | `  at 10 iterations: 1.617978` -> `  at 10 iterations: 1.617977` | `3FCF19E3` -> `1.617977` |
+| trig:15 | `tanf  1.500000: 14.101419` -> `tanf  1.500000: 14.101418` | `3FC00000` -> `1.500000`; `41619F69` -> `14.101418` |
+| trig:27 | `tanf  -1.500000: -14.101419` -> `tanf  -1.500000: -14.101418` | `BFC00000` -> `-1.500000`; `C1619F69` -> `-14.101418` |
+| trig:56 | `acosf -0.250000: 1.823476` -> `acosf -0.250000: 1.823477` | `BE800000` -> `-0.250000`; `3FE967AE` -> `1.823477` |
+| trig:94 | `coshf 3.000000: 10.067663` -> `coshf 3.000000: 10.067662` | `40400000` -> `3.000000`; `41211525` -> `10.067662` |
+| trig:97 | `coshf -3.000000: 10.067663` -> `coshf -3.000000: 10.067662` | `C0400000` -> `-3.000000`; `41211525` -> `10.067662` |
+| trig:99 | `sinhf 5.000000: 74.203208` -> `sinhf 5.000000: 74.203209` | `40A00000` -> `5.000000`; `4294680B` -> `74.203209` |
+| trig:102 | `sinhf -5.000000: -74.203208` -> `sinhf -5.000000: -74.203209` | `C0A00000` -> `-5.000000`; `C294680B` -> `-74.203209` |
+| ttrig:56 | `acos -0.250000: 1.823476` -> `acos -0.250000: 1.823477` | `BE800000` -> `-0.250000`; `3FE967AE` -> `1.823477` |
+| ttrig:75 | `value 1.500000. sinf 0.997498, xsinf 0.997463` -> `value 1.500000. sinf 0.997498, xsinf 0.997464` | `3FC00000` -> `1.500000`; `3F7F5C04` -> `0.997498`; `3F7F59C5` -> `0.997464` |
+| ttrig:78 | `value -1.500000. sinf -0.997498, xsinf -0.997463` -> `value -1.500000. sinf -0.997498, xsinf -0.997464` | `BFC00000` -> `-1.500000`; `BF7F5C04` -> `-0.997498`; `BF7F59C5` -> `-0.997464` |
+
+#### Every approved performance baseline update
+
+**524 existing rows change; `tfpround` is the only new row.**
+Each was remeasured with normal PowerShell stack checking, both modes.
+`-UpdatePerfBaseline` selected only candidates whose linked metrics changed
+with the first exact-decimal alternative, plus the changed-stdout apps and
+new `tfpround`. The final smaller/faster sequence left two provisional size
+candidates (`tfloat4`, `tmathf`) unchanged; their checked rows remain identical. The checked
+suite deliberately defaults `dcc_floatio=true` even for integer-only programs
+(`Get-DccFloatio`), so formatter dependencies affect their linked sizes too:
+24 rows change cycles, 523 change size. Apps with the explicit
+floatio-off override and no float formatting stay unchanged. **Maintainer
+approval covers these runtime-driven stdout/performance updates.**
+
+`=` means that column is exactly unchanged; all changed cells show old -> new.
+COM sizes are emulator-checked file sizes (128-byte quantized). No existing
+peep or nopeep cycle count increases; no existing image grows. Sizes decrease
+by up to 2176 bytes. The 20 unchanged original rows remain byte-identical.
+
+| App | Peep cycles | Nopeep cycles | Peep bytes | Nopeep bytes |
+| --- | ---: | ---: | ---: | ---: |
+| 00040b | = | = | 6272 -> 4224 | 6272 -> 4224 |
+| catalan | = | = | 8448 -> 6400 | 8576 -> 6400 |
+| e | = | = | 5248 -> 3200 | 5376 -> 3200 |
+| fact | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| fcall1 | = | = | 5376 -> 3328 | 5504 -> 3328 |
+| fileops | = | = | 12032 -> 9984 | 12160 -> 10112 |
+| ln2 | = | = | 7168 -> 4992 | 7168 -> 5120 |
+| mm | 125251357 -> 125184909 | 126675973 -> 126609525 | 7936 -> 7168 | 7936 -> 7296 |
+| nqueens | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| pihex | 689144476 -> 689090020 | 691517464 -> 691463008 | 11136 -> 11008 | 11392 -> 11264 |
+| primes | = | = | 6272 -> 4224 | 6272 -> 4224 |
+| sieve | 16857093 -> 16840203 | 17302294 -> 17284054 | 5120 -> 3072 | 5120 -> 3072 |
+| t | = | = | 12032 -> 9856 | 12416 -> 10368 |
+| t2darr | = | = | 6528 -> 4480 | 6656 -> 4608 |
+| t2denum | = | = | 5120 -> 2944 | 5120 -> 3072 |
+| tabort | = | = | 9216 -> 7040 | 9216 -> 7040 |
+| tabsidm | = | = | 5504 -> 3328 | 5504 -> 3328 |
+| taddr | = | = | 5504 -> 3456 | 5504 -> 3456 |
+| taggordr | = | = | 5504 -> 3328 | 5632 -> 3584 |
+| tallocx | = | = | 15488 -> 13440 | 16000 -> 13952 |
+| tandself | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| taninit | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tanonagg | = | = | 5888 -> 3840 | 5888 -> 3840 |
+| tap | 167807559 -> 167801334 | 168343823 -> 168337598 | 7296 -> 6272 | 7296 -> 6400 |
+| tappend | = | = | 9600 -> 7424 | 9600 -> 7552 |
+| targlim | = | = | 7424 -> 5248 | 7936 -> 5888 |
+| targs | = | = | 6144 -> 4096 | 6272 -> 4224 |
+| tarray | = | = | 8320 -> 6272 | 8448 -> 6400 |
+| tarray6 | = | = | 7552 -> 5504 | 7680 -> 5504 |
+| tarresc | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tarrtd | = | = | 6272 -> 4096 | 6272 -> 4224 |
+| tasinfsp | = | = | 7680 -> 7424 | 7680 -> 7424 |
+| tasm | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tasmcoll | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tasmdrop | = | = | 5376 -> 3200 | 5376 -> 3328 |
+| tassert | = | = | 5248 -> 3072 | 5248 -> 3200 |
+| tatan2sp | = | = | 8704 -> 8448 | 8704 -> 8448 |
+| tatexit | = | = | 5376 -> 3200 | 5376 -> 3200 |
+| tatof | = | = | 9216 -> 9088 | 9216 -> 9088 |
+| tautolcs | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tb6exp | = | = | 6912 -> 6784 | 6912 -> 6784 |
+| tb6pow | = | = | 10112 -> 9984 | 10112 -> 9984 |
+| tbcgcol | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tbcint | = | = | 5120 -> 2944 | 5120 -> 2944 |
+| tbcloop | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tbcreg | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tbcregno | = | = | 5248 -> 3072 | 5248 -> 3072 |
+| tbcreld | = | = | 5120 -> 2944 | 5120 -> 2944 |
+| tbcsar | = | = | 5760 -> 3712 | 5888 -> 3712 |
+| tbcshl | = | = | 5760 -> 3712 | 5888 -> 3840 |
+| tbdos | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tbfcnt | = | = | 5504 -> 3456 | 5632 -> 3584 |
+| tbfcomp | = | = | 8192 -> 6144 | 8448 -> 6272 |
+| tbfdate | = | = | 5504 -> 3456 | 5632 -> 3584 |
+| tbfexpr | = | = | 6784 -> 4736 | 7296 -> 5248 |
+| tbfinit | = | = | 5888 -> 3712 | 5888 -> 3712 |
+| tbfprot | = | = | 5504 -> 3456 | 5632 -> 3584 |
+| tbig | = | = | 13568 -> 11392 | 13824 -> 11776 |
+| tbigfunc | = | = | 29696 -> 27648 | 37248 -> 35200 |
+| tbios | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tbiosrg | = | = | 6272 -> 4096 | 6400 -> 4352 |
+| tbitfld | = | = | 6784 -> 4736 | 7040 -> 4992 |
+| tbits | = | = | 7424 -> 5376 | 7552 -> 5504 |
+| tbits32 | = | = | 6016 -> 3840 | 6016 -> 3840 |
+| tblkabi | = | = | 5632 -> 3584 | 5760 -> 3712 |
+| tblkcopy | = | = | 5760 -> 3584 | 5760 -> 3584 |
+| tblkdiv | = | = | 6272 -> 4096 | 6272 -> 4224 |
+| tblkneg | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tblkret | = | = | 5632 -> 3584 | 5760 -> 3712 |
+| tblktern | = | = | 8576 -> 6528 | 8704 -> 6656 |
+| tblktype | = | = | 7040 -> 4992 | 7168 -> 5120 |
+| tbool | = | = | 11136 -> 9088 | 12032 -> 9984 |
+| tboolbf | = | = | 5888 -> 3712 | 5888 -> 3840 |
+| tboolbr | = | = | 5760 -> 3712 | 5888 -> 3840 |
+| tbrelide | = | = | 5504 -> 3456 | 5888 -> 3712 |
+| tbsearch | = | = | 7936 -> 5888 | 8064 -> 6016 |
+| tbufex | = | = | 5632 -> 3456 | 5632 -> 3456 |
+| tbug | = | = | 5760 -> 3712 | 5888 -> 3712 |
+| tbug2 | = | = | 5504 -> 3328 | 5504 -> 3328 |
+| tbuiltof | = | = | 5376 -> 3200 | 5504 -> 3328 |
+| tbyteeq | = | = | 6528 -> 4480 | 6528 -> 4480 |
+| tbytephi | = | = | 5504 -> 3456 | 5632 -> 3456 |
+| tbytepre | = | = | 14336 -> 12288 | 19072 -> 17024 |
+| tc89bit | = | = | 5504 -> 3456 | 5504 -> 3456 |
+| tc89comp | = | = | 7040 -> 4992 | 7168 -> 5120 |
+| tc89core | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tc89decl | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tc89fadd | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tc89fcmp | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tc89fcnv | = | = | 5632 -> 3712 | 5760 -> 3712 |
+| tc89fdiv | = | = | 6016 -> 4480 | 6016 -> 4480 |
+| tc89ffio | 118738 -> 59254 | 118768 -> 59284 | 5120 -> 4096 | 5120 -> 4096 |
+| tc89fini | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tc89flng | = | = | 5504 -> 3328 | 5504 -> 3328 |
+| tc89flt | = | = | 5376 -> 3200 | 5376 -> 3200 |
+| tc89flta | = | = | 6784 -> 4736 | 6784 -> 4736 |
+| tc89fltc | = | = | 5760 -> 3584 | 5760 -> 3712 |
+| tc89fmat | = | = | 6656 -> 6400 | 6656 -> 6400 |
+| tc89fmul | = | = | 5760 -> 5120 | 5760 -> 5120 |
+| tc89fnty | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tc89fp | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tc89fptr | = | = | 5632 -> 3456 | 5632 -> 3456 |
+| tc89fs | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tc89ini2 | = | = | 5760 -> 3712 | 6016 -> 3968 |
+| tc89init | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tc89pp | = | = | 5248 -> 3200 | 5376 -> 3200 |
+| tc89ptr | = | = | 5888 -> 3840 | 5888 -> 3840 |
+| tc89qual | = | = | 5504 -> 3456 | 5504 -> 3456 |
+| tc89size | = | = | 10368 -> 8320 | 10496 -> 8320 |
+| tc89swjt | = | = | 6656 -> 4608 | 6784 -> 4736 |
+| tc89uac | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tc99apar | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tc99ctl | = | = | 6016 -> 3968 | 6144 -> 4096 |
+| tc99init | = | = | 6784 -> 4736 | 6912 -> 4864 |
+| tc99scpe | = | = | 6528 -> 4352 | 6656 -> 4480 |
+| tc99varm | = | = | 5760 -> 3584 | 5760 -> 3584 |
+| tcaidxb | = | = | 5376 -> 3200 | 5376 -> 3328 |
+| tcalb11 | = | = | 15360 -> 13312 | 16000 -> 13952 |
+| tcalsuf | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tcanest | = | = | 5248 -> 3200 | 5376 -> 3200 |
+| tcapmbr | = | = | 5376 -> 3328 | 5504 -> 3328 |
+| tcaslv | = | = | 11392 -> 10368 | 11776 -> 10752 |
+| tcastasg | = | = | 5632 -> 3584 | 5760 -> 3712 |
+| tcastcnd | = | = | 7168 -> 4992 | 7296 -> 5120 |
+| tcastlog | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tcharbit | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tchess | = | = | 18048 -> 16000 | 19712 -> 17536 |
+| tchptr | = | = | 5248 -> 3072 | 5248 -> 3200 |
+| tclit | = | = | 7680 -> 6656 | 7680 -> 6656 |
+| tcmbyte | = | = | 6016 -> 4992 | 6272 -> 5376 |
+| tcmdapp | = | = | 6656 -> 4608 | 7040 -> 4992 |
+| tcmp | = | = | 9472 -> 8448 | 9600 -> 8576 |
+| tcmpabi | = | = | 5888 -> 3840 | 6144 -> 3968 |
+| tcmpq | = | = | 8704 -> 7680 | 8704 -> 7680 |
+| tcmprhs | = | = | 8448 -> 8320 | 8448 -> 8320 |
+| tcmpval | = | = | 8960 -> 6912 | 9216 -> 7168 |
+| tcmt99 | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tcmwide | = | = | 8704 -> 6656 | 9344 -> 7168 |
+| tcnstfld | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tcodegen | = | = | 6912 -> 4736 | 7040 -> 4992 |
+| tconstdz | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tconstp | = | = | 5504 -> 3456 | 5504 -> 3456 |
+| tconstun | = | = | 5504 -> 3456 | 5632 -> 3584 |
+| tconv10 | = | = | 9344 -> 7296 | 9728 -> 7680 |
+| tcpirlp | = | = | 5248 -> 3072 | 5248 -> 3072 |
+| tcptrarr | = | = | 5632 -> 3456 | 5632 -> 3584 |
+| tcrcfix | = | = | 10112 -> 7936 | 10368 -> 8320 |
+| tcsecall | = | = | 5504 -> 3456 | 5504 -> 3456 |
+| tctresc | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tctrlz | = | = | 10496 -> 8320 | 10496 -> 8448 |
+| tctrreg | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tctxflt | = | = | 17792 -> 17664 | = |
+| tctxops | = | = | 10496 -> 10368 | 10496 -> 10368 |
+| tctype | = | = | 7168 -> 5120 | 7168 -> 5120 |
+| tctypw | = | = | 5888 -> 3840 | 5888 -> 3840 |
+| tdblnot | = | = | 6400 -> 4352 | 6656 -> 4608 |
+| tdblnotw | = | = | 5760 -> 3712 | 5888 -> 3840 |
+| tdblptr | = | = | 5632 -> 3456 | 5632 -> 3584 |
+| tdblptw | = | = | 5632 -> 3584 | 5760 -> 3584 |
+| tdead | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tdeadblk | = | = | 5888 -> 3840 | 6272 -> 4224 |
+| tdecinit | = | = | 5504 -> 3456 | 5504 -> 3456 |
+| tdecl | = | = | 6912 -> 4864 | 7040 -> 4992 |
+| tderefpi | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tdirpat | = | = | 8448 -> 6400 | 8448 -> 6400 |
+| tdivcmp | = | = | 7168 -> 4992 | 7168 -> 5120 |
+| tdivmod | = | = | 6528 -> 4480 | 6528 -> 4480 |
+| tdivzero | = | = | 9728 -> 7552 | 9728 -> 7680 |
+| tdmfuse | = | = | 8320 -> 6272 | 8448 -> 6400 |
+| tdowhile | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tdrive | = | = | 9344 -> 7296 | 9344 -> 7296 |
+| tearly16 | = | = | 5760 -> 3712 | 5888 -> 3840 |
+| tecreg | = | = | 5120 -> 2944 | 5120 -> 3072 |
+| tenum | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tenumfsm | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| terrno | = | = | 12288 -> 10240 | 12416 -> 10368 |
+| terrwid | = | = | 6016 -> 3840 | 6016 -> 3968 |
+| tesc | = | = | 11776 -> 9600 | 11776 -> 9728 |
+| texargs | = | = | 12160 -> 10112 | 13312 -> 11264 |
+| texbnd08 | = | = | 8320 -> 6144 | 8448 -> 6400 |
+| texec | = | = | 7168 -> 5120 | 7296 -> 5248 |
+| texecdp | = | = | 7040 -> 4992 | 7040 -> 4992 |
+| texfile | = | = | 8576 -> 6400 | 8576 -> 6400 |
+| texlog | = | = | 7168 -> 4992 | 7168 -> 5120 |
+| texpfsp | = | = | 7040 -> 6912 | 7040 -> 6912 |
+| texscan | = | = | 7936 -> 5888 | 7936 -> 5888 |
+| texsort | = | = | 4992 -> 2944 | 4992 -> 2944 |
+| texstrct | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tfaedge | 756108 -> 422799 | 756155 -> 422846 | 5632 -> 4608 | 5632 -> 4608 |
+| tfarrsub | = | = | 7040 -> 4864 | 7168 -> 4992 |
+| tfcarg2d | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tfchunk | = | = | 9472 -> 7424 | 9600 -> 7424 |
+| tfdedge | 537355 -> 407930 | 537402 -> 407977 | 5376 -> 3840 | 5376 -> 3840 |
+| tfdf | = | = | 6912 -> 5760 | 6912 -> 5760 |
+| tfdivr | = | = | 6016 -> 4480 | 6016 -> 4480 |
+| tfedge | = | = | 9984 -> 7936 | 10112 -> 7936 |
+| tfeof | = | = | 10880 -> 8832 | 11008 -> 8960 |
+| tfileapp | = | = | 11008 -> 8960 | 11264 -> 9216 |
+| tfilero | = | = | 10624 -> 8448 | 10752 -> 8704 |
+| tfio | = | = | 8960 -> 6912 | 8960 -> 6912 |
+| tfiob5 | = | = | 12928 -> 10880 | 13440 -> 11392 |
+| tfixarr | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tflcini | = | = | 6016 -> 5760 | 6016 -> 5888 |
+| tflcnot | = | = | 6016 -> 5760 | 6144 -> 6016 |
+| tflddecl | = | = | 5888 -> 3712 | 6144 -> 4096 |
+| tfldparr | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tflidx | = | = | 9472 -> 8704 | 10112 -> 9216 |
+| tflinc | = | = | 6272 -> 5248 | 6528 -> 5504 |
+| tflmadd | = | = | 7808 -> 7680 | 7808 -> 7680 |
+| tflncmp | = | = | 7936 -> 7808 | 7936 -> 7808 |
+| tflnot | = | = | 5632 -> 4992 | 5760 -> 4992 |
+| tfloorsp | = | = | 7808 -> 6784 | 7808 -> 6784 |
+| tflscast | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tfltret | = | = | 5760 -> 5248 | 5760 -> 5248 |
+| tflucast | = | = | 5632 -> 5376 | 5632 -> 5504 |
+| tfmadd | 388547 -> 235368 | 389060 -> 235881 | 6272 -> 5504 | 6400 -> 5504 |
+| tfmaddr | = | = | 6784 -> 5888 | 6784 -> 5888 |
+| tfmaf | = | = | 7552 -> 6656 | 7552 -> 6656 |
+| tfmedge | 402603 -> 301509 | 402650 -> 301556 | 5376 -> 4608 | 5376 -> 4608 |
+| tfmode | = | = | 10368 -> 8320 | 10624 -> 8576 |
+| tfmodfsp | = | = | 9984 -> 9728 | 9984 -> 9856 |
+| tfncond | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tfnxtcvt | = | = | 8320 -> 6400 | 8448 -> 6400 |
+| tfo | = | = | 8704 -> 6656 | 8704 -> 6656 |
+| tfopenw | = | = | 8832 -> 6784 | 8832 -> 6784 |
+| tforblk | = | = | 6912 -> 4864 | 7040 -> 4864 |
+| tforcomm | = | = | 5760 -> 3584 | 5760 -> 3712 |
+| tfordia | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tforfrm | = | = | 5120 -> 3072 | 5248 -> 3072 |
+| tforhex | = | = | 5504 -> 3456 | 5632 -> 3584 |
+| tforhome | = | = | 7040 -> 4992 | 7424 -> 5248 |
+| tforinc | = | = | 5504 -> 3328 | 5504 -> 3456 |
+| tforjmp | = | = | 5504 -> 3328 | 5632 -> 3456 |
+| tforpred | = | = | 5248 -> 3072 | 5248 -> 3072 |
+| tforsco | = | = | 8320 -> 6272 | 8448 -> 6400 |
+| tfpaext | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tfpcall | = | = | 5888 -> 3712 | 5888 -> 3712 |
+| tfpos | = | = | 9344 -> 7168 | 9344 -> 7296 |
+| tfpraw | = | = | 7296 -> 5376 | 7296 -> 5376 |
+| tfpshad | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tfpspec | = | = | 12672 -> 12416 | 12800 -> 12544 |
+| tfracphi | = | = | 6144 -> 4096 | 6272 -> 4096 |
+| tfreid | = | = | 8704 -> 6656 | 8832 -> 6656 |
+| tfreopen | = | = | 9088 -> 7040 | 9088 -> 7040 |
+| tfret | = | = | 5120 -> 4480 | 5120 -> 4480 |
+| tfrexpsp | = | = | 7040 -> 4992 | 7040 -> 4992 |
+| tfrndop | = | = | 10624 -> 10368 | 10624 -> 10368 |
+| tfrxb6 | = | = | 9856 -> 9728 | 9984 -> 9728 |
+| tfseekr | = | = | 9984 -> 7936 | 9984 -> 7936 |
+| tfsubadd | = | = | 7040 -> 6016 | 7040 -> 6016 |
+| tfuncid | = | = | 5504 -> 3456 | 5632 -> 3456 |
+| tfwdtag | = | = | 5248 -> 3200 | 5376 -> 3200 |
+| tgbcmp | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tgcdphi | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tginaddr | = | = | 5504 -> 3456 | 5504 -> 3456 |
+| tginitad | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tginitu | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tginoffs | = | = | 5376 -> 3328 | 5504 -> 3456 |
+| tgnarly | = | = | 7936 -> 5888 | 8448 -> 6400 |
+| tgoto | = | = | 5888 -> 3712 | 5888 -> 3840 |
+| tgotocap | = | = | 5248 -> 3072 | 5248 -> 3072 |
+| thoistbc | = | = | 5632 -> 3584 | 5760 -> 3584 |
+| thyp10 | = | = | 7936 -> 7808 | 8064 -> 7936 |
+| thypb6 | = | = | 7808 -> 7680 | 7808 -> 7680 |
+| tidxasgn | = | = | 5376 -> 3200 | 5376 -> 3200 |
+| tidxrmw | = | = | 5760 -> 3712 | 5760 -> 3712 |
+| tifcom | = | = | 4992 -> 2944 | 4992 -> 2944 |
+| tinc32a | = | = | 6144 -> 3968 | 6400 -> 4224 |
+| tindopt | = | = | 5248 -> 3200 | 5376 -> 3328 |
+| tindres | = | = | 5248 -> 3200 | 5376 -> 3328 |
+| tinitbf | = | = | 5888 -> 3712 | 5888 -> 3840 |
+| tinitbr | = | = | 5376 -> 3328 | 5504 -> 3328 |
+| tinitcs | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tinitfc | = | = | 5504 -> 3456 | 5504 -> 3456 |
+| tinitreg | = | = | 6912 -> 4864 | 6912 -> 4864 |
+| tinittyp | = | = | 7424 -> 5376 | 7552 -> 5504 |
+| tinline | = | = | 6656 -> 4608 | 7040 -> 4864 |
+| tinlinfb | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tinlnpar | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tioerr | = | = | 9984 -> 7936 | 9984 -> 7936 |
+| tisnan | = | = | 6400 -> 4224 | 6400 -> 4224 |
+| tiyreg | = | = | 7040 -> 4864 | 7168 -> 5120 |
+| tkandr | = | = | 5632 -> 3584 | 5760 -> 3584 |
+| tkrfnptr | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tlbreuse | = | = | 5248 -> 3072 | 5248 -> 3072 |
+| tlcont | = | = | 5760 -> 3584 | 5760 -> 3584 |
+| tldref | = | = | 6144 -> 4096 | 6272 -> 4224 |
+| tlimbsh | = | = | 9088 -> 7040 | 9600 -> 7424 |
+| tlimits | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tlmod | = | = | 7424 -> 5376 | 7424 -> 5376 |
+| tlmul | = | = | 6912 -> 4864 | 6912 -> 4864 |
+| tlngcond | = | = | 5504 -> 3456 | 5504 -> 3456 |
+| tlngfptr | = | = | 5632 -> 3456 | 5632 -> 3456 |
+| tlngnarw | = | = | 6400 -> 4352 | 6528 -> 4480 |
+| tlocalfp | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tlog | 1009961 -> 895822 | 1010018 -> 895879 | 7936 -> 7808 | 7936 -> 7808 |
+| tlogblk | = | = | 6400 -> 4352 | 6656 -> 4480 |
+| tlogfsp | = | = | 7552 -> 7296 | 7552 -> 7296 |
+| tlogwide | = | = | 6656 -> 4736 | 6784 -> 4736 |
+| tlong | = | = | 6656 -> 4480 | 6656 -> 4608 |
+| tlongaud | = | = | 6912 -> 4864 | 7168 -> 5120 |
+| tlongcnv | = | = | 7552 -> 5376 | 7552 -> 5504 |
+| tlongfn | = | = | 9472 -> 7424 | 9472 -> 7424 |
+| tlongidx | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tlongopt | = | = | 19968 -> 17920 | 20864 -> 18816 |
+| tlongreg | = | = | 8704 -> 6528 | 8832 -> 6656 |
+| tlongsub | = | = | 7808 -> 5760 | 7808 -> 5760 |
+| tloopdef | = | = | 5248 -> 3072 | 5248 -> 3200 |
+| tlpcall | 556423 -> 453112 | 560949 -> 457638 | 8960 -> 8704 | 9344 -> 9088 |
+| tm | = | = | 7168 -> 5120 | 7168 -> 5120 |
+| tm1mu | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tmacwide | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tmalloch | = | = | 6016 -> 3840 | 6016 -> 3968 |
+| tmatbit | = | = | 6016 -> 3840 | 6016 -> 3968 |
+| tmatha | = | = | 9984 -> 9856 | 9984 -> 9856 |
+| tmdstr | = | = | 5248 -> 3200 | 5504 -> 3456 |
+| tmemaddr | = | = | 5376 -> 3328 | 5504 -> 3456 |
+| tmeminfo | = | = | 6784 -> 4608 | 7424 -> 5248 |
+| tmemtm | = | = | 5376 -> 3200 | 5376 -> 3200 |
+| tmerge16 | = | = | 6144 -> 4096 | 6400 -> 4352 |
+| tmerrb6 | = | = | 13952 -> 13824 | 13952 -> 13824 |
+| tmfcall | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tmfstat | = | = | 5248 -> 3200 | 5376 -> 3200 |
+| tmfstr | = | = | 5760 -> 3712 | 5888 -> 3840 |
+| tmircfg | = | = | 5120 -> 2944 | 5120 -> 3072 |
+| tmirconv | = | = | = | 13568 -> 13440 |
+| tmirfast | = | = | 7936 -> 5760 | 8064 -> 5888 |
+| tmirfix | = | = | 9216 -> 7168 | 10240 -> 8064 |
+| tmirfuse | = | = | 9088 -> 7040 | 9344 -> 7296 |
+| tmirhome | = | = | 6016 -> 3968 | 6144 -> 4096 |
+| tmirlife | = | = | 9344 -> 7296 | 10112 -> 8192 |
+| tmirload | = | = | 6272 -> 4224 | 6400 -> 4352 |
+| tmirslot | = | = | 6144 -> 4096 | 6272 -> 4096 |
+| tmod3216 | = | = | 5888 -> 3840 | 5888 -> 3840 |
+| tmodp2 | = | = | 7936 -> 5888 | 8064 -> 6016 |
+| tmuldiv | = | = | 8832 -> 6784 | 8832 -> 6784 |
+| tmulpow2 | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tnamecol | = | = | 5376 -> 3200 | 5504 -> 3456 |
+| tnarrow | = | = | 5248 -> 3200 | 5376 -> 3200 |
+| tnarwin | = | = | 4992 -> 2944 | 4992 -> 2944 |
+| tnddecay | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tndwide | = | = | 6016 -> 3968 | 6144 -> 4096 |
+| tnegidx | = | = | 6656 -> 4608 | 6912 -> 4736 |
+| tnestfor | = | = | 6400 -> 4352 | 6528 -> 4480 |
+| tnestini | = | = | 5248 -> 3072 | 5248 -> 3200 |
+| tnestpi | = | = | 6144 -> 3968 | 6144 -> 4096 |
+| tnoretrn | = | = | 5248 -> 3072 | 5248 -> 3200 |
+| toffset | = | = | 5504 -> 3328 | 5504 -> 3328 |
+| too | = | = | 20480 -> 18432 | 21248 -> 19200 |
+| tpadread | = | = | 9856 -> 7680 | 9856 -> 7808 |
+| tparrgrp | = | = | 6400 -> 4224 | 6528 -> 4352 |
+| tpeepal | = | = | 5376 -> 3328 | 5504 -> 3328 |
+| tpeepi | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tpeepop | = | = | 5504 -> 3328 | 5504 -> 3456 |
+| tpeepsum | = | = | 6784 -> 4736 | 7040 -> 4992 |
+| tpeeq8 | = | = | 5632 -> 3456 | 5632 -> 3584 |
+| tpeerng | = | = | 7168 -> 5120 | 7680 -> 5504 |
+| tpeesc | = | = | 6272 -> 5248 | 6272 -> 5248 |
+| tpephl | = | = | 5632 -> 3456 | 5888 -> 3712 |
+| tperror | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tpfargs | 682088 -> 658171 | 692570 -> 668653 | 8576 -> 6528 | 8704 -> 6528 |
+| tpfauto | 312246 -> 264322 | 312273 -> 264349 | 5888 -> 3840 | 5888 -> 3840 |
+| tpfbuf | 1480566 -> 1309280 | 1706969 -> 1535683 | 12160 -> 10112 | 12544 -> 10496 |
+| tpffmt | 720894 -> 694302 | 780121 -> 753529 | 6912 -> 4736 | 7040 -> 4864 |
+| tpfinf | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tpfio | 390059 -> 241813 | 390686 -> 242440 | 8448 -> 7424 | 8576 -> 7552 |
+| tpflio | 540231 -> 450123 | 540858 -> 450750 | 8448 -> 6272 | 8448 -> 6400 |
+| tphi | 1058546 -> 994721 | 1058573 -> 994748 | 5376 -> 3840 | 5376 -> 3840 |
+| tphiarg | = | = | 5248 -> 3072 | 5248 -> 3200 |
+| tphiarm | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tphijoin | = | = | 6144 -> 4096 | 6400 -> 4352 |
+| tphislot | = | = | 8448 -> 7424 | 8960 -> 7936 |
+| tpi | = | = | 6400 -> 4352 | 6400 -> 4352 |
+| tpihexb | = | = | 6016 -> 3968 | 6016 -> 3968 |
+| tplng | = | = | 8320 -> 6272 | 8448 -> 6400 |
+| tponce | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tporthdr | = | = | 5248 -> 3200 | 5376 -> 3200 |
+| tportio | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tpost16 | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tpost32 | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tpost8 | = | = | 5888 -> 3840 | 6144 -> 4096 |
+| tpostai | = | = | 5376 -> 3200 | 5376 -> 3200 |
+| tpostbr | = | = | 5888 -> 3840 | 6016 -> 3968 |
+| tpostfld | = | = | 5632 -> 3456 | 5632 -> 3584 |
+| tpostidx | = | = | 4992 -> 2944 | 4992 -> 2944 |
+| tpostinc | = | = | 6144 -> 3968 | 6144 -> 4096 |
+| tpostptr | = | = | 11392 -> 9344 | 11904 -> 9856 |
+| tpostut | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tpowfsp | = | = | 8576 -> 8448 | 8576 -> 8448 |
+| tppasgn | = | = | 5248 -> 3200 | 5376 -> 3200 |
+| tppreg | = | = | 5376 -> 3328 | 5504 -> 3328 |
+| tppsuf | = | = | 5248 -> 4352 | 5248 -> 4352 |
+| tpragstk | = | = | 5248 -> 3072 | 5248 -> 3072 |
+| tpreinc | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tpreproc | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tprintf | 1070346 -> 986209 | 1070373 -> 986236 | 7040 -> 4992 | 7040 -> 4992 |
+| tpromo | = | = | 9216 -> 8448 | 9344 -> 8576 |
+| tpromo2 | = | = | 6528 -> 4352 | 6528 -> 4480 |
+| tpromo32 | = | = | 6912 -> 4864 | 6912 -> 4864 |
+| tptarith | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tptr2dv | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tptrarr | = | = | 5760 -> 3712 | 5888 -> 3712 |
+| tptrcnd | = | = | 17536 -> 15360 | 18944 -> 16896 |
+| tptrcst | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tptrdiff | = | = | 5376 -> 3328 | 5504 -> 3328 |
+| tptrinit | = | = | 6144 -> 3968 | 6144 -> 4096 |
+| tptrixld | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tptrlhs | = | = | 16768 -> 14720 | 18048 -> 15872 |
+| tptrmac | = | = | 5248 -> 3072 | 5248 -> 3200 |
+| tptrrhs | = | = | 27264 -> 25088 | 31104 -> 28928 |
+| tqsort | 66477980 -> 66477917 | = | 9984 -> 7936 | 10624 -> 8448 |
+| trealloc | = | = | 6656 -> 4608 | 6784 -> 4608 |
+| treg | = | = | 7040 -> 4864 | 7040 -> 4992 |
+| tregnarw | = | = | 5120 -> 3072 | 5248 -> 3072 |
+| tregwide | = | = | 5376 -> 3328 | 5504 -> 3328 |
+| trenamex | = | = | 9344 -> 7296 | 9344 -> 7296 |
+| trenwild | = | = | 8320 -> 6272 | 8448 -> 6272 |
+| tret | = | = | 6912 -> 4864 | 6912 -> 4864 |
+| tretnar | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| triangle | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| trig | 12793704 -> 10109185 | 12794063 -> 10109544 | 11648 -> 11520 | 11648 -> 11520 |
+| trnb5 | = | = | 8576 -> 6528 | 8704 -> 6656 |
+| trowcmp | = | = | 5376 -> 3200 | 5376 -> 3328 |
+| trowinv | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| trowptr | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| trtl2 | = | = | 9856 -> 7808 | 9984 -> 7936 |
+| trw | = | = | 9984 -> 7936 | 10112 -> 7936 |
+| trw2 | = | = | 10496 -> 8448 | 10752 -> 8704 |
+| trwold | = | = | 9216 -> 7168 | 9216 -> 7168 |
+| ts | = | = | 6272 -> 4224 | 6272 -> 4224 |
+| ts32 | = | = | 6912 -> 4864 | 6912 -> 4864 |
+| tscandir | = | = | 13696 -> 11520 | 13696 -> 11648 |
+| tscanf | = | = | 12416 -> 10368 | 12544 -> 10368 |
+| tscanin | = | = | 7936 -> 5888 | 7936 -> 5888 |
+| tselfadj | = | = | 6016 -> 3968 | 6016 -> 3968 |
+| tselfop | = | = | 6912 -> 6784 | 7040 -> 6912 |
+| tsetjiy | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tsetjmp | = | = | 5248 -> 3200 | 5376 -> 3200 |
+| tshlmac | = | = | 5632 -> 3712 | 5760 -> 3712 |
+| tsizetyp | = | = | 5120 -> 3072 | 5248 -> 3072 |
+| tsjdeep | = | = | 5632 -> 3456 | 5632 -> 3584 |
+| tsnprtf | = | = | 5888 -> 3840 | 5888 -> 3840 |
+| tsparse | = | = | 9984 -> 7936 | 9984 -> 7936 |
+| tsprintf | = | = | 6912 -> 4864 | 6912 -> 4864 |
+| tsqrtsp | = | = | 7040 -> 6784 | 7040 -> 6784 |
+| tsretmem | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tsretret | = | = | 5888 -> 3840 | 6016 -> 3968 |
+| tstackov | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tstar | = | = | 7936 -> 5888 | 7936 -> 5888 |
+| tstchain | = | = | 5504 -> 3328 | 5632 -> 3456 |
+| tstdc | = | = | 5248 -> 3072 | 5248 -> 3072 |
+| tstdlib | = | = | 9472 -> 7424 | 9600 -> 7552 |
+| tstfield | = | = | 6144 -> 4096 | 6272 -> 4096 |
+| tstr | 1343091356 -> 1343090549 | 1368265056 -> 1368264412 | 11136 -> 9088 | 11520 -> 9472 |
+| tstr2 | = | = | 6272 -> 4224 | 6400 -> 4352 |
+| tstr3 | = | = | 7552 -> 5504 | 7680 -> 5504 |
+| tstraddr | = | = | 5120 -> 3072 | 5248 -> 3072 |
+| tstrb11 | = | = | 9728 -> 9600 | 9984 -> 9856 |
+| tstrcmpf | = | = | 6272 -> 4224 | 6272 -> 4224 |
+| tstrcmpi | = | = | 5504 -> 3328 | 5504 -> 3328 |
+| tstrconv | = | = | 12416 -> 10240 | 12544 -> 10368 |
+| tstretst | = | = | 6912 -> 4864 | 7040 -> 4864 |
+| tstrftm | = | = | 9728 -> 7680 | 10112 -> 8064 |
+| tstri2 | = | = | 5376 -> 3200 | 5376 -> 3200 |
+| tstrify | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tstring | = | = | 9216 -> 7040 | 9088 -> 7040 |
+| tstrnul | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tstruct | = | = | 6144 -> 4096 | 6144 -> 4096 |
+| tstructi | = | = | 5632 -> 3584 | 5632 -> 3584 |
+| tstructp | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tstructv | = | = | 9344 -> 7296 | 9472 -> 7424 |
+| tsvbmod | = | = | 5632 -> 3584 | 5760 -> 3712 |
+| tsvbuf2 | = | = | 10624 -> 8576 | 10624 -> 8576 |
+| tswitch | = | = | 5248 -> 3072 | 5248 -> 3072 |
+| tswneg | = | = | 5248 -> 3072 | 5248 -> 3200 |
+| tsyntax | = | = | 6528 -> 4480 | 6528 -> 4480 |
+| tszlogic | = | = | 5120 -> 3072 | 5248 -> 3200 |
+| tszswap | 99486414 -> 99477864 | 133734086 -> 133727516 | 6144 -> 4096 | 6528 -> 4480 |
+| ttdstr | = | = | 5632 -> 3456 | 5888 -> 3840 |
+| tternarg | = | = | 6656 -> 4608 | 6912 -> 4864 |
+| ttmp | = | = | 9472 -> 7424 | 9472 -> 7424 |
+| ttmpb7 | = | = | 7168 -> 5120 | 7168 -> 5120 |
+| ttmpcl | = | = | 10496 -> 8320 | 10496 -> 8448 |
+| ttrg6sp | = | = | 10368 -> 10112 | 10368 -> 10240 |
+| ttrig | 40303224 -> 38212327 | 40353951 -> 38263054 | = | = |
+| ttt | = | = | 6144 -> 4096 | 6272 -> 4096 |
+| ttype2 | = | = | 5888 -> 3840 | 6016 -> 3968 |
+| ttype32 | = | = | 5888 -> 3840 | 5888 -> 3840 |
+| ttypesr | = | = | 5888 -> 3840 | 5888 -> 3840 |
+| tugcore | = | = | 11136 -> 9088 | 11136 -> 9088 |
+| tugpath | = | = | 12928 -> 10880 | 13056 -> 10880 |
+| tunary | = | = | 6400 -> 4352 | 7424 -> 5376 |
+| tunary32 | = | = | 6016 -> 3968 | 6016 -> 3968 |
+| tunaryp | = | = | 7296 -> 5120 | 7296 -> 5248 |
+| tunbf | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tunfphi | = | = | 5504 -> 3456 | 5632 -> 3584 |
+| tungetc | = | = | 9088 -> 6912 | 9088 -> 7040 |
+| tunion | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tunion2 | = | = | 6144 -> 4096 | 6272 -> 4224 |
+| tunmsg1 | = | = | 5376 -> 3328 | 5504 -> 3328 |
+| tunmsg2 | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tunused | = | = | 5248 -> 3200 | 5248 -> 3200 |
+| tupdprov | = | = | 5504 -> 3328 | 5504 -> 3328 |
+| tvapinit | = | = | 5376 -> 3328 | 5376 -> 3328 |
+| tvariad | = | = | 6016 -> 3968 | 6144 -> 4096 |
+| tvla | = | = | 24192 -> 22144 | 29312 -> 27264 |
+| tvlaero | = | = | 5888 -> 3840 | 6144 -> 4096 |
+| tvlaisle | = | = | 6912 -> 4736 | 7168 -> 4992 |
+| tvlapal | = | = | 5760 -> 3584 | 5888 -> 3840 |
+| tvlaparm | = | = | 7168 -> 5120 | 7296 -> 5248 |
+| tvlapk | = | = | 6016 -> 3840 | 6144 -> 4096 |
+| tvlasub | = | = | 5632 -> 3584 | 5760 -> 3712 |
+| tvlax | = | = | 7040 -> 4864 | 7168 -> 5120 |
+| tvolopt | = | = | 5888 -> 3712 | 5888 -> 3712 |
+| tvpapar | = | = | 5120 -> 3072 | 5120 -> 3072 |
+| tvplain | = | = | 7680 -> 5632 | 7808 -> 5760 |
+| twcasgm | = | = | 6528 -> 4480 | 6656 -> 4608 |
+| twhcomma | = | = | 8320 -> 7424 | 8448 -> 7552 |
+| twild | = | = | 8320 -> 6144 | 8320 -> 6272 |
+| twincadd | = | = | 7296 -> 5248 | 7552 -> 5376 |
+| twincg | = | = | 6528 -> 4480 | 6656 -> 4608 |
+| twphicpy | = | = | 7296 -> 5248 | 7552 -> 5376 |
+| tzpad | = | = | 8448 -> 6400 | 8448 -> 6400 |
+| wumpus | = | = | 14592 -> 12544 | 15104 -> 13056 |
+
+New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size=3840, nopeep_size=3840.
+
+
+#### Release gates and limitations
+
+- Canonical all-tool build passes; no compiler/debug-metadata implementation changes.
+- Strict PowerShell full+extended **with stack checking**: 584 apps discovered,
+  560 passed, 24 standard override skips, zero failed; perf, diagnostics,
+  dccpeep fixtures and extended suite pass.
+- Strict PowerShell full+extended **without stack checking**: the same 560
+  passed/24 standard skips/zero failed; diagnostics, fixtures and extended pass.
+- Normal-stack remeasurement of runtime-affected candidates: 527 passed,
+  zero failed; 524 existing rows change, 20 remain byte-identical, one new row.
+- `validate-unit-test.ps1 -App tfpround`: host O0/O2, sanitizers and target
+  proof pass; normal peep/nopeep perf row is checked.
+- Both MIR censuses: all 3672 unchanged-source functions byte-identical.
+- IY-safety and API/public-label coverage audits pass; strict MkDocs passes.
+- After promotion, known-bugs runner: seven fail, zero unexpectedly FIXED.
+- `clang-oracle-fuzz.py --gen float --seeds 1-300 --configs production
+  --off known --timeout 6 --jobs 6`: **286 ok / 14 INVALID / zero FAIL**.
+  No generator features changed; exact decimal rendering is proven by the
+  dedicated linked table rather than this raw-bit arithmetic fuzzer.
+- Full Python discovery: **338 tests**, failures=3, errors=10, standard skips=2.
+  Two assertion failures are the pre-answered **#277** modules
+  `test_mir_campaign_baselines` and `test_mir_exact_controls`; neither is fixed,
+  refreshed or skipped. The remaining failure/errors were supervisor/mutation
+  harness timing (two extra errors were timeout-following fixture cleanup).
+  With every other F1 long job finished, one serial isolated runner retried
+  all **nine** affected test methods: **seven pass**, while two pre-existing
+  harness tests still fail: `CompilerMutationTests.test_child_timeout_and_environment_isolation`
+  (the 2-second child deadline loses its expected pre-timeout diagnostic) and
+  `CompilerMutationTests.test_default_serial_and_parallel_are_equal_and_bounded`
+  (the synthetic scheduler exceeds its 180-second subprocess deadline).
+  Both use unchanged PowerShell/fake-compiler fixtures, not the changed float
+  runtime. No harness is fixed or skipped; no old compiler/main checkout is
+  run, as pre-answered. **The full Python gate is not green**: those two timing
+  checks remain unverified, alongside the acknowledged #277 assertions.
+  Local logs: `build/f1-python-tests.log` and `build/f1-python-isolated.log`.
+- New bugs: none. Exhaustive enumeration of all 2^32 bit patterns is not
+  claimed; precision proof samples are explicit above. `%e`/`%g` and existing
+  upstream arithmetic/libm approximations are deliberately not fixed.
+- Original filtered census SHA256: no-stack
+  `46bbc2b260ba6c3f682439f4d725fa87a59f8d0e7eb546ebd37c0bd6ecea0101`;
+  stack `f86f1d9bc90c9e0fa1ca3bc2665c2a70e0791316d5cca0b03c15357992e030a9`.
+  Both filtered post-fix snapshots have exactly these hashes.
+
 ## Tracking
 
 | Cluster | Branch / PR | Status | Notes |
 | --- | --- | --- | --- |
+| F1 | [#330](https://github.com/davidly/dcc/pull/330) (`fix/cluster-f1-printf-rounding`) | PR open; runtime/release proof complete; known Python exceptions documented | BUG-060 promoted as tfpround; maintainer-approved 16 stdout lines/524 perf rows, no cycle increase or image growth; formatter -2 bytes; both 3672-function censuses identical |
 | N | [#312](https://github.com/davidly/dcc/pull/312) (`fix/cluster-n-float-array-else`) | PR open; release gates verified | BUG-055 promoted as tflidx; restored float 283 ok/17 INVALID/zero FAIL; both 3,574-function censuses and all 530 existing perf rows unchanged; #277 plus isolated harness retries documented |
 | A1 | [#281](https://github.com/davidly/dcc/pull/281) | merged | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
 | A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
 | A2b | [#314](https://github.com/davidly/dcc/pull/314) (`fix/cluster-a2b-block-typing`) | split after first root fix | A2b-1 clears original 004, not 015; restored fuzzing finds 004 byte SSA facet (A2b-3); neither issue closes; D2d provenance is a sibling, not the same fix |
 | A2b-1 | [#314](https://github.com/davidly/dcc/pull/314) (`fix/cluster-a2b-block-typing`) | PR open; verified compiler gates; partial issues | Canonical repaired assignment reuses boolean-source widening contract; all original 004 lines pass; new host-proven tlogblk covers cleared facets, no partial reproducer promoted |
-| A2b-2 | | open | BUG-015 pointer-repair ordering, bit-field promotion, discarded signed cast, unary float and missing operand conversions; no second fix |
-| A2b-3 | | open; newly traced | BUG-004 byte local forwarded to untyped logical PHI after metadata repair; same-width 2/4-byte SSA guard excludes bytes; narrow logicbyteinit steering retained |
+| A2b-2 | | split; BUG-015 remains open | Pointer integer ordering cleared in A4; bit-field facet already cleared by E2-bitfield #310; casts and float consumers remain independently owned |
+| A2b-3 | [#329](https://github.com/davidly/dcc/pull/329) (`fix/cluster-a2b3-logical-byte`) | PR open; compiler gates verified; Python exceptions documented | BUG-004 promoted as tlogbyte; byte logical PHI retains its source type; restored integer 283 ok/14 INVALID/3 limit-only/zero FAIL; both 3,672-function existing censuses and all 544 existing perf rows unchanged |
+| A4 | [#328](https://github.com/davidly/dcc/pull/328) (`fix/cluster-a4-block-pointer-typing`) | PR open; verified partial BUG-015 fix | Printed lines 152/153/154/162/163 flip; 155 already passes at base; tptrblk added; 3,672 existing functions and 544 perf rows unchanged; steered fuzz 283 ok/14 INVALID/3 limits; restored seed 96 exposes store-conversion remainder; harness retries documented; no steering/reproducer removal |
 | A2c | [#318](https://github.com/davidly/dcc/pull/318) (`fix/cluster-a2c-block-type-resolution`) | draft PR; stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
 | A3 | [#331](https://github.com/davidly/dcc/pull/331) (`fix/cluster-a3-block-word-widening`) | PR open; compiler gates verified; approved Python harness exceptions | BUG-058 promoted as tblkword; BUG-015 statements 156–158 covered by tblkcast, full issue retained; 3,672 existing functions/mode and 544 perf rows unchanged; restored integer 290 ok/7 INVALID/3 limit-only/zero FAIL |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
