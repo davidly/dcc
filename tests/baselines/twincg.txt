@@ -1,0 +1,9 @@
+post-increment 70001 70001
+add one 6 6
+assigned pre-increment 8 8
+after goto 10 10
+assigned add 65536 65536
+unsigned wrap 0 0
+loop 65537 65537
+controls 70001 70001
+untaken 2 2

@@ -34313,9 +34313,12 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 mir_spilled_cfg_used_wide_store_forwarding = 1;
             dense_switch_handoff =
                 mir_store_feeds_dense_byte_switch(i, insn->src1);
+            /* A fused wide increment lives in its named home, not a narrow
+             * spill slot. The wide store below reloads the full value. */
             if (!dense_switch_handoff &&
                 !(type_size(memory_type) == 4 &&
                   (mir_wide_store_forwarding_enabled ||
+                   mir_value_is_selfstore_wide_increment_result(insn->src1) ||
                    (producer != NULL &&
                     mir_cfg_block_count() == 1 &&
                     mir.local_bytes >= 256 &&

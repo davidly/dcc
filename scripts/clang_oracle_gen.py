@@ -1437,7 +1437,6 @@ KNOWN_BUGS = {
     'structbytecasg': 'BUG-011',
     'negnotconst': 'BUG-012',
     'bfpromo': 'BUG-013',
-    'widelocalinc': 'BUG-014',
     'blockptr': 'BUG-015',
     'inittype': 'BUG-016',
     'widecasgbf': 'BUG-018',
