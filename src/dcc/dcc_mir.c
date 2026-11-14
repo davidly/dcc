@@ -8717,7 +8717,31 @@ void mir_resolve_deferred_metadata(void)
                 struct MirInsn *left;
                 struct MirInsn *right;
                 int repaired_type;
-                if (insn->opcode == MIR_UNARY && insn->src1 >= 0 &&
+                /* A block pointer's load has been bound above, but its
+                 * dereference still has the AST's assumed int type. Infer
+                 * that integer pointee before repairing binary consumers and
+                 * their provisional conversions, not in the later memory pass. */
+                if (insn->opcode == MIR_LOAD_INDIRECT &&
+                    (insn->type == 0 || insn->type == TYPE_INT) &&
+                    insn->src1 >= 0 && insn->bit_width == 0 &&
+                    (insn->memory_flags & 256) == 0) {
+                    source = mir_mutable_definition(insn->src1);
+                    if (source == NULL || type_ptr_depth(source->type) == 0 ||
+                        source->opcode != MIR_LOAD ||
+                        strstr(source->name, "#b") == NULL)
+                        continue;
+                    repaired_type = type_decay_ptr(source->type);
+                    if (type_size(repaired_type) <= 0 ||
+                        type_ptr_depth(repaired_type) != 0 ||
+                        type_is_float(repaired_type) ||
+                        type_is_struct_object(repaired_type))
+                        continue;
+                    if (insn->type != repaired_type) {
+                        insn->type = repaired_type;
+                        insn->memory_size = type_size(repaired_type);
+                        changed = 1;
+                    }
+                } else if (insn->opcode == MIR_UNARY && insn->src1 >= 0 &&
                     (insn->immediate == '+' || insn->immediate == '-' ||
                      insn->immediate == '~')) {
                     source = mir_mutable_definition(insn->src1);

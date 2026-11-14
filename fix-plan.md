@@ -205,7 +205,7 @@ addition is the five-instruction, five-byte signed-word extension already
 emitted for the control: `ld a,h; rlca; sbc a,a; ld d,a; ld e,a`. No emitter,
 selector, schedule, runtime, fallback or AST admission changes.
 
-#### A2b-2. Independently traced BUG-015 consumers (not fixed)
+#### A2b-2. Independently traced BUG-015 consumers (split)
 
 | Facet | Traced cause / next file and function |
 | --- | --- |
@@ -222,6 +222,74 @@ stores); the unary, mixed arithmetic and conditional-consumer probes above
 still fail and are byte-unchanged by A2b-1. No partial BUG-015 test is promoted,
 no BUG-015 steering is removed, and #235 remains open.
 
+
+#### A4. Direct block-pointer integer repair ordering (partial BUG-015)
+
+Investigated from `8db72cbd` on `fix/cluster-a4-block-pointer-typing`.
+The A2c early-lexical-typing experiment remains withdrawn: this change stays
+inside the existing deferred metadata repair and does not bind AST locals
+early or change selectors, allocation, schedules or runtime helpers.
+
+The hypothesis is confirmed for the direct pointer facet. Named block-pointer
+loads are repaired first, but their dereferences still hold the AST's assumed
+int type when scoped binary repair runs. The later indirect-load pass repairs
+only the load; its consumers retain signed-word arithmetic and provisional
+word conversions. Infer scalar integer dereferences of repaired block-pointer
+loads in the scoped fixed-point walk before repairing those consumers. Float,
+aggregate and pointer pointees, bit-fields and pointer-array loads are excluded.
+
+- BUG-015 statement lines **22/32/44/127/137**, printed lines
+  **152/153/154/162/163**, now pass in peep and nopeep: long multiplication,
+  signed-byte/word comparisons against unsigned long, unsigned word shift
+  and unsigned word divide. The first ordering fix clears this whole facet;
+  no second consumer patch is needed.
+- The byte/bit-field facet (statement **55**, printed line **155**) already
+  passes at the starting commit: E2-bitfield #310 made
+  `mir_promoted_operand_type()` apply field-width range promotion in deferred
+  repair. A4 makes no bit-field change and records that inherited correction.
+- The parked program improves from **8 to 3 wrong lines of 13**. Cast lines
+  **156–158** remain for A3; the separately logged float facets remain outside
+  A4. **BUG-015/#235 stays open**, with its reproducer and all generator
+  steering untouched. Counts stay **eight open / fifty-one fixed**.
+- New host/ASan/UBSan-proven `tptrblk` covers the cleared pointer paths and
+  function-scope controls, plus the already-correct byte/bit-field path.
+  Its sole new normal-stack perf row measures **195016/196163 cycles** and
+  **7296/7424 bytes** (peep/nopeep). Dynamic MIR probes match fully typed
+  multiplication/comparison controls under release, stack-check, `-gline`
+  and `-g`; linked `-gline` COM bytes are release-identical in both pipelines.
+- Both censuses are byte-identical for **3,672 existing functions / 559 apps**;
+  only 13 `tptrblk` functions are added. All **544 existing perf rows** are
+  unchanged. Both strict full+extended suites pass (560 apps each), as do
+  diagnostics, peephole fixtures, independent compiler CMake and debugger
+  CTest (10/10). No existing function acquires a fallback.
+- The unsigned shift uses the same `srl h`/`rr l` loop as the already-correct
+  outer-pointer shape; both complete neighbouring-control assemblies remain
+  unchanged. Long multiplication uses the established `__lmul` path instead
+  of low-word shift/add followed by wrong sign-extension; division selects
+  `__divu`, not `__divs`. Correct long arithmetic costs only the new workload,
+  not any existing test.
+- The required steered integer batch (seeds 1–300, production configurations,
+  `--off known`) is clean: **283 ok / 14 INVALID / 3 limit-only / zero FAIL**.
+  A separate diagnostic invocation temporarily restores only `blockptr`
+  without editing the generator, and finds seed **96**. The reduced,
+  host/sanitizer-proven remainder is a plain long store:
+  `{ int32_t *q = &a3[0]; *q = x; }` stores 0 for 65536, or -1 for -65537;
+  a literal 65536 also stores 0. Function-scope pointers are correct in both
+  pipelines. Lowering inserted `MIR_UNARY type=2` for the assumed word target;
+  later repair makes the store four bytes but cannot restore the discarded
+  high word. That missing store-conversion obligation is not the load/binary
+  ordering fixed here. **Stop rule applied:** stop the diagnostic batch and
+  ship only the clean cleared sub-root; no second compiler patch, new bug
+  number, steering removal or reproducer edit. Restored 300-seed completion
+  remains unverified and BUG-015 stays open with this new documented facet.
+- Python discovery ran **338 tests**, with **6 failures / 10 errors / 2 skips**:
+  two failures are the accepted #277 campaign/exact controls; the others are
+  process-supervision, compiler-mutation and clobber-runner harness failures.
+  A focused isolated retry of the 13 affected methods leaves **1 failure /
+  6 errors** (PowerShell timeouts and lifecycle/orphan-pipe assertions).
+  Several timing failures clear, but the remaining harness contracts are
+  unverified, not fixed or skipped. The newly added dynamic pointer test
+  passes separately; debug metadata and debugger CTest pass.
 
 #### A2b-3. Restored logical-byte initializers lose their SSA source type
 
@@ -3258,8 +3326,9 @@ addresses require the normal full/line debug pipeline checks.
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
 | A2b | [#314](https://github.com/davidly/dcc/pull/314) (`fix/cluster-a2b-block-typing`) | split after first root fix | A2b-1 clears original 004, not 015; restored fuzzing finds 004 byte SSA facet (A2b-3); neither issue closes; D2d provenance is a sibling, not the same fix |
 | A2b-1 | [#314](https://github.com/davidly/dcc/pull/314) (`fix/cluster-a2b-block-typing`) | PR open; verified compiler gates; partial issues | Canonical repaired assignment reuses boolean-source widening contract; all original 004 lines pass; new host-proven tlogblk covers cleared facets, no partial reproducer promoted |
-| A2b-2 | | open | BUG-015 pointer-repair ordering, bit-field promotion, discarded signed cast, unary float and missing operand conversions; no second fix |
+| A2b-2 | | split; BUG-015 remains open | Pointer integer ordering cleared in A4; bit-field facet already cleared by E2-bitfield #310; casts and float consumers remain independently owned |
 | A2b-3 | [#329](https://github.com/davidly/dcc/pull/329) (`fix/cluster-a2b3-logical-byte`) | PR open; compiler gates verified; Python exceptions documented | BUG-004 promoted as tlogbyte; byte logical PHI retains its source type; restored integer 283 ok/14 INVALID/3 limit-only/zero FAIL; both 3,672-function existing censuses and all 544 existing perf rows unchanged |
+| A4 | [#328](https://github.com/davidly/dcc/pull/328) (`fix/cluster-a4-block-pointer-typing`) | PR open; verified partial BUG-015 fix | Printed lines 152/153/154/162/163 flip; 155 already passes at base; tptrblk added; 3,672 existing functions and 544 perf rows unchanged; steered fuzz 283 ok/14 INVALID/3 limits; restored seed 96 exposes store-conversion remainder; harness retries documented; no steering/reproducer removal |
 | A2c | [#318](https://github.com/davidly/dcc/pull/318) (`fix/cluster-a2c-block-type-resolution`) | draft PR; stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |

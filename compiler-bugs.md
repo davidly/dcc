@@ -252,8 +252,41 @@ signed char l2 = -66;
 E1 also corrects the `wrapped_decrement` facet: SSA forwarding now retains
 the unsigned word interpretation of its untyped decrement result before
 widening. The parked program improves from 10 to 9 wrong lines out of 13;
-all remaining pointer, byte, and cast facets still fail. No independent
-BUG-015 implementation or steering change is included.
+all remaining pointer, byte, and cast facets still failed at that stage. No
+independent BUG-015 implementation or steering change was included in E1.
+
+At `8db72cbd`, E2-bitfield (#310) already makes the block-byte/bit-field
+comparison at reproducer statement line 55 (printed line 155) pass: deferred
+repair uses `mir_promoted_operand_type()`'s field-width range promotion.
+
+**A4 clears the direct block-pointer integer facets.** The scoped repair now
+infers scalar integer pointees from repaired block-pointer loads before
+retyping their binary consumers and provisional conversions. In both peep
+and nopeep, reproducer printed lines **152, 153, 154, 162 and 163** flip:
+`multiply ffffae4e` → `0003ae4e`, `compare char 7` → `0`, `compare int 7` →
+`0`, `shift u16 255` → `1`, and `divide u16 120` → `136` (statements 22,
+32, 44, 127 and 137). Line 155 remains correct without a bit-field edit.
+The parked program improves from **8 to 3 wrong lines of 13**; its cast
+lines 156–158 still fail. `tptrblk` separately covers the cleared pointer
+paths, function-scope controls and the already-correct byte/bit-field path.
+Both censuses preserve all 3,672 existing functions byte-for-byte, and all
+544 existing performance rows are unchanged. **BUG-015/#235 remains open**;
+its reproducer and integer/float steering stay parked for the independently
+owned cast and float facets. No float typing repair is included in A4.
+
+A4's temporary restored-`blockptr` fuzz probe finds another facet of this
+same deferred block-target typing bug (integer seed 96):
+`void f(int32_t x) { { int32_t *q = &a3[0]; *q = x; } }` stores **0** for
+65536 and **-1** for -65537. `*q = (int32_t)65536` also stores 0; declaring
+`q` at function scope stores the full correct value. The host and ASan/UBSan
+agree, and both dcc pipelines fail. `mir_lower_expr_impl()` inserts a word
+conversion to the assumed assignment target; subsequent pointer/store repair
+sets `MIR_STORE_INDIRECT.memory_size` to four but retains that `MIR_UNARY`
+source conversion (`type=2` from an `int32_t` parameter `type=4`). This is a
+**store-conversion obligation**, not the indirect-load/binary ordering fixed
+by A4. The diagnostic restored run is stopped under the partial-root stop
+rule; no second implementation is attempted, no new bug number is allocated,
+and `blockptr` steering is retained. The original `bug015.c` stays unchanged.
 
 
 
