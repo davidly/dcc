@@ -33,19 +33,20 @@ and their historical diagnoses are retained separately below.
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
-| [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 
-Twelve are open: eight give wrong results with no diagnostic
-(BUG-039 is in the runtime), one latent wrong-code finding is blocked by
+| [BUG-060](#bug-060) | #322 | wrong result | `%f` rounds exact IEEE float bits to an incorrect last decimal digit |
+| [BUG-061](#bug-061) | #323 | wrong result | `sizeof` at or above 32768 is sign-extended or divided as a signed 16-bit value |
+
+Thirteen are open: nine give wrong results with no diagnostic, one latent wrong-code finding is blocked by
 BUG-041 admission, one hangs, one stops the compile,
 and one (BUG-022) turns a compile error into
 a broken program. BUG-013's unsigned bit-field promotion is fixed below.
 
-Forty-three reported bugs are fixed: [two in cluster C1](#fixed-in-cluster-c1),
+Forty-four reported bugs are fixed: [one in cluster R1](#fixed-in-cluster-r1), [two in cluster C1](#fixed-in-cluster-c1),
 [one in cluster N](#fixed-in-cluster-n),
 [one in cluster E2-bitfield](#fixed-in-cluster-e2-bitfield),
 [two in cluster E2-shift](#fixed-in-cluster-e2-shift),
@@ -91,6 +92,36 @@ The wrong-result bugs and the hang also show with the v3.6.0 compiler, but it
 was only tried with today's runtime, which is not a reliable pairing.
 
 ---
+
+## BUG-060
+
+**`%f` rounds exact IEEE single-precision bits to an incorrect last decimal
+ digit.** No arithmetic or libm is needed to reproduce it: printing
+`41649249` gives `14.285715` instead of `14.285714`; `c0b55555` gives
+`-5.666666` instead of `-5.666667`, and `40b55555` gives `5.666666` instead of
+`5.666667`. The hexadecimal bits themselves are correct in both modes.
+
+- Control: `3fc00000` prints `1.500000` correctly.
+- Found during cluster R1: corrected division exposes the independent formatter
+  defect in `tfdedge`. The old divider accidentally masked the negative case.
+- Regression is parked as [bug060.c](tests/known-bugs/bug060.c); host O0/O2,
+  ASan and UBSan agree. Formatter implementation is intentionally unchanged.
+
+## BUG-061
+
+**`sizeof` at or above 32768 is sign-extended or divided as a signed 16-bit
+value.** For a static `uint8_t large[32768]`, `(unsigned long)sizeof(large)`
+should print `32768`, and `(unsigned long)(sizeof(large) / 8)` should print
+`4096`. Both are wrong; `sizeof(small) / 8` for a 32760-byte array prints
+`4095` correctly. CP/M's unsigned 16-bit `size_t` can represent both sizes.
+
+- Found in the R1 proof harness: a 4404-pair array occupies 35232 bytes and
+  `sizeof(pairs)/sizeof(pairs[0])` compiled to a 61748-iteration bound, instead
+  of 4404. The proof was repaired with an explicit unsigned count; all original
+  4404 division results agreed even before the harness repair.
+- Regression is parked as [bug061.c](tests/known-bugs/bug061.c); host O0/O2,
+  ASan and UBSan agree. No compiler code is changed in cluster R1.
+
 
 ## BUG-004
 
@@ -390,31 +421,6 @@ dcc emits the increment first and then the copy, which reads the new `i`:
   `do … while`, and a copy outside a loop.
 - Found by fuzzing at `83dc7a91` (seed 7581), with and without `dcc-peep`.
 
-## BUG-039
-
-**Float division is off by one unit in the last place in about a fifth of
-cases, in both directions.** Addition, subtraction, multiplication, the
-comparisons and every integer/float conversion are bit-exact against IEEE
-single precision (484 operand pairs each), so this is the rounding in the
-runtime's `__fdiv` (`DCCRTL.MAC`), not a general precision limit.
-
-```c
-volatile float va = 1.0f, vb = 3.0f;
-union { float f; uint32_t u; } b;
-b.f = va / vb;      /* want 3eaaaaab, dcc 3eaaaaaa */
-va = 10.0f;         /* 10/3: want 40555555, dcc 40555556 */
-va = 1.0f; vb = 1.85f;  /* want 3f0a60dd, dcc 3f0a60de */
-```
-
-- 80 of 400 quotients over a 20-value table are wrong, all by exactly one
-  ulp; 44 are too low and 36 too high, so it is not a missing round-up.
-- Division by a power of two is exact.
-- `1.0f / 3.0f` with constant operands is wrong too: dcc does not fold float
-  division, it calls the runtime (`__fdf`, the fast-call entry of `__fdiv`),
-  so every float quotient goes through the one routine.
-- Also at v3.6.0 (`20290235`) with today's runtime.
-- Found by hand probing (the float generator excludes `/` as `fdivround`).
-
 ## BUG-041
 
 **The value of a float `++` or `--` expression is rejected.** `DCC-E1002`
@@ -480,6 +486,66 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   fuzzing (float generator, seed 4294).
 
 ---
+
+## Fixed in cluster R1
+
+BUG-039's runtime rounding defect is **fixed in cluster R1**. Acceptance of
+this runtime change is still **blocked**, not complete: two existing tests
+embed obsolete expected bits in C, and updating those constants would violate
+R1's requirement that all existing MIR function streams remain byte-identical.
+Additionally, corrected division exposes BUG-060 formatting differences and
+increases the mathematical tangent error at the single-precision half-pi.
+No existing numeric or performance baseline has been changed to conceal these
+conflicts; [R1's evidence](fix-plan.md#r1-normalize-the-restoring-division-quotient-before-rounding)
+records the exact deltas and the incomplete gates.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-039](#bug-039) | #259 | [tfdivr](tests/tfdivr.c) |
+
+The divider formerly rounded the 24-bit quotient before left-normalizing a
+ratio below one. Reusing `FDLUP` for one extra restoring step before rounding
+recovers the missing bit and removes the post-round normalizer. The shared
+`__fdf`/`__fdiv` helper shrinks from 431 to 420 bytes; neither ABI nor IY
+preservation changes. A linked dual-ABI probe matches host clang exactly for
+4404 operand pairs (8808 ABI output patterns) in each peep mode, including the
+404 historical cases, 4000 additional edge/random pairs, and all powers of two
+across the normal exponent range. The host agrees at O0/O2 and under ASan/UBSan.
+Subnormal inputs/results retain the documented flush-to-zero behavior and are
+not claimed as IEEE-bit-exact coverage.
+
+Regression [tfdivr.c](tests/tfdivr.c) persists the 404-case table through both
+explicit ABIs and checks IY preservation. The original reproducer flipped in
+both modes before promotion; BUG-022's unrelated existing FIXED result remains
+owned by cluster M.
+
+The following diagnosis describes the pre-fix behavior.
+
+### BUG-039
+
+**Float division is off by one unit in the last place in about a fifth of
+cases, in both directions.** Addition, subtraction, multiplication, the
+comparisons and every integer/float conversion are bit-exact against IEEE
+single precision (484 operand pairs each), so this is the rounding in the
+runtime's `__fdiv` (`DCCRTL.MAC`), not a general precision limit.
+
+```c
+volatile float va = 1.0f, vb = 3.0f;
+union { float f; uint32_t u; } b;
+b.f = va / vb;      /* want 3eaaaaab, dcc 3eaaaaaa */
+va = 10.0f;         /* 10/3: want 40555555, dcc 40555556 */
+va = 1.0f; vb = 1.85f;  /* want 3f0a60dd, dcc 3f0a60de */
+```
+
+- 80 of 400 quotients over a 20-value table are wrong, all by exactly one
+  ulp; 44 are too low and 36 too high, so it is not a missing round-up.
+- Division by a power of two is exact.
+- `1.0f / 3.0f` with constant operands is wrong too: dcc does not fold float
+  division, it calls the runtime (`__fdf`, the fast-call entry of `__fdiv`),
+  so every float quotient goes through the one routine.
+- Also at v3.6.0 (`20290235`) with today's runtime.
+- Found by hand probing (the float generator excludes `/` as `fdivround`).
+
 
 ## Fixed in cluster N
 
@@ -2218,11 +2284,10 @@ and `tnestfor` performance rows move; every existing stdout baseline stays
 unchanged. Restored `fnegzero_not` production seeds 1-300 give **269 ok,
 31 INVALID, zero FAIL**. Regression: [tflnot](tests/tflnot.c).
 
-BUG-039 remains open. Its restoring-step experiment fixes all 404 bit
-patterns and passes both linked division ABIs, but none of the five
-changed full stdout baselines satisfies the newly required host-clang
-proof. The runtime edit was reverted; see
-[the investigation notes](fix-plan.md#j-float-arithmetic).
+The earlier J/J2 BUG-039 experiment was reverted because its five changed
+complete stdout baselines failed the host-clang requirement; see the
+[investigation notes](fix-plan.md#j-float-arithmetic). R1 now implements the
+correct divider and records the remaining acceptance conflicts separately.
 
 | ID | Issue | Regression |
 | --- | --- | --- |

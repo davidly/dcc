@@ -54,7 +54,6 @@ FEATURES = frozenset((
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering.
 KNOWN_BUGS = {
-    'fdivround': 'BUG-039',
     'fincdecval': 'BUG-041, BUG-056',
     'fblockneg': 'BUG-015',
     'fblockint': 'BUG-015',
