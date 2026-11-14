@@ -1,6 +1,6 @@
-/* BUG-054: dccpeep defers a global word load despite HL still being live
- * when a byte local is used twice by a binary operator. Parameter and
- * constant sources are passing controls. */
+/* Global-source byte self-operands retain resident HL through peephole
+ * optimization. Covers unsigned/signed subtraction, addition and AND,
+ * with parameter and literal sources as controls. */
 #include <stdint.h>
 #include <stdio.h>
 struct S { uint16_t a[2]; int16_t b; uint16_t c; };

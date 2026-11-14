@@ -437,7 +437,7 @@ def same_variable(a, b):
 
 
 def peep_byte_self(op, operands):
-    """A byte binary self-use can lose a live global load (BUG-054)."""
+    """Detect byte binary self-use for optional coverage steering."""
     return op not in (*LOGIC, '=') and same_variable(*operands) \
         and is_int(ty(operands[0])) and ty(operands[0]).bits == 8
 
@@ -1448,7 +1448,6 @@ KNOWN_BUGS = {
     'blockdec': 'BUG-015',
     'loopcopy': 'BUG-037',
     'wordarm': 'BUG-038',
-    'peepbyteself': 'BUG-054',
 }
 
 

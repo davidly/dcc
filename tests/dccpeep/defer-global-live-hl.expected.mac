@@ -1,0 +1,76 @@
+; An unlabelled entry also retains its resident HL operand.
+	ld hl,(_word)
+	push hl
+	pop de
+	or a
+	sbc hl,de
+	ret
+
+_live_after_pop:
+	ld hl,(_word)
+	push hl
+	pop de
+	or a
+	sbc hl,de
+	ret
+
+_live_before_pop:
+	ld hl,(_word)
+	push hl
+	ld a,l
+	ld (_byte),a
+	ld hl,3
+	pop de
+	add hl,de
+	ret
+
+_partial_overwrite:
+	ld hl,(_word)
+	push hl
+	ld h,0
+	pop de
+	add hl,de
+	ret
+
+_live_high_byte:
+	ld hl,(_word)
+	push hl
+	pop bc
+	ld a,h
+	ld (_byte),a
+	ld hl,3
+	add hl,bc
+	ret
+
+_safe_overwrite:
+	ld hl,(_other)
+	add hl,hl
+	ld de,(_word) ; peep: defer_global_push_reload
+	add hl,de
+	ret
+
+_safe_nested_push:
+	ld hl,(_third)
+	add hl,hl
+	ld bc,(_other) ; peep: defer_global_push_reload
+	add hl,bc
+	ld de,(_word) ; peep: defer_global_push_reload
+	add hl,de
+	ret
+
+_safe_pop_hl:
+	ld a,7
+	ld (_byte),a
+	ld hl,(_word) ; peep: defer_global_push_reload
+	ret
+
+_safe_split_sign_extension:
+	ld a,(_byte)
+	ld l,a
+	rlca
+	sbc a,a
+	ld h,a
+	ex de,hl ; peep: push_hl_pop_de_to_ex
+	ld hl,(_word) ; peep: defer_global_push_reload
+	add hl,de
+	ret

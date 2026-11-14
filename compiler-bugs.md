@@ -48,16 +48,16 @@ and their historical diagnoses are retained separately below.
 | [BUG-042](#bug-042) | #262 | compile error | A float constant that must be folded or tested for truth is rejected: `-(-2.5f)`, `!2.5f`, `2.5f && n`, `if (2.3f)` |
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
-| [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 
-Twenty-six are open: sixteen give wrong results with no diagnostic
+Twenty-five are open: sixteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one hangs, eight stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-013 and BUG-016.
 
-Twenty-seven reported bugs are fixed: [two in cluster D2a](#fixed-in-cluster-d2a),
+Twenty-eight reported bugs are fixed: [two in cluster D2a](#fixed-in-cluster-d2a),
+[one in cluster K2](#fixed-in-cluster-k2),
 [two in cluster D1](#fixed-in-cluster-d1),
 [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
@@ -865,7 +865,80 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
 
-## BUG-054
+## BUG-055
+
+**A variable-index store into a local float array inside an `else` arm can
+be lost between nested loops and a later `while` with conditional float
+expressions.** The array's original value is read back, in all four production
+configurations. This is an independent finding from cluster F's restored
+float seeds 1-300, seed 241; the reduced program contains no integer compound
+assignment and does not invoke F's new admission rule.
+
+The parked reproducer expects `16777216` from all three functions. dcc prints
+`0` for the variable-index case and the correct `16777216` for both controls.
+The full differential reducer produced a 115-line, sanitizer-proven case;
+the parked hand reduction replaces bit-pattern printing with an explicit,
+in-range float-to-`int32_t` conversion and retains the failing context.
+
+- Correct if `la3[l4 & 3] = 16777216.0f` uses the constant index `0`.
+- Correct if the earlier nested loop, the surrounding `if`/`else`, the later
+  `while`, or the intervening unused conditional-float expression is removed.
+- A simple 16-bit counter copy followed by the indexed local-array store is
+  correct; this is not sufficient evidence to merge the finding into BUG-037.
+- No compiler fix is attempted here. Float steering `farrloopindex` replaces
+  variable indexes only for local float-array writes inside a root-level branch
+  preceded by a nested loop and followed by a `while`; scalar, global, member,
+  constant-index and other indexed stores remain enabled.
+
+---
+
+## Fixed in cluster K2
+
+BUG-054 now passes in peep/nopeep, with and without stack checking. The
+optimizer removed `ld hl,(global)` while replacing its push/pop transport
+with a delayed reload into another register pair. Earlier spill cleanup can
+leave the self-operation's other byte operand resident in that same HL;
+stack balance alone does not establish that its original value is dead.
+
+The rule now requires the original H and L to be dead after the removed
+push, including reads beyond its matching pop. A versioned CFG proof is
+backed by a local byte-kill scan recognizing accumulator-only rotates. This
+keeps the safe split sign-extension case in `tcaslv` unchanged without
+weakening unknown/user-assembly barriers or modifying shared instruction
+effects. New fixtures cover live uses before/after the pop, partial writes,
+a high-byte use, full/split overwrites, nested pushes, a pop into HL and
+an unlabelled entry.
+
+Only BUG-054 flipped: all 29 other parked reproducers still fail.
+`peepbyteself` is removed from integer `KNOWN_BUGS`; production seeds 1-300
+with `--off known` give **228 ok, 72 INVALID, zero FAIL or target limits**
+in all four configurations, including peep and peep-nosc. The reproducer is
+promoted as `tpephl`, with its unchanged host/sanitizer-proven baseline.
+
+Both strict full+extended production suites pass. Before/after comparisons
+preserve all **3,047 generated MAC files in each stack mode**, except
+`tstdc`'s embedded `__TIME__` literal. All **514 existing performance rows**
+(the 509 requested rows plus five already present on the branch base) are
+unchanged; only the promoted test's new normal-stack measured row is added.
+All 72 existing optimizer checks plus the new fixture pass, also under
+ASan/UBSan. Full/line debug reproducers retain matching `.COM`/`.DBG` pairs;
+`-gline` is release-identical in both pipelines, and all ten debugger-host
+checks pass. MIR and compiler emission are untouched.
+
+Python gate details and isolated timing retries are recorded in
+[fix-plan.md](fix-plan.md#k2-live-hl-deleted-by-a-deferred-global-reload).
+No expectations were refreshed or skipped; no historical compiler checks
+or `prepush.ps1` run were performed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-054](#bug-054) | #288 | [tpephl](tests/tpephl.c) |
+
+### BUG-054
+
+**Fixed:** prove that the original H and L are dead after the removed push
+before deferring a global reload. Regression: [tpephl.c](tests/tpephl.c),
+[baseline](tests/baselines/tpephl.txt).
 
 **With `dccpeep`, a byte local loaded from a global and used twice by
 a binary operator loses a live register.** The result can select
