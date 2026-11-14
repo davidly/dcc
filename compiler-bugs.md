@@ -7,7 +7,7 @@ wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
 source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `6e5a05ea` plus the cluster C2b wide-PHI edge-use proof (2026-11-15).
+- **Compiler under test:** `6e5a05ea` plus the cluster C2c loop-live PHI slot proof (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -33,18 +33,17 @@ and their historical diagnoses are retained separately below.
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
-| [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 | [BUG-058](#bug-058) | #315 | wrong result | A nested-block word initialized across signedness is widened with the initializer type when stored to a 32-bit array |
 
-Eleven are open: seven give wrong results with no diagnostic
+Ten are open: six give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
 BUG-041 admission, one hangs, one stops the compile,
 and one (BUG-022) turns a compile error into
 a broken program. BUG-013's unsigned bit-field promotion is fixed below.
 
-Forty-five reported bugs are fixed: [one in cluster C2b](#fixed-in-cluster-c2b),
+Forty-six reported bugs are fixed: [one in cluster C2c](#fixed-in-cluster-c2c),
 [one in cluster C2a](#fixed-in-cluster-c2a),
 [two in cluster C1](#fixed-in-cluster-c1),
 [one in cluster N](#fixed-in-cluster-n),
@@ -440,7 +439,43 @@ if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
 - Found by fuzzing (float generator, seed 3).
 
 
-## BUG-052
+## Fixed in cluster C2c
+
+BUG-052 is fixed by requiring CFG deadness before coalescing a solitary PHI
+source with its destination in `mir_prepare_backend_slots()`. A parameter's
+one static edge use can repeat on every loop iteration; retaining that live
+source prevents both result accumulation and slot-lifetime truncation by a
+later counter. No liveness scan, wide-PHI-update matcher, selector, cost
+policy or fallback is changed. BUG-029, BUG-037 and BUG-057 remain open.
+
+Promoted as [tphislot](tests/tphislot.c): all nine original lines are retained,
+with six added lines for nonconstant conditions in both arms, float/long
+accumulators and float/long member stores. All 15 lines pass peep/nopeep,
+release/line/full debug and forced `spilled-all`; line-debug COMs are
+release-identical. The original three control instruction bodies are unchanged
+in both pipelines after local-label renumbering.
+
+Restored float production seeds 1-300: **291 ok, 9 INVALID, zero FAIL**.
+Remaining-known-shape steering is clean for 3,000 seeds; no new bug was found.
+Both original **3,603-function** census TSVs and all **534 existing perf rows**
+are byte-identical; only the new measured `tphislot` row is added.
+Before promotion: **12 reproducers, 2 FIXED / 10 fails**. After promotion:
+**11 reproducers, 1 FIXED / 10 fails**; the sole remaining FIXED is BUG-022's
+pre-existing fixture-only pass, not closure of its diagnostic defect.
+
+The strict full+extended compiler gates, sanitizer/CMake build, six host MIR
+and ten debugger-host tests, 34 focused metadata/compiler tests and required
+MIR emission/extended censuses pass. The regular Python gate retains #277's
+approved golden failures and load-sensitive harness exceptions; isolated
+retry details are recorded in [fix-plan.md](fix-plan.md#c2c-loop-live-solitary-conditional-phi-sources-bug-052).
+No historical compiler/dating check or `prepush.ps1` was run, and no existing
+baseline, harness expectation, timeout or skip was changed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-052](#bug-052) | #272 | [tphislot](tests/tphislot.c) |
+
+### BUG-052
 
 **In a loop, an expression with a folded `?:` on a 32-bit parameter is
 accumulated into the parameter when the parameter is assigned after the
@@ -974,7 +1009,7 @@ use guard that prevents cyclic PHI proofs. The existing carry/borrow schedule
 is retained; no fusion matcher, selection/cost policy or fallback is changed.
 
 The first root clears only 027/038, so the stop rule splits C1 (fixed) from
-C2 (029/037/052, still open). C2's separately traced causes are recorded in
+C2 (029/037 still open; 052 subsequently fixed in C2c). C2's separately traced causes are recorded in
 [fix-plan.md](fix-plan.md#c-assignments-lost-across-control-flow-merges-and-loop-carried-values).
 BUG-037 mutates an old wide-PHI backend slot before its backedge copy; it is
 not BUG-057's stale direct-add named-home-result read. BUG-057 remains open.
