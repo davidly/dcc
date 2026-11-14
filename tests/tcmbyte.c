@@ -1,8 +1,6 @@
-/* BUG-011: compound assignment to an element of a char, signed char or
- * unsigned char array that is a struct member is rejected with DCC-E1002,
- * for every operator and for constant and variable indexes. `s.b[i]++`,
- * `s.b[i] = s.b[i] ^ 1`, a plain byte array, and a 16-bit array member all
- * compile. */
+/* Compound updates of signed/unsigned byte array members through struct
+ * variables, pointers and struct arrays; used values narrow and evaluate
+ * their index once, including wide and float right operands. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -34,6 +32,22 @@ static void element(void)
     sa[1].c[idx - 1] -= 1;
 }
 
+static uint32_t wide = 70003;
+static float factor;
+
+static void used_values(void)
+{
+    uint8_t value;
+    int16_t next = 0;
+    s.b[0] = 250;
+    value = (s.b[next++] += wide);
+    printf("used byte %u %u %d\n", (unsigned)value, (unsigned)s.b[0], (int)next);
+    factor = 2.5f;
+    s.b[1] = 4;
+    value = (s.b[1] += factor);
+    printf("mixed byte %u %u\n", (unsigned)value, (unsigned)s.b[1]);
+}
+
 int main(void)
 {
     uint8_t i;
@@ -46,5 +60,6 @@ int main(void)
         printf("%u %d %u | %u %d | %u %d %u\n", (unsigned)s.b[i], (int)s.c[i],
                (unsigned)(uint8_t)s.name[i], (unsigned)sa[1].b[i], (int)sa[1].c[i],
                (unsigned)sa[0].b[i], (int)sa[0].c[i], (unsigned)(uint8_t)sa[0].name[i]);
+    used_values();
     return 0;
 }

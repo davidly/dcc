@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has thirty-two open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has thirty open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -9,7 +9,7 @@ fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), B1 (#286),
-K (#278), L (#279) and G1 (#295) are confirmed and fixed.
+K (#278), L (#279), F (#296) and G1 (#295) are confirmed and fixed.
 B3 confirms the common
 forwarded-operand defect in BUG-026 and the formerly E-grouped BUG-017. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
@@ -495,9 +495,39 @@ conversion insertion that feeds MIR.
 | BUG-018 | #238 | `op=` of a 32-bit value to a bit-field or to an element of a 16-bit array member: rejected |
 | BUG-043 | #263 | `op=` on an integer lvalue with a float right operand: rejected |
 
-All `DCC-E1002`. Upstream `34e35b3a` handled plain members, elements and
-pointer targets; these are the remaining lvalue kinds and the mixed-type
-case. Likely one lowering switch that enumerates lvalue kinds.
+**Confirmed shared root cause:** stale AST admission gates enumerate legacy
+lvalue/RHS restrictions although the existing MIR numeric compound contract
+already loads, converts, computes, narrows and stores all three shapes.
+One shared integer-compound admission rule validates the existing lvalue proofs
+and numeric operand/operator types. Upstream `34e35b3a` already supplied the
+lowering; no lowering, allocation, selection, emitter or runtime change is
+needed. All three bugs share this cause, so no F1/F2 split or second compiler
+fix is necessary.
+
+- Before promotion: 35 reproducers give three `FIXED`, 32 `fails`; only
+  BUG-011/018/043 flip. BUG-055/#294 is an independent restored-float finding
+  with no integer compounds, parked and narrowly steered, not fixed here.
+- Both censuses are byte-identical across all 3,436 existing functions,
+  including hashes; all 509 old perf rows retain their exact bytes. New
+  byte-member and integer/float sequences match already-supported controls.
+- Restored integer features: 213 ok, 85 INVALID, two target-limit-only,
+  zero FAIL for production seeds 1-300. Restored `icasgf`: final float batch
+  256 ok, 44 INVALID, zero FAIL after triaging seed 241; 3,000-seed steering
+  proof clean. The discovery batch was 255 ok, 44 INVALID, one BUG-055 FAIL.
+- Promoted `tcmbyte`, `tcmwide`, `tcmfloat`, with three newly measured normal-
+  stack PowerShell rows. Strict stack/no-stack full+extended, Python runall,
+  host/sanitizer baselines, native MIR, debugger/metadata and require-emit
+  gates pass.
+
+The final regular Python gate runs 314 tests with the two approved #277
+failures and two existing skips. It also hits the unchanged mock mutation
+fixture's 180-second deadline in
+`test_default_serial_and_parallel_are_equal_and_bounded`, then a directory-
+not-empty cleanup error (two errors). The same fixture timed out in two earlier
+runs; its scripts and manifest are byte-unchanged and it builds a synthetic
+mock compiler, not the modified dcc sources. The #280 fixture's final assertion
+is therefore unverified on this host. No compiler/harness fix, skip, expectation
+refresh, historical compiler check or prepush run was made for these failures.
 
 ### G. Constant expressions in the front end
 
@@ -889,7 +919,7 @@ so it matters more than its size suggests. Both are one-offs.
 | C | | open | |
 | D | | open | |
 | E | | open | |
-| F | | open | |
+| F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
 | G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |
 | G2 | | open | 033 zero-divisor admission; 040 static float token parser; 042 float folding/truth gates |

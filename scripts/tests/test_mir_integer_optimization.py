@@ -34,6 +34,24 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_integer_compound_lvalues_match_expanded_assignment(self):
+        cases = (
+            ("struct S { unsigned char b[4]; } s;", "s.b[2]", "^", "1"),
+            ("long value; float rhs;", "value", "*", "rhs"),
+        )
+        for declarations, target, operator, rhs in cases:
+            compound = (declarations + " void probe(void) { " + target + " " +
+                        operator + "= " + rhs + "; }\n")
+            expanded = (declarations + " void probe(void) { " + target + " = " +
+                        target + " " + operator + " " + rhs + "; }\n")
+            release = self.code(self.compile(compound))
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(target=target, operator=operator, options=options):
+                    actual = self.code(self.compile(compound, options))
+                    self.assertEqual(actual, self.code(self.compile(expanded, options)))
+                    if options == ("-gline",):
+                        self.assertEqual(actual, release)
+
     def test_float_conversion_retains_cast_signedness(self):
         cases = (
             ("long x", "(unsigned long)x", "__fulf"),
