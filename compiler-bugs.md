@@ -35,7 +35,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
-| [BUG-024](#bug-024) | #244 | wrong result | `if (x++)` in a loop tests the incremented value (8-bit local, later `do … while`) |
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
@@ -50,13 +49,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 
-Twenty-five are open: sixteen give wrong results with no diagnostic
+Twenty-four are open: fourteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one hangs, eight stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-013 and BUG-016.
 
-Twenty-eight reported bugs are fixed: [two in cluster D2a](#fixed-in-cluster-d2a),
+Twenty-nine reported bugs are fixed: [one in cluster D2c](#fixed-in-cluster-d2c),
+[two in cluster D2a](#fixed-in-cluster-d2a),
 [one in cluster K2](#fixed-in-cluster-k2),
 [two in cluster D1](#fixed-in-cluster-d1),
 [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
@@ -455,28 +455,6 @@ the program fails at run time.
   `missing direct MIR named-home offset` (BUG-014) still stop the compile.
 - This only matters while some function cannot be emitted, but then it turns
   a compile error into a silently broken program.
-
-## BUG-024
-
-**`if (x++)` inside a loop tests the incremented value instead of the old
-one**, for an 8-bit local that a later `do … while` loop also modifies.
-
-```c
-int8_t l = 0, i;
-short d = 0;
-for (i = 0; i < 3; i++) {
-    if (l++)                /* l is 0, 1, 2: true twice; dcc: three times */
-        hits++;
-}
-do { l--; } while (++d < 2);
-```
-
-- Wrong for `signed char` and `unsigned char`; for `if (l++)` and
-  `if (l++ != 0)`; with the first loop a `for` or a `while`; with `l--`,
-  `l -= 1` or `l++` in the later loop.
-- Correct: a 16-bit local; no later `do … while` (a plain `l--;`, or a
-  `while` loop, after the first loop is fine); the `if` not in a loop.
-- BUG-021 is another case where a post-increment yields the new value.
 
 ## BUG-027
 
@@ -978,6 +956,49 @@ uint32_t sub(int8_t p)
 - Steered by `peepbyteself`: non-logical byte binary self-operands
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
+
+## Fixed in cluster D2c
+
+BUG-024 is promoted as `tests/tpost8.c` with the unchanged, host-proven four-line
+baseline. The byte-PHI direct-home gate unconditionally reused the mutable
+local object for an immutable SSA value. A real postfix update store overwrote
+that home before the branch consumed the old PHI. Require CFG liveness to
+exclude materialized stores of other values while the PHI remains live;
+analysis-only dead stores do not clobber the home and retain their schedules.
+Address-taken objects and missing liveness decline conservatively. No word
+admission, selector, cost policy or fallback changes.
+
+Before promotion: **25 reproducers: 1 FIXED (024), 24 fails**; after promotion:
+**24 reproducers, 24 fails, zero FIXED**. No out-of-cluster reproducer flips.
+Both final censuses preserve all **3,503 existing function rows byte-identically**;
+tpost8 alone adds five functions. All **519 existing performance rows** remain
+unchanged; tpost8 alone adds a measured normal-stack row. Restored integer
+production seeds 1-300: **266 ok, 34 INVALID, zero FAIL**. `postincvalue` is
+removed from `KNOWN_BUGS`; the five generator tests and remaining-known-shape
+proof over 3,000 seeds pass. Final promotion/release checks are recorded in
+fix-plan.md.
+
+### BUG-024
+
+**`if (x++)` inside a loop tests the incremented value instead of the old
+one**, for an 8-bit local that a later `do … while` loop also modifies.
+
+```c
+int8_t l = 0, i;
+short d = 0;
+for (i = 0; i < 3; i++) {
+    if (l++)                /* l is 0, 1, 2: true twice; dcc: three times */
+        hits++;
+}
+do { l--; } while (++d < 2);
+```
+
+- Wrong for `signed char` and `unsigned char`; for `if (l++)` and
+  `if (l++ != 0)`; with the first loop a `for` or a `while`; with `l--`,
+  `l -= 1` or `l++` in the later loop.
+- Correct: a 16-bit local; no later `do … while` (a plain `l--;`, or a
+  `while` loop, after the first loop is fine); the `if` not in a loop.
+- BUG-021 is another case where a post-increment yields the new value.
 
 ## Fixed in cluster D2a
 
