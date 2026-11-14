@@ -436,6 +436,12 @@ def same_variable(a, b):
     return a.op == 'var' and b.op == 'var' and a.a is b.a
 
 
+def peep_byte_self(op, operands):
+    """A byte binary self-use can lose a live global load (BUG-054)."""
+    return op not in (*LOGIC, '=') and same_variable(*operands) \
+        and is_int(ty(operands[0])) and ty(operands[0]).bits == 8
+
+
 def nested_if_else(s):
     """s is an `if` with, directly in one of its arms, an `if` that has an
     `else`: the BUG-027 shape."""
@@ -586,6 +592,8 @@ def known_shapes(prog):
 
     def expr(e, root):
         op = e.op
+        if op in ('bin', 'asg') and peep_byte_self(e.a, e.k):
+            found.add('peepbyteself')
         if op == 'asg':
             lv, rhs = e.k
             lt = ty(lv)
@@ -1414,7 +1422,7 @@ FEATURES = frozenset((
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
     'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockcast',
-    'blockdec', 'loopcallarg', 'loopcopy', 'wordarm'))
+    'blockdec', 'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
@@ -1432,14 +1440,12 @@ KNOWN_BUGS = {
     'widelocalinc': 'BUG-014',
     'blockptr': 'BUG-015',
     'inittype': 'BUG-016',
-    'selfand': 'BUG-017',
     'widecasgbf': 'BUG-018',
     'widehelperparam': 'BUG-020',
     'postincvalue': 'BUG-021, BUG-023, BUG-024',
     'duplabel': 'BUG-022',
     'crosstypeasg': 'BUG-023',
     'constjump': 'BUG-019',
-    'selfoperand': 'BUG-026',
     'nestedifelse': 'BUG-027',
     'bytesarcount': 'BUG-028',
     'bytearm': 'BUG-029',
@@ -1449,6 +1455,7 @@ KNOWN_BUGS = {
     'loopcallarg': 'BUG-036',
     'loopcopy': 'BUG-037',
     'wordarm': 'BUG-038',
+    'peepbyteself': 'BUG-054',
 }
 
 
@@ -1466,6 +1473,9 @@ class Gen:
     # ---- small helpers
 
     def mk(self, op, k=(), a=None, t=None):
+        if op in ('bin', 'asg') and not self.on('peepbyteself') and peep_byte_self(a, k):
+            self.prog.nid += 1
+            k = [k[0], E('const', (), 1, I16, self.prog.nid)]
         if op == 'bin' and not self.on('selfoperand') and same_variable(k[0], k[1]):
             # one variable is never both operands of an operator
             self.prog.nid += 1
@@ -1844,6 +1854,8 @@ class Gen:
         if not self.on('logicinit') and (t.bits <= 16 or storage == 'block') \
                 and rhs.op == 'bin' and rhs.a in LOGIC:
             rhs.a = '|' if rhs.a == '||' else '&'
+            if not self.on('peepbyteself') and peep_byte_self(rhs.a, rhs.k):
+                rhs.k[1] = self.mk('const', a=1, t=I16)
         if not self.on('blockwideneg') and storage == 'block' and t.bits == 32 \
                 and negative_constant(rhs, t):
             rhs = self.small(1, 1)

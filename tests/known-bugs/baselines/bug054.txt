@@ -1,0 +1,6 @@
+sub 127
+add 127
+and 4294967204
+signed 127
+param 127
+literal 127

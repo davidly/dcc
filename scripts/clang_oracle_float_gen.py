@@ -67,7 +67,6 @@ KNOWN_BUGS = {
     'fblockint': 'BUG-015',
     'finittype': 'BUG-016',
     'fconstjump': 'BUG-019',
-    'fselfop': 'BUG-026',
     'fconstcond': 'BUG-052',
     'floopcallarg': 'BUG-036',
 }
@@ -320,8 +319,6 @@ def known_shapes(prog):
             found.add('icasgf')
         if e.op == 'un' and e.a == '-' and is_blockfloat(e.k[0]):
             found.add('fblockneg')
-        if is_selfop(e):
-            found.add('fselfop')
         if is_loopcallarg(e):
             found.add('floopcallarg')
         if is_paramcond(e):
