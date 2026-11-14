@@ -1,9 +1,6 @@
-/* BUG-029: an 8-bit local is assigned in one arm of an if-else and another
- * variable in the other arm; the two are then combined in one expression in
- * which the 8-bit local is cast or negated. On the path that assigned the
- * 8-bit local, the other variable is replaced by the 8-bit local's value, so
- * `(int16_t)l - x` is `l - l`. It is correct without the cast (`l - x`), for
- * a 16-bit local, and with the operands the other way round. */
+/* Byte and word values merged from opposite if/else arms remain distinct
+ * through byte widening and negation, including two byte PHIs and an arm
+ * assigning both values. No-cast and 16-bit controls cover adjacent PHIs. */
 #include <stdint.h>
 #include <stdio.h>
 

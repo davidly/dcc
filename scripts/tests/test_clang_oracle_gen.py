@@ -13,6 +13,35 @@ finally:
 
 
 class IntegerKnownShapeTests(unittest.TestCase):
+    def test_block_word_initializer_steer_keeps_passing_controls(self):
+        cases = ((gen.I16, gen.U16, 'block', True),
+                 (gen.U16, gen.I16, 'block', True),
+                 (gen.I16, gen.I16, 'block', False),
+                 (gen.U16, gen.U16, 'block', False),
+                 (gen.I16, gen.U16, 'local', False),
+                 (gen.I32, gen.U32, 'block', False))
+        for target, source, storage, blocked in cases:
+            for cast in (False, True):
+                with self.subTest(target=target, source=source,
+                                  storage=storage, cast=cast):
+                    expression = gen.E('var', a=gen.Decl('x', source, 'param'))
+                    if cast:
+                        expression = gen.E('cast', [expression], t=target)
+                    enabled = gen.Gen(0).initialiser(None, target, expression, storage)
+                    steered = gen.Gen(0, off={'blockwordinit'}).initialiser(
+                        None, target, expression, storage)
+                    self.assertIsNone(enabled[1])
+                    self.assertEqual(steered[1] is expression, blocked)
+                    program = gen.Program(0, off={'blockwordinit'})
+                    function = gen.Func('probe', gen.I16, [], 'helper')
+                    function.body.decls.append(gen.Decl(
+                        'b', target, storage, init=expression))
+                    program.funcs.append(function)
+                    self.assertEqual(gen.known_shapes(program),
+                                     {'blockwordinit'} if blocked else set())
+                    function.body.decls[0].init = steered[0]
+                    self.assertEqual(gen.known_shapes(program), set())
+
     def test_restored_wide_increment_add_preserves_operands(self):
         cases = ((gen.I32, 'local', '++', True, False, True),
                  (gen.U32, 'param', '++', True, False, True),
@@ -80,13 +109,34 @@ class IntegerKnownShapeTests(unittest.TestCase):
                     program.off = frozenset()
                     self.assertEqual(gen.known_shapes(program), set())
 
-    def test_logicinit_rewrite_does_not_reintroduce_byte_self_and(self):
+    def test_logicbyteinit_rewrite_does_not_reintroduce_byte_self_and(self):
         generator = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS) | {"peepbyteself"})
         variable = gen.E("var", a=gen.Decl("x", gen.U8, "local"))
         expression = generator.mk("bin", [variable, variable], "&&")
         stored = generator.stored(expression, gen.U8, "local")
         self.assertEqual(stored.k[1].op, "const")
         self.assertFalse(gen.peep_byte_self(stored.a, stored.k))
+
+    def test_byte_logical_steer_restores_word_and_block_long_stores(self):
+        for typ in (gen.I8, gen.U8, gen.I16, gen.U16, gen.I32, gen.U32):
+            for storage in ("local", "block", "global"):
+                for operator in ("&&", "||"):
+                    with self.subTest(typ=typ, storage=storage, operator=operator):
+                        generator = gen.Gen(0, off={"logicbyteinit"})
+                        rhs = gen.E("bin", [gen.E("const", a=1, t=gen.I16),
+                                           gen.E("const", a=0, t=gen.I16)], operator)
+                        declaration = gen.Decl("value", typ, storage, init=rhs)
+                        function = gen.Func("probe", gen.I16, [], "helper")
+                        function.body.decls.append(declaration)
+                        generator.prog.funcs.append(function)
+                        guarded = typ.bits == 8 and storage != "global"
+                        self.assertEqual(gen.known_shapes(generator.prog),
+                                         {"logicbyteinit"} if guarded else set())
+                        stored = generator.stored(rhs, typ, storage, init=True)
+                        self.assertEqual(stored.a,
+                                         ("&" if operator == "&&" else "|")
+                                         if guarded else operator)
+                        self.assertEqual(gen.known_shapes(generator.prog), set())
 
     def test_postfix_steer_restores_all_widths(self):
         for typ in (gen.I8, gen.U8, gen.I16, gen.U16, gen.I32, gen.U32):
