@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has forty-two open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has forty-one open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -8,8 +8,8 @@ one fix, made in the right place, closes several issues, and so that the
 fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
-neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), K (#278)
-and L (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
+neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), B1,
+K (#278) and L (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
 B was likewise disproved and split into B1–B4. The remaining clusters are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
@@ -217,8 +217,44 @@ frame layout byte-for-byte. Candidate placements, in order of preference:
    offset actually overlaps another live object in the same frame; emit the
    current layout otherwise.
 
-Whichever is chosen, re-run both censuses and require zero existing-function
-changes before acceptance. The rejected patch, LLDB trace, assembly and
+**B1 implementation:** use the overlap-qualified repair at real `for`-init
+replay, not a blanket refresh. Probe replay retains non-call initializer MIR
+(`mir_neutralize_since` only discards call-bearing captures), so discarding
+probe objects globally would also change the established homes and schedules.
+The repair checks half-open byte ranges against still-live enclosing locals;
+for-init entries whose rename has already been popped are not live, despite
+remaining in `locals[]`. Ordinary declarations are outside this repair.
+
+An initial all-local overlap check also moved `tcmpabi.insertion_sort`'s
+ordinary `j` past an expired LICM temporary and mistook expired sibling-loop
+slots in `tforsco.main` for live objects. That iteration was rejected. The
+for-init/active-rename guards preserve both functions without weakening the
+actual overlap check.
+
+Both final censuses compare identically across all 3,366 existing functions
+(stack-check and no-stack-check): zero selector, size, instruction or selected
+assembly-hash changes. BUG-030 alone flips to `FIXED`; the other 41 parked
+reproducers still fail. The two neighbouring controls are byte-identical in
+peep and nopeep. Strict full+extended stack and no-stack suites pass.
+
+**Accepted:** `armfordecl` is restored; integer production seeds 1-300 finish
+with 216 ok, 83 INVALID, one target-limit-only and zero FAIL. BUG-030 is
+promoted as `tforhome`, with additional 16-/32-bit counters and a new normal
+stack-check performance row; all 500 existing rows are byte-identical. The
+final censuses add only its 11 new functions, with all 3,366 existing functions
+unchanged in both modes. Both final strict full+extended gates pass (516 apps,
+196 extended apps); all 41 remaining known-bug reproducers still fail.
+
+The full Python gate runs 307 tests: 303 pass, two pre-existing skips, and the
+two #277 failures have byte-identical failure payloads on an unchanged
+`0d11922d` snapshot using the saved parent compiler. The nondeterministic
+#280 mutation fixture passes here and is untouched. Its separate unchanged-main
+confirmation run also encountered existing mutation-runner timeout/cleanup
+errors; none occurred in the full fixing-branch run. Debug metadata/host tests
+and the six ASan/UBSan MIR tests pass; `-gline` retains release-identical
+binaries and full `-g` runs pass in both modes.
+
+Both censuses must continue to require zero existing-function changes. The rejected patch, LLDB trace, assembly and
 census comparisons from the first attempt are in the agent's
 `build/cluster-b/` (not committed); re-derive rather than reuse.
 
@@ -450,7 +486,7 @@ so it matters more than its size suggests. Both are one-offs.
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
 | A2b | | open; after E | BUG-004/015; unconfirmed shared cause |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
-| B1 | | open | BUG-030: stale probe offset; fix must leave existing frame layouts untouched |
+| B1 | `fix/cluster-b1-probe-offset` | fixed | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | | open | BUG-014/019 bookkeeping fatals; unconfirmed shared cause |
 | B3 | | open | BUG-026 same-value operands |
 | B4 | | open | BUG-036; check overlap with C/D first |
