@@ -1,7 +1,6 @@
-/* BUG-048: converting `(uint32_t)x` to float, where x is a signed 32-bit
- * expression, converts the signed value instead: (float)(uint32_t)-72 is
- * -72.0f rather than 4294967224.0f. Storing the cast in a uint32_t variable
- * first, or casting a signed 8- or 16-bit value, converts correctly. */
+/* Unsigned long cast signedness when converting signed values to float:
+ * implicit/explicit casts, arithmetic, and arguments, with stored-unsigned
+ * and narrow-integer controls. */
 #include <stdio.h>
 #include <stdint.h>
 
@@ -32,5 +31,7 @@ int main(void)
     u = (uint32_t)g2;
     m = u;
     printf("%08lx %08lx %08lx\n", bits(m), bits((uint32_t)gs), bits((uint16_t)gs));  /* 4f800000 4f800000 477fb800 */
+    m = 0.0f + (uint32_t)g2;
+    printf("%08lx\n", bits(m));
     return 0;
 }

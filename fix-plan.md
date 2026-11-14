@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has forty-two open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has forty open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -11,7 +11,10 @@ The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), K (#278)
 and L (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
-B was likewise disproved and split into B1–B4. The remaining clusters are still hypotheses.
+B was likewise disproved and split into B1–B4. I was disproved and split
+with maintainer approval into I1 (return admission) and I2 (cast signedness);
+both subclusters now have confirmed root causes. Other remaining clusters
+are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
 explicitly approved K as a four-rule exception.
@@ -20,7 +23,7 @@ explicitly approved K as a four-rule exception.
 
 - One cluster per branch and pull request. The A subclusters and B–D all touch MIR
   lowering and the homed/spilled emitters and will conflict; work them one
-  at a time. I, K and L are isolated and can proceed in parallel.
+  at a time. I1, I2, K and L are isolated and can proceed in parallel.
 - Do not change a generator's `KNOWN_BUGS` or a reproducer until the fix is
   in. The parked reproducers and the steering are the acceptance test.
 - Acceptance for every bug in a cluster, from the skill's "Closing a logged
@@ -345,17 +348,72 @@ parameter, both fatal with no candidate able to emit, and both pass with the
 operands swapped or the expression hoisted into a temporary. Look at how the
 comparison selector accepts a non-leaf right operand.
 
-### I. Float ↔ integer conversion
+### I1. Long ↔ float return admission
 
 | Bug | Issue | Shape |
 | --- | --- | --- |
 | BUG-046 | #266 | `return` does not convert between float and 32-bit integer |
+
+**Confirmed root cause:** `ast_return_stmt_supported()` omits long
+expressions in float-returning functions and float expressions in
+long-returning functions, before existing MIR return conversion can run.
+The maintainer approved splitting I after the first experiment fixed only
+046, leaving 048/050 unchanged. I1 is fixed and promoted as `tfltret` on
+independent [#285](https://github.com/davidly/dcc/pull/285), not included here.
+That PR reports 265 ok, 35 INVALID, zero FAIL on 300 production float seeds,
+with all existing assembly and performance rows unchanged.
+
+### I2. Cast signedness before conversion to float
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
 | BUG-048 | #268 | `(uint32_t)x` to float, `x` signed 32-bit: signed conversion |
 | BUG-050 | #270 | `(int32_t)(uint32_t)x` to float, `x` signed 8/16-bit: unsigned conversion |
 
-048 and 050 are mirror images: the conversion picks `__ltof`/`__ultof` from
-the inner operand's type instead of the cast's. 046 is the missing implicit
-conversion at `return`. Independent of A–E.
+**Confirmed shared root cause:** `mir_unary_is_representation_identity()`
+preserves an equal-width integer signedness cast before a wider conversion,
+but not before an equal-width long-to-float conversion. Removing the cast
+makes `mir_emit_cast()` correctly choose a helper for the wrong source type:
+`__flf` instead of `__fulf` for 048, and the reverse for 050. The root fix
+retains casts feeding float conversions as well as widening conversions.
+
+The first fix clears both reproducers in peep and nopeep: **2 FIXED,
+40 fails**, with no out-of-cluster flips; I1's BUG-046 still fails on this
+independent branch. Both existing-function censuses are byte-identical
+across 3,366 functions. The complete parked programs' assembly changes only
+conversion helper calls and associated `extrn` placement, not instructions
+around them or their existing correctly typed controls. The logged 050
+folded/arithmetic and global/local/parameter facets also match the sanitized
+host oracle in both modes.
+
+Retaining the cast emits no value-changing instructions. An isolated
+zero-local parameter-only microprobe does retain an extra `ld sp,ix`
+(2 bytes, 10 Z80 T-states) compared with its already-typed control; no
+existing function changes and neither parked reproducer gains that
+instruction. No general/spilled fallback was introduced.
+
+This work uses `fix/cluster-i2-float-conv`, independently based on `origin/main`
+`0d11922d` in its own worktree, not I1. Both subclusters remain independent
+of A–E. BUG-048/050 are promoted as `tflucast`/`tflscast`. Strict Python
+full+extended and both PowerShell stack/no-stack release gates pass; both
+host validations and targeted peep/nopeep tests pass. All 500 existing
+performance rows are preserved verbatim, with exactly two new rows.
+Corrected production float seeds 1-300 give **267 ok, 33 INVALID, zero FAIL**;
+all 40 remaining parked reproducers still fail.
+
+The float shape checker also needed a directly coupled acceptance fix:
+return only shapes in `prog.off`, as the integer checker does. Otherwise
+restored `fu32cast`/`fretconv` forms were excluded as INVALID. The first
+140-ok/160-INVALID batch is superseded, not claimed as restored coverage.
+A focused checker regression protects both features; I1 receives the same
+checker fix independently. MIR/line tests, CMake, ASan/UBSan, debugger-host,
+release-identical `-gline`, and runnable full `-g` checks pass.
+The full Python gate ran 308 tests with the two approved #277 failures and
+two skips; the new checker regression passes separately. Concurrent
+mutation-fixture timeout/cleanup errors all cleared on sequential focused
+reruns (3/3 pass). The known #280 exit-139 fixture did not recur on those
+reruns; no fixture, skip or expectation was modified.
+
 
 ### J. Float arithmetic
 
@@ -439,7 +497,7 @@ so it matters more than its size suggests. Both are one-offs.
 5. **E**, then **A2b**, then **C** — E and C are in the emitter's
    typing/merge paths; A2b waits for E's BUG-004 facet; C is the least
    certain cluster.
-6. **I, J, H, G, F, M** in any order.
+6. **I1**, then **I2** on an independent branch; **J, H, G, F, M** in any order.
 
 ## Tracking
 
@@ -460,7 +518,8 @@ so it matters more than its size suggests. Both are one-offs.
 | F | | open | |
 | G | | open | |
 | H | | open | |
-| I | | open | |
+| I1 | [#285](https://github.com/davidly/dcc/pull/285) (`fix/cluster-i`) | PR open | Approved split; 046 return admission fixed independently; 300 float seeds clean; existing assembly/perf unchanged |
+| I2 | `fix/cluster-i2-float-conv` | PR open | 048/050 promoted as tflucast/tflscast; corrected 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged; no outside flips |
 | J | | open | |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |

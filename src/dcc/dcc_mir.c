@@ -8013,7 +8013,7 @@ static int mir_unary_is_representation_identity(
         return 0;
     /*
      * Equal-width signed/unsigned casts preserve bits, but a later widening
-     * must still see the cast's type to choose sign versus zero extension.
+     * or float conversion must still see the cast's signedness.
      * Other consumers already carry their effective computation/memory type
      * and can safely use the original representation directly.
      */
@@ -8021,7 +8021,8 @@ static int mir_unary_is_representation_identity(
         if ((mir.insns[instruction].opcode == MIR_UNARY &&
              mir.insns[instruction].immediate == 0 &&
              mir.insns[instruction].src1 == insn->dst &&
-             type_size(mir.insns[instruction].type) > target_size) ||
+             (type_size(mir.insns[instruction].type) > target_size ||
+              type_is_float(mir.insns[instruction].type))) ||
             (mir.insns[instruction].opcode == MIR_STORE &&
              mir.insns[instruction].src1 == insn->dst &&
              mir.insns[instruction].type == insn->type &&
