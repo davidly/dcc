@@ -51,13 +51,13 @@ int main(void)
     okb("tanf(+halfpi) finite", !isnan(t) && !isinf(t), 1);
     okb("tanf(+halfpi) negative", signbit(t), 1);
     okb("tanf(+halfpi) large", fabsf(t) > 10000000.0f, 1);
-    okbits("tanf(+halfpi) bits", t, 0xcbae8a4aUL);
+    okbits("tanf(+halfpi) bits", t, 0xcbae8a4bUL);
 
     t = tanf(-halfpi);
     okb("tanf(-halfpi) finite", !isnan(t) && !isinf(t), 1);
     okb("tanf(-halfpi) positive", signbit(t), 0);
     okb("tanf(-halfpi) large", fabsf(t) > 10000000.0f, 1);
-    okbits("tanf(-halfpi) bits", t, 0x4bae8a4aUL);
+    okbits("tanf(-halfpi) bits", t, 0x4bae8a4bUL);
 
     okb("sinf cutoff", isnan(sinf(32768.0f)), 1);
     okb("cosf cutoff", isnan(cosf(32768.0f)), 1);

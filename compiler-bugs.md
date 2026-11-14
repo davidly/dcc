@@ -490,15 +490,16 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
 ## Fixed in cluster R1
 
 BUG-039's runtime rounding defect is **fixed in cluster R1**
-([PR #325](https://github.com/davidly/dcc/pull/325)). Acceptance of
-this runtime change is still **blocked**, not complete: two existing tests
-embed obsolete expected bits in C, and updating those constants would violate
-R1's requirement that all existing MIR function streams remain byte-identical.
-Additionally, corrected division exposes BUG-060 formatting differences and
-increases the mathematical tangent error at the single-precision half-pi.
-No existing numeric or performance baseline has been changed to conceal these
-conflicts; [R1's evidence](fix-plan.md#r1-normalize-the-restoring-division-quotient-before-rounding)
-records the exact deltas and the incomplete gates.
+([PR #325](https://github.com/davidly/dcc/pull/325)). The maintainer approved
+runtime-caused numeric/performance baseline changes and clarified that census
+invariance applies to **unchanged sources**: only five expected constants in
+`tstrb11.c`/`ttrg6sp.c` change, and only their `main` function streams differ.
+The existing approximate libm, decimal parser and `%f` formatter are unchanged;
+corrected quotient bits explain the new numeric lines, without a monotonic
+mathematical-accuracy requirement. Independent formatting defects are tracked
+as BUG-060 #322. [R1's evidence](fix-plan.md#r1-normalize-the-restoring-division-quotient-before-rounding)
+records every numeric line classification, all 100 measured performance row
+updates, the narrow census differences and gate results.
 
 | ID | Issue | Regression |
 | --- | --- | --- |
@@ -2288,7 +2289,8 @@ unchanged. Restored `fnegzero_not` production seeds 1-300 give **269 ok,
 The earlier J/J2 BUG-039 experiment was reverted because its five changed
 complete stdout baselines failed the host-clang requirement; see the
 [investigation notes](fix-plan.md#j-float-arithmetic). R1 now implements the
-correct divider and records the remaining acceptance conflicts separately.
+correct divider with maintainer-approved numeric, test-source and performance
+updates; its evidence and passing gates are recorded separately.
 
 | ID | Issue | Regression |
 | --- | --- | --- |
