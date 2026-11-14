@@ -1,0 +1,2255 @@
+<!DOCTYPE html><html lang="en" class="no-js"><head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="MkDocs documentation for DCC C Compiler, its runtime, and dccrtlstrip size analysis.">
+      
+      
+        <meta name="author" content="David Lee">
+      
+      
+      
+        <link rel="prev" href="../03-utilities/">
+      
+      
+        <link rel="next" href="../05-building-project-docs/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.1">
+    
+    
+      
+        <title>Banked memory support - DCC C Compiler Reference</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  <link href="../../assets/stylesheets/glightbox.min.css" rel="stylesheet"><script src="../../assets/javascripts/glightbox.min.js"></script><style id="glightbox-style">
+            html.glightbox-open { overflow: initial; height: 100%; }
+            .gslide-title { margin-top: 0px; user-select: text; }
+            .gslide-desc { color: #666; user-select: text; }
+            .gslide-image img { background: white; }
+            .gscrollbar-fixer { padding-right: 15px; }
+            .gdesc-inner { font-size: 0.75rem; }
+            body[data-md-color-scheme="slate"] .gdesc-inner { background: var(--md-default-bg-color); }
+            body[data-md-color-scheme="slate"] .gslide-title { color: var(--md-default-fg-color); }
+            body[data-md-color-scheme="slate"] .gslide-desc { color: var(--md-default-fg-color); }
+        </style></head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#banked-memory-support" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DCC C Compiler Reference" class="md-header__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"></path></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DCC C Compiler Reference
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Banked memory support
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink" aria-label="Switch to dark mode" type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 2c-1.82 0-3.53.5-5 1.35C8 5.08 10 8.3 10 12s-2 6.92-5 8.65C6.47 21.5 8.18 22 10 22a10 10 0 0 0 10-10A10 10 0 0 0 10 2"></path></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="amber" data-md-color-accent="cyan" aria-label="Switch to light mode" type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden="">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"></path></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required="">
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"></path></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix="">
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DCC C Compiler Reference" class="md-nav__button md-logo" aria-label="DCC C Compiler Reference" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"></path></svg>
+
+    </a>
+    DCC C Compiler Reference
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/davidly/dcc" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"></path></svg>
+  </div>
+  <div class="md-source__repository">
+    DCC C Compiler
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix="">
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-setup-toolchain/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The toolchain
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-vscode-debugging/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VS Code debugging
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-debug-host/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debugger host and I/O adapters
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../00-agent-skills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agentic skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../01-c-conformance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    C conformance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../02-build-and-link/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building and linking
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../03-types-and-conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Types and conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../04-operators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operators
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_10">
+        
+          
+          <label class="md-nav__link" for="__nav_10" id="__nav_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Library reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_10">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Library reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/01-assert/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    assert.h: Diagnostics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/07-ctype/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ctype.h: Character handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/02-errno/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    errno.h: Error reporting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/03-float/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    float.h: Floating-point limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/04-limits/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    limits.h: Integer limits
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/17-locale/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    locale.h: Localization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/08-math/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    math.h: Floating point math
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/09-setjmp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    setjmp.h: Non-local jumps
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/16-signal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    signal.h: Signal handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/10-stdarg/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdarg.h: Variadic arguments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/11-stdbool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdbool.h: Boolean type
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/12-stddef/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stddef.h: Common definitions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/13-stdint/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdint.h: Fixed-width integers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/05-stdio/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdio.h: Console and file I/O
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/06-stdlib/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    stdlib.h: Memory and utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/14-string/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    string.h: String handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../standard-lib/15-time/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    time.h: Date and time
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../10-system-and-cpm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    System and CP/M services
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../11-limitations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limitations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../12-examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worked examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" checked="">
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Appendix
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Appendix
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix="">
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../00-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Compiler architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../01-dccrtlstrip/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime optimization
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../02-runtime-sizes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime function sizes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../03-utilities/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Utilities
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Banked memory support
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Banked memory support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#two-banks-one-address-window" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two banks, one address window
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cpm-memory-map-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CP/M memory map reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#from-a-cpm-call-to-physical-io" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From a CP/M call to physical I/O
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#composite-projects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Composite projects
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-address-bank-1-libraries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed-address bank-1 libraries
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../05-building-project-docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Building project docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../06-differential-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Differential testing against clang
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc">
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
+      
+        <li class="md-nav__item">
+  <a href="#two-banks-one-address-window" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two banks, one address window
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cpm-memory-map-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CP/M memory map reference
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#from-a-cpm-call-to-physical-io" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From a CP/M call to physical I/O
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#composite-projects" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Composite projects
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed-address-bank-1-libraries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed-address bank-1 libraries
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="banked-memory-support">Banked memory support<a class="headerlink" href="#banked-memory-support" title="Permanent link">¶</a></h1>
+<p>This appendix covers DCC's optional fixed-address bank-1 libraries for the
+<a href="https://gloveboxes.github.io/Z80ROMlessSBC/">Z80 ROM-less SBC</a>. These features
+depend on that project's banked SRAM, resident loader and BANKSDK runtime;
+they are not part of standard CP/M 2.2 and are not needed for ordinary
+single-bank <code>.COM</code> applications. Generating Z80 code alone does not provide
+cross-bank calls.</p>
+<p>Use a bank-0 <code>.COM</code> host for startup and user interaction, and a bank-1
+<code>.LIB</code> service for processing and large, service-owned data. Build the library
+first, then the host with its generated wrappers and BANKSDK. Calls are
+synchronous and copy bounded arguments rather than sharing pointers; each
+bank has its own code, data, heap and stack budget.</p>
+<p>The memory layouts and diagrams below are adapted from the SBC project's
+<a href="https://gloveboxes.github.io/Z80ROMlessSBC/system/cpm-execution/">CP/M execution reference</a>.
+The SVG assets are included locally so this appendix can be viewed without
+loading images from another site. Consult the upstream reference and
+<a href="https://gloveboxes.github.io/Z80ROMlessSBC/cpm-dcc/bank1-library-spec/">bank-1 library specification</a>
+for the current firmware, loader and hardware details. For ordinary builds,
+see <a href="../../02-build-and-link/">Building and linking</a>.</p>
+<h2 id="two-banks-one-address-window">Two banks, one address window<a class="headerlink" href="#two-banks-one-address-window" title="Permanent link">¶</a></h2>
+<p><a href="../../images/cpm-banked-memory.svg"><img alt="Bank-0 and bank-1 memory regions and the mirrored bank-switch gateway" src="../../images/cpm-banked-memory.svg"></a></p>
+<p>Region heights are schematic. Addresses are hexadecimal and ranges inclusive
+unless labelled otherwise; <code>#</code> means active LOW.</p>
+<p>The SBC's 128 KiB SRAM has two 64 KiB banks, each mapped to <code>0000h</code>-<code>FFFFh</code>.
+PIO1 completes <code>OUT 07h</code> by sending D0 to A16: 0 selects bank 0, 1 selects
+bank 1. This switches code, data, stack and vectors together.</p>
+<ul>
+<li><strong>Bank 0:</strong> <code>.COM</code> programs start at <code>0100h</code>; the TPA holds 58,624 bytes.</li>
+<li><strong>Bank 1:</strong> one fixed-address <code>.LIB</code> uses <code>0100h</code>-<code>C7FFh</code>, 50,944 bytes.</li>
+</ul>
+<p>Both budgets include the image (code, DCC runtime and initialized data), BSS,
+<code>malloc</code> heap and call stack, not just free heap. <strong>BSS (Block Started by
+Symbol)</strong> holds zero-initialized globals/statics. For example,
+<code>static unsigned char buffer[1024];</code> reserves 1,024 bytes; the library loader
+zeros them without storing those zeros in <code>.LIB</code>. Each bank's <code>heap_base</code>
+follows its own linked image and BSS.</p>
+<p>The diagram uses <strong>512-byte call stack examples</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Region</th>
+<th>Bank 0 TPA (inclusive)</th>
+<th>Bank 1 library (inclusive)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Image + BSS</td>
+<td><code>.COM</code>: <code>0100h</code> to <code>heap_base - 1</code></td>
+<td><code>.LIB</code>: <code>0100h</code> to <code>heap_base - 1</code></td>
+</tr>
+<tr>
+<td><code>malloc</code> heap</td>
+<td><code>heap_base</code> to <code>E3FFh</code></td>
+<td><code>heap_base</code> to <code>C5FFh</code></td>
+</tr>
+<tr>
+<td>Call stack (512 bytes)</td>
+<td><code>E400h</code> to <code>E5FFh</code></td>
+<td><code>C600h</code> to <code>C7FFh</code></td>
+</tr>
+</tbody>
+</table>
+<p>Bank-0 placement is illustrative and application-specific. Bank 1's <code>.LIB</code>
+header sets a 256-2,048-byte stack in 256-byte units below <code>C800h</code>; its last
+heap byte is <code>C800h - stack size - 1</code>. The separate 5,632-byte pool at
+<code>C800h</code>-<code>DDFFh</code> uses checked handles; RESET does not unload the library or
+reset its <code>malloc</code> heap.</p>
+<h3 id="why-switching-banks-does-not-lose-execution">Why switching banks does not lose execution<a class="headerlink" href="#why-switching-banks-does-not-lose-execution" title="Permanent link">¶</a></h3>
+<p>The <code>FF00h</code> gateway and <code>FB40h</code> trampoline have matching code in both banks,
+so instruction fetching survives an A16 switch. Applications use checked
+BANKSDK transfers and generated wrappers, not cross-bank pointers or
+arbitrary bank toggles. The resident gateway saves and restores the caller's
+bank and stack. See the SBC's
+<a href="https://gloveboxes.github.io/Z80ROMlessSBC/system/cpm-execution/#stack-switch-and-return">stack switch and return reference</a>
+for the saved state and call sequence.</p>
+<h2 id="cpm-memory-map-reference">CP/M memory map reference<a class="headerlink" href="#cpm-memory-map-reference" title="Permanent link">¶</a></h2>
+<p>These addresses describe the SBC's banked CP/M implementation, not a universal
+CP/M memory map. Bank 0's TPA excludes the CCP; all resident workspace stays
+above it:</p>
+<table>
+<thead>
+<tr>
+<th>Region</th>
+<th>Address range</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Page zero</td>
+<td><code>0000h</code>-<code>00FFh</code></td>
+<td>CP/M vectors, default FCBs, DMA buffer and command tail</td>
+</tr>
+<tr>
+<td>Transient Program Area (TPA)</td>
+<td><code>0100h</code>-<code>E5FFh</code></td>
+<td><code>.COM</code> image, BSS, <code>malloc</code> heap and call stack</td>
+</tr>
+<tr>
+<td>CCP</td>
+<td><code>E600h</code>-<code>EDFFh</code></td>
+<td>Console Command Processor, reloaded after a warm boot</td>
+</tr>
+<tr>
+<td>BDOS shim and tables</td>
+<td><code>EE00h</code>-<code>FB3Fh</code></td>
+<td>Bank-0 console and disk/file proxy; entry at <code>EE06h</code></td>
+</tr>
+<tr>
+<td>BDOS shim private stack</td>
+<td><code>F600h</code>-<code>F7FFh</code></td>
+<td>512-byte stack inside the BDOS slot</td>
+</tr>
+<tr>
+<td>Mirrored trampoline</td>
+<td><code>FB40h</code>-<code>FB7Fh</code></td>
+<td>Bank-1 warm-boot return and checked-transfer extent lookup</td>
+</tr>
+<tr>
+<td>Reserved BDOS padding</td>
+<td><code>FB80h</code>-<code>FBFFh</code></td>
+<td>128-byte BIOS directory buffer</td>
+</tr>
+<tr>
+<td>BIOS core</td>
+<td><code>FC00h</code>-<code>FEFDh</code></td>
+<td>Boot, console, disk, translation and startup-report routines</td>
+</tr>
+<tr>
+<td>Spare padding</td>
+<td><code>FEFEh</code>-<code>FEFFh</code></td>
+<td>2 bytes</td>
+</tr>
+<tr>
+<td>BIOS bank extension</td>
+<td><code>FF00h</code>-<code>FFFFh</code></td>
+<td>Mirrored bank-switch code and private workspace</td>
+</tr>
+</tbody>
+</table>
+<p>Bank 1 reserves <code>DE00h</code> and above for system code:</p>
+<table>
+<thead>
+<tr>
+<th>Bank-1 address</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0000h</code>-<code>00FFh</code></td>
+<td>CP/M page zero</td>
+</tr>
+<tr>
+<td><code>0100h</code>-<code>(heap_base - 1)</code></td>
+<td>Fixed <code>.LIB</code> image and BSS</td>
+</tr>
+<tr>
+<td><code>heap_base</code>-<code>(C800h - stack - 1)</code></td>
+<td>Library <code>malloc</code> heap, starting after linked BSS</td>
+</tr>
+<tr>
+<td><code>(C800h - stack)</code>-<code>C7FFh</code></td>
+<td>Pinned library stack; size comes from the <code>.LIB</code> header</td>
+</tr>
+<tr>
+<td><code>C800h</code>-<code>DDFFh</code></td>
+<td>General <code>bmalloc</code> pool, 5,632 bytes</td>
+</tr>
+<tr>
+<td><code>DE00h</code>-<code>E5FFh</code></td>
+<td>Resident loader, proxy and service workspace</td>
+</tr>
+<tr>
+<td><code>E600h</code>-<code>EDFFh</code></td>
+<td>Extent allocator metadata/code</td>
+</tr>
+<tr>
+<td><code>EE00h</code>-<code>FB3Fh</code></td>
+<td>Authoritative CP/M BDOS</td>
+</tr>
+<tr>
+<td><code>FB40h</code>-<code>FB7Fh</code></td>
+<td>Mirrored warm-boot return and extent lookup</td>
+</tr>
+<tr>
+<td><code>FB80h</code>-<code>FEFFh</code></td>
+<td>BIOS buffer and core</td>
+</tr>
+<tr>
+<td><code>FF00h</code>-<code>FFFFh</code></td>
+<td>Mirrored bank-switch gateway</td>
+</tr>
+</tbody>
+</table>
+<h2 id="from-a-cpm-call-to-physical-io">From a CP/M call to physical I/O<a class="headerlink" href="#from-a-cpm-call-to-physical-io" title="Permanent link">¶</a></h2>
+<p><a href="../../images/cpm-pio-execution.svg"><img alt="CP/M software path, PIO and core ownership, and the IN and OUT cycle sequences" src="../../images/cpm-pio-execution.svg"></a></p>
+<p>Arrows show logical call/data flow, not PCB wires.</p>
+<ol>
+<li>Bank-0 <code>CALL 0005h</code> enters the BDOS shim at <code>EE06h</code>.</li>
+<li>Console calls stay local; disk/file calls copy File Control Blocks (FCBs)
+   and software DMA buffers to bank 1 using the private <code>F600h</code>-<code>F7FFh</code> stack.</li>
+<li>Bank-1 BDOS selects files and records, then calls BIOS at <code>FC00h</code>.
+   Libraries reach it through their own <code>0005h</code> vector.</li>
+<li>BIOS emits port I/O; PIO1 completes the bus cycle, core 0 supplies device
+   data, and core 1 handles queued storage/transport work.</li>
+</ol>
+<p>The Z80 executes CP/M directly from SRAM; the Pico supervises boot and I/O
+rather than emulating the CPU. See the SBC's
+<a href="https://gloveboxes.github.io/Z80ROMlessSBC/system/cpm-execution/#pio-io-engine-reference">PIO I/O engine reference</a>
+for hardware-specific timing and device details.</p>
+<h2 id="composite-projects">Composite projects<a class="headerlink" href="#composite-projects" title="Permanent link">¶</a></h2>
+<p>A parent <code>dccmake.txt</code> can build an ordered collection of child projects:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># LIBDEMO/dccmake.txt</span>
+<span class="na">dcc-projects</span><span class="o">=</span><span class="s">lib,host</span>
+</code></pre></div>
+<p>Run <code>dccmake</code> in the parent directory. Each listed directory must contain
+its own <code>dccmake.txt</code>; paths resolve relative to the containing parent.
+The library builds first and generates the typed host wrappers before the
+host compiles. Each child retains its own inputs, output format, tools,
+and build directory. Nested composite projects are supported, with cycle
+detection and a maximum of 16 composite levels. A failed child stops the
+remaining builds and makes the root invocation fail.</p>
+<p>Parent configurations contain only <code>dcc-projects</code> and an optional
+<code>dcc-library-linker</code>. Keep compilation settings in children; common
+command-line overrides are forwarded to each child. <code>dcc-input</code> and
+<code>dcc-output</code> cannot be overridden on a composite invocation.</p>
+<div class="highlight"><pre><span></span><code>dccmake<span class="w"> </span>dcc-library-linker<span class="o">=</span>/path/to/dcc/l80c
+</code></pre></div>
+<p>The library-specific linker override applies only to LIB children, leaving
+COM children on their ordinary linker. It can also be used for a standalone
+library build. A composite builds outputs in their child build directories;
+it does not install files or make disk updates transactional.</p>
+<h2 id="fixed-address-bank-1-libraries">Fixed-address bank-1 libraries<a class="headerlink" href="#fixed-address-bank-1-libraries" title="Permanent link">¶</a></h2>
+<p><code>dcc-output-format=lib</code> builds a fixed-address CP/M bank-1 library, not a
+LINK-80 object archive. DCC's native <code>l80c</code> implements this format through
+its <code>--lib</code> mode; emulated <code>L80.COM</code> does not.</p>
+<p>Keep the host and library in separate directories, each with a
+<code>dccmake.txt</code> and <code>build/</code> directory. For example, the library configuration
+can contain:</p>
+<div class="highlight"><pre><span></span><code><span class="na">dcc-input</span><span class="o">=</span><span class="s">LIB.C</span>
+<span class="na">dcc-output</span><span class="o">=</span><span class="s">SPREADS</span>
+<span class="na">dcc-output-format</span><span class="o">=</span><span class="s">lib</span>
+<span class="na">dcc-exports</span><span class="o">=</span><span class="s">auto</span>
+<span class="na">dcc-library-api</span><span class="o">=</span><span class="s">auto</span>
+<span class="na">dcc-library-host-dir</span><span class="o">=</span><span class="s">../host/generated</span>
+<span class="na">dcc-stack-bytes</span><span class="o">=</span><span class="s">512</span>
+<span class="na">dcc-runtime</span><span class="o">=</span><span class="s">${DCC_DIR}/DCCRTL.MAC</span>
+<span class="na">dcc-include-directory</span><span class="o">=</span><span class="s">${DCC_DIR}</span>
+<span class="na">l80c-tool</span><span class="o">=</span><span class="s">${DCC_DIR}/l80c</span>
+</code></pre></div>
+<p>Run <code>dccmake</code> in that directory to produce <code>build/SPREADS.LIB</code> and
+<code>build/SPREADS.SYM</code>. Configure compiler/assembler tools as for ordinary
+application builds. The host's own configuration keeps the default <code>com</code>
+format and uses the same native linker without <code>--lib</code>.</p>
+<p>The library pipeline uses DCC's linked BSS/heap symbols, omits transient
+startup, and leaves heap initialization to the matching bank-1 loader.
+Library output requires <code>dcc-exports=auto</code>: the 1–8 exports are the public C
+definitions discovered by the compiler, and each one is linked with its
+canonical signature (see <a href="#automatic-typed-libraries">Automatic typed libraries</a>).
+Export names are at most eight characters. All application functions are
+retained so externally called exports cannot be stripped as unreachable.
+Runtime stripping and optional peephole optimization still apply.</p>
+<p>Library stacks must be 256–2,048 bytes in 256-byte units. If DCC raises the
+first translation unit's stack requirement, <code>dccmake</code> rejects the mismatch
+instead of publishing a smaller stack in the header; increase the configured
+reserve to an aligned value. Choose sufficient stack space for helper
+modules and the complete library call chain as well.</p>
+<p>The linked image, BSS and at least one heap byte must end below the reserved
+stack, which ends at <code>C7FFh</code>. With the default 2 KiB stack an image without
+BSS may therefore extend through <code>BFFEh</code>. Native <code>l80c</code> enforces the same
+image, heap and stack limits as the resident bank-1 loader.</p>
+<p>The linker records the heap base after the linked image/BSS, and the loader
+bounds the heap below the reserved stack. Library <code>main</code>, process
+exit/chaining, and re-entry into the bank-switch gateway are not supported.</p>
+<p>The <code>.LIB</code> file (library format version 1) is a header, the export table,
+then the image bytes, padded to a 128-byte record multiple. All multi-byte
+fields are little-endian:</p>
+<table>
+<thead>
+<tr>
+<th>Offset</th>
+<th>Size</th>
+<th>Field</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>4</td>
+<td>Magic <code>B1LB</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td>1</td>
+<td>Library format version, <code>1</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td>1</td>
+<td>ABI major, <code>1</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td>1</td>
+<td>ABI minor, <code>0</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td>1</td>
+<td>Call revision, <code>1</code></td>
+</tr>
+<tr>
+<td>8</td>
+<td>2</td>
+<td>Origin, <code>0100h</code></td>
+</tr>
+<tr>
+<td>10</td>
+<td>2</td>
+<td>Image length</td>
+</tr>
+<tr>
+<td>12</td>
+<td>2</td>
+<td>Export count, 1–8</td>
+</tr>
+<tr>
+<td>14</td>
+<td>2</td>
+<td>Reserved, zero</td>
+</tr>
+<tr>
+<td>16</td>
+<td>2</td>
+<td>Stack bytes</td>
+</tr>
+<tr>
+<td>18</td>
+<td>2</td>
+<td>Header length, 26 + 12 × exports</td>
+</tr>
+<tr>
+<td>20</td>
+<td>2</td>
+<td><code>__brk</code> image offset, or <code>FFFFh</code></td>
+</tr>
+<tr>
+<td>22</td>
+<td>2</td>
+<td><code>__hlimit</code> image offset, or <code>FFFFh</code></td>
+</tr>
+<tr>
+<td>24</td>
+<td>2</td>
+<td>Absolute heap base</td>
+</tr>
+</tbody>
+</table>
+<p>Each 12-byte export entry holds a zero-padded 8-byte name, the adapter's
+image-relative offset, and the image-relative offset of its NUL-terminated
+canonical signature string. Every export has a signature.</p>
+<h3 id="automatic-typed-libraries">Automatic typed libraries<a class="headerlink" href="#automatic-typed-libraries" title="Permanent link">¶</a></h3>
+<p>Library interfaces are generated from compiler type information; there is
+no export list or separate interface manifest to maintain:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># lib/dccmake.txt (run dccmake here before building the host)</span>
+<span class="na">dcc-input</span><span class="o">=</span><span class="s">DATA.C</span>
+<span class="na">dcc-output</span><span class="o">=</span><span class="s">DATA</span>
+<span class="na">dcc-output-format</span><span class="o">=</span><span class="s">lib</span>
+<span class="na">dcc-exports</span><span class="o">=</span><span class="s">auto</span>
+<span class="na">dcc-library-api</span><span class="o">=</span><span class="s">auto</span>
+<span class="na">dcc-library-host-dir</span><span class="o">=</span><span class="s">../host/generated</span>
+<span class="na">dcc-stack-bytes</span><span class="o">=</span><span class="s">512</span>
+<span class="na">dcc-runtime</span><span class="o">=</span><span class="s">${DCC_DIR}/DCCRTL.MAC</span>
+<span class="na">dcc-include-directory</span><span class="o">=</span><span class="s">${DCC_DIR}</span>
+<span class="na">l80c-tool</span><span class="o">=</span><span class="s">${DCC_DIR}/l80c</span>
+</code></pre></div>
+<p>With <code>dcc-library-api=auto</code>, library source is the single source of truth.
+DCC compiles every configured library source with its normal include paths,
+defines and compiler settings, emitting resolved type metadata with <code>-bank-api</code>.
+It generates <code>host/generated/API.H</code>, retaining parameter names and resolving
+typedefs to primitive C types, plus the client wrappers. Do not include this
+generated header from library source: generation must work without prior
+outputs. No source-text C parser or Python generator is used.
+Every non-static definition must have a supported signature; public helpers
+must either join the API or become <code>static</code>. Unsupported definitions fail
+instead of disappearing.</p>
+<p>Alternatively, <code>dcc-library-api=../API.H</code> selects a handwritten header: the
+library and host share that header, and every public definition must match a
+declaration there. The header is validated, never overwritten. Exports are
+still discovered from definitions and linked with generated signatures.
+Assembly definitions, unresolved prototypes, public data, static helpers,
+and functions owned by the separately linked runtime are not auto exports.
+There must be 1–8 discovered functions, and names are uppercased for lookup
+and limited to eight characters. M80 external-name collisions and reserved
+generated symbol names are rejected.</p>
+<p>The build produces:</p>
+<ul>
+<li><code>lib/build/B1ADAPT.C</code>: bank-1 dispatch adapters and canonical signature strings.</li>
+<li><code>host/generated/API.H</code>: public prototypes and buffer annotations in auto mode.</li>
+<li><code>host/generated/B1HOST.C</code>: client implementations of the public C API.</li>
+<li><code>lib/build/B1M01.API</code> and later: resolved source metadata, including definition
+  parameter names. Handwritten-header mode also produces <code>B1M00.API</code> for the
+  selected header. Metadata-pass <code>.MAC</code> files are build intermediates.</li>
+<li><code>lib/build/DATA.LIB</code>: the library image with its typed export table; no
+  hand-maintained manifest.</li>
+</ul>
+<p><strong>Generate the contract before client integration</strong>, without an assembler,
+linker or runtime file:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># In the library directory, or the composite root containing lib and host:</span>
+dccmake<span class="w"> </span>dcc-contract-only<span class="o">=</span><span class="nb">true</span>
+</code></pre></div>
+<p>This still compiles the library sources to validate types and obtain metadata,
+but does not assemble, link or install anything. Composite COM children are
+skipped. A previously linked LIB is left untouched. Normal builds refresh the
+contract automatically. Contract-only mode requires LIB output.
+Failed generation invalidates generated interfaces instead of leaving stale
+headers for clients. Existing handwritten headers in the generated location are
+protected against accidental overwriting.</p>
+<p>The host includes <code>API.H</code> and retains an ordinary COM configuration, adding
+<code>generated/B1HOST.C</code> to <code>dcc-input</code>, both <code>generated</code> and the directory containing
+the common <code>BANKLIB.H</code> to <code>dcc-include-directory</code>, and compiling BANKLIB/BIOSBANK runtime
+sources. Auto-generated client wrappers include their adjacent API header;
+bank adapters and handwritten-header wrappers use a build-time absolute path,
+so regenerate them after moving the source tree. Missing directories beneath
+<code>dcc-library-host-dir</code> are created automatically. Full automatic rebuilds also
+invalidate the previous LIB before compiling.</p>
+<p><strong>Transfer types and annotations.</strong> The supported set is <code>void</code>
+results, signed/unsigned 8-, 16-, and 32-bit integers, opaque <code>unsigned int</code>
+handles, explicitly counted byte buffers, and annotated pointers to single
+named flat records. Typedefs resolve through the
+compiler: a handle typedef remains canonical <code>u16</code>, not a raw pointer.
+Plain <code>char</code> is signed on this target. Pointer results, unannotated pointers,
+pointer graphs, function pointers, varargs, old-style/unprototyped functions,
+floats, and by-value structure/union arguments/results are rejected explicitly.
+Records have a checked target-layout contract, not implicit pointer or
+deep-object serialization.</p>
+<p>For example:</p>
+<div class="highlight"><pre><span></span><code><span class="k">typedef</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">handle</span><span class="p">;</span>
+<span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">onload</span><span class="p">(</span><span class="kt">void</span><span class="p">);</span>
+<span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">onunload</span><span class="p">(</span><span class="kt">void</span><span class="p">);</span>
+<span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">add16</span><span class="p">(</span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">left</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">right</span><span class="p">);</span>
+<span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">upper</span><span class="p">(</span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">data</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">count</span><span class="p">);</span>
+<span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">filerd</span><span class="p">(</span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">data</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">count</span><span class="p">);</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">BlockSpec</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">seed</span><span class="p">;</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="n">label</span><span class="p">[</span><span class="mi">8</span><span class="p">];</span><span class="w"> </span><span class="p">};</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">BlockInfo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">handle</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="n">byte_sum</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">signed</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="n">state</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="n">label</span><span class="p">[</span><span class="mi">8</span><span class="p">];</span>
+<span class="p">};</span>
+<span class="n">handle</span><span class="w"> </span><span class="nf">blknew</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">BlockSpec</span><span class="w"> </span><span class="o">*</span><span class="n">spec</span><span class="p">,</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">BlockInfo</span><span class="w"> </span><span class="o">*</span><span class="n">info</span><span class="p">);</span>
+<span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">blkread</span><span class="p">(</span><span class="n">handle</span><span class="w"> </span><span class="n">block</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">offset</span><span class="p">,</span>
+<span class="w">                     </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">data</span><span class="p">,</span><span class="w"> </span><span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">count</span><span class="p">);</span>
+<span class="kt">unsigned</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="nf">blkfree</span><span class="p">(</span><span class="k">struct</span><span class="w"> </span><span class="nc">BlockInfo</span><span class="w"> </span><span class="o">*</span><span class="n">info</span><span class="p">);</span>
+<span class="cp">#pragma dcc bank_buffer upper 1 inout 2 128</span>
+<span class="cp">#pragma dcc bank_buffer filerd 1 out 2 128</span>
+<span class="cp">#pragma dcc bank_buffer blkread 3 out 4 128</span>
+<span class="cp">#pragma dcc bank_record blknew 1 in</span>
+<span class="cp">#pragma dcc bank_record blknew 2 out</span>
+<span class="cp">#pragma dcc bank_record blkfree 1 inout</span>
+</code></pre></div>
+<p>The maintained
+<a href="https://github.com/gloveboxes/Z80ROMlessSBC/tree/main/examples/LIBDEMO">LIBDEMO example</a>
+builds this data service from <code>lib/DATA.C</code> and its eight-step client/test
+program from <code>host/DATATEST.C</code>. Its outputs are <code>DATA.LIB</code> and <code>DATATEST.COM</code>.
+The shared BANKLIB/BIOSBANK client support lives in
+<a href="https://github.com/gloveboxes/Z80ROMlessSBC/tree/main/examples/BANKSDK"><code>examples/BANKSDK</code></a>,
+not inside another runnable example.
+Its public C API uses descriptive <code>bank_library_*</code>, <code>bank_memory_*</code> and
+<code>bank_bios_*</code> names, aliased to the short linker symbols, so they add no
+runtime wrapper overhead.
+The generated wrappers make ordinary C calls possible; only the deliberate
+ABI-rejection checks use low-level call frames.</p>
+<p>The pragma syntax is
+<code>#pragma dcc bank_buffer FUNCTION BUFFER_ARG in|out|inout COUNT_ARG MAX_BYTES</code>.
+Argument positions are <strong>1-based</strong>; the count must resolve to <code>unsigned int</code>
+(<code>u16</code>); the maximum is a literal decimal integer from 1 to 256. Annotate
+each byte pointer once (identical repeated annotations are harmless).
+In auto-header mode place pragmas in library sources or headers they include;
+annotations are collected across configured modules. In handwritten-header mode
+they must occur in the selected API header.
+<code>const</code> byte pointers support <code>in</code> only. Zero count permits NULL; nonzero
+count with NULL is invalid. No pointers or pointer graphs cross banks;
+buffers are independent flat snapshots, without pointer-alias preservation.
+The sum of result, scalar arguments and maximum buffer sizes must fit 256
+bytes. These are byte lengths, never implicit NUL-terminated strings.</p>
+<p>For a single record use
+<code>#pragma dcc bank_record FUNCTION RECORD_ARG in|out|inout</code>.
+The 1-based argument must point to a complete <strong>named struct</strong> with
+unqualified signed/unsigned 8-, 16- or 32-bit integer fields or fixed
+one-dimensional arrays of those types. Pointer members, nested/anonymous
+aggregates, unions, bitfields, const/volatile members, and flexible arrays
+are not supported. Record pointers cannot be NULL; <code>const</code> record pointers
+permit only IN. Records passed by value or returned by value remain
+unsupported.</p>
+<p>The compiler emits version-2 bank metadata with resolved tags, member
+names/types, sizes, offsets and array lengths. This is obtained from the
+type model, never by parsing source text. Automatic contracts use
+<code>#pragma once</code> instead of macro include guards and contain
+complete <code>struct TAG</code> definitions, annotations and compile-time target-layout
+checks; original typedef aliases are resolved, not reproduced. Handwritten
+contracts are checked against the same schemas. Conflicting definitions
+across source modules are rejected, including same-size field changes.
+Use matching updated <code>dcc</code> and <code>dccmake</code> executables.</p>
+<p>VS Code's C/C++ IntelliSense uses native host widths and alignment, not
+DCC's 16-bit packed target model. Generated layout assertions are skipped
+only while <code>__INTELLISENSE__</code> is defined by the editor; struct definitions
+and prototypes remain visible. Real compilation, including DCC and native
+compiler validation, retains all assertions. Do not define this editor
+macro in build settings to bypass incompatible-layout failures.</p>
+<p>Record copies use the verified DCC packed little-endian representation;
+these headers are not a portable native-host ABI. A compiler with different
+widths/padding fails the generated static assertions. Wrappers copy complete
+records with bounded <code>memcpy</code>; no heap allocation, per-field serialization
+or runtime layout discovery is needed. A fixed-size call uses constant frame
+offsets, an exact-size host array, and one adapter body-length check.
+Only return/OUT regions are zeroed, rather than clearing inputs before
+overwriting them. Record and byte-buffer arguments may be mixed.</p>
+<p>OUT records start zero-filled. IN/OUT/INOUT direction and successful-dispatch
+copy-back rules are the same as for byte buffers; a zero C result with a
+successful transport still publishes outputs. Copied arguments are independent
+snapshots; overlapping arguments involving a record are rejected if either
+is writable. The callee must not retain its temporary record pointer. Large
+record arrays should remain bank-owned, with bounded slices exposed separately.</p>
+<p><strong>Canonical signatures and framing.</strong> Type names are <code>void</code>, <code>i8</code>, <code>u8</code>,
+<code>i16</code>, <code>u16</code>, <code>i32</code>, and <code>u32</code>. Functions use <code>RESULT(ARG,...)</code>, with no
+whitespace: <code>u16()</code>, <code>void()</code>, <code>u16(u16)</code>, and <code>void(u16)</code>. Byte buffers
+replace the pointer type with <code>DIRECTION:u8[COUNT_ARG&lt;=MAX_BYTES]</code>, regardless
+of signedness of the byte pointer. The example <code>objread</code> has exactly
+<code>u16(u16,u16,out:u8[4&lt;=128],u16)</code>. Full NUL-terminated ASCII strings
+(maximum 255 characters excluding NUL) are linked at <code>b1s00</code>, <code>b1s01</code>, etc.;
+adapters use <code>b1e00</code>, <code>b1e01</code>, etc. The linker receives both
+<code>--export OBJREAD=_b1e05</code> and <code>--signature OBJREAD=_b1s05</code>, avoiding M80's
+six-significant-character limit and signature-hash collisions. Export
+entries are 12 bytes: name[8], image-relative adapter offset, image-relative
+signature-string offset (both offsets little-endian uint16).</p>
+<p>The packed <strong>body</strong> is result bytes first, then scalar arguments in
+declaration order (pointer arguments consume no pointer slot), then copied
+buffers and records in declaration order. Integers use the target's little-endian representation.
+An OUT buffer begins zero-filled; IN copies only into bank 1; OUT/INOUT copy
+back only after successful dispatch. Results and count scalars occupy their
+normal 1/2/4-byte widths, without alignment padding. For <code>objread</code>, the body
+is result2, handle2, offset2, count2, then <code>count</code> bytes: 8–136 bytes.
+Records occupy one fixed-size region each among the copied arguments, in
+declaration order, and do not consume pointer slots. <code>blknew</code> uses 29 body
+bytes and <code>blkfree</code> 19. Record signatures use
+<code>DIRECTION:rec1le:TAG[SIZE]{FIELD:TYPE@OFFSET;ARRAY:TYPE[COUNT]@OFFSET}</code>.
+The grammar version and <code>le</code> specify packed little-endian layout. Full
+field names/order, widths/signedness, array bounds, offsets and size are
+included, so equal names or sizes alone never establish compatibility.
+The 255-character signature and 256-byte body limits apply;
+overflow is a generation error, not a truncated signature or short hash.</p>
+<p>Host wrappers keep one four-byte static <code>bank_library_binding_t</code> and call
+<code>bank_library_call_bound(&amp;binding, name, signature, body, body_size)</code> from
+<code>BANKLIB.H</code>. BANKSDK compares the full signature once per module generation,
+then reuses the bound export index. Open reserves a 512-byte bank-1 frame
+extent; steady-state calls do not allocate/free. Module generation and pool
+epoch checks reject stale bindings/ownership before frame writes and again at
+dispatch. Raw <code>blcall()</code> is also available, with full signature validation on
+every call. Clients and libraries use BIOS ABI 1.0, call revision 1.
+On the bank wire,
+the runtime prepends a little-endian uint16 body-size prefix and passes a
+pointer to that prefix to <code>unsigned int b1e00(unsigned char *wire)</code>.
+The adapter checks the prefix against the minimum fixed size <strong>before</strong>
+reading scalars, checks each count/bound and the 256-byte cap, then requires
+an exact body-size match before rebasing pointers or invoking C. It returns
+1 for dispatch or 0 for invalid framing. The common runtime must ensure the
+allocation really contains the claimed body bytes; the prefix itself is
+outside the 256-byte body limit.</p>
+<p>On local NULL/count/bounds validation failures wrappers call
+<code>blfail(BL_ARGUMENT)</code> or <code>blfail(BL_BOUNDS)</code> before any copying or transport.
+On transport failure they preserve the runtime's <code>blerr()</code>, do not copy out,
+and return deterministic zero (or return from a void function). Callers
+<strong>must check <code>blerr()</code></strong>, since a legitimate result can also be zero.
+Optional <code>onload(void)</code>/<code>onunload(void)</code> lifecycle functions are ordinary
+<code>u16()</code> exports; the common runtime owns their automatic invocation.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer">
+        
+          
+          <a href="../03-utilities/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Utilities">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"></path></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Utilities
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../05-building-project-docs/" class="md-footer__link md-footer__link--next" aria-label="Next: Building project docs">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Building project docs
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"></path></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright © 2026 David Lee
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.footer", "content.code.copy", "navigation.tabs.sticky", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.a5f9d56c.min.js"></script>
+      
+    
+  
+<script id="init-glightbox">const lightbox = GLightbox({"touchNavigation": true, "loop": false, "zoomable": true, "draggable": true, "openEffect": "zoom", "closeEffect": "zoom", "slideEffect": "slide"});
+document$.subscribe(()=>{ lightbox.reload(); });
+</script></body></html>
