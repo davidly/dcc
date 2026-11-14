@@ -1002,6 +1002,8 @@ float out[2];
 
 ## Fixed in cluster D2b
 
+Fix and verification: [PR #301](https://github.com/davidly/dcc/pull/301).
+
 BUG-010 (#230) is promoted as [tpost32](tests/tpost32.c). A postfix expression
 was admitted only for plain integers and pointers even though the existing
 long-value classifier already resolved long update lvalues. Reuse that proof
