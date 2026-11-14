@@ -145,6 +145,20 @@ static int ast_promoted_operand_type(const struct AstNode *n)
     return promote_int_type(type);
 }
 
+/* Interim BUG-061 repair: keep today's signed sizeof type unless a known
+ * constant sets bit 15. Full unsigned size_t typing, including VLAs, is
+ * deferred to BUG-062's typing and exact-schedule recovery track. */
+static int ast_sizeof_result_type(const struct AstNode *n)
+{
+    long size = 0;
+
+    if (n->kind == AST_SIZEOF_TYPE)
+        size = n->ival;
+    else if (ast_sizeof_whole_vla_sym(n->a) == NULL)
+        size = ast_sizeof_expr_value(n->a);
+    return size >= 0x8000L ? TYPE_INT | TYPE_UNSIGNED : TYPE_INT;
+}
+
 int ast_expr_type_for_sizeof(const struct AstNode *n)
 {
     struct Sym *s;
@@ -293,7 +307,7 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
         return ast_call_result_type(n);
     case AST_SIZEOF_EXPR:
     case AST_SIZEOF_TYPE:
-        return TYPE_INT;
+        return ast_sizeof_result_type(n);
     default:
         return n->type;
     }
@@ -792,13 +806,13 @@ static struct AstNode *p_unary(struct AstArena *ar)
             next_token();
             parse_type_name_decl(&ty, &sz);
             expect(')');
-            n->type = TYPE_INT;
             n->ival = sz;
+            n->type = ast_sizeof_result_type(n);
             return n;
         } else {
             struct AstNode *n = ast_new(ar, AST_SIZEOF_EXPR);
             n->a = p_unary(ar);
-            n->type = TYPE_INT;
+            n->type = ast_sizeof_result_type(n);
             /* Resolve the operand's size during semantic processing, after
              * nested declaration spans have entered their symbols. */
             return n;

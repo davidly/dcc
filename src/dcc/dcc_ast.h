@@ -70,7 +70,7 @@ enum AstKind {
     AST_COMPOUND_LITERAL, /* (type){...}: sym = hidden auto object          */
     AST_COMMA,          /* a , b                                           */
     AST_SIZEOF_EXPR,    /* sizeof a                                        */
-    AST_SIZEOF_TYPE,    /* sizeof(type): type = operand type               */
+    AST_SIZEOF_TYPE,    /* sizeof(type): type = result type, ival = size    */
 
     /* ---- statements ---- */
     AST_EXPR_STMT,      /* a = expression (may be NULL for empty ';')      */
