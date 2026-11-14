@@ -40,8 +40,8 @@ test:
    `KNOWN_BUGS` in `scripts/clang_oracle_gen.py` so the fuzzer generates that
    form again.
 
-`tests/twcasgm.c`, `tests/tblkdiv.c` and `tests/tcastasg.c` were promoted this
-way.
+`tests/twcasgm.c`, `tests/tblkdiv.c`, `tests/tcastasg.c`, `tests/tblkabi.c`,
+`tests/tblkret.c` and `tests/tblkcopy.c` were promoted this way.
 
 ## Adding one
 

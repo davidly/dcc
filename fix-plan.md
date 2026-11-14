@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has forty-six open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has forty-three open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -8,16 +8,17 @@ one fix, made in the right place, closes several issues, and so that the
 fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
-neighbouring shapes that pass in each entry. They have not been confirmed in
-the source, except K, whose four independent rules have now been fixed, and
-L, whose preprocessing-token boundary defect is confirmed and fixed.
+neighbouring shapes that pass in each entry. A1's conversion-loss defect is
+confirmed, but its experimental fix is not accepted. K's four independent
+rules and L's preprocessing-token boundary defect are confirmed and fixed;
+the remaining clusters, including A2, are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
 explicitly approved K as a four-rule exception.
 
 ## Rules
 
-- One cluster per branch and pull request. Clusters A–D all touch MIR
+- One cluster per branch and pull request. Clusters A1, A2 and B–D all touch MIR
   lowering and the homed/spilled emitters and will conflict; work them one
   at a time. I, K and L are isolated and can proceed in parallel.
 - Do not change a generator's `KNOWN_BUGS` or a reproducer until the fix is
@@ -68,23 +69,65 @@ Priority follows the maintainer's own ranking of what ordinary code hits
 (BUG-026, 044, 047, 030, 003, 013, 016, 025) and the number of issues a
 fix would close.
 
-### A. Nested-block locals lose their declared type
+### A1. Conversions discarded while block-local load types are unresolved
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-025 | #245 | `return x;` of a block object not converted to 8- or 32-bit return type |
+| BUG-031 | #251 | Block 32-bit local copied from a local, stored through a variable address: low byte only |
+| BUG-007 | #227 | Block or `for`-init local as a converted argument of an indirect call: bad ABI type |
+
+**Confirmed root cause**, fixed on `fix/cluster-a1-deferred-conversions`
+from main `48f4f3de`: an unresolved block-local load loses its required
+conversion, and argument replay can replace a fixed prototype's ABI type
+with a repaired operand type. Declaration replay restores the load's
+declared type but not the consumer's conversion contract.
+
+Return and indirect-store requirements now survive on the consumer until
+types resolve, without speculative MIR instructions or value IDs. Fixed
+prototype arguments retain their ABI target; existing exact call schedules
+and selection-time conversion materialization are preserved.
+
+- Before promotion: 3 `FIXED`, 43 `fails`, with no outside-cluster flips.
+  BUG-004, BUG-008 and BUG-015 remain in A2.
+- Both censuses compare identically across 3,333 existing functions. Strict
+  full+extended stack-check and no-stack-check runs pass; no existing
+  performance row changed. The earlier speculative-conversion experiment
+  changed 355 functions across 80 apps and was rejected.
+- For BUG-025, `ld hl,300` becomes `ld hl,44`, exactly matching the
+  unchanged function-scope control in peep and nopeep.
+- Restored `ptrcallconv`, `blockret` and `blockwidecopy`: seeds 1-300 in
+  all production configurations finish with 218 ok, 81 INVALID, one
+  target-limit-only, zero FAIL. Seeds 77/256 exposed arithmetic-argument
+  facets of the same ABI defect; both have permanent regression coverage.
+- Promoted as `tblkabi`, `tblkret` and `tblkcopy` with unchanged host
+  baselines and three new PowerShell stack-check performance rows.
+  Focused MIR, ASan/UBSan, debugger/metadata, release-identical `-gline`
+  and require-emit checks pass.
+- The final regular Python gate has three failures and two skips across
+  307 tests. The two #277 failures match clean rebuilt main exactly.
+  The additional mutation-runner exit-139 fixture failure also reproduces
+  on clean main, with nondeterministic mutant IDs (#280). The maintainer
+  approved documenting it separately without fixing or skipping the test.
+
+### A2. Remaining nested-block expression typing defects (unconfirmed)
 
 | Bug | Issue | Shape |
 | --- | --- | --- |
 | BUG-015 | #235 | Block pointer to 32-bit object: `*q *= k` in 16 bits, `c <= *q` signed; block `unsigned char` compared as `unsigned int`; `?:` of two block floats |
-| BUG-025 | #245 | `return x;` of a block object not converted to 8- or 32-bit return type |
-| BUG-031 | #251 | Block 32-bit local copied from a local, stored through a variable address: low byte only |
 | BUG-008 | #228 | Negative constant assigned to a block 32-bit local: fatal |
-| BUG-007 | #227 | Block or `for`-init local as a converted argument of an indirect call: bad ABI type |
 | BUG-004 | #225 | `&&`/`||` assigned to a block 32-bit local leaves garbage high word (facet; the function-scope half is in E) |
 
-Common control: every shape is right when the same local is declared at
-function scope. Start in the MIR lowering of block-scope declarations and
-the type recorded for their homes (`src/dcc/dcc_mir.c`, scope handling in
-`dcc_func.c`): the block local appears to be typed from its initialiser or
-from context rather than from its declaration. Expect this to be the largest
-single win.
+These three remain after the A1 conversion-loss experiment. Every shape is
+right when the same local is declared at function scope, but a shared root
+cause among these bugs is **not confirmed**. Trace expression typing,
+conversion insertion and deferred metadata repair in `src/dcc/dcc_mir.c`
+against the neighbouring correct shapes before changing anything.
+
+Keep A2 on a separate branch and PR from A1. The original stop rule still
+applies: if its first root-cause fix does not clear its siblings, stop and
+split again rather than add independent fixes. BUG-004 remains shared with
+E; its issue cannot close until both facets pass.
 
 ### B. Stack slot and home allocation
 
@@ -277,7 +320,8 @@ so it matters more than its size suggests. Both are one-offs.
 
 1. **K, L** — isolated, cheap, four and one issues; good warm-up for the
    acceptance loop.
-2. **A** — six issues, largest expected win.
+2. **A1**, then **A2** — three confirmed conversion-loss bugs first;
+   three remaining typing bugs are a separate, unconfirmed hypothesis.
 3. **B** — BUG-030 corrupts memory; BUG-026 is the maintainer's first
    priority.
 4. **D** — BUG-044 and BUG-003.
@@ -289,7 +333,8 @@ so it matters more than its size suggests. Both are one-offs.
 
 | Cluster | Branch / PR | Status | Notes |
 | --- | --- | --- | --- |
-| A | | open | |
+| A1 | [#281](https://github.com/davidly/dcc/pull/281) (`fix/cluster-a1-deferred-conversions`) | PR open | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
+| A2 | | open: hypothesis unconfirmed | 004/008/015 still fail after A1 experiment; separate branch/PR; stop and split again if necessary |
 | B | | open | |
 | C | | open | |
 | D | | open | |
@@ -308,7 +353,7 @@ a fix shows the hypothesis was wrong.
 
 ## Appendix: prompt for a fixing agent
 
-Give this to the agent once per cluster. Change only the cluster letter in
+Give this to the agent once per cluster. Change only the cluster identifier in
 the **Task** line.
 
 ````text
@@ -319,7 +364,7 @@ MIR selection, schedules, or allocation.
 
 ## Task
 
-Fix cluster **K** in `fix-plan.md`. Read the cluster's table, then every
+Fix cluster **A1** in `fix-plan.md`. Read the cluster's table, then every
 `## BUG-NNN` entry it lists in `compiler-bugs.md`, including the bullets
 describing which neighbouring shapes are already correct — those are your
 strongest clue to the root cause and to what the fixed code should emit.

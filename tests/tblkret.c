@@ -1,9 +1,6 @@
-/* BUG-025: `return x;`, where x is declared in a nested block, is not
- * converted to the function's return type. To an 8-bit type it is not
- * truncated: the caller receives all 16 bits. To a 32-bit type it is not
- * widened: the high word is whatever was in the register. It is correct for
- * a local declared at function scope, for a parameter, for
- * `return (uint8_t)x;`, `return x + 1;` and for a 16-bit return type. */
+/* Return conversions for block, if-body and for-init locals: byte
+ * truncation, signedness changes, wide extension, array elements and
+ * updated values, with function-scope and word-return controls. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -83,7 +80,7 @@ static uint8_t function_scope(void)
     }
 }
 
-/* a 32-bit return type: the high word is not set */
+/* Widening to a 32-bit return type. */
 static uint32_t widened(void)
 {
     {
@@ -101,7 +98,7 @@ static int32_t widened_signed(int16_t n)
     return 1;
 }
 
-/* correct: a 16-bit return type */
+/* Word-return control. */
 static int16_t to_16_bits(void)
 {
     {

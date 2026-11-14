@@ -1,11 +1,6 @@
-/* BUG-031: a 32-bit local declared in a nested block and initialised from a
- * function-scope 32-bit local is stored to a 16-bit array element, struct
- * member or pointer target with only its low byte loaded: the high byte
- * written is whatever was in the register. It is correct when the local is
- * declared at function scope, when it is initialised from a global, a
- * constant or an expression, and when the destination is a plain global. It
- * is wrong too when the local is first initialised with a constant and then
- * assigned from the other local. */
+/* Narrowing stores from wide block-local copies to word array elements,
+ * struct members and pointer targets, including assignment after
+ * initialization and function-scope/plain-global controls. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -51,8 +46,7 @@ static void in_if(int16_t n, uint32_t x)
     }
 }
 
-/* the same through an assignment: the local is initialised with a constant
- * and then assigned the other local */
+/* Assignment after initialization. */
 static void assigned_after_init(int32_t x)
 {
     int32_t y = x;
@@ -63,7 +57,7 @@ static void assigned_after_init(int32_t x)
     }
 }
 
-/* correct: declared at function scope */
+/* Function-scope control. */
 static void function_scope(uint32_t x)
 {
     uint32_t y = x;
@@ -71,7 +65,7 @@ static void function_scope(uint32_t x)
     a2[0] = b;
 }
 
-/* correct: stored to a plain global */
+/* Plain-global control. */
 static void to_global(uint32_t x)
 {
     uint32_t y = x;

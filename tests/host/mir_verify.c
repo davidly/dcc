@@ -4251,6 +4251,167 @@ static void verify_deferred_scoped_type_repair(void)
     }
 }
 
+static void verify_deferred_load_return_conversions(void)
+{
+    const int return_types[] = {
+        TYPE_CHAR | TYPE_UNSIGNED, TYPE_LONG, TYPE_INT
+    };
+    int indirect;
+    int target;
+    int ok = 1;
+
+    for (indirect = 0; indirect < 2; ++indirect) {
+        for (target = 0; target < 3; ++target) {
+            struct AstNode ident;
+            struct AstNode dereference;
+            struct AstNode statement;
+            struct Sym local;
+            const struct MirInsn *conversion;
+            const struct MirInsn *source;
+            int count;
+            int values;
+
+            setup(2, 1, 1);
+            mir.count = 1;
+            mir.next_value = 0;
+            memset(&ident, 0, sizeof(ident));
+            memset(&dereference, 0, sizeof(dereference));
+            memset(&statement, 0, sizeof(statement));
+            memset(&local, 0, sizeof(local));
+            ident.kind = AST_IDENT;
+            ident.sval = "verify_deferred_value";
+            dereference.kind = AST_UNARY;
+            dereference.op = '*';
+            dereference.a = &ident;
+            statement.kind = AST_RETURN;
+            statement.a = indirect ? &dereference : &ident;
+            mir.return_type = return_types[target];
+            mir_capture_stmt(&statement);
+            count = mir.count;
+            values = mir.next_value;
+
+            strcpy(local.name, ident.sval);
+            local.type = indirect ? TYPE_INT | TYPE_PTR : TYPE_INT;
+            local.storage = SC_LOCAL;
+            local.offset = -2;
+            local.size = 2;
+            mir_note_declared_symbol(&local);
+            mir_resolve_deferred_metadata();
+
+            conversion = mir_definition(mir.insns[mir.count - 1].src1);
+            if (return_types[target] == TYPE_INT) {
+                ok = ok && conversion != NULL &&
+                     conversion->opcode ==
+                         (indirect ? MIR_LOAD_INDIRECT : MIR_LOAD) &&
+                     mir.count == count && mir.next_value == values;
+                continue;
+            }
+            source = conversion != NULL
+                ? mir_definition(conversion->src1) : NULL;
+            ok = ok && conversion != NULL &&
+                 conversion->opcode == MIR_UNARY &&
+                 conversion->immediate == 0 &&
+                 conversion->type == return_types[target] &&
+                 source != NULL && source->type == TYPE_INT;
+        }
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred load return conversions\n");
+        ++failures;
+    }
+}
+
+static void verify_deferred_argument_expression_abi(void)
+{
+    struct Sym *callback = add_global(
+        "verify_expression_callback", type_add_ptr(TYPE_INT), SC_GLOBAL);
+    int case_index;
+    int ok = 1;
+
+    callback->is_funcptr = 1;
+    callback->funcptr_return_type = TYPE_INT;
+    callback->has_proto = 1;
+    callback->proto_nargs = 1;
+    for (case_index = 0; case_index < 2; ++case_index) {
+        struct AstNode nodes[6];
+        struct AstNode *arguments[1];
+        struct Sym local;
+        const struct MirInsn *source;
+        int argument = -1;
+        int instruction;
+        int target_type = TYPE_INT | (case_index ? TYPE_UNSIGNED : 0);
+        int source_type = TYPE_LONG | (case_index ? TYPE_UNSIGNED : 0);
+        int case_ok;
+
+        setup(2, 1, 1);
+        mir.count = 1;
+        mir.next_value = 0;
+        mir.return_type = TYPE_INT;
+        memset(nodes, 0, sizeof(nodes));
+        memset(&local, 0, sizeof(local));
+        callback->proto_types[0] = target_type;
+        nodes[0].kind = AST_IDENT;
+        nodes[0].sval = "verify_expression_value";
+        nodes[1].kind = AST_INT_LIT;
+        nodes[1].type = target_type;
+        nodes[1].ival = 1;
+        nodes[2].kind = AST_BINARY;
+        nodes[2].op = case_index ? '+' : '^';
+        nodes[2].type = target_type;
+        nodes[2].operand_type = target_type;
+        nodes[2].deferred_types = 1;
+        nodes[2].a = &nodes[0];
+        nodes[2].b = &nodes[1];
+        nodes[3].kind = AST_IDENT;
+        nodes[3].type = callback->type;
+        nodes[3].sval = callback->name;
+        nodes[3].sym = callback;
+        nodes[4].kind = AST_CALL;
+        nodes[4].type = TYPE_INT;
+        nodes[4].a = &nodes[3];
+        arguments[0] = &nodes[2];
+        nodes[4].list = arguments;
+        nodes[4].list_len = 1;
+        nodes[4].list_cap = 1;
+        mir_capture_discarded_expr(&nodes[4]);
+        nodes[5].kind = AST_RETURN;
+        nodes[5].a = &nodes[1];
+        mir_capture_stmt(&nodes[5]);
+
+        strcpy(local.name, nodes[0].sval);
+        local.type = source_type;
+        local.storage = SC_LOCAL;
+        local.offset = -4;
+        local.size = 4;
+        mir_note_declared_symbol(&local);
+        mir_resolve_deferred_metadata();
+        for (instruction = 0; instruction < mir.count; ++instruction)
+            if (mir.insns[instruction].opcode == MIR_ARG)
+                argument = instruction;
+        source = argument >= 0
+            ? mir_definition(mir.insns[argument].src1) : NULL;
+        case_ok = argument >= 0 &&
+            mir.insns[argument].type == target_type &&
+            source != NULL && source->opcode == MIR_BINARY &&
+            source->type == source_type;
+        if (case_ok) {
+            case_ok = mir_materialize_folded_argument_conversions();
+            for (instruction = 0; instruction < mir.count; ++instruction)
+                if (mir.insns[instruction].opcode == MIR_ARG)
+                    argument = instruction;
+            source = mir_definition(mir.insns[argument].src1);
+            case_ok = case_ok && source != NULL &&
+                source->opcode == MIR_UNARY && source->immediate == 0 &&
+                source->type == target_type;
+        }
+        ok = ok && case_ok;
+    }
+    if (!ok) {
+        fprintf(stderr, "FAIL deferred argument expression ABI\n");
+        ++failures;
+    }
+}
+
 static void verify_deferred_metadata_call_ordering(void)
 {
     struct MirInsn argument;
@@ -9363,6 +9524,8 @@ int main(int argc, char **argv)
     verify_deferred_for_init_alias_window();
     verify_deferred_metadata_merge_demotion();
     verify_deferred_scoped_type_repair();
+    verify_deferred_load_return_conversions();
+    verify_deferred_argument_expression_abi();
     verify_deferred_metadata_call_ordering();
     verify_five_call_arguments();
     verify_spilled_feature_defaults();
