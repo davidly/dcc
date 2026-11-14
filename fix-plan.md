@@ -508,7 +508,7 @@ so it matters more than its size suggests. Both are one-offs.
 | F | | open | |
 | G | | open | |
 | H | | open | |
-| I | `fix/cluster-i` (draft PR) | stopped; split proposed | First root fix cleared only 046; 048/050 unchanged; compiler experiment reverted; I1 return admission vs unconfirmed I2 cast signedness; 42 fails after restore; zero existing baseline changes |
+| I | [#285](https://github.com/davidly/dcc/pull/285) (`fix/cluster-i`) | stopped; split proposed | First root fix cleared only 046; 048/050 unchanged; compiler experiment reverted; I1 return admission vs unconfirmed I2 cast signedness; 42 fails after restore; zero existing baseline changes |
 | J | | open | |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
