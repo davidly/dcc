@@ -4980,16 +4980,14 @@ _pffio:
 
 ; pf_f is the %f handler installed via pf_float_hook when _pffio is active.
 ; It lives in the _pffio block so dccrtlstrip omits it for non-float builds.
-; Uses pf_arg_dehl, pf_build_u32, __pf32_l/__pf32_h from the __pf32h block,
+; Uses pf_arg_dehl, pf_divu32_10, __pf32_l/__pf32_h from the __pf32h block,
 ; and pf_prec/pf_emit_a from the _printf block.
 pf_f:
         ; HL (fmt ptr) already pushed by the %f dispatch in pf_pct_done_width
         call    pf_arg_dehl     ; loads __pf32_l/__pf32_h with raw float bits, advances DE by 4
         push    de
 
-        ; Width never needs a staging buffer: after rounding, pf_build_u32
-        ; gives the integer digit count, and precision fixes the remaining
-        ; length.  Keep only the sign bit until that exact length is known.
+        ; Keep the sign until the rounded decimal vector fixes field length.
 
         ; C99 7.19.6.1p6: a NaN or infinite value ignores the '0' flag
         ; (always space-padded, never zero-padded) and prints as
@@ -5068,224 +5066,152 @@ pf_f_prec_default:
 pf_f_prec_known:
         ld      (pf_fcnt),a
 
-        ; Round before splitting integer/fractional parts: add 0.5*10^-prec.
-        cp      10
-        jr      nc,pf_f_rounded     ; no table entry for larger precisions
-        add     a,a                 ; offset = precision * 4
-        add     a,a
-        ld      e,a
-        ld      d,0
-        ld      hl,pf_rndtab
-        add     hl,de
-        ld      e,(hl)
-        inc     hl
-        ld      d,(hl)
-        inc     hl
-        ld      (pf_ftl),de
-        ld      e,(hl)
-        inc     hl
-        ld      d,(hl)
-        ld      (pf_fth),de
-
-        ; Every float-arithmetic helper below (__faf/__fsf/__fmf/__ffi/__fif/
-        ; __fful/__fulf) freely clobbers B and C as scratch - completely fine
-        ; for their normal callers, but BC is also __pf_run's running output
-        ; character count for the whole printf call, live across every
-        ; pf_emit_a call in this routine. Left alone, each of these calls
-        ; would silently corrupt that count (and thus a caller's snprintf/
-        ; sprintf return value) every time %f rounds or builds a fractional
-        ; digit. Each call below is wrapped in push bc/pop bc for exactly
-        ; this reason - not to pass or receive a value, purely to protect the
-        ; count across a callee that doesn't know it needs protecting.
-        ld      hl,(pf_fl)
-        ld      de,(pf_fh)
-        push    bc
-        push    de
-        push    hl
-        ld      hl,(pf_ftl)
-        ld      de,(pf_fth)
-        call    __faf
-        pop     af              ; discard the 2 pushed operand pairs via AF, not BC
-        pop     af
-        pop     bc              ; restore the running count
-        ld      (pf_fl),hl
-        ld      (pf_fh),de
-pf_f_rounded:
-
-        ; Finite values at or above 2^32 are exact integers in IEEE single
-        ; precision, but __fful saturates them to 0xffffffff. Build those
-        ; integer digits directly from the 24-bit significand, repeatedly
-        ; doubling a little-endian decimal digit vector for the remaining
-        ; binary exponent. This covers the complete finite single range
-        ; (at most 39 decimal digits) without a general bignum dependency.
+        ; Work on the exact significand scaled by 10^precision, not a
+        ; rounded float. Binary right shifts retain guard/sticky bits and
+        ; round once, ties to even. Singles terminate by decimal place 149.
         ld      hl,(pf_fh)
         ld      a,l
         add     a,a
         ld      a,h
         rla
-        cp      159
-        jr      c,pf_f_u32
-        sub     150             ; significand needs this many left shifts
-        ; The 39-digit work vector is transient. Keep it on the stack instead
-        ; of permanently growing every float-enabled image by 39 bytes.
-        ; The saved running count immediately above it is reloaded before
-        ; emission; calls then use stack below the vector and cannot overwrite
-        ; unread digits.
+        ld      (pf_fexp),a
+        cp      150
+        ld      a,39
+        jr      nc,pf_f_alloc_big
+        ld      a,(pf_fcnt)
+        cp      150
+        jr      c,pf_f_scale_known
+        ld      a,149
+pf_f_scale_known:
+        ld      (pf_fscale),a
+        add     a,9              ; 8 significand digits plus a rounding carry
+        jr      pf_f_alloc
+pf_f_alloc_big:
+        ld      e,a
+        xor     a
+        ld      (pf_fscale),a
+        ld      a,e
+pf_f_alloc:
+        ld      (pf_falloc),a
         push    bc
-        ld      hl,-39
+        push    ix
+        ld      e,a
+        ld      d,0
+        ld      hl,0
+        or      a
+        sbc     hl,de
         add     hl,sp
         ld      sp,hl
-        call    pf_fbig_build
-
-        ld      e,b              ; builder returns decimal digit count in B
+        push    hl
+        pop     ix              ; little-endian numeric decimal work vector
+        call    pf_fdecimal
+        ld      a,b
+        ld      (pf_fiw),a       ; actual vector length, before leading zeros
+        ld      a,(pf_falloc)
+        ld      e,a
         ld      d,0
-        ld      hl,39
-        add     hl,sp
-        ld      c,(hl)           ; restore the live printf character count
-        inc     hl
-        ld      b,(hl)
-        push    de               ; preserve the digit count across padding
-        call    pf_f_length
-        call    pf_f_prepad
-        call    pf_f_signzero
-        pop     de
-        ld      hl,0
+        ld      hl,2
         add     hl,sp
         add     hl,de
-pf_fbig_emit:
-        dec     hl
-        ld      a,(hl)
-        add     a,'0'
-        call    pf_emit_a
-        dec     e
-        jr      nz,pf_fbig_emit
+        ld      c,(hl)          ; restore printf's running character count
+        inc     hl
+        ld      b,(hl)
 
-        ld      hl,41            ; discard 39-byte vector plus saved BC
-        add     hl,sp
-        ld      sp,hl
-        ld      a,(pf_fcnt)
+        ld      a,(pf_fscale)
+        ld      e,a
+        ld      a,(pf_fiw)
+        sub     e
+        jr      nc,pf_f_integer_len
+        xor     a
+pf_f_integer_len:
         or      a
-        jp      z,pf_f_done
-        ld      a,'.'
-        call    pf_emit_a
-pf_fbig_zero:
-        ld      a,'0'
-        call    pf_emit_a
-        ld      a,(pf_fcnt)
-        dec     a
-        ld      (pf_fcnt),a
-        jr      nz,pf_fbig_zero
-        jp      pf_f_done
-
-pf_f_u32:
-        ; Integer part = (unsigned long)abs(f).
-        ld      hl,(pf_fl)
-        ld      de,(pf_fh)
-        push    bc
-        call    __fful
-        pop     bc
-
-        ; Save integer part in pf_ftl/pf_fth; load __pf32_l/__pf32_h for pf_print_u32.
-        ld      (__pf32_l),hl
-        ld      (__pf32_h),de
-        ld      (pf_ftl),hl
-        ld      (pf_fth),de
-
-        call    pf_build_u32    ; A = integer digits, HL -> first digit
-        push    hl
+        jr      nz,pf_f_have_integer
+        inc     a
+pf_f_have_integer:
         ld      e,a
         call    pf_f_length
         call    pf_f_prepad
         call    pf_f_signzero
+
+        ld      a,(pf_fscale)
+        ld      e,a
+        ld      a,(pf_fiw)
+        sub     e
+        jr      c,pf_f_integer_zero
+        jr      z,pf_f_integer_zero
+        ld      d,a              ; integer digits to emit
+        ld      a,(pf_fiw)
+        ld      e,a
+        push    ix
         pop     hl
-        call    pf_emstr
-
-        ; C89: an explicit zero precision (%.0f) prints no decimal point at
-        ; all, not just no fractional digits - pf_fcnt is the final chosen
-        ; precision (set above), so skip the '.' when it's 0.
-        ld      a,(pf_fcnt)
-        or      a
-        jr      z,pf_f_nodot
-        ld      a,'.'
-        call    pf_emit_a
-pf_f_nodot:
-
-        ; pf_build_u32 destroys __pf32_l/__pf32_h; restore integer part from pf_ftl/pf_fth.
-        ld      hl,(pf_ftl)
-        ld      de,(pf_fth)
-        push    bc
-        call    __fulf
-        pop     bc
-        ld      (pf_ftl),hl
-        ld      (pf_fth),de
-        ld      hl,(pf_fl)
-        ld      de,(pf_fh)
-        push    bc
-        push    de
-        push    hl
-        ld      hl,(pf_ftl)
-        ld      de,(pf_fth)
-        call    __fsf
-        pop     af              ; discard operands via AF, not BC - see __faf above
-        pop     af
-        pop     bc              ; restore the running count
-        ld      (pf_fl),hl
-        ld      (pf_fh),de
-
-pf_f_digloop:
-        ld      a,(pf_fcnt)
-        or      a
-        jr      z,pf_f_done
-
-        ; frac *= 10.0f
-        ld      hl,(pf_fl)
-        ld      de,(pf_fh)
-        push    bc
-        push    de
-        push    hl
-        ld      hl,0
-        ld      de,16672        ; 10.0f = 0x41200000
-        call    __fmf
-        pop     af              ; discard operands via AF, not BC - see __faf above
-        pop     af
-        pop     bc              ; restore the running count
-        ld      (pf_fl),hl
-        ld      (pf_fh),de
-
-        ; digit = (int)frac
-        push    bc
-        call    __ffi
-        pop     bc
-        ld      (pf_fiw),hl
-        ld      a,l
+        ld      a,d
+        ld      d,0
+        add     hl,de
+        ld      d,a
+pf_f_integer_emit:
+        dec     hl
+        ld      a,(hl)
         add     a,'0'
         call    pf_emit_a
-
-        ; frac -= (float)digit
-        ld      hl,(pf_fiw)
-        push    bc
-        call    __fif
-        pop     bc
-        ld      (pf_ftl),hl
-        ld      (pf_fth),de
-        ld      hl,(pf_fl)
-        ld      de,(pf_fh)
-        push    bc
-        push    de
-        push    hl
-        ld      hl,(pf_ftl)
-        ld      de,(pf_fth)
-        call    __fsf
-        pop     af              ; discard operands via AF, not BC - see __faf above
-        pop     af
-        pop     bc              ; restore the running count
-        ld      (pf_fl),hl
-        ld      (pf_fh),de
-
+        dec     d
+        jr      nz,pf_f_integer_emit
+        jr      pf_f_fraction
+pf_f_integer_zero:
+        ld      a,'0'
+        call    pf_emit_a
+pf_f_fraction:
         ld      a,(pf_fcnt)
-        dec     a
-        ld      (pf_fcnt),a
-        jr      pf_f_digloop
+        or      a
+        jr      z,pf_f_free
+        ld      a,'.'
+        call    pf_emit_a
+        ld      a,(pf_fscale)
+        ld      e,a
+        ld      d,0
+        push    ix
+        pop     hl
+        add     hl,de
+        ld      a,(pf_fiw)
+        ld      d,a
+        ld      a,e
+        or      a
+        jr      z,pf_f_fraction_tail
+pf_f_fraction_emit:
+        dec     hl
+        dec     e
+        ld      a,e
+        cp      d
+        ld      a,0
+        jr      nc,pf_f_fraction_zero
+        ld      a,(hl)
+pf_f_fraction_zero:
+        add     a,'0'
+        call    pf_emit_a
+        ld      a,e
+        or      a
+        jr      nz,pf_f_fraction_emit
+pf_f_fraction_tail:
+        ld      a,(pf_fscale)
+        ld      e,a
+        ld      a,(pf_fcnt)
+        sub     e
+        jr      z,pf_f_free
+        ld      e,a
+pf_f_zero_tail:
+        ld      a,'0'
+        call    pf_emit_a
+        dec     e
+        jr      nz,pf_f_zero_tail
+pf_f_free:
+        ld      a,(pf_falloc)
+        ld      e,a
+        ld      d,0
+        ld      hl,0
+        add     hl,sp
+        add     hl,de
+        ld      sp,hl
+        pop     ix
+        pop     af              ; discard original count, keep updated BC
 pf_f_done:
         ld      a,(pf_left)
         or      a
@@ -5373,32 +5299,79 @@ pf_zpad_loop:
 pf_fneg:    db 0
 pf_fl:      dw 0
 pf_fh:      dw 0
-pf_ftl:     dw 0
-pf_fth:     dw 0
-pf_fiw:     dw 0
+pf_fiw:     db 0
 pf_fcnt:    db 0
+pf_fexp:    db 0
+pf_fscale:  db 0
+pf_falloc:  db 0
 
-; Build the exact integer digits for a finite positive IEEE single >= 2^32.
-; IN: A = biased exponent - 150 (9..104).
-; OUT: caller's 39-byte stack vector = numeric digits, least significant first;
-;      B = digit count (10..39).
-; At entry SP points to the return address immediately below that vector.
-; BC, DE, HL and the shared __pf32 value are scratch.
-pf_fbig_build:
-        ld      c,a
-        ld      b,0
+; IX = decimal vector. Return B = length. BC/DE/HL are scratch; IX/IY
+; remain intact. Form floor(significand * 10^scale * 2^(exponent-150)),
+; then use the final discarded binary bit and all earlier bits to round.
+pf_fdecimal:
+        push    ix
+        pop     hl
+        ld      a,(pf_fscale)
+        ld      b,a
+        or      a
+        jr      z,pf_fd_seed
+        xor     a
+pf_fd_zero:
+        ld      (hl),a
+        inc     hl
+        djnz    pf_fd_zero
+pf_fd_seed:
+        ld      a,(pf_fscale)
+        ld      b,a
+        push    hl
         ld      hl,(pf_fl)
-        ld      de,(pf_fh)
-        ld      a,e
-        and     7fh
-        or      80h
-        ld      e,a
-        ld      d,0
         ld      (__pf32_l),hl
-        ld      (__pf32_h),de
-        ld      hl,2
-        add     hl,sp
-pf_fbig_seed:
+        ld      hl,(pf_fh)
+        ld      a,l
+        and     7fh
+        ld      l,a
+        ld      a,(pf_fexp)
+        or      a
+        jr      z,pf_fd_subnormal
+        set     7,l
+pf_fd_subnormal:
+        ld      h,0
+        ld      (__pf32_h),hl
+        ; Cancel exact powers of two before the decimal divide loop.
+        ld      a,(pf_fexp)
+        cp      150
+        jr      nc,pf_fd_reduced
+        or      a
+        jr      nz,pf_fd_reduce_exp
+        inc     a
+pf_fd_reduce_exp:
+        ld      d,a
+        ld      e,l
+        ld      hl,(__pf32_l)
+        ld      a,e
+        or      h
+        or      l
+        jr      z,pf_fd_reduced
+pf_fd_reduce:
+        bit     0,l
+        jr      nz,pf_fd_reduce_done
+        ld      a,d
+        cp      150
+        jr      z,pf_fd_reduce_done
+        srl     e
+        rr      h
+        rr      l
+        inc     d
+        jr      pf_fd_reduce
+pf_fd_reduce_done:
+        ld      (__pf32_l),hl
+        ld      a,e
+        ld      (__pf32_h),a
+        ld      a,d
+        ld      (pf_fexp),a
+pf_fd_reduced:
+        pop     hl
+pf_fd_seed_loop:
         call    pf_divu32_10
         ld      (hl),a
         inc     hl
@@ -5409,48 +5382,117 @@ pf_fbig_seed:
         ld      de,(__pf32_l)
         or      d
         or      e
-        jr      nz,pf_fbig_seed
-
-pf_fbig_shift:
-        ld      hl,2
-        add     hl,sp
-        ld      d,b
+        jr      nz,pf_fd_seed_loop
+        dec     hl              ; most significant digit
+        ld      a,(pf_fexp)
+        cp      150
+        jr      nc,pf_fd_left
+        or      a
+        jr      nz,pf_fd_normal
+        inc     a               ; subnormals have exponent 1, no hidden bit
+pf_fd_normal:
+        ld      e,a
+        ld      a,150
+        sub     e
+        ld      d,a             ; binary right shifts remaining
+        ld      c,0             ; sticky discarded bits
+        ld      e,0             ; previous remainder (0 or 10)
+pf_fd_right:
+        ld      a,c
+        or      e
+        ld      c,a
+        push    hl
+        push    bc
         ld      e,0
-pf_fbig_double:
+pf_fd_half:
+        ld      a,(hl)
+        add     a,e
+        srl     a
+        ld      (hl),a
+        sbc     a,a
+        and     10
+        ld      e,a
+        dec     hl
+        djnz    pf_fd_half
+        pop     bc
+        pop     hl
+pf_fd_trim:
+        ld      a,b
+        cp      1
+        jr      z,pf_fd_trimmed
+        ld      a,(hl)
+        or      a
+        jr      nz,pf_fd_trimmed
+        dec     hl
+        dec     b
+        jr      pf_fd_trim
+pf_fd_trimmed:
+        dec     d
+        jr      z,pf_fd_round
+        ld      a,b
+        cp      1
+        jr      nz,pf_fd_right
+        ld      a,(hl)
+        or      a
+        jr      nz,pf_fd_right
+        ret                     ; another shift makes guard zero as well
+pf_fd_round:
+        ld      a,e
+        or      a
+        ret     z
+        ld      a,c
+        or      a
+        jr      nz,pf_fd_up
+        bit     0,(ix+0)
+        ret     z               ; exact half: keep an even last digit
+pf_fd_up:
+        push    ix
+        pop     hl
+        ld      e,b
+pf_fd_carry:
+        inc     (hl)
+        ld      a,(hl)
+        cp      10
+        ret     c
+        ld      (hl),0
+        inc     hl
+        dec     e
+        jr      nz,pf_fd_carry
+        ld      (hl),1
+        inc     b
+        ret
+pf_fd_left:
+        sub     150
+        ret     z
+        ld      d,a
+pf_fd_double_start:
+        push    ix
+        pop     hl
+        ld      c,b
+        ld      e,0
+pf_fd_double:
         ld      a,(hl)
         add     a,a
         add     a,e
         ld      e,0
         cp      10
-        jr      c,pf_fbig_store
+        jr      c,pf_fd_double_store
         sub     10
         inc     e
-pf_fbig_store:
+pf_fd_double_store:
         ld      (hl),a
         inc     hl
-        dec     d
-        jr      nz,pf_fbig_double
+        dec     c
+        jr      nz,pf_fd_double
         ld      a,e
         or      a
-        jr      z,pf_fbig_next
+        jr      z,pf_fd_double_next
         ld      (hl),a
         inc     b
-pf_fbig_next:
-        dec     c
-        jr      nz,pf_fbig_shift
+pf_fd_double_next:
+        dec     d
+        jr      nz,pf_fd_double_start
         ret
-
-pf_rndtab:
-        dw      00000H,03F00H        ; 0.5e-0
-        dw      0CCCDH,03D4CH        ; 0.5e-1
-        dw      0D70AH,03BA3H        ; 0.5e-2
-        dw      0126FH,03A03H        ; 0.5e-3
-        dw      0B717H,03851H        ; 0.5e-4
-        dw      0C5ACH,036A7H        ; 0.5e-5
-        dw      037BDH,03506H        ; 0.5e-6
-        dw      0BF95H,03356H        ; 0.5e-7
-        dw      0CC77H,031ABH        ; 0.5e-8
-        dw      0705FH,03009H        ; 0.5e-9
 
 ; ---- long-enabled printf (-flongio) -----------------------------------------
 ; _pflng and friends are drop-ins for the printf family that pre-install the

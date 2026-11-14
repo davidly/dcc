@@ -25,6 +25,10 @@ BUG-041 admission; neither parked fixture is promoted by D2e-1.
 `tests/tupdprov.c` separately covers the already-admitted wide update
 provenance repaired by that safe subset.
 
+BUG-060 was promoted as `tfpround`: exact-bit `%f` nearest-even rounding,
+decimal carries, signed zero and subnormal fractions. `%e`/`%g` remain
+unsupported; `scripts/printf-float-proof.py` checks their pre-existing behavior.
+
 BUG-061 was promoted as `tests/tsizhigh.c` after the maintainer approved
 unsigned typing only for compile-time `sizeof` values at or above `0x8000`.
 The full unsigned-type trial changed existing output and exact schedules and
@@ -84,13 +88,14 @@ regular test:
 `tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c`, `tests/tflncmp.c`,
 `tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tflidx.c`, `tests/tndwide.c`,
 `tests/tlbreuse.c`, `tests/twincadd.c`, `tests/tmerge16.c`, `tests/tearly16.c`,
-`tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c`, `tests/tbfcomp.c`, `tests/tfdivr.c` and
+`tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c`, `tests/tbfcomp.c`, `tests/tfdivr.c`, `tests/tfpround.c` and
 `tests/tsizhigh.c` were promoted this way.
 
 
-`tests/tlogblk.c` separately covers BUG-004's host-proven word and block-long
-facets cleared by E1/A2b-1. BUG-004 stays open with its newly reduced byte-local
-logical SSA facet; that partial issue's reproducer is not promoted.
+`tests/tlogblk.c` covers BUG-004's host-proven word and block-long facets
+cleared by E1/A2b-1. A2b-3 closes the remaining byte-local logical SSA facet:
+`tests/tlogbyte.c` promotes the exact checksum reproducer and adds the other
+long consumers, nested/variable paths and short-circuit side effects.
 
 ## Adding one
 
