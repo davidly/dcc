@@ -27,12 +27,11 @@ and their historical diagnoses are retained separately below.
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
 | [BUG-002](#bug-002) | #223 | wrong result | `unsigned char` local `<<=` an `unsigned char` variable is not truncated on return |
-| [BUG-004](#bug-004) | #225 | wrong result | 16-bit local set from `&&`/`\|\|`, stored to a 32-bit lvalue, leaves a garbage high word |
+| [BUG-004](#bug-004) | #225 | wrong result | Nested-block 32-bit local assigned from `&&`/`\|\|` leaves a garbage high word |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
-| [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
 | [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
@@ -52,14 +51,15 @@ and their historical diagnoses are retained separately below.
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 
-Twenty-five are open: sixteen give wrong results with no diagnostic
+Twenty-four are open: fourteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
 BUG-041 admission, one hangs, seven stop the compile,
 and one (BUG-022) turns a compile error into
-a broken program. The most likely ordinary-code defects remaining are
-BUG-013 and BUG-016.
+a broken program. The highest-priority ordinary-code defect remaining is
+BUG-013.
 
-Twenty-nine reported bugs are fixed: [one in cluster D2b](#fixed-in-cluster-d2b),
+Thirty reported bugs are fixed: [one in cluster E1](#fixed-in-cluster-e1),
+[one in cluster D2b](#fixed-in-cluster-d2b),
 [two in cluster D2a](#fixed-in-cluster-d2a),
 [one in cluster K2](#fixed-in-cluster-k2),
 [two in cluster D1](#fixed-in-cluster-d1),
@@ -116,6 +116,13 @@ static uint8_t f(void) { uint8_t x = a1[0]; x <<= count; return x; }
 - Selected emitter for `f`: `spilled-scalar-cfg`.
 
 ## BUG-004
+
+**Partially corrected by E1:** the four function-scope word-local cases now
+pass, because SSA forwarding preserves the local's declared interpretation
+before widening an untyped logical result. The nested-block 32-bit assignment
+still fails: its canonical conversion is repaired to long without typing its
+source boolean PHI. The complete issue and `logicinit` steering remain open.
+The following original diagnosis includes the now-correct function-scope cases.
 
 **An unsigned 16-bit local initialised from `&&` or `||`, then stored to a
 32-bit lvalue, leaves garbage in the high word.**
@@ -284,50 +291,11 @@ signed char l2 = -66;
   (`fg ? b5 : fg`), a constant (`fg ? b5 : 3.0f`) or `b5 + 0.0f`. Found by
   fuzzing (float generator, seed 4750).
 
-## BUG-016
-
-**A local keeps the signedness of its initialiser instead of its declared
-type.** It shows when the local is later widened to 32 bits or used in a
-32-bit division.
-
-```c
-uint16_t l = gs;         /* int16_t gs = -31256 */
-long r = l;              /* want 34280, dcc -31256 */
-
-int16_t l = gu;          /* uint16_t gu = 50000 */
-long r = l;              /* want -15536, dcc 50000 */
-
-int32_t l = 1u | a3[1];  /* a3[1] = -3, so l = -3 */
-r = x / l;               /* uint16_t x = 50000: want -16666, dcc 0 */
-```
-
-- Wrong when the initialiser is a global, a struct member, a parameter, a
-  function result, or a negative constant (`unsigned short l = -100;` then
-  `long r = l;` gives -100, not 65436).
-- A cast to the declared type in the initialiser does not help when it only
-  changes signedness: `unsigned short l = (uint16_t)p;` with `int16_t p`, or
-  `int32_t l = (int32_t)u;` with `uint32_t u`, are still wrong.
-- Correct when the value is assigned in a separate statement
-  (`uint16_t l; l = gs;`), when the initialiser's cast also changes width
-  (`(uint16_t)(int32_t)p`), for 8-bit locals, and when the local is only used
-  at its own width (`l > 5`, `l / 2`).
-- A separate assignment does not help in a nested block when the value is an
-  unsigned constant: `{ short b = 0; b = (uint16_t)0xb840; out = (b % three); }`
-  with a 32-bit `three` of 3 gives 2 (`47168 % 3`), not -2. Correct with `b`
-  at function scope or a signed constant.
-- With floats: `{ uint32_t b = (int32_t)1 - 78; fg = b; }` converts the
-  signed value (`c29a0000` instead of `4f800000`), as does `float c = b;`
-  in the block; and `{ uint16_t b = h(); fg = (float)b; }` with `h()`
-  returning `int16_t -180` gives `-180.0f` instead of `65356.0f` (also in
-  `8.1f > (float)b`). Found by fuzzing (float generator, seeds 456, 863,
-  1203 and 1215).
-- An `int32_t` local initialised from a `uint32_t` converts to float as
-  unsigned even after it has been read correctly as an integer:
-  `{ int32_t t = (int32_t)gu; fg = (float)t; }` with `gu = 0xffffffbd`
-  gives `4f800000`, not `c2860000` (`-67.0f`); the same with `int32_t t =
-  gu;` and `fg = t;`, and after `printf("%ld", (long)t)` has shown -67.
-  Right: `int32_t t; t = (int32_t)gu;` or `(float)(t + 0)`. Found by
-  fuzzing (float generator, seed 3792).
+E1 also corrects the `wrapped_decrement` facet: SSA forwarding now retains
+the unsigned word interpretation of its untyped decrement result before
+widening. The parked program improves from 10 to 9 wrong lines out of 13;
+all remaining pointer, byte, and cast facets still fail. No independent
+BUG-015 implementation or steering change is included.
 
 ## BUG-019
 
@@ -876,6 +844,93 @@ in-range float-to-`int32_t` conversion and retains the failing context.
   constant-index and other indexed stores remain enabled.
 
 ---
+
+## Fixed in cluster E1
+
+BUG-016 now passes in peep and nopeep. Equal-width initializer casts were
+removed as representation identities; local-load promotion then forwarded the
+initializer's differently typed SSA value, losing the declaration's
+interpretation. `mir_promote_objects` now keeps a typed identity view at a
+promoted read whose consumers observe signedness, without changing selectors
+or adding a fallback. Unobservable uses and sign-bit-clear constants retain
+the original forwarding path.
+
+Before promotion: **1 FIXED, 24 fails**. BUG-004's four function-scope cases
+and BUG-015's wrapped word decrement also improve, but neither full issue
+flips; the independent remaining causes are recorded in fix-plan.md's E2
+section. No second independent fix is included.
+
+Both MIR censuses are byte-identical across **3,509 existing functions**.
+Strict Python full+extended acceptance passes with zero performance
+regressions; all **520 existing performance rows** remain unchanged. New
+`tinittyp` coverage preserves the original nine host-baseline lines and adds
+ten documented integer/float facets and separate-assignment controls, proven
+against optimized and ASan/UBSan host clang. Its new row alone is measured on
+the normal PowerShell stack-check path.
+
+Restored `inittype` and `finittype`, seeds 1-300 in all production modes:
+**integer 297 ok, 2 INVALID, 1 target-limit-only (seed 178, TPA too small)**;
+**float 281 ok, 19 INVALID**; zero FAIL in either batch. All five remaining
+E2 issues keep their `KNOWN_BUGS` steering.
+The regular Python gate retains the approved #277 failures and three
+synthetic mutation-runner timing failures after isolated retries (one fourth
+watchdog failure passes its retry). Those harness exceptions are recorded in
+fix-plan.md; no expectation, timeout or skip was changed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-016](#bug-016) | #236 | [tinittyp](tests/tinittyp.c) |
+
+### BUG-016
+
+**Fixed:** local SSA reads retain their declared integer interpretation.
+Regression: [tinittyp.c](tests/tinittyp.c),
+[stdout](tests/baselines/tinittyp.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**A local keeps the signedness of its initialiser instead of its declared
+type.** It shows when the local is later widened to 32 bits or used in a
+32-bit division.
+
+```c
+uint16_t l = gs;         /* int16_t gs = -31256 */
+long r = l;              /* want 34280, dcc -31256 */
+
+int16_t l = gu;          /* uint16_t gu = 50000 */
+long r = l;              /* want -15536, dcc 50000 */
+
+int32_t l = 1u | a3[1];  /* a3[1] = -3, so l = -3 */
+r = x / l;               /* uint16_t x = 50000: want -16666, dcc 0 */
+```
+
+- Wrong when the initialiser is a global, a struct member, a parameter, a
+  function result, or a negative constant (`unsigned short l = -100;` then
+  `long r = l;` gives -100, not 65436).
+- A cast to the declared type in the initialiser does not help when it only
+  changes signedness: `unsigned short l = (uint16_t)p;` with `int16_t p`, or
+  `int32_t l = (int32_t)u;` with `uint32_t u`, are still wrong.
+- Correct when the value is assigned in a separate statement
+  (`uint16_t l; l = gs;`), when the initialiser's cast also changes width
+  (`(uint16_t)(int32_t)p`), for 8-bit locals, and when the local is only used
+  at its own width (`l > 5`, `l / 2`).
+- A separate assignment does not help in a nested block when the value is an
+  unsigned constant: `{ short b = 0; b = (uint16_t)0xb840; out = (b % three); }`
+  with a 32-bit `three` of 3 gives 2 (`47168 % 3`), not -2. Correct with `b`
+  at function scope or a signed constant.
+- With floats: `{ uint32_t b = (int32_t)1 - 78; fg = b; }` converts the
+  signed value (`c29a0000` instead of `4f800000`), as does `float c = b;`
+  in the block; and `{ uint16_t b = h(); fg = (float)b; }` with `h()`
+  returning `int16_t -180` gives `-180.0f` instead of `65356.0f` (also in
+  `8.1f > (float)b`). Found by fuzzing (float generator, seeds 456, 863,
+  1203 and 1215).
+- An `int32_t` local initialised from a `uint32_t` converts to float as
+  unsigned even after it has been read correctly as an integer:
+  `{ int32_t t = (int32_t)gu; fg = (float)t; }` with `gu = 0xffffffbd`
+  gives `4f800000`, not `c2860000` (`-67.0f`); the same with `int32_t t =
+  gu;` and `fg = t;`, and after `printf("%ld", (long)t)` has shown -67.
+  Right: `int32_t t; t = (int32_t)gu;` or `(float)(t + 0)`. Found by
+  fuzzing (float generator, seed 3792).
 
 ## Fixed in cluster K2
 

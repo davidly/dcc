@@ -8031,6 +8031,39 @@ static int mir_block_name_has_multiple_declared_types(const char *name)
     return 0;
 }
 
+/* Promotion may expose an initializer's raw bits. Preserve the declared
+ * interpretation when a load's consumers can observe its signedness. */
+static int mir_value_has_signedness_use(int value, int type, int depth)
+{
+    int instruction;
+
+    if (depth >= 16)
+        return 1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *use = &mir.insns[instruction];
+
+        if (use->opcode == MIR_UNARY && use->immediate == 0 &&
+            use->src1 == value) {
+            if (type_is_float(use->type) || type_size(use->type) > type_size(type))
+                return 1;
+            if (use->type == type &&
+                mir_value_has_signedness_use(use->dst, type, depth + 1))
+                return 1;
+        } else if (use->opcode == MIR_BINARY &&
+                   (use->immediate == '/' || use->immediate == '%') &&
+                   type_size(use->secondary_offset) == 4 &&
+                   type_size(type) == 4 &&
+                   (use->src1 == value || use->src2 == value)) {
+            return 1;
+        } else if (use->opcode == MIR_PHI && use->type == type &&
+                   (use->src1 == value || use->src2 == value) &&
+                   mir_value_has_signedness_use(use->dst, type, depth + 1)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int mir_unary_is_representation_identity(
     const struct MirInsn *insn, const struct MirInsn *source)
 {
@@ -10845,7 +10878,36 @@ static int mir_promote_objects(void)
                         mir_block_start_for_instruction(i));
             if (reaching < 0)
                 continue;
-            aliases[insn->dst] = mir_resolve_alias(aliases, reaching);
+            reaching = mir_resolve_alias(aliases, reaching);
+            {
+                const struct MirInsn *source = mir_definition(reaching);
+                int size = type_size(insn->type);
+                unsigned long sign_bit = size == 2
+                    ? 0x8000UL : 0x80000000UL;
+
+                if (source != NULL && source->type != insn->type &&
+                    (size == 2 || size == 4) &&
+                    type_size(source->type) == size &&
+                    type_ptr_depth(source->type) == 0 &&
+                    type_ptr_depth(insn->type) == 0 &&
+                    !type_is_float(source->type) &&
+                    !type_is_float(insn->type) &&
+                    !(source->opcode == MIR_CONST &&
+                      ((unsigned long)source->immediate & sign_bit) == 0) &&
+                    mir_value_has_signedness_use(insn->dst, insn->type, 0)) {
+                    /* Reusing bits is not reusing their interpretation. Keep
+                     * the declared type at a signedness-observing SSA read. */
+                    insn->opcode = MIR_UNARY;
+                    insn->src1 = reaching;
+                    insn->immediate = 0;
+                    insn->object = -1;
+                    insn->memory_size = 0;
+                    mir_invalidate_use_cache();
+                    ++promoted;
+                    continue;
+                }
+            }
+            aliases[insn->dst] = reaching;
             insn->opcode = MIR_NOP;
             insn->dst = -1;
             mir_invalidate_use_cache();

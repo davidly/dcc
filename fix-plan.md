@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has twenty-five open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twenty-four open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -166,7 +166,7 @@ typing defect.
   mutation-fixture timeout and cleanup error do not recur in the final
   standalone full run.
 
-### A2b. Remaining block-local expression typing (unconfirmed; after E)
+### A2b. Remaining block-local expression typing (E handoff)
 
 | Bug | Issue | Shape |
 | --- | --- | --- |
@@ -175,7 +175,12 @@ typing defect.
 
 Neither is fixed by A1 or A2a. Their shared nested-block condition is not
 proof of a shared root cause, and BUG-015 itself has many facets. Work A2b
-**after E**: if E clears the BUG-004 facet, BUG-015 is traced on its own.
+**after E**: E1 fixes only BUG-004's function-scope half; the block-local
+assignment remains. Its boolean source stays untyped after the canonical
+conversion is repaired to long (E2 below), independently of BUG-015's
+pointer/byte/cast facets. E1 also corrects BUG-015's wrapped word decrement
+widening, but none of those remaining facets. Trace the remaining issues
+independently rather than assuming their shared block scope is a root cause.
 Trace expression typing, conversion insertion and deferred metadata repair in
 `src/dcc/dcc_mir.c` against the neighbouring correct shapes before changing
 anything. The stop rule applies: if a first fix clears one facet of BUG-015
@@ -753,22 +758,112 @@ updates, plus byte/word/pointer/float admission rules, are unchanged.
   are unchanged. No main-checkout/dating runs were made for the maintainer's
   pre-approved #277 exceptions.
 
-### E. Signedness and integer promotion
+### E. Disproved: split into E1 and E2
+
+The single root-cause fix on `fix/cluster-e-signedness` (from main
+`7901b30c`) clears **BUG-016 only**. No second independent fix is included.
+BUG-004's four function-scope cases also become correct, but its nested-block
+assignment still fails; BUG-013/006/028/002 do not share E1's root. E1 completes
+acceptance for BUG-016, while E2 records the unfixed causes below.
+
+### E1. Declared interpretation lost by SSA load forwarding
 
 | Bug | Issue | Shape |
 | --- | --- | --- |
 | BUG-016 | #236 | Local takes the signedness of its initialiser, not its declaration |
-| BUG-013 | #233 | Unsigned bit-field not promoted to `int` as an operand |
-| BUG-006 | #226 | `/=`, `%=`, `>>=` on an unsigned bit-field sign-extend it |
-| BUG-028 | #248 | `signed char >>= unsigned int count` shifts logically |
-| BUG-002 | #223 | `unsigned char <<= unsigned char` not truncated on return |
-| BUG-004 | #225 | 16-bit local from `&&`/`||` stored to 32-bit lvalue: garbage high word |
 
-Each is a result typed from the wrong operand: initialiser instead of
-declaration, field width instead of promoted `int`, count instead of left
-operand, 16-bit logical result instead of a widened value. Start with
-BUG-016 and BUG-013 (maintainer priorities) in the expression typing /
-conversion insertion that feeds MIR.
+**Confirmed root cause:** `mir_unary_is_representation_identity` can erase an
+initializer's same-width signedness cast, after which `mir_promote_objects`
+replaces a declared local load with the initializer's differently typed SSA
+value. The replacement preserves bits, not the interpretation needed by a
+later widening, float conversion, or 32-bit division/remainder.
+
+At a promoted read with an observable type difference, retain the load as a
+bit-preserving `MIR_UNARY` typed from the declaration rather than aliasing it.
+Follow identity casts and typed PHIs with bounded recursion, and keep the old
+alias for constants whose sign bit is clear and uses that cannot observe
+signedness. This neither changes selectors nor adds a fallback. An initial
+experiment retaining every stored signedness cast changed 21 existing
+functions across 12 apps; a use-filtered version still changed `tldref` by
+retaining a cast for loop loads that are never promoted. Both were rejected.
+The final fix applies at the proven reaching-value replacement itself.
+
+- Before promotion: 1 `FIXED`, 24 `fails` out of 25 parked reproducers.
+- Promoted BUG-016 as `tinittyp`, retaining all nine original expected lines
+  and adding ten documented integer/float facets and assignment controls.
+  Only its new PowerShell stack-check performance row is added:
+  peep 414,199 cycles / 7,424 bytes; nopeep 414,665 / 7,552.
+- Restored integer `inittype` and float `finittype`. Production seeds 1-300
+  finish with integer **297 ok, 2 INVALID, 1 target-limit-only** (178: TPA too
+  small), float **281 ok, 19 INVALID**, and **zero FAIL** in either batch.
+- BUG-004 improves from 5/5 wrong lines to only its block-local line wrong:
+  forwarding a word local now keeps its typed view of an untyped boolean
+  PHI. Its full issue remains open, with the remaining facet in E2/A2b.
+- Out of cluster, BUG-015 improves from 10/13 wrong lines to 9/13: the
+  nested-block `uint16_t --b` is now zero-extended as the declared word.
+  No BUG-015 admission, pointer typing, or decrement lowering was changed;
+  the complete reproducer still fails and all of its steering stays parked.
+- Both existing MIR censuses are byte-identical across **3,509 functions**
+  (all TSV fields equal), with zero changed apps or selected hashes.
+- Final post-promotion censuses add only `tinittyp`'s 13 functions (3,522
+  accepted total); all 3,509 pre-existing rows still compare identically in
+  stack and no-stack modes. All 24 remaining parked reproducers report
+  `fails`, with zero `FIXED` or `UNPROVEN`.
+- Final strict PowerShell full+extended stack and no-stack gates both pass:
+  536 apps, diagnostics, peephole fixtures and the extended suite; no existing
+  performance row changed. `validate-unit-test.ps1 -App tinittyp` also passes.
+- Strict Python full+extended acceptance passes: 535 apps, 196 runnable
+  extended tests, diagnostics and optimizer fixtures; zero performance
+  regressions and all **520 existing performance rows** unchanged.
+- CMake Release, core MIR CTest (6/6), require-emit diagnostics, and isolated
+  ASan/UBSan compiler checks pass. Debugger-host
+  CTest passes 10/10, line-debug tests pass 2/2, and the new integer/float
+  cases run correctly with full `-g` and `-gline` through both pipelines;
+  `-gline` COM files are release-byte-identical.
+- BUG-016's integer and documented float facets agree with optimized and
+  ASan/UBSan host clang in both production modes. The fixed
+  `unsigned_from_signed` emits `ld hl,(gs); ld de,0; ret`, exactly like the
+  separate-assignment control in peep and nopeep, rather than sign-extending.
+  Five corrected functions match their separate-assignment controls exactly;
+  the long-cast remainder omits twelve redundant argument-staging instructions
+  present in its control, rather than introducing a larger schedule.
+
+- Regular Python unit gate ran all **320 tests**: **3 failures, 4 errors,
+  2 existing skips**. The two approved #277 failures are
+  `test_campaign_assembly_baselines` and
+  `test_campaign_positive_controls_select_their_exact_schedules`.
+  Four synthetic PowerShell mutation-fixture cases had timing/process errors:
+  `test_child_timeout_and_environment_isolation` (diagnostic lost),
+  `test_default_serial_and_parallel_are_equal_and_bounded` (180-second timeout
+  plus teardown race),
+  `test_survivors_invalid_exits_builds_and_worker_errors_are_recorded`
+  (180-second timeout), and
+  `test_worker_watchdog_records_invalid_and_stops_descendants` (child PID
+  file not created). All four were retried in isolation without changing
+  tests: watchdog passes; the other three still fail (**1 failure, 4 errors**
+  including both timeout teardown races). These synthetic fixtures do not
+  execute the changed compiler. Per the pre-answered harness-timing policy,
+  no test, timeout, expectation or skip was changed; those three harness
+  checks remain unverified. Logs: `build/e-python-units.log` and
+  `build/e-python-isolated.log`. No historical compiler/main check was run.
+
+### E2. Remaining expression/conversion defects (independent of E1)
+
+| Bug | Issue | Traced cause / fix location |
+| --- | --- | --- |
+| BUG-013 | #233 | `ast_expr_type_for_sizeof` in `dcc_ast_build.c` recursively retypes a nested binary from raw field types instead of its recorded promoted result; unary `-`/`~` and `?:` also use raw unsigned field types. `p_binary` already gives direct narrow bit-field binaries signed operand types, but an enclosing expression loses that result type. Field-aware promotion must be consistent across those AST typing paths. |
+| BUG-006 | #226 | `mir_lower_expr_impl`'s `AST_ASSIGN` member compound path builds its initial `MIR_LOAD_INDIRECT` with `node->a->type == 0`, despite having the resolved `FieldDef`. `mir_emit_bitfield_extract` interprets missing `TYPE_UNSIGNED` as signed, so the top bit sign-extends. Repair explicitly excludes bit-field loads from pointee inference. Preserve the field's declared extraction type separately from its promoted arithmetic type here. |
+| BUG-028 | #248 | `mir_resolve_deferred_metadata`'s general binary widening loop promotes a discarded byte compound shift to the wider **right/count** type unless `deferred_operand_types` is set. An unsigned word count therefore stamps `TYPE_UNSIGNED` onto a signed-byte `>>=`. The shift computation belongs to the promoted left operand in `mir_lower_compound_value` and that repair loop, not to the count. |
+| BUG-002 | #223 | `mir_lower_compound_value` keeps discarded byte shifts typed as the stored byte. With a byte count no width change forces an explicit truncation; the result's nominal byte type survives object promotion although the emitted word shift holds high bits. A following byte return reuses that value without masking. The promotion/narrowing contract belongs in byte compound-shift lowering (and its store-result handling), not the initializer signedness fix. |
+| BUG-004 (remaining block facet) | #225 | `mir_lower_ident_assignment_conversion` sees an unresolved block lvalue type and does not type the boolean PHI. `mir_resolve_deferred_metadata` later restores the conversion target to long, but its source PHI stays untyped; conversion emission therefore leaves the high word uninitialized. Extend `mir_type_untyped_widened_value`'s contract to repaired canonical assignment conversions. The function-scope half is fixed incidentally by E1; A2b may proceed on this explicit remaining facet, not an assumed BUG-015 shared cause. |
+
+BUG-002 and BUG-028 are a promising byte-shift subgroup: discarded byte
+compound shifts lack promoted-left computation and a distinct narrowed result;
+BUG-028 additionally exposes the count-driven repair. That grouping is traced,
+not implementation-proven: no second fix or E2 experiment was attempted.
+
+No E2 implementation is included. All five complete reproducers still fail,
+and their generator `KNOWN_BUGS` entries remain enabled.
 
 ### F. Compound assignment to complex lvalues
 
@@ -1230,7 +1325,7 @@ so it matters more than its size suggests. Both are one-offs.
 | A1 | [#281](https://github.com/davidly/dcc/pull/281) | merged | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
 | A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
-| A2b | | open; after E | BUG-004/015; unconfirmed shared cause |
+| A2b | | open; E traced | BUG-004 block assignment still untyped at repaired widening; function facet fixed by E1; BUG-015 pointer/byte facets independent |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
@@ -1244,7 +1339,9 @@ so it matters more than its size suggests. Both are one-offs.
 | D2 | | split into D2a / D2b | Stored-home versus AST admission are independent |
 | D2a | [#300](https://github.com/davidly/dcc/pull/300) (`fix/cluster-d2a-postinc-home`) | merged | 021/023 promoted as tpost16/tpostbr; 023 moved from C, same root; 024 remains independent (D2c); 3,487 pre-follow-up functions and 517 perf rows unchanged |
 | D2b | [#301](https://github.com/davidly/dcc/pull/301) (`fix/cluster-d2b-postinc-admit`) | PR open; verified partial fix | 010 promoted as tpost32; 041 admission withdrawn after new BUG-056/#299; int 227/73, blocked float 281/19, zero FAIL; 3,482 existing functions and 516 perf rows byte-identical; strict release gates pass; #277 plus five isolated harness exceptions documented |
-| E | | open | |
+| E | `fix/cluster-e-signedness` | split into E1 / E2 | Single SSA forwarding fix clears 016; 004 function facet and 015 word-widening facet improve, complete issues still open |
+| E1 | `fix/cluster-e-signedness` | verified compiler gates; documented harness exceptions | 016 promoted as tinittyp; int 297/2/1 limit, float 281/19, zero FAIL; 3,509 functions and 520 perf rows unchanged; #277 and three isolated synthetic-fixture timing failures |
+| E2 | | open | 013 AST promotion; 006 field extraction type; 028 count-driven repair; 002 byte truncation; 004 repaired boolean conversion |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
 | G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |
