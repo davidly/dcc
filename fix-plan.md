@@ -9,7 +9,7 @@ fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), B1 (#286),
-K (#278), L (#279) and G1 (BUG-012) are confirmed and fixed.
+K (#278), L (#279) and G1 (#295) are confirmed and fixed.
 B3 confirms the common
 forwarded-operand defect in BUG-026 and the formerly E-grouped BUG-017. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
@@ -837,8 +837,8 @@ so it matters more than its size suggests. Both are one-offs.
 | D | | open | |
 | E | | open | |
 | F | | open | |
-| G | `fix/cluster-g-const-fold` | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
-| G1 | `fix/cluster-g-const-fold` | fixed; PR pending | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |
+| G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
+| G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |
 | G2 | | open | 033 zero-divisor admission; 040 static float token parser; 042 float folding/truth gates |
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
