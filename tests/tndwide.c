@@ -1,7 +1,6 @@
-/* BUG-009: a do-while loop nested inside another loop never exits when its
- * condition is `d < n` with a 32-bit `d`: the comparison is always true.
- * This program hangs. The same loop on its own, a while loop, `d != n`, or a
- * 16-bit `d` all terminate. */
+/* Nested do-while loops with signed and unsigned 32-bit counters, 16- and
+ * 32-bit outer counters, and local/global bounds. Each inner loop tests the
+ * counter after its in-place increment and terminates at the bound. */
 #include <stdint.h>
 #include <stdio.h>
 

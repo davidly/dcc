@@ -1,7 +1,6 @@
-/* BUG-037: in a `for` or `while` loop whose 32-bit counter is incremented,
- * a copy of the counter taken in the body (`l = i;`) is stored after the
- * increment, so it holds the next value. Correct for 16-bit counters, for
- * `do ... while`, and outside a loop. */
+/* Wide loop-counter copies preserve the pre-update value on PHI edges.
+ * Cover for/while, postincrement, constant/variable strides and word carry;
+ * narrow counters, do/while and straight-line copies remain controls. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -57,6 +56,38 @@ static int32_t straight_line(void)
     return l;
 }
 
+static int32_t variable_stride(int32_t step)
+{
+    int32_t l = 0, i;
+    for (i = -3; i < 3; i += step)
+        l = i;
+    return l;
+}
+
+static int32_t constant_stride(void)
+{
+    int32_t l = 0, i;
+    for (i = -3; i < 3; i += 2)
+        l = i;
+    return l;
+}
+
+static uint32_t carry_counter(void)
+{
+    uint32_t l = 0, i;
+    for (i = 65535UL; i < 65538UL; i++)
+        l = i;
+    return l;
+}
+
+static int32_t no_iterations(int32_t limit)
+{
+    int32_t l = 9, i;
+    for (i = 2; i < limit; i++)
+        l = i;
+    return l;
+}
+
 int main(void)
 {
     printf("for %ld\n", (long)for_loop());
@@ -65,5 +96,10 @@ int main(void)
     printf("narrow %ld\n", (long)narrow_counter());
     printf("do %ld\n", (long)do_loop());
     printf("straight %ld\n", (long)straight_line());
+    printf("stride constant %ld\n", (long)constant_stride());
+    printf("stride variable %ld\n", (long)variable_stride(2));
+    printf("stride negative %ld\n", (long)variable_stride(1));
+    printf("carry %lu\n", (unsigned long)carry_counter());
+    printf("zero iterations %ld\n", (long)no_iterations(2));
     return 0;
 }

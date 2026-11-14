@@ -1,5 +1,9 @@
-post bf000000
-pre bf000000
-reverse bf000000
-chain bf800000
-control bf000000
+block init -32768 -32768
+function init -32768 -32768
+block assign -32768 -32768
+block cast -32768 -32768
+block literal -32768 -32768
+block copy -32768 -32768
+block signed -32768 -32768
+block expr -32768 -32768
+block unsigned 32768 32768

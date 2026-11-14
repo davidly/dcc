@@ -4191,7 +4191,7 @@ void mir_end_function(void)
 
     destination = g_emit_sink.stream;
     if (!verified) {
-        if (g_diag_error_count > 0 ||
+        if (errors > 0 ||
             (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL &&
              mir.opaque_count != 0))
             goto finish;
@@ -4332,7 +4332,7 @@ void mir_end_function(void)
         if (generated != NULL)
             mir_stream_close(generated);
         label_id = candidate_label_base;
-        if (g_diag_error_count > 0 ||
+        if (errors > 0 ||
             (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL &&
              mir.opaque_count != 0))
             goto finish;
