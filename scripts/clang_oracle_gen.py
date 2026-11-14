@@ -610,6 +610,8 @@ def known_shapes(prog):
             return
         if (d.t.bits <= 16 or d.storage == 'block') and rhs.op == 'bin' and rhs.a in LOGIC:
             found.add('logicinit')
+            if d.t.bits == 8:
+                found.add('logicbyteinit')
         if d.storage == 'block' and d.t.bits == 32 and negative_constant(rhs, d.t):
             found.add('blockwideneg')
 
@@ -1441,7 +1443,7 @@ FEATURES = frozenset((
     'cassign', 'incdec', 'i8', 'i32',
     # forms that hit a logged dcc defect; see KNOWN_BUGS
     'widecassign', 'bytevarshl', 'castsfx', 'widepostinc', 'structbytecasg', 'negnotconst',
-    'bfdivasg', 'wideidxincdec', 'logicinit', 'blockwidediv', 'ptrcallconv',
+    'bfdivasg', 'wideidxincdec', 'logicinit', 'logicbyteinit', 'blockwidediv', 'ptrcallconv',
     'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'blockptr', 'inittype',
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg', 'wideincadd',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
@@ -1452,7 +1454,8 @@ FEATURES = frozenset((
 # that each one would otherwise keep rediscovering. Remove a feature from this
 # table when its bug is fixed.
 KNOWN_BUGS = {
-    'logicinit': 'BUG-004',
+    'logicbyteinit': 'BUG-004',
+    'bytevarshl': 'BUG-002',
     'bfdivasg': 'BUG-006',
     'nestedwideless': 'BUG-009',
     'blockptr': 'BUG-015',
@@ -1859,8 +1862,9 @@ class Gen:
         initialiser), steered round logged bugs whose feature is off."""
         if storage == 'global' or not is_int(t):
             return rhs
-        if not self.on('logicinit') and (t.bits <= 16 or storage == 'block') \
-                and rhs.op == 'bin' and rhs.a in LOGIC:
+        if rhs.op == 'bin' and rhs.a in LOGIC and (
+                (not self.on('logicinit') and (t.bits <= 16 or storage == 'block'))
+                or (not self.on('logicbyteinit') and t.bits == 8)):
             rhs.a = '|' if rhs.a == '||' else '&'
             if not self.on('peepbyteself') and peep_byte_self(rhs.a, rhs.k):
                 rhs.k[1] = self.mk('const', a=1, t=I16)
