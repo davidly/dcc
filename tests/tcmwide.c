@@ -1,5 +1,7 @@
 /* Wide compound operands and shift counts for signed/unsigned bit-fields
- * and word array members, directly, through pointers and struct arrays. */
+ * and word array members, directly, through pointers and struct arrays.
+ * The second pointer input reaches 463 before division; remainder and right
+ * shift also start with the unsigned field's sign bit set. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -40,14 +42,25 @@ static void array_member(struct S *p)
 
 int main(void)
 {
+    uint16_t original, quotient, remainder;
+
     ga[1] = g;
     bit_field();
     bit_field_through_pointer(&h);
     array_member(&h);
     printf("bit-field %u %d\n", (unsigned)g.u, (int)g.s);
-    printf("bit-field via pointer %u\n", (unsigned)h.u);
     printf("array member %d %d %u %u\n", (int)g.w[0], (int)g.w[1], (unsigned)h.x[1],
            (unsigned)g.x[1]);
     printf("element of struct array %d %u\n", (int)ga[1].w[0], (unsigned)ga[1].u);
+    original = h.u;
+    h.u = 200;
+    bit_field_through_pointer(&h);
+    quotient = h.u;
+    h.u = 463;
+    h.u %= big;
+    remainder = h.u;
+    h.u >>= r;
+    printf("bit-field via pointer %u sign-bit %u\n", (unsigned)original,
+           (unsigned)(quotient == 92 && remainder == 463 && h.u == 14));
     return 0;
 }

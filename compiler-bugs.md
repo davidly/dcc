@@ -7,7 +7,7 @@ wrong-code findings from withdrawn BUG-041 admission experiments; their parked
 sources remain rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `15db8e69` plus the cluster D2e-1 update-provenance traversal (2026-11-15).
+- **Compiler under test:** `15db8e69` plus the cluster E2c bit-field compound extraction repair (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -27,7 +27,6 @@ and their historical diagnoses are retained separately below.
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
 | [BUG-004](#bug-004) | #225 | wrong result | Byte local initialized from `&&`/`\|\|`, forwarded into 32-bit consumers loses its source type |
-| [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
@@ -35,12 +34,12 @@ and their historical diagnoses are retained separately below.
 | [BUG-058](#bug-058) | #315 | wrong result | A nested-block word initialized across signedness is widened with the initializer type when stored to a 32-bit array |
 | [BUG-059](#bug-059) | #316 | latent wrong result | Deferred float update arithmetic lacks an implicit integer-to-float conversion after type repair |
 
-Eight are open: five give wrong results with no diagnostic
+Seven are open: four give wrong results with no diagnostic
 (BUG-039 is in the runtime), two latent wrong-code findings are blocked by
 BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
 promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Forty-nine reported bugs are fixed: [one in cluster M-b](#fixed-in-cluster-m-b),
+Fifty reported bugs are fixed: [one in cluster E2c](#fixed-in-cluster-e2c),
 [two in cluster M-a](#fixed-in-cluster-m-a),
 [one in cluster C2a](#fixed-in-cluster-c2a),
 [two in cluster C1](#fixed-in-cluster-c1),
@@ -176,6 +175,27 @@ s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
   `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
   (their low bits do not depend on the extension); a signed bit-field.
 
+## BUG-009
+
+**A `do … while (d < n)` loop nested inside another loop never exits when
+`d` is 32 bits wide.** The comparison behaves as always true.
+
+```c
+int32_t i, d = 0, n = 0;
+for (i = 0; i < 4; i++) {
+    n = limit;
+    do { ++d; } while (d < n);      /* never leaves */
+}
+```
+
+With `&& passes < 100` added to the condition the function returns 103
+instead of 6, which shows the comparison is the part that is wrong.
+
+- Hangs for `int32_t` and `uint32_t` `d`; with `n` a local, a global, 16 or
+  32 bits; with a 16- or 32-bit outer counter; with an outer `for` or `while`;
+  with `++d` in the body or in the condition.
+- Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
+  `d != n`; `n` set from a constant; a 16-bit `d`.
 
 ## BUG-015
 
@@ -709,6 +729,68 @@ in-range float-to-`int32_t` conversion and retains the failing context.
 
 ---
 
+## Fixed in cluster E2c
+
+Unsigned bit-field compound `/=`, `%=` and `>>=` now load with the declared
+field type, then compute with its field-range-promoted type. The old member
+compound load used unresolved AST type zero, so extraction sign-extended an
+unsigned field. Narrow unsigned fields promote to signed int; full-width
+unsigned fields remain unsigned, including right shifts and live results.
+
+The refined repair preserves add/subtract/multiply, bitwise and left-shift
+shapes: their stored low bits are invariant under sign versus zero extension.
+The full repair was rejected because it changed `tbfinit`/`tbitfld` exact
+schedules into spilled schedules. Only existing `tcmwide.array_member`,
+`bit_field_through_pointer` and `main` change in either census; the first is
+label-only, the second saves 24 instructions, and the last adds coverage.
+
+The maintainer explicitly approved this existing-output change: the incumbent
+pointer test happened to reach 147 before division, hiding the defect. With
+`h.u = 200` it reaches 463 and formerly printed 297 instead of clang's 92.
+The extended `tcmwide` checks both inputs and high-bit remainder/right shift;
+clang O0/O2/ASan/UBSan all prove its revised baseline. Only its existing perf
+row changes; the new `tbfcomp` row is separately measured. Restored `bfdivasg`, 300 integer seeds: **293 ok, 7 INVALID, zero FAIL**.
+Before promotion: 12 reproducers, 2 FIXED (006 and the historical fixture-only
+022), 10 fails. Afterwards: 11 parked, 1 historical FIXED, 10 fails. All
+3,610 other existing functions in each census and all 534 other performance
+rows are unchanged. Strict PowerShell stack/no-stack and Python full+extended gates
+pass; host, debug and #277/isolated-harness outcomes are in fix-plan.md.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-006](#bug-006) | #226 | [tbfcomp](tests/tbfcomp.c), extended [tcmwide](tests/tcmwide.c) |
+
+### BUG-006
+
+**Fixed:** declared extraction signedness and field-range arithmetic promotion
+are kept separate for high-bit-sensitive compound operators. Regression:
+[tbfcomp.c](tests/tbfcomp.c), [stdout](tests/baselines/tbfcomp.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**`/=`, `%=` and `>>=` on an unsigned bit-field store the wrong value when
+the field's top bit is set.** The field is sign-extended from its own width,
+as if it were a signed bit-field, before the operation.
+
+```c
+struct S { uint16_t m2 : 11; uint16_t m5 : 5; } s = { 1148, 18 };
+s.m5 %= 7;         /* want 4,    dcc 2    */
+s.m5 /= 21930;     /* want 0,    dcc 2    */
+s.m2 %= 21930;     /* want 1148, dcc 296  */
+s.m5 >>= 1;        /* want 9,    dcc 25   */
+s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
+```
+
+- Every wrong value is what sign extension gives. 18 in 5 bits is `10010`,
+  which sign-extends to `0xfff2` (65522): 65522 % 7 is 2, 65522 / 21930 is 2,
+  and `0xfff2 >> 1` done arithmetically is `0xfff9`, 25 in 5 bits.
+- Wrong for a field of any width, including all 16 bits
+  (`uint16_t a : 16` holding `0x8421`: `a >>= 3` gives `0xf084`), in a
+  global or local struct and through a pointer (`p->a >>= 3`), and when the
+  result is used (`r = (s.a >>= 3)`).
+- Correct: the same statements when the field's top bit is clear;
+  `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
+  (their low bits do not depend on the extension); a signed bit-field.
 ## Fixed in cluster M-b
 
 BUG-022 is fixed by checking reported `errors`, not `g_diag_error_count`, in
@@ -946,10 +1028,9 @@ gate's approved #277 and loaded synthetic-harness exceptions, including
 isolated retries, are documented in fix-plan.md; no expectations were changed.
 The final standalone Ninja gate runs 328 tests with only the two approved
 #277 failures and two existing skips; all earlier harness failures pass.
-BUG-006 is independent and remains open: its correct extraction repair changes
-an existing `tcmwide` function and was discarded under the per-bug output-
-preservation rule. The full trace and host-proven alternate input are recorded
-in fix-plan.md.
+BUG-006 was independently stopped under the original output-preservation
+rule. It is now fixed in E2c below, with the maintainer-approved `tcmwide`
+exception; the original trace remains in fix-plan.md.
 
 | ID | Issue | Regression |
 | --- | --- | --- |

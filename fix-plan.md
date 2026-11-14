@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has eight open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has seven open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -1921,7 +1921,7 @@ The final fix applies at the proven reaching-value replacement itself.
 | Bug | Issue | Traced cause / fix location |
 | --- | --- | --- |
 | BUG-013 | #233 | `ast_expr_type_for_sizeof` in `dcc_ast_build.c` recursively retypes a nested binary from raw field types instead of its recorded promoted result; unary `-`/`~` and `?:` also use raw unsigned field types. `p_binary` already gives direct narrow bit-field binaries signed operand types, but an enclosing expression loses that result type. Field-aware promotion must be consistent across those AST typing paths. |
-| BUG-006 | #226 | `mir_lower_expr_impl`'s `AST_ASSIGN` member compound path builds its initial `MIR_LOAD_INDIRECT` with `node->a->type == 0`, despite having the resolved `FieldDef`. `mir_emit_bitfield_extract` interprets missing `TYPE_UNSIGNED` as signed, so the top bit sign-extends. Repair explicitly excludes bit-field loads from pointee inference. Preserve the field's declared extraction type separately from its promoted arithmetic type here. |
+| BUG-006 | #226 | **Fixed in E2c.** `mir_lower_expr_impl`'s `AST_ASSIGN` member compound path builds its initial `MIR_LOAD_INDIRECT` with `node->a->type == 0`, despite having the resolved `FieldDef`. `mir_emit_bitfield_extract` interprets missing `TYPE_UNSIGNED` as signed, so the top bit sign-extends. Repair explicitly excludes bit-field loads from pointee inference. Preserve the field's declared extraction type separately from its promoted arithmetic type here. |
 | BUG-028 | #248 | **Fixed in E2-shift.** A discarded signed-byte shift had no promoted-left operation, so `mir_resolve_deferred_metadata` widened it to the unsigned word count type. `mir_lower_compound_value` now materializes promoted int and a separate narrowed result; equal-width counts cannot retype it. |
 | BUG-002 | #223 | **Fixed in E2-shift.** `mir_lower_compound_value` left discarded byte shifts nominally byte-typed when a byte count did not widen them. Object promotion forwarded the word result through a byte return. Explicit promoted-left computation plus a distinct narrowed SSA/store value restores truncation. |
 | BUG-004 (block facet; now A2b-1) | #225 | Fixed by replaying `mir_type_untyped_widened_value` when `mir_resolve_deferred_metadata` restores a canonical assignment conversion target. E1 fixed the function-scope half; A2b-1 fixes the block half without changing BUG-015. |
@@ -2081,6 +2081,118 @@ No E2 implementation was included in E1. A2b-1 subsequently fixes BUG-004's
 original block facet; restored fuzzing traces a separate byte SSA facet in
 A2b-3. All five expanded issues remain open with their unresolved facets
 steered.
+
+#### E2c. Unsigned bit-field compound extraction (BUG-006/#226)
+
+The maintainer explicitly approved reopening the stopped BUG-006 repair and
+changing the incumbent `tcmwide` output. Its original 444 input truncates to
+147 before division, hiding incorrect sign extension; input 200 instead
+reaches 463 and gives 297 where host clang gives 92. Preserving those bytes
+would preserve the defect. No application-name or input-value gate is added.
+
+The member-compound `MIR_LOAD_INDIRECT` must retain the declared field type
+for extraction. `mir_lower_compound_value` independently uses
+`mir_promoted_operand_type`: unsigned widths <=15 promote to signed int;
+width 16 stays unsigned. The final store still narrows and reloads the field,
+so negative divisors, scoped right operands, full-width shifts and used
+assignment results retain their C types.
+
+**Refined repair chosen after a full-repair experiment.** Full extraction/
+promotion repair changed six functions: `tbfinit.main` (302->1150 instructions)
+and `tbitfld.main` (479->2835) declined their exact schedules for spilled
+candidates; `tcmwide.array_member`, `bit_field`, `bit_field_through_pointer`
+and `main` also changed. Those exact-to-spilled regressions are unacceptable.
+Repairing only division, remainder and right shift retains every selector and
+leaves `tbfinit`/`tbitfld` byte-identical.
+
+This is a complete semantic repair, not a fallback: if a field has width w,
+sign and zero extension differ by a multiple of 2^w. Addition, subtraction
+and multiplication preserve that congruence; bitwise AND/OR/XOR independently
+preserve each low bit; a defined left shift likewise preserves the low w bits.
+The field store masks to those bits, and a used result reloads that mask.
+Division/remainder (including negative divisors) and right shift do depend
+on high bits and arithmetic signedness, and receive the repaired types.
+
+Before extending the workload, both 3,613-function censuses change exactly
+`tcmwide.bit_field_through_pointer` (434->410 no-stack instructions, 435->411
+stack; 202 fewer assembly-text bytes), `tcmwide.array_member` and `tcmwide.main`
+(label-only changes). All retain `spilled-scalar-cfg`, their incumbent candidate;
+there is no newly spilled function or fallback. After extension, the exact
+list remains those three functions, with `main` now adding the new coverage;
+all other 3,610 existing functions remain byte-identical in both modes.
+
+`tcmwide` retains the 444 input and also checks the 200 input, remainder of
+463 by the wide divisor and right shift of 463. Host clang O0/O2/ASan/UBSan
+agree with the revised baseline. The fix alone improves its original workload:
+peep/nopeep cycles 136005/138544 -> 135869/138488; sizes stay 8192/8704.
+The deliberately extended workload's checked row is
+136005/138544, 8192/8704 -> **181731/185418, 8704/9344**.
+The increase buys the additional execution, not slower repaired code.
+Bounded extension experiments reduced three separate result prints
+(237210/240682 cycles; 8704/9344 bytes) to one value print
+(189250/192790; 8704/9216), then one combined correctness flag
+(181731/185418; 8704/9344). Eager bitwise checks were slower
+(181911/185452; same sizes), so short-circuit checks are retained.
+The one-value-print option trades 128 fewer nopeep bytes for 7,372 additional
+nopeep cycles; the delivered version favors minimum dynamic cost. The full
+compiler repair was also tested and rejected as above. No selector/emitter
+workaround or padding is introduced. All 534 other original perf rows retain
+their exact bytes and ordering; only the new `tbfcomp` row is added.
+
+The original BUG-006 reproducer flipped in peep/nopeep: 12 reproducers,
+2 FIXED (006 plus the pre-existing fixture-only 022), 10 fails. It is promoted
+as `tbfcomp`, retaining all six original lines and adding scoped negative
+divisors, local/pointer fields, full-width unsigned shifts and live results.
+All four host configurations agree; its normal-stack row is
+177203/181128 cycles and 8192/8448 bytes. Both host validators pass. After
+promotion: 11 parked reproducers, 1 historical FIXED (022), 10 fails.
+
+**Debug metadata review:** only MIR value types and instruction addresses
+change; declaration types, scopes and source boundaries are not rewritten.
+Both tests pass all twelve release/full-debug/line-debug peep/nopeep pipelines;
+`-gline` COM files are release-byte-identical. Full-debug frame variables and
+line-debug ranged locations survive. Six MIR host and ten debugger-host CTests
+and require-emit diagnostics pass. No debug or MI harness is changed.
+
+The ordinary-assignment neighbour `a.u = a.u % divisor` is byte-identical
+before/after (67 instructions, hash aa305755), as is that probe's `main`.
+The repaired compound shrinks 76->68 instructions and uses the same zero
+extraction and signed remainder sequence as its 67-instruction neighbour.
+Its sole instruction difference is the pre-existing shared-address IY reload
+(`push iy; pop hl` versus `ld hl,address`), not a new save or fallback; both
+use the same byte count for that address load. Original peep and nopeep
+reproducer assembly drops the sign-extension branch and uses `__r1s` /
+`__mods` in place of `__r1u` / `__modu` for promoted narrow fields.
+
+The final promoted censuses accept 3,620 functions (seven new `tbfcomp`
+functions); their only three existing deltas are the exact list above.
+Restored `bfdivasg`, production integer seeds 1-300: **293 ok, 7 INVALID,
+zero FAIL and zero target limits**. No new bug was found or filed. The
+pre-existing BUG-022 fixture-only pass is the sole out-of-cluster reproducer
+observation; no other bug or steer is changed.
+
+All strict release gates pass: PowerShell full+extended stack and no-stack
+(575 apps: 551 pass, 24 existing skips), diagnostics and peephole fixtures;
+Python full+extended (same app totals, 196 runnable extended cases), zero
+performance regressions. The restored-generator/metadata/entrypoint focused
+Python runner passes 22/22. Both host validators, all twelve debug pipelines,
+6/6 MIR host CTests, 10/10 debugger-host CTests and require-emit pass.
+
+The regular Python gate ran **333 tests**: **2 approved #277 failures,
+4 harness errors, 2 existing skips**. The errors are the unchanged 180-second
+synthetic mutation-fixture deadlines in
+`test_default_serial_and_parallel_are_equal_and_bounded` and
+`test_survivors_invalid_exits_builds_and_worker_errors_are_recorded`, each
+with a directory-not-empty teardown race. Both are retried individually,
+without altering any fixture, timeout, assertion, expectation or skip.
+The isolated scheduler still times out after 180 seconds with the cleanup
+race. The isolated classifier passes; the scheduler alone remains **unverified**
+(181.256s total, two errors including teardown). This is an accepted harness
+exception, not a compiler result; #277's two approved failures remain
+unchanged. Logs: `build/e2c-python.log`,
+`build/e2c-python-isolated-scheduler.log` and
+`build/e2c-python-isolated-classifier.log`.
+No old-compiler/regression-dating check or `prepush.ps1` was run.
 
 ### F. Compound assignment to complex lvalues
 
@@ -2852,9 +2964,10 @@ addresses require the normal full/line debug pipeline checks.
 | D2e-2 | [#316](https://github.com/davidly/dcc/issues/316) | open; trial withdrawn | 041/056/058 remain steered by fincdecval; unary/binary float types repaired but assumed-identity implicit conversions are absent; no second compiler fix |
 | E | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | split into E1 / E2 | Single SSA forwarding fix clears 016; 004 function facet and 015 word-widening facet improve, complete issues still open |
 | E1 | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | PR open; verified compiler gates; documented harness exceptions | 016 promoted as tinittyp; int 297/2/1 limit, float 281/19, zero FAIL; 3,509 functions and 520 perf rows unchanged; #277 and three isolated synthetic-fixture timing failures |
-| E2 | | split; E2-shift fixed; E2-bitfield partial | 013 fixed in E2-bitfield; 006 stopped (incumbent tcmwide output encodes the defect); 002/028 fixed in E2-shift; 004 repaired boolean conversion remains in A2b |
+| E2 | | split; byte-shift and bit-field bugs fixed | 013 fixed in E2-bitfield; 006 repaired in E2c with the approved tcmwide exception; 002/028 fixed in E2-shift; 004 repaired boolean conversion remains in A2b |
 | E2-shift | [#309](https://github.com/davidly/dcc/pull/309) (`fix/cluster-e2-byte-shift`) | PR open; verified compiler gates; one harness exception | 002/028 share one promotion/narrowing root; tbcshl/tbcsar promoted; 297 ok/1 INVALID/2 limits/zero FAIL; both 3,545-function censuses and 526 existing perf rows unchanged; #277 plus one isolated mock serial/parallel timeout unverified |
-| E2-bitfield | [#310](https://github.com/davidly/dcc/pull/310) (`fix/cluster-e2-bitfield`) | PR open; partial: 013 accepted; 006 stopped | 013 promoted as tbfexpr; 300 integer seeds clean; 3,545 existing functions and 526 performance rows unchanged; 006 correct repair changes incumbent tcmwide output and is discarded under the per-bug stop rule |
+| E2-bitfield | [#310](https://github.com/davidly/dcc/pull/310) (`fix/cluster-e2-bitfield`) | PR open; 013 accepted; 006 moved to E2c | 013 promoted as tbfexpr; 300 integer seeds clean; 3,545 existing functions and 526 performance rows unchanged; 006 originally stopped; maintainer-approved output exception is now handled in E2c |
+| E2c | [#324](https://github.com/davidly/dcc/pull/324) (`fix/cluster-e2c-bitfield-compound-load`) | fixed; release/fuzz gates verified; harness retries documented | BUG-006 promoted as tbfcomp; maintainer-approved tcmwide change; refined high-bit-sensitive repair; no exact-to-spilled regressions |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1/G2 fixed | G1 clears 012; approved G2 fixes 033/040/042 independently |
 | G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |
