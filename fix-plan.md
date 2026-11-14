@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has twenty-seven open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twenty-five open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -442,12 +442,14 @@ no dating checks or prepush.ps1 were run.
 | --- | --- | --- |
 | BUG-027 | #247 | Local assigned in `if … else` nested in an `if`, then updated: lost when a loop follows |
 | BUG-038 | #258 | Same with no outer `if`: lost when an early-return `if` follows |
-| BUG-023 | #243 | `if (x++ > K) x = v;` leaves `x` as 1 when not taken (local assigned from another type) |
 | BUG-029 | #249 | 8-bit local and another variable assigned in opposite arms: `(int)c + x` loses `x` |
 | BUG-037 | #257 | Copy of a 32-bit loop counter is taken after the increment |
 | BUG-052 | #272 | Folded `?:` on a 32-bit parameter in a loop accumulates into the parameter |
 
-The first four are a value merged from two arms that is never stored before
+BUG-023 was filed here but is confirmed fixed in D2a: its postfix update
+uses the same false named-home binding as BUG-021.
+
+The first three are a value merged from two arms that is never stored before
 the update. BUG-037 and BUG-052 are a value read at the wrong point of the
 loop. Both smell of the homed emitter's liveness/merge at join blocks
 and of a temporary being homed in the variable it was computed from. Begin
@@ -460,11 +462,12 @@ with BUG-038, the smallest.
 | BUG-003 | #224 | `++`/`--` on a 32-bit array element done in 16 bits |
 | BUG-044 | #264 | Float `++`/`--`: no-op on a scalar, 16-bit integer increment on an array element |
 | BUG-021 | #241 | `x++` yields the new value (16-bit local from a local array element) |
+| BUG-023 | #243 | Cross-type local assignment followed by a postfix update/branch; moved from C |
 | BUG-024 | #244 | `if (x++)` in a loop tests the new value (8-bit local) |
 | BUG-010 | #230 | Cast or narrowing return of a 32-bit post-increment: rejected |
 | BUG-041 | #261 | Value of a float `++`/`--` rejected |
 
-**Confirmed split: D1 (003/044) and D2 (021/024/010/041).** The first
+**Confirmed split: D1 (003/044) and D2 (021/023/024/010/041).** The first
 root-cause change fixes D1 only; do not extend it with independent D2 fixes.
 BUG-044 is the maintainer's second priority.
 
@@ -493,8 +496,114 @@ BUG-044 is the maintainer's second priority.
   not admit float update values. Repairing statement arithmetic cannot make
   those rejected expressions reach MIR. This needs separate admission work.
 
-D1 acceptance is recorded below and in Tracking; D2 remains open with
-unchanged reproducers. No out-of-cluster reproducer flipped.
+D1 acceptance is recorded below and in Tracking. D2 is split into **D2a
+(021/023/024: stored-value lifetime)** and **D2b (010/041: AST admission)**;
+D2b is being investigated independently.
+
+#### D2a root-cause experiment
+
+Between BUG-021 and BUG-024, the apparent shared home-clobber cause is only
+a semantic resemblance, not one faulty gate. BUG-021's `v15` is an assignment conversion (`MIR_UNARY`)
+carrying the destination name `l3`; that name is metadata, not a binding of
+its immutable SSA value to the object's mutable memory. The selfstore
+increment matcher nevertheless accepts it as a named memory source. In the
+promoted-local-slot candidate, the old SSA value occupies `l3`'s vacated
+slot; the in-place update then overwrites it. Require an actual LOAD,
+PARAM or PHI binding before using the selfstore update. The existing
+spilled candidate computes the update from the SSA value instead; no
+fallback or selector/cost-policy change is added.
+
+The single root fix clears **021/023**, while **024 still fails** in all
+four parked variants. Per the approved partial-fix stop rule, no second
+compiler change is added. BUG-024 is independently admitted by the
+unconditional byte case of `mir_phi_uses_scalar_object_home`: `v5` really
+is a header PHI, and the later store of `v14` destroys its old value before
+the condition reloads it. It needs its own lifetime proof, not the
+assignment-conversion binding fix.
+
+**Confirmed same cause: BUG-023, moved from C.** Its cross-type assignment
+also gives a `MIR_UNARY` result destination-name metadata. The later
+selfstore update treats that metadata as an authoritative memory binding,
+losing the old value used by the branch or the assigned loop-carried value.
+The existing single matcher fix clears all eight output cases in both
+modes; this is not an incidental flip. It is promoted as `tpostbr` alongside
+`tpost16`. No additional compiler fix is needed or added.
+
+#### D2a initial acceptance (BUG-021 promotion)
+
+- BUG-021 is promoted as `tpost16`, with the original host-proven baseline
+  and one newly measured normal-stack performance row. Before promotion:
+  **28 reproducers: 2 FIXED (021/023), 26 fails**. After the initial 021
+  promotion: **27 reproducers: 1 FIXED (023), 26 fails**; 023 is promoted
+  in the follow-up below, and 024 is unchanged.
+- The strict Python full+extended gate passes **531 apps** before promotion.
+  Final strict PowerShell full+extended stack/no-stack gates each pass
+  **532 apps**, plus extended, diagnostics and dccpeep fixtures; normal-stack
+  performance passes. Targeted full-mode promotion and host validation pass.
+- Both final canonical-build censuses contain **3,487 functions**, adding
+  only tpost16's five functions. Every original **3,482-function** row is
+  byte-identical in both modes. All **516 existing performance rows** are
+  unchanged in either direction; tpost16 alone adds a row (69,593 peep /
+  70,119 nopeep cycles; 5,632-byte COM in both modes).
+- `postincvalue` now steers byte postfix values only (BUG-024); word postfix
+  coverage is restored. BUG-010 wide-postfix and BUG-023 cross-type guards
+  remain. Integer production seeds 1-300: **227 ok, 73 INVALID, zero FAIL**.
+  The final 3,000-seed remaining-known-shape proof and four generator tests
+  pass. No float generator changes or float batch are needed for this fix.
+- Both pipeline assemblies of the unsigned-local neighboring control are
+  wholly unchanged in the same-worktree before/after guard experiment.
+  The fixed `returned_increment` body is byte-identical to that control in
+  both pipelines. Its exact assembled size changes **86 -> 87 bytes
+  nopeep**, **80 -> 73 bytes peep**; the one-byte nopeep cost is confined
+  to the previously incorrect new reproducer, not existing functions.
+  No older checkout, regression dating, fallback path or prepush run.
+- Canonical and independent CMake compiler builds pass; MIR host tests
+  **6/6**, debugger-host tests **10/10**, focused integer/line-debug tests
+  **24/24**, and strict require-emit diagnostics pass. Full-debug target
+  output remains correct with nonempty metadata; line-debug COMs are
+  release-identical in both pipelines. Statement/scope/type boundaries
+  are unchanged. Focused ASan/UBSan compiler runs on tpost16 and bug024
+  are clean.
+- The full Python suite ran **318 tests**, with two built-in skips intact.
+  Approved #277 golden failures remain in `test_mir_campaign_baselines`
+  and `test_mir_exact_controls`; they were not fixed, skipped or refreshed.
+  Under concurrent machine load, the initial run also had five errors
+  across three mutation-runner methods (including teardown races), plus
+  watchdog and process-supervision timing failures. The five affected
+  test methods were retried separately in isolation (**5 tests, 397.7 s**):
+  process-supervision's `test_post_exit_grace_preempts_long_overall_deadline`
+  passes; four mutation-runner cases remain **unverified**. The default
+  serial/parallel and survivor-recording methods time out after 180 s;
+  exited-worker cleanup cannot find `watchdog-child`; the worker watchdog
+  exceeds its 8 s bound (8.56 s). Retry teardown races disappear. These
+  are harness failures, not hidden passes: no expectation, runner, fixture
+  or skip was altered, and no older/main-checkout comparison was made.
+
+#### D2a BUG-023 follow-up
+
+- Confirmed BUG-023 **FIXED in peep/nopeep**, including host, ASan and
+  UBSan baseline proof. It shares the existing selfstore-fusion root cause
+  with BUG-021; it is moved from C, not treated as an incidental flip.
+  Promote as `tpostbr` with the unchanged eight-line host baseline.
+- Final known-bug run: **26 reproducers, 26 fails, zero FIXED**. Counts agree:
+  **26 open, 27 reported fixed** in compiler-bugs.md; fix-plan.md line 3
+  has 26 open. BUG-024 remains parked and failing.
+- New normal-stack row: **152,995 peep / 154,692 nopeep cycles**;
+  **5,888 / 6,016-byte COM** respectively. All **517 pre-follow-up
+  performance rows** (including tpost16) are unchanged; tpostbr alone
+  adds a row. Promoted host validation and targeted full-mode checks pass.
+- Both censuses preserve all **3,487 pre-follow-up functions byte-identically**
+  and add only tpostbr's nine functions (**3,496 total**). Thus all original
+  3,482 functions and 516 original performance rows remain unchanged too.
+- Removed `crosstypeasg` from `KNOWN_BUGS`; the cross-type rewrite is no
+  longer active under `--off known`. Five focused generator tests and
+  the 3,000-seed remaining-known-shape proof pass. Both strict full+extended
+  stack/no-stack release gates pass **533 apps**, extended, diagnostics
+  and dccpeep fixtures; stack performance has zero regressions. Full-debug
+  output matches all eight baseline lines in both pipelines, nonempty DBG
+  metadata is retained, and line-debug COMs match release byte-for-byte.
+  Restored-cross-type production seeds 1-300: **300 programs: INVALID 34, ok 266**; zero FAIL.
+  No compiler code was changed in this follow-up.
 
 #### D1 acceptance
 
@@ -1024,9 +1133,11 @@ so it matters more than its size suggests. Both are one-offs.
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | [#293](https://github.com/davidly/dcc/pull/293) | PR open | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
 | C | | open | |
-| D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/024/010/041); traces above |
+| D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/023/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
-| D2 | | open | BUG-021/024 stored-home lifetime; BUG-010/041 AST value admission; no independent compiler fixes added |
+| D2 | | split into D2a / D2b | Stored-home versus AST admission are independent |
+| D2a | [#300](https://github.com/davidly/dcc/pull/300) (`fix/cluster-d2a-postinc-home`) | PR open; verified partial fix | 021/023 promoted as tpost16/tpostbr; 023 moved from C, same root; 024 remains independent; 26 parked reproducers all fail; 3,487 pre-follow-up functions and 517 perf rows unchanged |
+| D2b | | open; separate worktree | BUG-010/041 AST value admission; not changed by D2a |
 | E | | open | |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
