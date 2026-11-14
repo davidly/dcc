@@ -1881,6 +1881,26 @@ under `build/` for inspection.
 
 #### D2e. Update provenance ships separately; float admission stops again
 
+**D2e-2 follow-up (root repair):** late float typing now propagates through
+unary `+`/`-`, deferred binary and conditional consumers after lvalue/update
+repair. Missing implicit binary operand conversions are inserted there, while
+explicit casts and all integer-only graphs keep their interpretation. The
+non-update equivalents of BUG-059 and both A2b-2 float facets pass in
+`tflbconv` (host clang + ASan/UBSan, peep/nopeep). Its eight printed cases
+cover ordinary and assignment-value unary, mixed operands, compound values,
+conditional consumers and a constant/cast chain.
+
+Both **3,672-function / 559-app** starting census TSVs are byte-identical after
+this root-only change. The **544 original performance rows** are preserved
+byte-for-byte; only `tflbconv` is appended. All eight parked verdicts remain
+`fails` at this step: BUG-059/041/056 are still admission-blocked, and the
+integer-only `bug015.c` has **no changed output lines** (8/13 still wrong).
+The float facets in the A2b-2 table are additional probes, not printed lines
+in that parked integer fixture. BUG-015 stays open with A3/A4; its steering
+and reproducer are unchanged. Float update admission is attempted separately,
+after committing this shared repair.
+
+
 **D2e-1:** `ast_expr_base_ident_unresolved()` now follows `AST_POSTFIX`
 and prefix `TOK_INC`/`TOK_DEC` to the stored lvalue, just as it already follows
 member/index/dereference and assignment results. A block-local update therefore
