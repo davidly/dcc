@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has sixteen open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has fifteen open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -1711,6 +1711,69 @@ checks passed. The two regular Python-test failures match clean rebuilt
 BUG-022 is a diagnostic bug that turns a compile error into broken output,
 so it matters more than its size suggests. Both are one-offs.
 
+### N. Lost variable-index local float-array store
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-055 | #294 | Variable-index local float-array store in an `else` arm after a counter-copy loop |
+
+**Traced cause:** the store and its address lowering are intact. The first
+loop's `l4 = i1` becomes a second PHI consuming the old counter on the
+backedge. `mir_binary_is_narrow_phi_adjust()` checks only textual uses after
+the increment, overlooking this earlier PHI's edge use. At 40 CFG blocks it
+updates the counter's slot in place, so the backedge copies `5`, not `4`,
+and the later store addresses element 1 instead of 0. Removing the unused
+conditional expression drops the CFG below that profitability threshold
+and retains separate counter/update slots. A constant index bypasses the
+bad counter; changing only the store to the then arm or to an `int32_t`
+array still fails, contrary to the proposed neighbouring-shape assumption.
+
+The narrow matcher retains its existing profitability/legality gates and
+adds the existing CFG-live-out proof for earlier PHIs whose destinations
+are used. Unused PHIs produce no edge copy, so they must not disable the
+already-correct constant-index control schedule. The wide
+matcher and BUG-037 remain outside this task. Debug scopes/types/source
+boundaries are unchanged; corrected temporary homes and instruction
+addresses require the normal full/line debug pipeline checks.
+
+- Restored float production seeds 1-300: **283 ok, 17 INVALID, zero FAIL**;
+  the `farrloopindex` known-bug steer is removed. Remaining-known-shape
+  steering proof: 3,000 seeds clean. No new bug was found.
+- Promoted as `tflidx`, preserving all original output lines and adding
+  then-arm, integer-array and decrement coverage. Post-promotion parked
+  tally: **15 reproducers, 1 FIXED, 14 fails**.
+- Both census TSVs are byte-identical across **3,574 existing functions**;
+  all **530 existing performance rows** remain unchanged. Strict Python
+  full+extended and both PowerShell stack/no-stack release gates pass.
+- Pre-promotion parked tally: **16 reproducers, 2 FIXED, 14 fails**. Only
+  BUG-055 newly flips; BUG-022's historical fixture remains the pre-existing
+  pass while its diagnostic defect stays open. BUG-037 still fails.
+- Constant-index and reduced-CFG control instruction streams are unchanged
+  in peep/nopeep (only whole-program label numbering moves). The failed
+  shape retains `spilled-scalar-cfg`; its counter update and parallel edge
+  copies now match the reduced-CFG control, without a fallback selector.
+  Exact linked `f0` body size is 713→732 bytes peep (+19) and 815→838
+  bytes nopeep (+23); its 34-byte frame is unchanged and no helper is added.
+  That cost is confined to the previously wrong new shape.
+- Canonical/CMake builds, MIR host 6/6, debugger-host 10/10, focused compiler
+  30/30, line metadata 2/2, require-emit diagnostics and ASan/UBSan with
+  independent liveness/cache verification pass. The extended MIR census
+  is 274/274 (100%) in each stack mode. All twelve new-fixture
+  release/line/full-debug combinations (both peep modes and stack modes)
+  pass; line-debug COMs are release-identical and adjacent DBG metadata is
+  nonempty. Source scopes/types/boundaries are unchanged; corrected frame
+  temporaries and instruction addresses use normal emission metadata.
+- An initial overlapping-build Python suite had a transient diagnostics
+  failure only; all 116 diagnostics pass in isolation and the complete
+  final strict rerun passes. No diagnostic expectations were changed.
+- Regular Python unit gate: **328 tests, 2 existing skips**, the two approved
+  #277 golden failures, a mock serial/parallel mutation-runner 180-second
+  timeout, and a MIR-clobber lifecycle timing failure. The MIR-clobber
+  method passes in isolation. The mock scheduler still times out at 180
+  seconds alone (plus a teardown race); the complete isolated Ninja
+  retry passes the same assertions; no harness/timeout/expectation
+  or skip was changed. No old-compiler/dating or `prepush.ps1` checks run.
+
 ## Suggested order
 
 1. **K, L** — isolated, cheap, four and one issues; good warm-up for the
@@ -1729,6 +1792,7 @@ so it matters more than its size suggests. Both are one-offs.
 
 | Cluster | Branch / PR | Status | Notes |
 | --- | --- | --- | --- |
+| N | `fix/cluster-n-float-array-else` | fixed; release gates verified | BUG-055 promoted as tflidx; restored float 283 ok/17 INVALID/zero FAIL; both 3,574-function censuses and all 530 existing perf rows unchanged; #277 plus isolated harness retries documented |
 | A1 | [#281](https://github.com/davidly/dcc/pull/281) | merged | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
 | A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |

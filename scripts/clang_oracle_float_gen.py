@@ -59,7 +59,6 @@ KNOWN_BUGS = {
     'fblockneg': 'BUG-015',
     'fblockint': 'BUG-015',
     'fconstcond': 'BUG-052',
-    'farrloopindex': 'BUG-055',
 }
 
 
