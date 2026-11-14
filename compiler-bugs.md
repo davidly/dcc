@@ -135,8 +135,9 @@ int32_t c = b;
 g = c++;                    /* stale high word of the zero value */
 uint8_t b = (uint16_t)1 || (uint32_t)1;
 s.m1 = b;                   /* uint32_t member: stale high word */
-int8_t b = (uint16_t)1 && 29464;
-g = returns_minus_one_long() >= b;  /* wrong: true instead of false */
+int32_t returns_minus_one_long(void);
+int8_t byte_compare = (uint16_t)1 && 29464;
+g = returns_minus_one_long() >= byte_compare;  /* wrong: true instead of false */
 ```
 
 `mir_promote_objects()` forwards the typed byte load to its untyped boolean
