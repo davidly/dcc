@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has eight open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has seven open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -247,14 +247,61 @@ The already-built long conversion consequently acquires an untyped source
 **after** deferred metadata repair and emits no extension. This is not the
 A2b-1 canonical-assignment repair point; no second implementation is tried.
 
-BUG-004 now parks the exact reduced seed-133 byte facet (host and sanitizer
-proven, failing in both pipelines), while the original five lines and six
-additional signed/unsigned block logical paths are covered separately by
-`tlogblk`. Keep #225 open. The broad `logicinit` steer is removed from
-`KNOWN_BUGS`; only a new, narrowly detected `logicbyteinit` steer (non-global
-8-bit logical stores/initializers) remains mapped to BUG-004. Word and block
-long logical forms are genuinely restored. No new issue is manufactured for
-these additional facets of the existing logical-source bug.
+At the A2b-1 checkpoint BUG-004 parked the exact reduced seed-133 byte
+facet, while the earlier word and block-long paths were promoted separately
+as `tlogblk`. Only `logicbyteinit` remained steered at that checkpoint.
+
+**Fixed in A2b-3 on `fix/cluster-a2b3-logical-byte`.** Independent MIR and
+assembly inspection confirmed the forwarding trace: the final cast changed
+from a typed byte load to a type-zero PHI, and neither pipeline extended DE.
+The first root fix assigns the byte local's type to that PHI only when its
+constant/PHI tree proves 0/1 and an existing long/float conversion needs the
+source contract. No consumers, schedules, selectors or fallbacks are patched.
+
+- All **2/2 parked lines** pass, including checksum `4001 9971d1fc`; all four
+  reduced byte facets pass. Promoted `tlogbyte` preserves those two lines and
+  adds fourteen lines for the other consumers, false/true variable and nested
+  logical paths, assignment, short-circuit side effects and a constant control.
+- Both original censuses remain byte-identical across **3,672 existing
+  functions / 559 apps**. Final snapshots add only sixteen `tlogbyte`
+  functions. There are no new fallback/spilled selections for existing code.
+- Strict full+extended stack and no-stack gates pass: **559 apps passed,
+  24 configured skips, zero failures**. All **544 existing perf rows** are
+  byte-preserved, with only the measured `tlogbyte` row appended:
+  **272957/292634 cycles, 7040/7424 bytes** (peep/nopeep). Its checked stack
+  and no-stack runs and host validator pass.
+- Restored integer production seeds **1–300** with `--off known`:
+  **283 ok, 14 INVALID, 3 target-limit-only, zero FAIL**. Only the
+  `logicbyteinit` open-bug mapping is removed; optional manual steering is
+  retained. A 3,000-seed proof confirms the remaining known steers.
+- Original reproducer Z80 adds the usual **five-byte / twenty-T-state**
+  normalized signed word-to-long extension, in both pipelines, with no helper
+  or frame growth. The already-correct constant-byte control and `tlogblk`
+  are unchanged. Host O0/O2, ASan/UBSan and a sanitized CMake compiler pass.
+- Require-emit diagnostics and both **274/274** extended MIR census modes
+  pass. All **55 focused** arithmetic, line-debug, type-fingerprint, steering
+  and mutation-anchor tests pass; all **10 debugger-host** checks pass.
+- Before promotion: **1 FIXED, 7 fails**. After promotion: **7 reproducers,
+  7 fails**; BUG-004 closes, the other seven defects remain open. Bug-log
+  totals are **seven open / fifty-two fixed**. No new bugs are filed.
+- The regular Python run executed **339 tests**, with **6 failures,
+  9 errors and 2 existing skips**. Two failures are the pre-answered #277
+  campaign-baseline/exact-control expectations; neither is changed or skipped.
+  One typed-library invocation hit the canonical rebuild's temporary missing
+  `dcc`; it passes after restoration. The other exceptions are timing/process
+  harness checks. All thirteen non-#277 methods were retried sequentially with
+  Ninja: **nine pass; four remain unverified** (one failure, five errors,
+  including two teardown races):
+  `CompilerMutationTests.test_child_timeout_and_environment_isolation`,
+  `test_default_serial_and_parallel_are_equal_and_bounded`,
+  `test_exited_worker_cleans_nested_process_scopes`, and
+  `test_survivors_invalid_exits_builds_and_worker_errors_are_recorded`.
+  These retain lost timeout diagnostics, 180-second scheduler timeouts,
+  absent watchdog-child metadata or directory-not-empty teardown races.
+  The clobber runner, inherited-pipe regression, worker watchdog and all five
+  shared-supervisor checks pass their isolated retries. No harness code or
+  expectations are modified; the non-green Python gate is explicitly recorded.
+  No old-compiler checks, nested agents or `prepush.ps1` are run.
 
 **D2d relationship:** this is the same broad deferred-type pipeline, **not**
 one shared fix. BUG-004 loses the boolean source contract when a canonical
@@ -3212,7 +3259,7 @@ addresses require the normal full/line debug pipeline checks.
 | A2b | [#314](https://github.com/davidly/dcc/pull/314) (`fix/cluster-a2b-block-typing`) | split after first root fix | A2b-1 clears original 004, not 015; restored fuzzing finds 004 byte SSA facet (A2b-3); neither issue closes; D2d provenance is a sibling, not the same fix |
 | A2b-1 | [#314](https://github.com/davidly/dcc/pull/314) (`fix/cluster-a2b-block-typing`) | PR open; verified compiler gates; partial issues | Canonical repaired assignment reuses boolean-source widening contract; all original 004 lines pass; new host-proven tlogblk covers cleared facets, no partial reproducer promoted |
 | A2b-2 | | open | BUG-015 pointer-repair ordering, bit-field promotion, discarded signed cast, unary float and missing operand conversions; no second fix |
-| A2b-3 | | open; newly traced | BUG-004 byte local forwarded to untyped logical PHI after metadata repair; same-width 2/4-byte SSA guard excludes bytes; narrow logicbyteinit steering retained |
+| A2b-3 | [#329](https://github.com/davidly/dcc/pull/329) (`fix/cluster-a2b3-logical-byte`) | PR open; compiler gates verified; Python exceptions documented | BUG-004 promoted as tlogbyte; byte logical PHI retains its source type; restored integer 283 ok/14 INVALID/3 limit-only/zero FAIL; both 3,672-function existing censuses and all 544 existing perf rows unchanged |
 | A2c | [#318](https://github.com/davidly/dcc/pull/318) (`fix/cluster-a2c-block-type-resolution`) | draft PR; stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
