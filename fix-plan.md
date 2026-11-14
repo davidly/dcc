@@ -377,10 +377,63 @@ generator and line-debug tests pass, as do all ten debugger-host tests.
 | --- | --- | --- |
 | BUG-036 | #256 | 32-bit local assigned in a loop and passed directly to a call: store dropped, reloaded from a slot never written |
 
-Standalone. The call gets the constant but the store to the local is lost.
-Compare with C (merges/loop-carried values) and D (dead-store elimination)
-before starting; if it turns out to share a cause with one of them, fold it
-there rather than fixing independently.
+Confirmed independent of C/D: `mir_call_argument_cache_target_for_state()`
+scanned uses only after the definition, missing the earlier loop-header PHI
+whose backedge consumes that value after the call. Slot planning/emission
+therefore treated a loop-carried value as call-only, staged it on the argument
+stack or in alternate registers, and never initialised the spill home that the
+PHI edge later reloads. The named store is legitimately dropped for a promoted
+object; the lost SSA spill is the defect, not object dead-store elimination.
+
+Before changing the compiler, compared MIR/assembly for C's 023/027/029/037/
+038/052 and D's 021/024 (the width/value-rejection facets do not use this
+cache). Their failing kernels have no corresponding direct call-argument
+handoff. After the narrow PHI-use guard, all six C reproducers and all six D
+reproducers still fail identically; no out-of-cluster reproducer flips. This
+shares the general uninitialised-forward-home symptom of B3, but the fault is
+in call-cache planning, not repeated binary operands or fused operations.
+
+Initial proof: BUG-036 passes in both modes, all other 33 parked reproducers
+still fail, and all 3,436 existing functions are byte-identical in both strict
+MIR censuses. The expression/narrow-argument neighbours are unchanged. The
+same emitter now writes the needed four-byte spill before the call; no
+selector, schedule, profitability gate or fallback changes.
+
+Regression `tlpcall` adds the logged long/float facets and controls. Production
+seeds 1-300 after restoring `loopcallarg` / `floopcallarg`: integers **228 ok,
+72 INVALID, zero FAIL**; floats **288 ok, 12 INVALID, zero FAIL**. Both
+3,000-seed disabled-shape proofs pass. Only the measured new performance row
+is added; all 509 existing rows are unchanged. Strict full+extended stack and
+no-stack gates and the Python full+extended runner pass, as do new-app host
+validation and full mode in both stack modes. CMake MIR checks (6/6), host
+ASan/UBSan, require-emit and 38 focused compiler/generator/line-debug/
+entrypoint tests pass. Release/line-debug binaries match in both pipelines;
+full-debug runs retain local/frame metadata and correct output.
+
+The final censuses add only `tlpcall`'s 25 functions: all 3,436 existing
+rows remain byte-identical in both modes. Both final strict full+extended
+gates pass (549 apps: 525 pass, 24 existing skips), as does the promoted app's
+normal-stack performance validation. Its only new row is peep 556,423 cycles /
+8,960 bytes and nopeep 560,949 cycles / 9,344 bytes.
+
+The full Python gate runs 312 tests: the two approved #277 failures, two
+further timing-bound harness failures and five mutation scheduler errors
+(three timeouts, an associated `CMakeScratch` teardown race and a missing
+watchdog-child file), with two unchanged skips. These additional fixtures use
+synthetic compilers and byte-identical current-main scheduler scripts, not
+the dcc emitter. An isolated unchanged-current-main source fixture run passes
+four of the five affected cases and reproduces the serial/parallel fixture's
+180-second timeout; no compiler dating/build was involved. After the long
+jobs, the current branch's clobber harness and survivor/invalid-exit fixture
+pass (three tests), including #280's exit-139 control. The three remaining current-branch timeout/
+watchdog/nested-scope cleanup case retries pass as well. Thus only the
+serial/parallel timeout remains reproduced in the unchanged-main fixture;
+no full-suite green result is claimed.
+The CMake Debug debugger suite passes 9/10: its synthetic MI Ctrl-C fixture
+fails terminal-endpoint cleanup twice. The unchanged canonical optimized
+`dcc-debug-host` passes that same MI test; all compiler-generated debug
+fixtures pass. No harness, expectation, skip or old baseline was changed;
+no dating checks or prepush.ps1 were run.
 
 ### C. Assignments lost across control-flow merges and loop-carried values
 
@@ -766,7 +819,7 @@ so it matters more than its size suggests. Both are one-offs.
 | B2a | [#292](https://github.com/davidly/dcc/pull/292) | PR open | BUG-014 promoted as twincg; 300 integer seeds clean; 3,426 census functions and 507 perf rows unchanged; approved #277 failures only (#280 passes) |
 | B2b | | open | BUG-019 unreachable nested-scope metadata skips declaration replay; untouched |
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
-| B4 | | open | BUG-036; check overlap with C/D first |
+| B4 | `fix/cluster-b4-loop-store-call-arg` | fixed; PR pending | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
 | C | | open | |
 | D | | open | |
 | E | | open | |
