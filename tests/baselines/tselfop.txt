@@ -7,3 +7,12 @@
 3: square 729 twice 54 minus 0 equal 1 and 33
 3: global 10 condition 1 long 729 copied 729
 3: other operand 810 separated 729
+40800000
+40c00000
+0
+41100000
+6
+40c00000
+4f3e66a3
+47dcc780
+4f3e66a3
