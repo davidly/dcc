@@ -3204,7 +3204,8 @@ addresses require the normal full/line debug pipeline checks.
 ### F1. Exact-bit fixed-decimal rounding
 
 **Maintainer-approved runtime correctness and stdout/performance updates.**
-Branch `fix/cluster-f1-printf-rounding`, based on `8db72cbd`; closes BUG-060
+[PR #330](https://github.com/davidly/dcc/pull/330), branch
+`fix/cluster-f1-printf-rounding`, based on `8db72cbd`; closes BUG-060
 #322. Only `DCCRTL.MAC` changes toolchain behavior. No compiler or math-library
 function is changed. The old formatter added a rounded binary float half-unit
 before splitting, then repeatedly multiplied a rounded residual by ten. The
@@ -3888,7 +3889,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 
 | Cluster | Branch / PR | Status | Notes |
 | --- | --- | --- | --- |
-| F1 | `fix/cluster-f1-printf-rounding` | Runtime/release proof complete; known Python exceptions documented | BUG-060 promoted as tfpround; maintainer-approved 16 stdout lines/524 perf rows, no cycle increase or image growth; formatter -2 bytes; both 3672-function censuses identical |
+| F1 | [#330](https://github.com/davidly/dcc/pull/330) (`fix/cluster-f1-printf-rounding`) | PR open; runtime/release proof complete; known Python exceptions documented | BUG-060 promoted as tfpround; maintainer-approved 16 stdout lines/524 perf rows, no cycle increase or image growth; formatter -2 bytes; both 3672-function censuses identical |
 | N | [#312](https://github.com/davidly/dcc/pull/312) (`fix/cluster-n-float-array-else`) | PR open; release gates verified | BUG-055 promoted as tflidx; restored float 283 ok/17 INVALID/zero FAIL; both 3,574-function censuses and all 530 existing perf rows unchanged; #277 plus isolated harness retries documented |
 | A1 | [#281](https://github.com/davidly/dcc/pull/281) | merged | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
 | A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |

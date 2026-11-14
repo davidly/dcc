@@ -409,6 +409,8 @@ if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
 
 ### BUG-060 — exact-bit fixed-decimal rounding
 
+Fixed in [PR #330](https://github.com/davidly/dcc/pull/330).
+
 The `%f` formatter added a single-precision `0.5 * 10^-precision` before
 splitting the integer/fraction, then repeatedly multiplied the residual by ten
 in float. Both stages rounded binary intermediates, so the final decimal digit
