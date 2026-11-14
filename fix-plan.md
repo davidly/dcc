@@ -9,7 +9,7 @@ fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), B1 (#286),
-K (#278), L (#279) and F are confirmed and fixed. B3 confirms the common
+K (#278), L (#279) and F (#296) are confirmed and fixed. B3 confirms the common
 forwarded-operand defect in BUG-026 and the formerly E-grouped BUG-017. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
 B was likewise disproved and split into B1–B4. I was disproved and split
@@ -800,7 +800,7 @@ so it matters more than its size suggests. Both are one-offs.
 | C | | open | |
 | D | | open | |
 | E | | open | |
-| F | `fix/cluster-f-compound-lvalues` | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
+| F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | | open | |
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
