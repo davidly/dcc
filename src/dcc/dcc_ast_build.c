@@ -128,6 +128,23 @@ int ast_call_result_type(const struct AstNode *n)
     return n != NULL && n->type != 0 ? n->type : TYPE_INT;
 }
 
+static int ast_promoted_operand_type(const struct AstNode *n)
+{
+    int type = n != NULL && n->type != 0
+        ? n->type : ast_expr_type_for_sizeof(n);
+
+    if (n != NULL && n->kind == AST_MEMBER) {
+        struct FieldDef *field = ast_member_field_for_sizeof(n);
+        /* A signed bit-field, and an unsigned bit-field whose complete range
+         * fits in the target's 16-bit signed int, promotes to int.  An
+         * explicit cast is an AST_CAST and deliberately bypasses this rule. */
+        if (field != NULL && field->bit_width > 0 &&
+            (!(field->type & TYPE_UNSIGNED) || field->bit_width <= 15))
+            return TYPE_INT;
+    }
+    return promote_int_type(type);
+}
+
 int ast_expr_type_for_sizeof(const struct AstNode *n)
 {
     struct Sym *s;
@@ -213,6 +230,8 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
             return type_add_ptr(lt);
         if (n->op == '!')
             return TYPE_INT;
+        if (n->op == '-' || n->op == '~' || n->op == '+')
+            return ast_promoted_operand_type(n->a);
         return promote_int_type(lt);
     case AST_POSTFIX:
         return ast_expr_type_for_sizeof(n->a);
@@ -229,7 +248,7 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
             n->op == TOK_EQ || n->op == TOK_NE)
             return TYPE_INT;
         if (n->op == TOK_SHL || n->op == TOK_SHR)
-            return promote_int_type(lt);
+            return ast_promoted_operand_type(n->a);
 
         lhs_pointer = type_ptr_depth(lt) > 0 ||
                       ast_expr_is_array_decay(n->a) ||
@@ -249,7 +268,8 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
                 return type_add_ptr(rt);
             return type_ptr_depth(rt) > 0 ? rt : type_add_ptr(rt);
         }
-        return common_arith_type(lt, rt);
+        return common_arith_type(ast_promoted_operand_type(n->a),
+                                 ast_promoted_operand_type(n->b));
     }
     case AST_LOGAND:
     case AST_LOGOR:
@@ -265,7 +285,8 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
             return lt;
         if (type_ptr_depth(rt) > 0)
             return rt;
-        return common_arith_type(lt, rt);
+        return common_arith_type(ast_promoted_operand_type(n->b),
+                                 ast_promoted_operand_type(n->c));
     case AST_COMMA:
         return ast_expr_type_for_sizeof(n->b);
     case AST_CALL:
@@ -837,23 +858,6 @@ static int ast_types_deferred(const struct AstNode *n)
     return n->deferred_types || ast_expr_base_ident_unresolved(n);
 }
 
-static int ast_promoted_binary_operand_type(const struct AstNode *n)
-{
-    int type = n != NULL && n->type != 0
-        ? n->type : ast_expr_type_for_sizeof(n);
-
-    if (n != NULL && n->kind == AST_MEMBER) {
-        struct FieldDef *field = ast_member_field_for_sizeof(n);
-        /* A signed bit-field, and an unsigned bit-field whose complete range
-         * fits in the target's 16-bit signed int, promotes to int.  An
-         * explicit cast is an AST_CAST and deliberately bypasses this rule. */
-        if (field != NULL && field->bit_width > 0 &&
-            (!(field->type & TYPE_UNSIGNED) || field->bit_width <= 15))
-            return TYPE_INT;
-    }
-    return promote_int_type(type);
-}
-
 static int ast_binary_operand_is_bitfield(const struct AstNode *n)
 {
     struct FieldDef *field;
@@ -898,8 +902,8 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
             lhs = ast_binary(ar, AST_BINARY, k, lhs, rhs, 0);
             lhs->peek_type = peek;
             lhs->type = ast_expr_type_for_sizeof(lhs);
-            left_type = ast_promoted_binary_operand_type(lhs->a);
-            right_type = ast_promoted_binary_operand_type(lhs->b);
+            left_type = ast_promoted_operand_type(lhs->a);
+            right_type = ast_promoted_operand_type(lhs->b);
             if (k == TOK_SHL || k == TOK_SHR)
                 lhs->operand_type = left_type;
             else

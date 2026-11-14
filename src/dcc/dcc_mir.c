@@ -1741,6 +1741,20 @@ static void mir_type_untyped_widened_value(int value, int target_type)
         definition->type = TYPE_INT;
 }
 
+static int mir_promoted_operand_type(const struct MirInsn *source)
+{
+    int type = source != NULL ? source->type : 0;
+
+    /* Keep the load's declared signedness for extraction. Only its arithmetic
+     * consumer sees the bit-field's range-based integer promotion; casts have
+     * their own unary value and deliberately do not inherit the field width. */
+    if (source != NULL && source->opcode == MIR_LOAD_INDIRECT &&
+        source->bit_width > 0 && type != 0 && type_ptr_depth(type) == 0 &&
+        (!(type & TYPE_UNSIGNED) || source->bit_width <= 15))
+        return TYPE_INT;
+    return promote_int_type(type);
+}
+
 static int mir_lower_conversion(int value, int target_type)
 {
     struct MirInsn *definition;
@@ -8685,7 +8699,7 @@ void mir_resolve_deferred_metadata(void)
                     if (source == NULL || type_ptr_depth(source->type) != 0 ||
                         type_is_float(source->type))
                         continue;
-                    repaired_type = promote_int_type(source->type);
+                    repaired_type = mir_promoted_operand_type(source);
                     if (insn->type != repaired_type) {
                         insn->type = repaired_type;
                         changed = 1;
@@ -8724,10 +8738,10 @@ void mir_resolve_deferred_metadata(void)
                         left->type = TYPE_INT;
                     if (right->opcode == MIR_PHI && right->type == 0)
                         right->type = TYPE_INT;
-                    left_type = promote_int_type(
-                        left->type != 0 ? left->type : TYPE_INT);
-                    right_type = promote_int_type(
-                        right->type != 0 ? right->type : TYPE_INT);
+                    left_type = left->type != 0
+                        ? mir_promoted_operand_type(left) : TYPE_INT;
+                    right_type = right->type != 0
+                        ? mir_promoted_operand_type(right) : TYPE_INT;
                     operand_type =
                         insn->immediate == TOK_SHL || insn->immediate == TOK_SHR
                             ? left_type
@@ -8805,10 +8819,10 @@ void mir_resolve_deferred_metadata(void)
                     if (right_source->opcode == MIR_PHI && right_source->type == 0)
                         right_source->type = TYPE_INT;
                     repaired_type = common_arith_type(
-                        promote_int_type(left_source->type != 0
-                                             ? left_source->type : TYPE_INT),
-                        promote_int_type(right_source->type != 0
-                                             ? right_source->type : TYPE_INT));
+                        left_source->type != 0
+                            ? mir_promoted_operand_type(left_source) : TYPE_INT,
+                        right_source->type != 0
+                            ? mir_promoted_operand_type(right_source) : TYPE_INT);
                     if (insn->type != repaired_type) {
                         insn->type = repaired_type;
                         left->type = repaired_type;

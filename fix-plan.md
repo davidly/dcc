@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has nineteen open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has eighteen open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -987,8 +987,42 @@ compound shifts lack promoted-left computation and a distinct narrowed result;
 BUG-028 additionally exposes the count-driven repair. That grouping is traced,
 not implementation-proven: no second fix or E2 experiment was attempted.
 
-No E2 implementation is included. All five complete reproducers still fail,
-and their generator `KNOWN_BUGS` entries remain enabled.
+The maintainer pre-approved **E2-bitfield** (BUG-013/#233 and BUG-006/#226)
+as two independent, separately accepted single-bug commits in one PR, with a
+stop rule per bug. BUG-002/028 remain a separate byte-shift workstream; neither
+is changed here. BUG-004's repaired boolean conversion remains in A2b.
+
+BUG-013's AST-only repair clears its parked program but restored integer seed
+23 exposes the same lost field-range promotion in scoped MIR metadata repair:
+`-3 > sign * (block_byte + unsigned_one_bit_field)` becomes an unsigned
+comparison. Unary and deferred conditional repair also read raw field types.
+Preserve the declared unsigned extraction type and apply field-range promotion
+only at arithmetic consumers; explicit casts keep their own MIR unary view.
+The seed now passes in all production modes and both 3,545-function censuses
+remain unchanged. An earlier experiment promoting operands before array/pointer
+decay changed four existing apps and was rejected; pointer decisions retain
+raw object types and only arithmetic consumers use the promotion helper.
+
+BUG-013 is accepted and promoted as `tbfexpr`: before promotion 2 FIXED /
+17 fails (BUG-022's known fixture-only pass is unchanged); 300 integer seeds
+with restored `bfpromo` give 297 ok / 1 INVALID / 2 target limits (82/178),
+zero FAIL. Both 3,545-function censuses and all 526 incumbent performance rows
+are unchanged. Strict Python and PowerShell full+extended stack/no-stack,
+focused metadata, release-identical `-gline`, full-debug, require-emit,
+six host MIR and ten debugger-host checks pass. BUG-006 remains independent.
+
+The first regular Python gate ran 327 tests: eight failures, four errors,
+two existing skips. Two failures are the approved #277 campaign baseline/exact
+control failures. Nine unique synthetic-harness tests failed under load:
+mutation scheduler equality, exited-worker cleanup, survivor/invalid-result
+classification (plus its cleanup error), clobber lifecycle, watchdog cleanup,
+and four process-supervision deadline/pipe/cleanup checks. Isolated retries pass six of the nine tests (clobber lifecycle, watchdog and
+all four supervision checks). Three mutation-harness checks remain unverified:
+scheduler equality and survivor/invalid classification each time out at the
+unchanged 180-second fixture deadline (the latter also races cleanup), and
+exited-worker cleanup still cannot find its expected watchdog-child file.
+These are documented harness exceptions, not compiler failures; no fixture,
+assertion, timeout, expected result or skip was changed.
 
 ### F. Compound assignment to complex lvalues
 
@@ -1536,7 +1570,8 @@ so it matters more than its size suggests. Both are one-offs.
 | D2c | [#305](https://github.com/davidly/dcc/pull/305) (`fix/cluster-d2c-byte-phi-home`) | PR open; verified compiler gates | 024 promoted as tpost8; 266 ok/34 INVALID/zero FAIL; 3,503 existing functions and 519 perf rows unchanged; 24 parked reproducers all fail; approved #277 and four isolated harness failures documented |
 | E | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | split into E1 / E2 | Single SSA forwarding fix clears 016; 004 function facet and 015 word-widening facet improve, complete issues still open |
 | E1 | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | PR open; verified compiler gates; documented harness exceptions | 016 promoted as tinittyp; int 297/2/1 limit, float 281/19, zero FAIL; 3,509 functions and 520 perf rows unchanged; #277 and three isolated synthetic-fixture timing failures |
-| E2 | | open | 013 AST promotion; 006 field extraction type; 028 count-driven repair; 002 byte truncation; 004 repaired boolean conversion |
+| E2 | | split | 013/006 in E2-bitfield; 002/028 separate byte-shift workstream; 004 repaired boolean conversion remains in A2b |
+| E2-bitfield | `fix/cluster-e2-bitfield` | BUG-013 accepted; BUG-006 next | 013 promoted as tbfexpr; AST/scoped MIR promotion; 300 integer seeds clean; 3,545 existing functions and 526 performance rows unchanged |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1/G2 fixed | G1 clears 012; approved G2 fixes 033/040/042 independently |
 | G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |

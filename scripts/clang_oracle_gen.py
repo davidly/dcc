@@ -1431,7 +1431,6 @@ KNOWN_BUGS = {
     'logicinit': 'BUG-004',
     'bfdivasg': 'BUG-006',
     'nestedwideless': 'BUG-009',
-    'bfpromo': 'BUG-013',
     'blockptr': 'BUG-015',
     'widehelperparam': 'BUG-020',
     'duplabel': 'BUG-022',
