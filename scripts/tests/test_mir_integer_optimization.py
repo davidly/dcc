@@ -34,6 +34,49 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_dead_scopes_compile_with_debug_and_vla_metadata(self):
+        cases = (
+            "if (sel) { return 1; { int b = 1; out += b; } } return 0;",
+            "if (sel) { return 1; for (unsigned char k = 3; k < 5; ++k) out++; } return 0;",
+            "while (sel) { break; { int b = 1; out += b; } } return 0;",
+            "if (sel) { goto end; if (sel) { int b = 1; out += b; } } end: return 0;",
+            "while (sel) { if (7) continue; { int n = sel + 1; int a[n]; a[0] = 1; } } return 0;",
+            "if (sel) { if (7) return 1; { int b = ++out; out += b; } } return 0;",
+            "if (sel) { return 1; int b = 1; out += b; return b; } return 0;",
+            "if (sel) { if ((int)(-1.0f)) return 1; { float b = 1.0f; out++; } } return 0;",
+        )
+        for body in cases:
+            source = "int sel, out; int probe(void) { " + body + " }"
+            release = self.code(self.compile(source))
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(body=body, options=options):
+                    actual = self.code(self.compile(source, options))
+                    if options == ("-gline",):
+                        self.assertEqual(actual, release)
+
+    def test_dead_scope_keeps_label_reentry_and_vla_diagnostics(self):
+        source = ("int out; int probe(void) { { goto entry; return 0; "
+                  "{ int b; entry: b = 7; out = b; } } return out; }")
+        release = self.code(self.compile(source))
+        for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+            with self.subTest(options=options):
+                actual = self.code(self.compile(source, options))
+                if options == ("-gline",):
+                    self.assertEqual(actual, release)
+        invalid = ("int probe(int n) { { goto entry; return 0; "
+                   "{ int a[n]; entry: a[0] = 7; } } return 0; }")
+        with tempfile.TemporaryDirectory(dir=ROOT / "build", prefix="dead-vla-") as directory:
+            path = Path(directory)
+            source_path = path / "probe.c"
+            source_path.write_text(invalid, encoding="ascii")
+            result = subprocess.run(
+                [str(ROOT / "dcc"), "-I", str(ROOT), str(source_path),
+                 "-o", str(path / "PROBE.MAC")],
+                env=ENV, capture_output=True, text=True, timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("goto into a variable-length array scope", result.stderr)
+
     def test_integer_compound_lvalues_match_expanded_assignment(self):
         cases = (
             ("struct S { unsigned char b[4]; } s;", "s.b[2]", "^", "1"),

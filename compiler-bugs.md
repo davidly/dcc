@@ -32,7 +32,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
-| [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
 | [BUG-021](#bug-021) | #241 | wrong result | `x++`/`x--` yields the new value for a 16-bit local assigned from a local array element |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
@@ -52,13 +51,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 
-Twenty-seven are open: seventeen give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, eight stop the compile,
+Twenty-six are open: seventeen give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, seven stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-013 and BUG-016.
 
-Twenty-six reported bugs are fixed: [one in cluster K2](#fixed-in-cluster-k2),
+Twenty-seven reported bugs are fixed: [one in cluster B2b](#fixed-in-cluster-b2b),
+[one in cluster K2](#fixed-in-cluster-k2),
 [two in cluster D1](#fixed-in-cluster-d1),
 [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
@@ -345,40 +345,6 @@ r = x / l;               /* uint16_t x = 50000: want -16666, dcc 0 */
   Right: `int32_t t; t = (int32_t)gu;` or `(float)(t + 0)`. Found by
   fuzzing (float generator, seed 3792).
 
-## BUG-019
-
-**A declaration in a nested scope that is unreachable because a `return`,
-`break` or `goto` precedes it in the same block stops the compile.**
-`dcc: fatal: MIR emission is required`. The declaration can be a block-local
-or a `for` initialiser.
-
-```c
-if (sel) {
-    return 1;
-    { int16_t b = 1; low += b; }             /* unreachable block with a declaration */
-}
-if (sel) {
-    return 2;
-    for (uint8_t k = 3; k < 5; ++k) low++;   /* unreachable for-init declaration */
-}
-```
-
-- Fails after `return`, `break` and `goto`, inside `if`, `else`, `for`,
-  `while` and `switch` bodies.
-- It also fails when the jump is conditional on a constant that is true,
-  which leaves the same code unreachable: `if (7) break;`, `if (1) return 5;`,
-  `if ((0 + 7) >= (-128)) continue;`, `if (0) { } else { break; }`.
-- Accepted: the same dead code at function scope (not inside a nested
-  block); dead code with no declaration (`return 1; { low += 1; }`); a
-  `for` loop whose counter is declared at function scope; a conditional jump
-  on a variable (`if (sel) continue;`, `if (1 || sel) break;`).
-- The constant may be a folded cast: `if ((int16_t)(-1.0f)) { return 1; }`
-  or `if ((int16_t)((int32_t)1000)) { return 1.0f; }` followed by `{ float
-  b = 1.0f; }` in the same block is fatal. Found by fuzzing (float
-  generator, seed 1957).
-- Dead code like this is rare in hand-written programs, so this is low
-  priority; it is still valid C.
-
 ## BUG-020
 
 **After a `switch` statement, a relational comparison between a variable and
@@ -485,6 +451,10 @@ the program fails at run time.
   `missing direct MIR named-home offset` (BUG-014) still stop the compile.
 - This only matters while some function cannot be emitted, but then it turns
   a compile error into a silently broken program.
+- Its historical parked program now passes after BUG-008/019 were fixed.
+  This does not close BUG-022: the same reused-label prefix before a BUG-020
+  failing function still exits zero with empty function bodies. Steering and
+  the historical reproducer are retained for the separate diagnostic fix.
 
 ## BUG-023
 
@@ -960,6 +930,90 @@ in-range float-to-`int32_t` conversion and retains the failing context.
   constant-index and other indexed stores remain enabled.
 
 ---
+
+## Fixed in cluster B2b
+
+BUG-019 passes in peep/nopeep and stack/no-stack modes. MIR retained dead
+nested declarations while metadata skipped their replay. Replay dead-child
+metadata under assembly suppression, and neutralize instructions from
+provably dead support probes, including VLA-bound side effects whose probe
+and replay names differ. Lowering and emitters remain unchanged; labels,
+declaration diagnostics, frame/VLA accounting and debug replay stay intact.
+
+Integer production seeds 1-300 give **220 ok, 79 INVALID, one target-limit-only,
+zero FAIL**; float production seeds 1-300 give **281 ok, 19 INVALID, zero FAIL**.
+`constjump` and `fconstjump` are restored. The reproducer is promoted as
+`tdeadblk`, with additional constant/continue exits, scalar/VLA-bound side
+effects, nested/for label re-entry and declarations before later labels. Its
+new baseline agrees with host clang at O0/O2 and under ASan/UBSan.
+
+Both censuses preserve all **3,489 existing functions byte-identically**.
+Strict full+extended stack/no-stack gates pass. All **517 existing performance
+rows are unchanged**; only `tdeadblk` adds a normal-stack measured row.
+Its live return path matches the accepted no-dead-tail control in both modes;
+unreachable MIR instructions remain in generated output (the dead scalar
+add is three bytes larger than a literal-increment control). This costs no
+existing program and no cycles on that return path.
+
+Focused debug/MIR Python tests, full-debug and release-identical `-gline`
+reproducer pipelines, require-emit, 73 peephole fixtures, six sanitized MIR
+host tests and debugger-host checks pass. The loaded debugger MI test's
+terminal-endpoint cleanup assertion passes when retried alone. The regular
+Python gate completed 319 tests with four failures, five errors and two
+existing skips: two failures are approved #277; the others are loaded
+mutation-harness timeout/cleanup failures. Unchanged fixtures pass 13/14
+when retried alone with Ninja; the mock serial/parallel scheduler equality
+test still times out, including a final single-test retry. That harness
+check remains unverified; no expectation, timeout or skip was changed.
+
+Before promotion: 27 reproducers, 2 `FIXED`, 25 `fails`. BUG-022's historical
+program also passes because both its BUG-008/019 failing-function triggers
+are gone, **not because diagnostic masking was fixed**: the same label prefix
+still hides a BUG-020 emission failure. BUG-022/#242 remains open, steered
+and unpromoted; after this promotion 26 parked reproducers remain (25 `fails`,
+one reproducer-only `FIXED`).
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-019](#bug-019) | #239 | [tdeadblk](tests/tdeadblk.c) |
+
+### BUG-019
+
+**Fixed:** suppressed dead-child metadata replay and dead support-probe
+neutralization. Regression: [tdeadblk.c](tests/tdeadblk.c),
+[baseline](tests/baselines/tdeadblk.txt).
+
+**A declaration in a nested scope that is unreachable because a `return`,
+`break` or `goto` precedes it in the same block stops the compile.**
+`dcc: fatal: MIR emission is required`. The declaration can be a block-local
+or a `for` initialiser.
+
+```c
+if (sel) {
+    return 1;
+    { int16_t b = 1; low += b; }             /* unreachable block with a declaration */
+}
+if (sel) {
+    return 2;
+    for (uint8_t k = 3; k < 5; ++k) low++;   /* unreachable for-init declaration */
+}
+```
+
+- Fails after `return`, `break` and `goto`, inside `if`, `else`, `for`,
+  `while` and `switch` bodies.
+- It also fails when the jump is conditional on a constant that is true,
+  which leaves the same code unreachable: `if (7) break;`, `if (1) return 5;`,
+  `if ((0 + 7) >= (-128)) continue;`, `if (0) { } else { break; }`.
+- Accepted: the same dead code at function scope (not inside a nested
+  block); dead code with no declaration (`return 1; { low += 1; }`); a
+  `for` loop whose counter is declared at function scope; a conditional jump
+  on a variable (`if (sel) continue;`, `if (1 || sel) break;`).
+- The constant may be a folded cast: `if ((int16_t)(-1.0f)) { return 1; }`
+  or `if ((int16_t)((int32_t)1000)) { return 1.0f; }` followed by `{ float
+  b = 1.0f; }` in the same block is fatal. Found by fuzzing (float
+  generator, seed 1957).
+- Dead code like this is rare in hand-written programs, so this is low
+  priority; it is still valid C.
 
 ## Fixed in cluster K2
 

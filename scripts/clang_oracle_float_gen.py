@@ -62,7 +62,6 @@ KNOWN_BUGS = {
     'fparamcmp': 'BUG-020',
     'fblockint': 'BUG-015',
     'finittype': 'BUG-016',
-    'fconstjump': 'BUG-019',
     'fconstcond': 'BUG-052',
     'farrloopindex': 'BUG-055',
 }

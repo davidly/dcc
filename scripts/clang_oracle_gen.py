@@ -1440,7 +1440,6 @@ KNOWN_BUGS = {
     'postincvalue': 'BUG-021, BUG-023, BUG-024',
     'duplabel': 'BUG-022',
     'crosstypeasg': 'BUG-023',
-    'constjump': 'BUG-019',
     'nestedifelse': 'BUG-027',
     'bytesarcount': 'BUG-028',
     'bytearm': 'BUG-029',

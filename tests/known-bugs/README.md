@@ -9,6 +9,10 @@ kept out of `tests/*.c` so the regression suite (`scripts/runall.py`,
 `baselines/bugNNN.txt` is the output the program should print. It is the host
 compiler's output, not dcc's.
 
+BUG-022 remains open, but its historical reproducer now passes because its
+BUG-008/BUG-019 emission-failure triggers were fixed. The diagnostic-masking
+defect still reproduces with another failing function; see its bug-log entry.
+
 ## Checking them
 
 ```sh
@@ -45,8 +49,8 @@ test:
 `tests/tfltret.c`, `tests/tflucast.c`, `tests/tflscast.c`,
 `tests/tandself.c`, `tests/tselfop.c`, `tests/tflmadd.c`, `tests/tflnot.c`,
 `tests/twincg.c`, `tests/tlpcall.c`, `tests/tconstun.c`, `tests/tcmbyte.c`,
-`tests/tcmwide.c`, `tests/tcmfloat.c`, `tests/tinc32a.c`, `tests/tflinc.c` and
-`tests/tpephl.c` were promoted this way.
+`tests/tcmwide.c`, `tests/tcmfloat.c`, `tests/tinc32a.c`, `tests/tflinc.c`,
+`tests/tpephl.c` and `tests/tdeadblk.c` were promoted this way.
 
 ## Adding one
 
