@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has thirty-six open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has thirty-five open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -17,7 +17,9 @@ with maintainer approval into I1 (return admission) and I2 (cast signedness);
 both are now fixed. Other remaining clusters are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
-explicitly approved K as a four-rule exception.
+explicitly approved K as a four-rule exception, and J2 as two independent
+fixes with narrowly specified existing-baseline exceptions. J2's numeric
+stdout refreshes still require independent host-clang proof.
 
 ## Rules
 
@@ -545,6 +547,73 @@ Cluster J investigation (`fix/cluster-j-float-arith`):
   mode. This needs explicit approval to update existing numeric
   expectations, not a narrower value-specific runtime patch.
 
+Cluster J2 investigation ([PR #291](https://github.com/davidly/dcc/pull/291),
+`fix/cluster-j2-float-neg-zero-fdiv` from `1a193976`;
+maintainer-approved independent fixes and baseline exception):
+
+- BUG-049: logical negation in the spilled emitter reduced all four raw
+  bytes, unlike float branches and bool casts, which mask the sign byte.
+  Using that same `and 127` test fixes negative zero without changing
+  integer negation or candidate selection. Both censuses compare **3,426
+  existing functions**: only `tctxflt:truth_not`, `tctxflt:truth_not_memb`
+  and `tnestfor:nz_float` differ, each by exactly one `and 127`. Removing
+  that instruction from each selected stream reproduces its before-census
+  hash, in both stack modes. The approved stack-check performance updates
+  are `tctxflt` 365581/371984 -> 365602/372005 and `tnestfor`
+  146931/182071 -> 146959/182099 (peep/nopeep); linked sizes are unchanged.
+- Before promotion, BUG-049 alone flips: **1 FIXED, 35 fails**, including
+  BUG-039 still failing. Restored `fnegzero_not` float seeds 1-300 in both
+  production modes give **269 ok, 31 INVALID, zero FAIL**. It is promoted
+  as `tflnot` with a new stack-check performance row and host-proven
+  baseline; no existing stdout baseline changes.
+- BUG-039 remains **blocked by the new host-output proof requirement**,
+  not by the unchanged-output rule. The smallest restoring-step experiment
+  adds a 25th division iteration for an unnormalized quotient before
+  rounding, reusing `FDLUP` and eliminating the post-round normalizer.
+  It fixes all 404 parked outputs, and a linked probe explicitly calling
+  both `__fdf` and stack-ABI `__fdiv` matches 808 host output lines in each
+  mode (404 quotients through each ABI). Both runtime audits pass.
+- All five predicted runtime stdout changes occur in both modes, but none
+  of their complete replacement baselines can be proved by host clang.
+  For example, `tfdedge` would print `14.285715` and `-5.666666`; clang
+  prints `14.285714` and `-5.666667` with the identical `%f` formats and
+  float arithmetic, at `-O0`, `-O2` and under ASan/UBSan. This also exposes
+  dcc's independent float-formatting differences. `trig` still differs
+  through approximate runtime math (`tanf(1)` 1.557448 vs host 1.557408).
+  `tstrb11`'s integer cancellation becomes 3f800002, while host parsing
+  gives 3f800000, and its target-only flush-to-zero/errno expectations
+  differ. `ttrg6sp`'s new half-pi tangent CBAE8A4B differs from host
+  CBAE8A4A, as do its intentional target cutoff checks. Host `ttrig`
+  builds after merely renaming its conflicting local math functions;
+  its changed tangent lines agree, but its complete stdout still differs
+  in other formatted values. Host probes retain single-precision float
+  expressions and the original printf formats; the parsing union is
+  narrowed to 32 bits for host portability. No baseline is refreshed.
+- The runtime experiment was reverted and both runtime audits rerun;
+  `DCCRTL.MAC`, BUG-039's reproducer, `fdivround`, division-user perf rows,
+  and all existing stdout baselines remain unchanged. Deliver BUG-049
+  independently; BUG-039 needs a separate policy for target-specific
+  numeric tests/formatting, not a value-specific divider patch.
+
+J2 acceptance: after promotion, **35 reproducers, 35 fails**. Strict
+full+extended stack and no-stack gates each pass **523 apps**, with 24
+existing skips, diagnostics, optimizer fixtures and the extended suite
+passing. The final censuses add only `tflnot:main` beyond the three
+approved existing-function deltas. The new `tflnot` stack-check row is
+37352/37758 cycles and 5632/5760 COM bytes (peep/nopeep); host baseline
+validation passes. Release, `-gline` and full `-g` pipelines pass in both
+peep modes; release/`-gline` COM files are identical, and all 10 debugger
+host tests pass. Canonical and independent CMake builds pass.
+
+The Python gate runs 312 tests with **2 failures, 2 errors and 2 existing
+skips**: the known campaign/exact-control failures (#277), the known
+exit-worker cleanup fixture error (#280), plus a 180-second serial
+mutation-fixture timeout. The latter reproduces in isolation and with
+unchanged `1a193976` scripts archived under this worktree's `build/`:
+only its tiny fake-tool scheduler fixture is rebuilt, not an older dcc.
+No failing test is fixed, skipped or refreshed; the full Python gate
+remains red. No prepush or compiler regression-dating check is run.
+
 ### K. dccpeep
 
 | Bug | Issue | Shape |
@@ -649,7 +718,8 @@ so it matters more than its size suggests. Both are one-offs.
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |
-| J | [#290](https://github.com/davidly/dcc/pull/290) | PR open; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; 3,394 existing census functions and 504 perf rows unchanged; 049/039 parked under the output rule |
+| J | [#290](https://github.com/davidly/dcc/pull/290) | merged; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; existing output unchanged; 049 fixed in J2, 039 still blocked by host-output proof |
+| J2 | [#291](https://github.com/davidly/dcc/pull/291) | PR open; partial fix | 049 promoted as tflnot; 300 float seeds 269 ok/31 INVALID/zero FAIL; only three one-instruction census changes and two approved perf rows; 039 reverted because all five complete numeric baselines fail host-clang proof |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | K2 | | open | BUG-054/#288 independently found during B3; live HL lost by deferred global reload |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |

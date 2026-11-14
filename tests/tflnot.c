@@ -1,7 +1,6 @@
-/* BUG-049: `!f` is 0 when the float f is negative zero; it should be 1.
- * The truth test in `if (f)`, `f ? :`, `&&`, `||` and the comparison
- * `f == 0.0f` all treat -0.0f as zero correctly; only `!` looks at the
- * raw bits. -0.0f arises from `-(float)0`, `0.0f * -1.0f` and similar. */
+/* Floating logical negation returns true for both signs of zero.
+ * Cover zeros produced by conversion/negation, a literal and multiplication,
+ * plus the neighboring branch, ternary, logical and equality truth tests. */
 #include <stdio.h>
 #include <stdint.h>
 
