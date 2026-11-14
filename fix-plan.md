@@ -856,7 +856,8 @@ Found while verifying B3, integer seed 255; independently reproduced on
 unchanged current main in peep and peep-nosc, with nopeep correct. This was
 parked separately from B3's compiler repair.
 
-Fixed on `fix/cluster-k3-peep-live-reg`. Deferral now proves that the original
+Fixed on `fix/cluster-k3-peep-live-reg`, with acceptance PR
+[#298](https://github.com/davidly/dcc/pull/298). Deferral now proves that the original
 H and L are dead after the removed push, including beyond the matching pop.
 The shared CFG proof alone conservatively rejected `tcaslv`'s safe split
 sign extension because accumulator rotates are opaque there; a local
@@ -967,7 +968,7 @@ so it matters more than its size suggests. Both are one-offs.
 | J | [#290](https://github.com/davidly/dcc/pull/290) | merged; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; existing output unchanged; 049 fixed in J2, 039 still blocked by host-output proof |
 | J2 | [#291](https://github.com/davidly/dcc/pull/291) | PR open; partial fix | 049 promoted as tflnot; 300 float seeds 269 ok/31 INVALID/zero FAIL; only three one-instruction census changes and two approved perf rows; 039 reverted because all five complete numeric baselines fail host-clang proof |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
-| K2 | `fix/cluster-k3-peep-live-reg` | verified; PR pending | BUG-054 promoted as tpephl; 228 ok/72 INVALID/zero FAIL; all 3,047 MAC files per stack mode and 514 existing perf rows unchanged (except clock literal); #277 and isolated harness retries documented |
+| K2 | [#298](https://github.com/davidly/dcc/pull/298) | PR open | BUG-054 promoted as tpephl; 228 ok/72 INVALID/zero FAIL; all 3,047 MAC files per stack mode and 514 existing perf rows unchanged (except clock literal); #277 and isolated harness retries documented |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
 | M | | open | |
 
