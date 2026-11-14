@@ -1,10 +1,6 @@
-/* BUG-047: `f + (x * y)`, a float plus a product, drops the product (the
- * result is just `f`) when the left factor x is an integer, or when the
- * right factor y is a local or parameter and x is a global, array element,
- * struct member or sub-expression. `-` and `*` in place of the outer `+`,
- * the product on the left (`(x * y) + f`), or a local/param/constant left
- * factor with any right factor are fine. Compound `f += x * y` is affected
- * too. */
+/* Float multiply-add operand preservation across fused MIR emission.
+ * Covers integer conversions and global, local, parameter, array and
+ * sub-expression factors, plus += and correctly ordered controls. */
 #include <stdio.h>
 #include <stdint.h>
 
@@ -43,7 +39,7 @@ int main(void)
         float l1 = 3.0f;
         printf("%08lx\n", bits(fg + (fv * l1)));             /* 10: 41200000 */
         printf("%08lx\n", bits(fg + (fv * l1 * l1)));        /* 28: 41e00000 */
-        printf("%08lx\n", bits(fg + ((fv + 0.0f) * l1)));    /* 10, dcc gives -inf */
+        printf("%08lx\n", bits(fg + ((fv + 0.0f) * l1)));    /* 10 */
         printf("%08lx\n", bits(t(3.0f)));                    /* 20: 41a00000 */
         printf("%08lx\n", bits(fg + (l1 * fv)));             /* 10 (right) */
     }
