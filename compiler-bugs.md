@@ -31,7 +31,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-010](#bug-010) | #230 | rejects valid C | Cast or narrowing return of a 32-bit post-increment or post-decrement |
 | [BUG-011](#bug-011) | #231 | rejects valid C | Compound assignment to an element of a byte array inside a struct |
-| [BUG-012](#bug-012) | #232 | rejects valid C | Unary `-` or `~` applied to `!`, `&&` or `\|\|` of constants |
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
@@ -58,14 +57,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 
-Thirty-three are open: nineteen give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, twelve stop the compile,
+Thirty-two are open: nineteen give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, eleven stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Nineteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Twenty reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [one in cluster B2a](#fixed-in-cluster-b2a),
@@ -74,7 +73,8 @@ Nineteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [four in cluster K](#fixed-in-cluster-k),
 [one in cluster L](#fixed-in-cluster-l),
 [one in cluster I1](#fixed-in-cluster-i1),
-[two in cluster I2](#fixed-in-cluster-i2) and
+[two in cluster I2](#fixed-in-cluster-i2),
+[one in cluster G1](#fixed-in-cluster-g1) and
 [two in cluster J](#fixed-in-cluster-j). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -238,27 +238,6 @@ p->name[i] |= 0x80;
   an array of structs.
 - Accepted: `s.b[2] = s.b[2] ^ 1`; `s.b[2]++`; a byte array that is not a
   struct member; a 16-bit array member.
-
-## BUG-012
-
-**Unary `-` or `~` applied to `!`, `&&` or `||` of constants is rejected.**
-`DCC-E1002`.
-
-```c
-r = -(!(-128));
-r = ~(!15);
-r = -(!0);
-r = ~(1 || 2);
-if (n > (~(1 && 2))) r = 1;
-```
-
-- Accepted: `-(!p)`, `~(!p)` and `~(p || 2)` with a variable;
-  `r = !(-128); r = -r;`; `~(3 > 2)`; `!(1 || 2)`; `(1 || 2) + 1`.
-- Two unary operators over a constant binary expression are rejected the
-  same way: `~(-(7 >> 13))`, `-(~(7 >> 13))`, `-(-(7 >> 13))`,
-  `~(+(7 >> 13))`, `~(-(8 - 8))`, `~(-(1 > 2))`. One unary operator
-  (`~(7 >> 13)`), two over a literal (`~(-5)`) and a variable inside
-  (`~(-(n >> 13))`) are accepted.
 
 ## BUG-013
 
@@ -1099,6 +1078,73 @@ uint32_t sub(int8_t p)
 - Steered by `peepbyteself`: non-logical byte binary self-operands
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
+
+## Fixed in cluster G1
+
+BUG-012's constant logical and nested-binary unary forms now pass in both
+peep and nopeep. The front-end support gate applied its existing scalar
+foldability proof only to `!`, then rejected other unary operators whose
+operands were structurally constant. Admit `-`, `+` and `~` with the same
+proof; MIR already lowers and folds them correctly, so neither the constant
+evaluator nor any MIR/emitter/runtime code changes. The original two
+functions emit byte-identically to their accepted literal neighbors in both
+pipelines, with no added instructions or frame cost.
+
+The first fix flips only BUG-012 (**1 FIXED, 33 fails** before promotion).
+Per the approved stop rule, cluster G is split into G1 (BUG-012 fixed) and
+G2 (BUG-033/040/042 still parked). G2 needs separate zero-divisor admission,
+static float token parsing, and floating-constant truth/folding work; its
+traces are in [fix-plan.md](fix-plan.md#g-constant-expressions-in-the-front-end).
+In particular, BUG-033 must retain the unevaluated division, not fabricate a
+constant result. No out-of-cluster reproducer flips.
+
+Integer `negnotconst` coverage is restored. Production seeds 1–300 give
+**216 ok, 82 INVALID, two target-limit-only, zero FAIL** across peep/nopeep
+and stack/no-stack; a 3,000-seed steering proof is also clean. `tconstun`
+promotes the original reproducer and adds constant `&&`/`||`, all six nested
+binary/unary facets, comparison, and variable/single-unary controls with
+host/sanitizer-proven stdout. Its new performance row is measured through
+normal-stack PowerShell runall: peep **94,472 cycles / 5,504 bytes**,
+nopeep **94,949 cycles / 5,760 bytes**.
+
+All **509 existing performance rows are unchanged**. Ordinary MIR census
+rows are byte-identical for all **3,436 existing functions in each mode**;
+the extended census also retains all **274 functions in each mode** (548
+rows), including hashes and metrics. Strict Python full+extended and both
+PowerShell stack/no-stack full+extended suites pass. The independent CMake
+compiler build, focused line-debug tests, new app host validation, and
+release-identical `-gline` bytes pass; full `-g` retains both named locals
+and their four-byte frame locations. Full Python/debugger results are
+recorded in the G1 acceptance notes in fix-plan.md.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-012](#bug-012) | #232 | [tconstun](tests/tconstun.c) |
+
+### BUG-012
+
+**Fixed:** admit integer unary expressions proved foldable by the existing
+scalar constant evaluator. Regression: [tconstun.c](tests/tconstun.c),
+[baseline](tests/baselines/tconstun.txt).
+
+**Unary `-` or `~` applied to `!`, `&&` or `||` of constants is rejected.**
+`DCC-E1002`.
+
+```c
+r = -(!(-128));
+r = ~(!15);
+r = -(!0);
+r = ~(1 || 2);
+if (n > (~(1 && 2))) r = 1;
+```
+
+- Accepted: `-(!p)`, `~(!p)` and `~(p || 2)` with a variable;
+  `r = !(-128); r = -r;`; `~(3 > 2)`; `!(1 || 2)`; `(1 || 2) + 1`.
+- Two unary operators over a constant binary expression are rejected the
+  same way: `~(-(7 >> 13))`, `-(~(7 >> 13))`, `-(-(7 >> 13))`,
+  `~(+(7 >> 13))`, `~(-(8 - 8))`, `~(-(1 > 2))`. One unary operator
+  (`~(7 >> 13)`), two over a literal (`~(-5)`) and a variable inside
+  (`~(-(n >> 13))`) are accepted.
 
 ## Fixed in cluster B2a
 

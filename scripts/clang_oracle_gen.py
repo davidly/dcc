@@ -1435,7 +1435,6 @@ KNOWN_BUGS = {
     'nestedwideless': 'BUG-009',
     'widepostinc': 'BUG-010',
     'structbytecasg': 'BUG-011',
-    'negnotconst': 'BUG-012',
     'bfpromo': 'BUG-013',
     'blockptr': 'BUG-015',
     'inittype': 'BUG-016',
