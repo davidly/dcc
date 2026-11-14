@@ -1,13 +1,13 @@
 # dcc compiler bugs
 
 Defects found by differential testing against the host C compiler (Apple
-clang). Every open entry except BUG-056/058 reproduces with a shipped configuration: no
+clang). Every open entry except BUG-056/059 reproduces with a shipped configuration: no
 diagnostic environment variables (some require `dccpeep`). BUG-056 and BUG-059 are latent
 wrong-code findings from withdrawn BUG-041 admission experiments; their parked
 sources remain rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `15db8e69` plus the cluster E2c bit-field compound extraction repair (2026-11-15).
+- **Compiler under test:** `8db72cbd` plus the cluster A3 word-interpretation repair (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -30,18 +30,18 @@ and their historical diagnoses are retained separately below.
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
-| [BUG-058](#bug-058) | #315 | wrong result | A nested-block word initialized across signedness is widened with the initializer type when stored to a 32-bit array |
 | [BUG-059](#bug-059) | #316 | latent wrong result | Deferred float update arithmetic lacks an implicit integer-to-float conversion after type repair |
 
 | [BUG-060](#bug-060) | #322 | wrong result | `%f` rounds exact IEEE float bits to an incorrect last decimal digit |
 | [BUG-061](#bug-061) | #323 | wrong result | `sizeof` at or above 32768 is sign-extended or divided as a signed 16-bit value |
 
-Eight are open: five give wrong results with no diagnostic,
+Seven are open: four give wrong results with no diagnostic,
 two latent wrong-code findings are blocked by
 BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
 promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Fifty-one reported bugs are fixed: [one in cluster R1](#fixed-in-cluster-r1),
+Fifty-two reported bugs are fixed: [one in cluster A3](#fixed-in-cluster-a3),
+[one in cluster R1](#fixed-in-cluster-r1),
 [two in cluster M-a](#fixed-in-cluster-m-a),
 [one in cluster C2a](#fixed-in-cluster-c2a),
 [two in cluster C1](#fixed-in-cluster-c1),
@@ -257,6 +257,16 @@ signed char l2 = -66;
   `b + ((int16_t)g16)` (32768, not -32768) and
   `(int16_t)((uint16_t)(1 << (g1 & 15)))` with `g1` at 15 (seed 6006). The
   `(int16_t)` of an unsigned 16-bit operand is lost.
+- **A3 clears only the explicit signed-word cast facet above:** the output
+  statements at `tests/known-bugs/bug015.c` lines **156–158** (`cast compare`,
+  `cast shift compare`, `cast sum`; expressions at lines 66, 77, 88) now pass
+  in peep and nopeep. Equal-width
+  casts are retained when a deferred binary implicitly widens their result,
+  using the same signedness-observing consumer proof as BUG-058. Host-proven
+  [tblkcast](tests/tblkcast.c) covers those three cases, unsigned interpretation,
+  operand order, word-only arithmetic and sign-boundary controls. The parked
+  thirteen-line reproducer is unchanged and still has five wrong lines
+  (152–154, 162–163); #235 stays open, with all BUG-015 steering retained.
 - A nested-block pointer to a `uint16_t` element with the top bit set is
   shifted and divided as signed (found by fuzzing at `83dc7a91`; seeds
   4245 and later): `{ uint16_t *q = &a2[1]; r = (*q) >> (g1 & 15); }` with
@@ -557,6 +567,33 @@ va = 1.0f; vb = 1.85f;  /* want 3f0a60dd, dcc 3f0a60de */
 - Also at v3.6.0 (`20290235`) with today's runtime.
 - Found by hand probing (the float generator excludes `/` as `fdivround`).
 
+## Fixed in cluster A3
+
+BUG-058 and BUG-015's explicit signed-word cast facet share an incomplete
+signedness-observing consumer proof. Deferred indirect stores and binaries
+can widen without an explicit MIR conversion. The existing SSA forwarding
+and equal-width cast-elimination guards now share `mir_use_widens_value()`,
+retaining the declared/cast word interpretation at those consumers; shift
+counts are excluded. No early block typing, selector, schedule, runtime or
+fallback change is made.
+
+BUG-058 is promoted as [tblkword](tests/tblkword.c); the partial BUG-015 facet
+is separately covered by [tblkcast](tests/tblkcast.c), without promoting or
+closing BUG-015. All original 3,672 functions have byte-identical census TSVs
+in both stack modes and all 544 existing perf rows are unchanged. The two
+new normal-stack rows are `tblkcast,226125,226907,5888,6016` and
+`tblkword,405538,406521,6400,6528`.
+
+The original `block_init` is 56 to 58 machine bytes peep, 63 to 77 nopeep.
+After peep its complete body is identical to the correct same-signed control;
+nopeep retains a 12-byte typed-word home store/reload beyond that control.
+All already-correct fixture functions are unchanged in both pipelines.
+Removing `blockwordinit` from `KNOWN_BUGS` restores integer seeds 1–300:
+**290 ok, 7 INVALID, 3 target-limit-only, zero FAIL** across all four
+production configurations. Final parked inventory: **7 reproducers, 7 fails**.
+Detailed release, debug and approved Python harness results are in A3 of
+[fix-plan.md](fix-plan.md).
+
 ## BUG-058
 
 **A nested-block 16-bit local initialized from the opposite signedness is
@@ -587,7 +624,7 @@ void probe(uint16_t x) {
   mismatch in 66 lines/86 tests; hand probes remove all loops and helper calls.
 - Compiler under test: main `6e5a05ea` plus the C2b PHI-edge guard, which
   does not match this loop-free reproducer.
-- Parked as `tests/known-bugs/bug058.c`; steer: `blockwordinit`.
+- Promoted as `tests/tblkword.c`; `blockwordinit` removed from `KNOWN_BUGS`.
 
 ## Fixed in cluster C2b
 

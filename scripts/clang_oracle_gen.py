@@ -1461,7 +1461,6 @@ KNOWN_BUGS = {
     'blockptr': 'BUG-015',
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',
-    'blockwordinit': 'BUG-058',
 }
 
 

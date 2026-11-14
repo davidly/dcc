@@ -1,0 +1,11 @@
+cast compare 0
+cast shift compare 0
+cast sum -32768
+cast compare outer 0
+unsigned sum 32769
+signed reverse -32767
+same width -32767
+positive compare 1
+positive shift 1
+positive sum 32767
+minus one sum -1

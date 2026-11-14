@@ -590,6 +590,97 @@ identity, rather than only runtime behavior, is the requested gate.
 | `tvlaparm` | `cgrid_sum`*, `grid_fill`*, `grid_sum`*, `main`*, `smooth` |
 | `tvlax` | `checksum_loop`*, `goto_stable`, `loop_stable`, `main`*, `nested_stable`, `rec_probe`* |
 
+### A3. Deferred widened consumers must observe word interpretation
+
+| Bug | Issue | Outcome |
+| --- | --- | --- |
+| BUG-058 | #315 | Fixed; promoted as `tblkword` |
+| BUG-015 signed-word cast facet | #235 | Output statements 156–158 fixed; host-proven `tblkcast`; full issue/reproducer/steering retained |
+
+Investigated independently on `fix/cluster-a3-block-word-widening` from
+`8db72cbd`. The shared loss is confirmed, not the rejected A2c early-typing
+experiment: both paths already have the correct declared/cast word type,
+but representation reuse discards it before implicit widening.
+
+- BUG-058: deferred repair restores the block array-store load to signed
+  word, but `mir_promote_objects()` forwards it to the unsigned initializer.
+  Its typed-view guard only sees explicit widening unary consumers (hence
+  the correct scalar-global store), not the implicit wide indirect store.
+- BUG-015: `mir_unary_is_representation_identity()` removes the unsigned-to-
+  signed word cast whose direct consumer is a deferred binary. The binary's
+  late widening then sees the original unsigned load and extends 0x8000 to
+  +32768. Function-scope controls already have explicit widening conversions.
+
+The existing guards now share `mir_use_widens_value()`: recognize implicit
+wide indirect stores and wider deferred binary data operands, retaining
+exactly the needed typed word views. A shift count is not a widened data
+operand. No parser/early typing, source boundary, selector, machine schedule,
+runtime, fallback, byte-PHI, pointer, bit-field or float-admission edit is made.
+
+All nine original BUG-058 lines pass in both pipelines. BUG-015 changes from
+8/13 to 5/13 wrong lines: only output statements **156–158** flip (cast compare,
+cast shift compare, cast sum; expressions 66, 77, 88); lines **152–154 and
+162–163** remain wrong.
+The parked `bug015.c` is unchanged, #235 stays open, and no BUG-015 steer is
+removed. `tblkcast` covers the cleared facet plus mirror signedness, reversed
+operand order, same-width and sign-boundary controls; clang O0/O2 and
+ASan/UBSan agree on all eleven lines.
+
+Both original **3,672-function** census TSVs are byte-identical, including
+every selector and selected hash; final snapshots add only 18 new functions
+(3,690 total). No existing fallback is added. All **544
+existing performance rows** remain byte-identical in their original order.
+New stack-checked rows only: `tblkcast,226125,226907,5888,6016` and
+`tblkword,405538,406521,6400,6528`. Original `block_init` is **56→58 machine
+bytes peep / 63→77 nopeep**. Its peep body is identical to the correct
+same-signed control. Nopeep retains a 12-byte typed-word home store/reload
+beyond that control, removed by existing dccpeep rules; no runtime extension
+helper is added. Every original correct fixture function is unchanged.
+
+`blockwordinit` is removed only from `KNOWN_BUGS`, restoring production
+integer seeds 1–300: **290 ok, 7 INVALID, 3 target-limit-only, zero FAIL**.
+All four production configurations are covered; 3,000 seeds retain no
+remaining steered shape. No new compiler bug is found. Final parked inventory
+is **7 reproducers / 7 fails**; log tally **seven open / fifty-two fixed**.
+
+Canonical and independent CMake compiler builds pass. Compiler ASan/UBSan
+and cache-verify probes, required-MIR diagnostics, both **274/274** extended
+MIR censuses, debugger-host CTest **10/10**, existing focused typing/entrypoint/
+line-debug Python tests **51/51**, and new tightness/generator tests **9/9**
+pass. The two repaired shapes pass all **24** release/full-debug/line-debug,
+stack/no-stack, peep/nopeep pipelines; all eight `-gline` COMs are release-
+identical. Full debug retains the signed block word declaration at its actual
+two-byte frame home. Existing symbols, scopes, statement boundaries and
+locations are unchanged because existing function output is unchanged.
+
+Initial strict native Python full+extended regression is **559 passed,
+24 skipped, zero failures**. Final strict PowerShell full+extended runs in
+both stack modes are **561 passed, 24 skipped, zero failures**; stack-checked
+performance, diagnostics, dccpeep and extended gates pass. Final censuses have
+only the 18 new test functions; filtering those rows is byte-identical to
+both starting files. New normal host validations and the repeated promoted
+source debug matrix/tightness/generator checks all pass.
+
+Regular Python discovery: **338 tests, six failures, ten errors, two existing
+skips**. The campaign-baseline and exact-control failures are the approved
+[#277](https://github.com/davidly/dcc/issues/277) exceptions. Every other
+failing test was retried individually: **9/13 pass**, including inherited-pipe
+cleanup, healthy-baseline inclusion, watchdog, environment/explicit policy,
+post-exit grace, clobber-runner orphan supervision, zero completion budget,
+pipe-drain budget and deadline/explicit-stop cleanup. Four unchanged synthetic
+mutation-runner cases remain **unverified**, not skipped or fixed:
+
+| `test_mir_compiler_mutations` case | Isolated retry |
+| --- | --- |
+| `test_child_timeout_and_environment_isolation` | outer harness command times out after about 20 seconds |
+| `test_default_serial_and_parallel_are_equal_and_bounded` | mock runner command times out at 180 seconds |
+| `test_exited_worker_cleans_nested_process_scopes` | missing `watchdog-child` marker after 7.653 seconds |
+| `test_survivors_invalid_exits_builds_and_worker_errors_are_recorded` | mock runner command times out at 180 seconds; teardown also reports a nonempty fixture directory |
+
+
+No old-compiler check, prepush, expectation refresh, harness fix or new skip
+is made. Concurrent A2b-3/A4/D2e-2/S1/F1 compiler surfaces are untouched.
+
 ### B1. Stale probe offset for a `for`-init declaration
 
 | Bug | Issue | Shape |
@@ -3214,6 +3305,7 @@ addresses require the normal full/line debug pipeline checks.
 | A2b-2 | | open | BUG-015 pointer-repair ordering, bit-field promotion, discarded signed cast, unary float and missing operand conversions; no second fix |
 | A2b-3 | | open; newly traced | BUG-004 byte local forwarded to untyped logical PHI after metadata repair; same-width 2/4-byte SSA guard excludes bytes; narrow logicbyteinit steering retained |
 | A2c | [#318](https://github.com/davidly/dcc/pull/318) (`fix/cluster-a2c-block-type-resolution`) | draft PR; stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
+| A3 | `fix/cluster-a3-block-word-widening` | verified shared repair; PR pending | BUG-058 promoted as tblkword; BUG-015 statements 156–158 covered by tblkcast, full issue retained; 3,672 existing functions/mode and 544 perf rows unchanged; restored integer 290 ok/7 INVALID/3 limit-only/zero FAIL |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |

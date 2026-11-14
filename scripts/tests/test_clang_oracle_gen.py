@@ -13,7 +13,7 @@ finally:
 
 
 class IntegerKnownShapeTests(unittest.TestCase):
-    def test_block_word_initializer_steer_keeps_passing_controls(self):
+    def test_restored_block_word_initializers_keep_optional_steer(self):
         cases = ((gen.I16, gen.U16, 'block', True),
                  (gen.U16, gen.I16, 'block', True),
                  (gen.I16, gen.I16, 'block', False),
@@ -27,7 +27,8 @@ class IntegerKnownShapeTests(unittest.TestCase):
                     expression = gen.E('var', a=gen.Decl('x', source, 'param'))
                     if cast:
                         expression = gen.E('cast', [expression], t=target)
-                    enabled = gen.Gen(0).initialiser(None, target, expression, storage)
+                    enabled = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS)).initialiser(
+                        None, target, expression, storage)
                     steered = gen.Gen(0, off={'blockwordinit'}).initialiser(
                         None, target, expression, storage)
                     self.assertIsNone(enabled[1])

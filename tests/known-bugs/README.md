@@ -82,6 +82,11 @@ regular test:
 facets cleared by E1/A2b-1. BUG-004 stays open with its newly reduced byte-local
 logical SSA facet; that partial issue's reproducer is not promoted.
 
+`tests/tblkword.c` promotes BUG-058's full word-initializer reproducer.
+`tests/tblkcast.c` separately covers the signed-word cast facet of BUG-015
+cleared by A3 (parked output statements 156–158). BUG-015 stays open and its
+reproducer remains parked with five wrong lines; its steering is retained.
+
 ## Adding one
 
 Write a small program that prints one line per shape of the bug, using

@@ -8155,6 +8155,24 @@ static int mir_block_name_has_multiple_declared_types(const char *name)
     return 0;
 }
 
+/* Deferred consumers can widen without an explicit conversion instruction. */
+static int mir_use_widens_value(
+    const struct MirInsn *use, int value, int type)
+{
+    if (use->opcode == MIR_UNARY && use->immediate == 0 &&
+        use->src1 == value)
+        return type_is_float(use->type) ||
+               type_size(use->type) > type_size(type);
+    if (use->opcode == MIR_STORE_INDIRECT && use->src2 == value)
+        return use->memory_size > type_size(type);
+    if (use->opcode == MIR_BINARY && use->deferred_operand_types &&
+        (use->src1 == value ||
+         (use->src2 == value && use->immediate != TOK_SHL &&
+          use->immediate != TOK_SHR)))
+        return type_size(use->secondary_offset) > type_size(type);
+    return 0;
+}
+
 /* Promotion may expose an initializer's raw bits. Preserve the declared
  * interpretation when a load's consumers can observe its signedness. */
 static int mir_value_has_signedness_use(int value, int type, int depth)
@@ -8166,10 +8184,10 @@ static int mir_value_has_signedness_use(int value, int type, int depth)
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *use = &mir.insns[instruction];
 
+        if (mir_use_widens_value(use, value, type))
+            return 1;
         if (use->opcode == MIR_UNARY && use->immediate == 0 &&
             use->src1 == value) {
-            if (type_is_float(use->type) || type_size(use->type) > type_size(type))
-                return 1;
             if (use->type == type &&
                 mir_value_has_signedness_use(use->dst, type, depth + 1))
                 return 1;
@@ -8213,16 +8231,13 @@ static int mir_unary_is_representation_identity(
         return 0;
     /*
      * Equal-width signed/unsigned casts preserve bits, but a later widening
-     * or float conversion must still see the cast's signedness.
-     * Other consumers already carry their effective computation/memory type
-     * and can safely use the original representation directly.
+     * or float conversion must still see the cast's signedness, including
+     * implicit widening in deferred binaries and indirect stores.
+     * Same-width consumers can use the original representation directly.
      */
     for (instruction = 0; instruction < mir.count; ++instruction)
-        if ((mir.insns[instruction].opcode == MIR_UNARY &&
-             mir.insns[instruction].immediate == 0 &&
-             mir.insns[instruction].src1 == insn->dst &&
-             (type_size(mir.insns[instruction].type) > target_size ||
-              type_is_float(mir.insns[instruction].type))) ||
+        if (mir_use_widens_value(
+                &mir.insns[instruction], insn->dst, insn->type) ||
             (mir.insns[instruction].opcode == MIR_STORE &&
              mir.insns[instruction].src1 == insn->dst &&
              mir.insns[instruction].type == insn->type &&

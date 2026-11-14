@@ -1,6 +1,5 @@
-/* BUG-058: cross-signed word initializers in nested blocks retain the
- * source signedness when widened into a 32-bit array. Scalar stores,
- * function-scope locals, separate assignments and same-type controls pass. */
+/* Block word initializers retain declared signedness in scalar and wide
+ * array stores, across casts, copies, expressions and scope controls. */
 #include <stdint.h>
 #include <stdio.h>
 int32_t g, a[2];
