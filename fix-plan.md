@@ -608,7 +608,7 @@ so it matters more than its size suggests. Both are one-offs.
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |
-| J | `fix/cluster-j-float-arith` | partial fix verified | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; 3,394 existing census functions and 504 perf rows unchanged; 049/039 parked under the output rule |
+| J | [#290](https://github.com/davidly/dcc/pull/290) | PR open; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; 3,394 existing census functions and 504 perf rows unchanged; 049/039 parked under the output rule |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
 | M | | open | |
