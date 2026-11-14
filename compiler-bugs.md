@@ -1368,9 +1368,14 @@ Before promotion, only BUG-046 flipped: one `FIXED`, 41 `fails`.
 Both stack-mode censuses are identical across 3,366 existing functions;
 strict full+extended regressions pass with all existing performance rows
 unchanged. The float generator's `fretconv` steering entry was removed:
-production seeds 1-300 with `--off known` give **258 ok, 42 INVALID,
+production seeds 1-300 with `--off known` give **265 ok, 35 INVALID,
 zero FAIL**. The unchanged host baseline is promoted with one new measured
 PowerShell stack-check performance row.
+
+The float shape checker reports only disabled features (`prog.off`), as
+its integer counterpart does. This directly coupled acceptance correction
+keeps restored `fretconv` shapes eligible for execution rather than
+incorrectly counting them as logged-shape INVALID.
 
 | ID | Issue | Regression |
 | --- | --- | --- |

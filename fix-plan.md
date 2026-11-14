@@ -375,13 +375,21 @@ Acceptance: before promotion, **1 FIXED, 41 fails**, with no out-of-cluster
 flips; after promotion all 41 remaining parked reproducers still fail.
 Strict Python full+extended and both PowerShell stack/no-stack release gates
 pass. Both censuses are byte-identical across 3,366 existing functions.
-Restoring `fretconv` gives **258 ok, 42 INVALID, zero FAIL** on production
+Restoring `fretconv` gives **265 ok, 35 INVALID, zero FAIL** on production
 float seeds 1-300. The host baseline is unchanged; only the new `tfltret`
 performance row is added. CMake, debugger-host tests, focused line metadata,
 release-identical `-gline`, and full `-g` output checks pass.
-The Python gate ran 307 tests: the two approved #277 failures, two skips;
-the nondeterministic #280 mutation-fixture failure did not occur. Nothing
-was skipped or refreshed to accommodate those known failures.
+The final Python gate ran 308 tests: the two approved #277 failures and
+two skips. A concurrent mutation-fixture timeout cleared on a sequential
+focused rerun; the nondeterministic #280 exit-139 failure did not occur.
+Nothing was skipped or refreshed to accommodate those known failures.
+
+The final fuzz proof also corrects the float shape checker's contract to
+report only shapes in `prog.off`, matching the integer checker. Restored
+`fretconv` must not be treated as a logged-shape INVALID after its steering
+entry is removed. A focused regression covers restored return and cast
+features; the superseded 258-ok/42-INVALID batch excluded seven return-shape
+programs. The corrected batch executes them and gives 265 ok, 35 INVALID.
 
 ### I2. Cast signedness before conversion to float
 
@@ -504,7 +512,7 @@ so it matters more than its size suggests. Both are one-offs.
 | F | | open | |
 | G | | open | |
 | H | | open | |
-| I1 | [#285](https://github.com/davidly/dcc/pull/285) (`fix/cluster-i`) | PR open | BUG-046 promoted as tfltret; 300 float seeds clean (258 ok, 42 INVALID); existing assembly/perf rows unchanged; approved I1/I2 split |
+| I1 | [#285](https://github.com/davidly/dcc/pull/285) (`fix/cluster-i`) | PR open | BUG-046 promoted as tfltret; 300 float seeds clean (265 ok, 35 INVALID); existing assembly/perf rows unchanged; approved I1/I2 split |
 | I2 | `fix/cluster-i2-float-conv` | pending; after I1 | Approved BUG-048/050 mirror pair; independent origin/main worktree; shared cast-type-loss cause unconfirmed |
 | J | | open | |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
