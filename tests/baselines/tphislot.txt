@@ -7,3 +7,9 @@ ok1 bfaccccd
 ok2 bfaccccd
 ok3 bfaccccd
 ok3 beb33333
+f6 true bfaccccd
+f6 false 00000000
+f7 461c0400
+f8 24985
+f9 bfaccccd
+f10 4

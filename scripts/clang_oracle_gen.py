@@ -713,6 +713,8 @@ def known_shapes(prog):
                 stored(d.init, d)
                 if not init_keeps_type(d.init, d.t):
                     found.add('inittype')
+                    if d.storage == 'block' and d.t.bits == 16:
+                        found.add('blockwordinit')
             expr(d.init, True)
 
     for b in all_blocks(prog):
@@ -1448,7 +1450,7 @@ FEATURES = frozenset((
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg', 'wideincadd',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
     'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockcast',
-    'blockdec', 'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself'))
+    'blockdec', 'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself', 'blockwordinit'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
@@ -1456,14 +1458,10 @@ FEATURES = frozenset((
 KNOWN_BUGS = {
     'logicbyteinit': 'BUG-004',
     'bytevarshl': 'BUG-002',
-    'nestedwideless': 'BUG-009',
     'blockptr': 'BUG-015',
-    'wideincadd': 'BUG-057',
-    'duplabel': 'BUG-022',
-    'bytearm': 'BUG-029',
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',
-    'loopcopy': 'BUG-037',
+    'blockwordinit': 'BUG-058',
 }
 
 
@@ -1891,6 +1889,9 @@ class Gen:
                 and expr.op == 'var' and expr.a.storage != 'global':
             # an expression, not a copy of the variable
             expr = self.mk('bin', [expr, self.small(1, 1)], '^')
+        if not self.on('blockwordinit') and storage == 'block' and t.bits == 16 \
+                and not init_keeps_type(expr, t):
+            return mk_const(0, t), expr
         if self.on('inittype') or init_keeps_type(expr, t):
             return expr, None
         return mk_const(0, t if t.bits >= 16 else I16), expr

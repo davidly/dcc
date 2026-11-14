@@ -1,7 +1,7 @@
-/* BUG-057: a fused 32-bit local increment used as an addition operand
- * reads an unwritten backend slot instead of the updated named home.
- * A later loop retains the spilled/PHI schedule even when it never runs.
- * Decrement, literal RHS and no-loop neighbors are passing controls. */
+/* Fused 32-bit increment values used by nonconstant addition,
+ * including prefix, compound update and reversed operands. A later dead
+ * loop retains the PHI/spill schedule; decrement, literal and no-loop forms
+ * check that adjacent supported shapes remain correct. */
 #include <stdint.h>
 #include <stdio.h>
 static int8_t g = -2;

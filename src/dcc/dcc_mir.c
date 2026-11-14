@@ -14062,14 +14062,11 @@ static int mir_compute_liveness_bytes(unsigned char *live_in,
                                         mir.next_value + value];
                     if (successor_is_phi[successor]) {
                         int first = successor_phi_first[successor];
-                        while (first < mir.count) {
+                        /* Widenings can separate PHIs in the same header. */
+                        for (; first >= 0;
+                             first = mir_next_phi_in_block(
+                                 insn->successors[successor], first + 1)) {
                             const struct MirInsn *phi = &mir.insns[first];
-                            if (phi->opcode == MIR_NOP) {
-                                ++first;
-                                continue;
-                            }
-                            if (phi->opcode != MIR_PHI)
-                                break;
                             if ((predecessor_label == phi->phi_pred1 &&
                                  value == phi->src1) ||
                                 (predecessor_label == phi->phi_pred2 &&
@@ -14077,7 +14074,6 @@ static int mir_compute_liveness_bytes(unsigned char *live_in,
                                 next_out = 1;
                                 break;
                             }
-                            ++first;
                         }
                     }
                 }
@@ -14213,13 +14209,12 @@ static int mir_compute_liveness_bitsets(MirLiveWord *live_in,
                 predecessor_label = mir_block_label_before(i);
                 predecessor_label_known = 1;
             }
-            for (; first < count; ++first) {
+            /* Match the emitter's block-bounded, interleaved PHI scan. */
+            for (; first >= 0;
+                 first = mir_next_phi_in_block(
+                     insn->successors[successor], first + 1)) {
                 const struct MirInsn *phi = &mir.insns[first];
 
-                if (phi->opcode == MIR_NOP)
-                    continue;
-                if (phi->opcode != MIR_PHI)
-                    break;
                 if (predecessor_label == phi->phi_pred1 &&
                     phi->src1 >= 0 && phi->src1 < values)
                     phi_row[phi->src1 / 64] |= 1ULL << (phi->src1 % 64);

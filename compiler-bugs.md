@@ -1,10 +1,10 @@
 # dcc compiler bugs
 
 Defects found by differential testing against the host C compiler (Apple
-clang). Every open entry except BUG-056 reproduces with a shipped configuration: no
-diagnostic environment variables (some require `dccpeep`). BUG-056 is a latent
-wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
-source remains rejected by the shipped admission gate. Fixed entries
+clang). Every open entry except BUG-056/058 reproduces with a shipped configuration: no
+diagnostic environment variables (some require `dccpeep`). BUG-056 and BUG-059 are latent
+wrong-code findings from withdrawn BUG-041 admission experiments; their parked
+sources remain rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
 - **Compiler under test:** `15db8e69` plus the cluster E2c bit-field compound extraction repair (2026-11-15).
@@ -27,24 +27,22 @@ and their historical diagnoses are retained separately below.
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
 | [BUG-004](#bug-004) | #225 | wrong result | Byte local initialized from `&&`/`\|\|`, forwarded into 32-bit consumers loses its source type |
-| [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
-| [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
-| [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
-| [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
-| [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
-| [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
+| [BUG-058](#bug-058) | #315 | wrong result | A nested-block word initialized across signedness is widened with the initializer type when stored to a 32-bit array |
+| [BUG-059](#bug-059) | #316 | latent wrong result | Deferred float update arithmetic lacks an implicit integer-to-float conversion after type repair |
 
-Eleven are open: seven give wrong results with no diagnostic
-(BUG-039 is in the runtime), one latent wrong-code finding is blocked by
-BUG-041 admission, one hangs, one stops the compile,
-and one (BUG-022) turns a compile error into
-a broken program. BUG-013's unsigned bit-field promotion is fixed below.
+Seven are open: four give wrong results with no diagnostic
+(BUG-039 is in the runtime), two latent wrong-code findings are blocked by
+BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
+promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Forty-four reported bugs are fixed: [one in cluster E2c](#fixed-in-cluster-e2c), [two in cluster C1](#fixed-in-cluster-c1),
+Fifty reported bugs are fixed: [one in cluster E2c](#fixed-in-cluster-e2c),
+[two in cluster M-a](#fixed-in-cluster-m-a),
+[one in cluster C2a](#fixed-in-cluster-c2a),
+[two in cluster C1](#fixed-in-cluster-c1),
 [one in cluster N](#fixed-in-cluster-n),
 [one in cluster E2-bitfield](#fixed-in-cluster-e2-bitfield),
 [two in cluster E2-shift](#fixed-in-cluster-e2-shift),
@@ -150,6 +148,32 @@ s.m1 = l;            /* uint32_t m1: want 00000001, dcc xxxx0001 (e.g. 09f90001)
 - Correct: `l = 1`; `l = one`; `s.m1 = one || zero` stored directly.
 - Commit `f00e062e` ("Widen && and || results converted to long or float")
   fixed a neighbouring shape.
+
+## BUG-006
+
+**`/=`, `%=` and `>>=` on an unsigned bit-field store the wrong value when
+the field's top bit is set.** The field is sign-extended from its own width,
+as if it were a signed bit-field, before the operation.
+
+```c
+struct S { uint16_t m2 : 11; uint16_t m5 : 5; } s = { 1148, 18 };
+s.m5 %= 7;         /* want 4,    dcc 2    */
+s.m5 /= 21930;     /* want 0,    dcc 2    */
+s.m2 %= 21930;     /* want 1148, dcc 296  */
+s.m5 >>= 1;        /* want 9,    dcc 25   */
+s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
+```
+
+- Every wrong value is what sign extension gives. 18 in 5 bits is `10010`,
+  which sign-extends to `0xfff2` (65522): 65522 % 7 is 2, 65522 / 21930 is 2,
+  and `0xfff2 >> 1` done arithmetically is `0xfff9`, 25 in 5 bits.
+- Wrong for a field of any width, including all 16 bits
+  (`uint16_t a : 16` holding `0x8421`: `a >>= 3` gives `0xf084`), in a
+  global or local struct and through a pointer (`p->a >>= 3`), and when the
+  result is used (`r = (s.a >>= 3)`).
+- Correct: the same statements when the field's top bit is clear;
+  `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
+  (their low bits do not depend on the extension); a signed bit-field.
 
 ## BUG-009
 
@@ -259,36 +283,39 @@ widening. The parked program improves from 10 to 9 wrong lines out of 13;
 all remaining pointer, byte, and cast facets still fail. No independent
 BUG-015 implementation or steering change is included.
 
-## BUG-022
 
-**When a label name used in one function is reused inside a nested block of
-a later function, dcc stops reporting `MIR emission is required` for the
-functions after it.** It exits 0, and the program hangs or restarts in a
-loop when the function it could not emit is called.
+
+## BUG-037
+
+**In a `for` or `while` loop whose counter is 32 bits wide, a copy of the
+counter taken in the body is stored after the increment.** The copy holds the
+next value, so it is one step ahead. A `do … while`, a 16-bit counter and
+straight-line code are correct.
 
 ```c
-static uint16_t first(void)  { L1:; return 1; }
-static uint16_t second(void) { { L1:; } return 2; }       /* same name, nested block */
-static int8_t third(void)    { { int32_t b = 0; b = -8305; low = (uint16_t)b; } return 3; }
+int32_t l = 0, i;
+for (i = 2; i < 3; i += 1)
+    l = i;
+return l;                    /* want 2, dcc 3 */
 ```
 
-`third` is a function dcc cannot emit (BUG-008). Without `first` and
-`second` the compile stops with the fatal error. With them it succeeds and
-the program fails at run time.
+dcc emits the increment first and then the copy, which reads the new `i`:
 
-- Needs the same label name in both functions and the second one inside a
-  nested block. With the second label renamed, or at function scope, the
-  fatal error is reported as usual.
-- Shown with the functions of BUG-008 and BUG-019. Functions that fail with
-  `missing direct MIR named-home offset` (BUG-014) still stop the compile.
-- This only matters while some function cannot be emitted, but then it turns
-  a compile error into a silently broken program.
-- Its historical parked program now passes after BUG-008/019 were fixed.
-  This does not close BUG-022: the same reused-label prefix before a BUG-020
-  failing function still exits zero with empty function bodies. Steering and
-  the historical reproducer are retained for the separate diagnostic fix.
+```
+    inc (ix-6)         ; i += 1, in place
+    ...
+    ld l,(ix-6)        ; l = i
+    ld h,(ix-5)
+    ld e,(ix-8)
+    ld d,(ix-7)
+    ld (ix-2),l
+```
 
-
+- Wrong for `i += 1` and `i++` in a `for`, and for `i += 1` at the end of a
+  `while` body (`while (i < 3) { l = i; i += 1; }`).
+- Correct for `int16_t` locals, `do … while`, `i = i + 1` and `i += 2` in a
+  `do … while`, and a copy outside a loop.
+- Found by fuzzing at `83dc7a91` (seed 7581), with and without `dcc-peep`.
 ## BUG-029
 
 **An 8-bit local is assigned in one arm of an `if … else` and another
@@ -330,38 +357,6 @@ L4:
   arms assigning only `l`; a `switch` or `?:` in place of the `if … else`.
 - The selected emitter is `homed-scalar-cfg` (`DCC_MIR_COST_REPORT=1`).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
-
-## BUG-037
-
-**In a `for` or `while` loop whose counter is 32 bits wide, a copy of the
-counter taken in the body is stored after the increment.** The copy holds the
-next value, so it is one step ahead. A `do … while`, a 16-bit counter and
-straight-line code are correct.
-
-```c
-int32_t l = 0, i;
-for (i = 2; i < 3; i += 1)
-    l = i;
-return l;                    /* want 2, dcc 3 */
-```
-
-dcc emits the increment first and then the copy, which reads the new `i`:
-
-```
-    inc (ix-6)         ; i += 1, in place
-    ...
-    ld l,(ix-6)        ; l = i
-    ld h,(ix-5)
-    ld e,(ix-8)
-    ld d,(ix-7)
-    ld (ix-2),l
-```
-
-- Wrong for `i += 1` and `i++` in a `for`, and for `i += 1` at the end of a
-  `while` body (`while (i < 3) { l = i; i += 1; }`).
-- Correct for `int16_t` locals, `do … while`, `i = i + 1` and `i += 2` in a
-  `do … while`, and a copy outside a loop.
-- Found by fuzzing at `83dc7a91` (seed 7581), with and without `dcc-peep`.
 
 ## BUG-039
 
@@ -411,9 +406,48 @@ if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
 - The limitation is not documented.
 - Also at v3.6.0 (`20290235`).
 - Found by fuzzing (float generator, seed 3).
+- D2e-1 repairs unresolved update provenance but retains float admission
+  steering: the restored admission trial clears this fixture and BUG-056,
+  then exposes latent BUG-059/#316 (missing implicit float operand conversion).
 
 
-## BUG-052
+## Fixed in cluster C2c
+
+BUG-052 is fixed by requiring CFG deadness before coalescing a solitary PHI
+source with its destination in `mir_prepare_backend_slots()`. A parameter's
+one static edge use can repeat on every loop iteration; retaining that live
+source prevents both result accumulation and slot-lifetime truncation by a
+later counter. No liveness scan, wide-PHI-update matcher, selector, cost
+policy or fallback is changed. BUG-029, BUG-037 and BUG-057 remain open.
+
+Promoted as [tphislot](tests/tphislot.c): all nine original lines are retained,
+with six added lines for nonconstant conditions in both arms, float/long
+accumulators and float/long member stores. All 15 lines pass peep/nopeep,
+release/line/full debug and forced `spilled-all`; line-debug COMs are
+release-identical. The original three control instruction bodies are unchanged
+in both pipelines after local-label renumbering.
+
+Restored float production seeds 1-300: **291 ok, 9 INVALID, zero FAIL**.
+Remaining-known-shape steering is clean for 3,000 seeds; no new bug was found.
+Both original **3,603-function** census TSVs and all **534 existing perf rows**
+are byte-identical; only the new measured `tphislot` row is added.
+Before promotion: **12 reproducers, 2 FIXED / 10 fails**. After promotion:
+**11 reproducers, 1 FIXED / 10 fails**; the sole remaining FIXED is BUG-022's
+pre-existing fixture-only pass, not closure of its diagnostic defect.
+
+The strict full+extended compiler gates, sanitizer/CMake build, six host MIR
+and ten debugger-host tests, 34 focused metadata/compiler tests and required
+MIR emission/extended censuses pass. The regular Python gate retains #277's
+approved golden failures and load-sensitive harness exceptions; isolated
+retry details are recorded in [fix-plan.md](fix-plan.md#c2c-loop-live-solitary-conditional-phi-sources-bug-052).
+No historical compiler/dating check or `prepush.ps1` was run, and no existing
+baseline, harness expectation, timeout or skip was changed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-052](#bug-052) | #272 | [tphislot](tests/tphislot.c) |
+
+### BUG-052
 
 **In a loop, an expression with a folded `?:` on a 32-bit parameter is
 accumulated into the parameter when the parameter is assigned after the
@@ -453,6 +487,181 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   fuzzing (float generator, seed 4294).
 
 ---
+
+## BUG-058
+
+**A nested-block 16-bit local initialized from the opposite signedness is
+widened using its initializer's signedness when stored into a 32-bit array.**
+The same local is widened correctly into a scalar global. This finding is
+independent of BUG-037's wide-counter PHI update; the reduced function has
+no loop, PHI update or increment.
+
+```c
+int32_t g, a[2];
+void probe(uint16_t x) {
+    { int16_t b = x; g = b; a[1] = b; }
+}                         /* x = 0x8000: g = -32768, a[1] = +32768 */
+```
+
+- Wrong in peep/nopeep with or without stack checking. A nested-block
+  `int16_t b = (int16_t)x`, a copy through another block word, and
+  `int16_t b = x + 0` also store +32768 instead of -32768.
+- The mirror case is wrong too: `{ uint16_t b = x; g=b; a[1]=b; }` with a
+  signed `int16_t x` of -32768 stores -32768 into the array, not 32768.
+- Correct: a function-scope local, initialization from a same-signed word,
+  a signed constant, a separate `int16_t b; b=x;` assignment, and the scalar
+  global store beside each failing array store.
+- Related to the block-type surfaces in BUG-015, but newly logged as this
+  distinct initializer/indexed-widening contract; its compiler cause is not
+  investigated or fixed by C2b. BUG-015's source paths and steering are untouched.
+- Found in restored integer seeds 1-300, seed 43. The reducer preserves the
+  mismatch in 66 lines/86 tests; hand probes remove all loops and helper calls.
+- Compiler under test: main `6e5a05ea` plus the C2b PHI-edge guard, which
+  does not match this loop-free reproducer.
+- Parked as `tests/known-bugs/bug058.c`; steer: `blockwordinit`.
+
+## Fixed in cluster C2b
+
+BUG-037 is fixed by sharing cluster N's pending predecessor-edge PHI-copy
+proof between narrow and wide in-place update matchers. The old wide counter
+is still live through the increment when a used earlier PHI consumes it on
+the backedge, so the update must retain a distinct backend slot. Unused PHI
+destinations do not inhibit the existing in-place schedules.
+
+Promoted as [twphicpy](tests/twphicpy.c), preserving all six original output
+lines and adding constant/variable strides, negative counters, word carry and
+zero-iteration coverage. The selected spilled candidate is unchanged; previously
+incorrect loop bodies now use native wide addition and parallel PHI copies,
+not a fallback or runtime addition helper. The original `for_loop` grows
+from **162 to 236 linked bytes peep / 185 to 259 nopeep** (+74 each).
+All three original correct controls retain identical instructions in both
+modes (only local/synthetic label numbering moves).
+
+Both original census TSVs are byte-identical across **3,603 existing
+functions/mode**; all **534 existing performance rows** remain unchanged.
+Only the promoted fixture receives a new measured stack-check row. Its
+release/line/full-debug outputs pass in all twelve stack/peep combinations;
+line-debug COMs are release-identical, and full-debug retains frame-variable
+metadata. Source scopes/types/statement boundaries are unchanged.
+
+The restored integer batch found a separate loop-free initializer/indexed
+widening defect: **287 ok, 11 INVALID, 1 target-limit-only, 1 FAIL** (seed 43).
+It is parked and filed as [BUG-058/#315](https://github.com/davidly/dcc/issues/315),
+not fixed here; `blockwordinit` steers it while `loopcopy` remains restored.
+Repeating restored integer 1-300 after the new steer gives **280 ok,
+19 INVALID, 1 target-limit-only, zero FAIL** across all four production
+configurations. The remaining-known-shape steering proof passes 3,000 seeds.
+Approved harness-retry results are recorded in [C2b](fix-plan.md#c2b-wide-counter-phi-edge-use).
+Before promotion with BUG-058 parked: **13 reproducers, 2 FIXED, 11 fails**;
+only BUG-037 newly flips. BUG-022's historical fixture pass is pre-existing,
+while its diagnostic defect and BUG-029/052/057 remain untouched.
+Post-promotion tally: **12 reproducers, 1 FIXED, 11 fails**.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-037](#bug-037) | #257 | [twphicpy](tests/twphicpy.c) |
+
+Historical diagnosis and original reproducer:
+
+### BUG-037
+
+**In a `for` or `while` loop whose counter is 32 bits wide, a copy of the
+counter taken in the body is stored after the increment.** The copy holds the
+next value, so it is one step ahead. A `do … while`, a 16-bit counter and
+straight-line code are correct.
+
+```c
+int32_t l = 0, i;
+for (i = 2; i < 3; i += 1)
+    l = i;
+return l;                    /* want 2, dcc 3 */
+```
+
+dcc emits the increment first and then the copy, which reads the new `i`:
+
+```
+    inc (ix-6)         ; i += 1, in place
+    ...
+    ld l,(ix-6)        ; l = i
+    ld h,(ix-5)
+    ld e,(ix-8)
+    ld d,(ix-7)
+    ld (ix-2),l
+```
+
+- Wrong for `i += 1` and `i++` in a `for`, and for `i += 1` at the end of a
+  `while` body (`while (i < 3) { l = i; i += 1; }`).
+- Correct for `int16_t` locals, `do … while`, `i = i + 1` and `i += 2` in a
+  `do … while`, and a copy outside a loop.
+- Found by fuzzing at `83dc7a91` (seed 7581), with and without `dcc-peep`.
+
+---
+## Fixed in cluster C2a
+
+BUG-029/#249 now passes in peep and nopeep. Both liveness implementations
+stopped their PHI-edge-input scan at the first widening unary between header
+PHIs. The later PHI's parameter operand was therefore not live on the incoming
+edge, letting its HL home be overwritten before the already-correct homed
+PHI-copy emitter read it. Both scans now use the existing block-bounded
+`mir_next_phi_in_block()` iterator for every PHI, even when interleaved.
+No selector, schedule, emitter, fallback or sibling C2b/C2c code was changed.
+
+The corrected `minus` instruction sequence matches the existing no-cast
+control in both modes; both original passing controls remain byte-identical.
+All **3,603 existing functions per census mode** and **534 existing perf rows**
+are unchanged. Only `tphiarm`'s new measured performance row is added.
+
+Before promotion: **2 FIXED / 10 fails** among 12 reproducers. After promotion:
+**1 FIXED / 10 fails** among 11; the sole FIXED remains the pre-existing
+BUG-022 fixture, not a repaired diagnostic. BUG-037, BUG-052 and BUG-057 are
+untouched. Restored integer `bytearm` seeds 1–300 are clean; the exact tally
+and remaining validation results are recorded in
+[fix-plan.md](fix-plan.md#c2a-interleaved-phi-edge-liveness-bug-029249).
+
+## BUG-029
+
+**Fixed in cluster C2a; promoted as `tests/tphiarm.c`.** The diagnosis below
+is retained as historical context.
+
+**An 8-bit local is assigned in one arm of an `if … else` and another
+variable in the other arm; when the two are then combined, with the 8-bit
+local cast or negated, the other variable's value is lost.** On the path
+that assigned the 8-bit local, the other operand becomes a copy of it (or 0).
+
+```c
+static uint16_t f(uint16_t x)
+{
+    int8_t l = 0;
+    if (sel) { x = 1; } else { l = 100; }
+    return (uint16_t)((int16_t)l - x);   /* sel 0, x 32767: want 32869, dcc 0 (100 - 100) */
+}
+```
+
+dcc emits (`x` should be in DE at `L4`):
+
+```
+L8:                    ; sel != 0
+    ld de,1            ; x = 1
+    jp L4
+L3:                    ; else
+    ld hl,100          ; l = 100
+    push hl
+    pop de             ; ... and DE, the home of x, is overwritten with it
+L4:
+    or a
+    sbc hl,de          ; l - x
+```
+
+- Wrong for `(int16_t)l - x`, `(int16_t)l + x`, `(uint8_t)l - x`, `-l - x`
+  and `g = (int16_t)l; return g - x;`; for `int8_t`, `uint8_t` and `char`;
+  when the other variable is a parameter, a 16-bit local or another 8-bit
+  local; whichever arm assigns which; when one arm assigns both
+  (`if (sel) { c = '-'; x = 5; } else { c = '+'; } return (int)c + x;`).
+- Correct: no cast (`l - x`); `(int32_t)l - x`; the operands the other way
+  round (`x - (int16_t)l`); `&`; a 16-bit `l`; an `if` with no `else`; both
+  arms assigning only `l`; a `switch` or `?:` in place of the `if … else`.
+- The selected emitter is `homed-scalar-cfg` (`DCC_MIR_COST_REPORT=1`).
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
 
 ## Fixed in cluster N
 
@@ -582,6 +791,216 @@ s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
 - Correct: the same statements when the field's top bit is clear;
   `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
   (their low bits do not depend on the extension); a signed bit-field.
+## Fixed in cluster M-b
+
+BUG-022 is fixed by checking reported `errors`, not `g_diag_error_count`, in
+both required-MIR failure paths. Frame-sizing probes can inherit a prior
+function's label table and count a suppressed duplicate-label complaint.
+The probe counter must keep those complaints for constant-expression
+attempts, but they must not veto an unrelated later emission diagnostic.
+Label IDs, selection and all accepted function bodies are unchanged.
+
+The original M-b proof used reused nested labels before BUG-020's switch/
+wide remainder comparison. H #308 subsequently fixed that trigger. After
+merging `902aca64`, the fixture was re-established using a local aggregate
+initialized by `va_arg(ap, struct S)` in a variadic function. The fixed-width
+last named parameter is compatible with its default argument promotion, and
+host O0/O2/ASan/UBSan all print the same baseline; this is valid C.
+
+Current release, stack, line debug and full debug all decline that initializer
+with `MIR emission is required` (strict diagnostics name `third`, reason
+`selector`). An isolated copy of the merged compiler with only the two
+`errors > 0` guards regressed to `g_diag_error_count > 0` still exits zero and
+emits an empty `third` body for reused nested labels in all eight normal/
+strict/debug combinations. Renamed and flat controls, and all fixed-compiler
+cases, correctly reject: 48 cases total, eight masked and forty diagnosed.
+This replaces the obsolete BUG-020 dependency without a skip or a new
+compiler change. Aggregate `va_arg` initialization itself is not fixed here.
+
+`DCC-EXPECT-ERROR` headers let the known-bugs runner classify a diagnostic fix
+as `FIXED` only for a failed build with the actual expected primary diagnostic,
+not an incidental occurrence of its text. The proven source and host stdout
+baseline are promoted to
+[the diagnostic fixture](tests/diagnostics/fixtures/mir-required-after-reused-label.c).
+The regular Python matrix proves it at host O0/O2/ASan/UBSan and tests reused,
+renamed and flat labels with normal/strict, release/stack/line/full debug.
+The fixtures subdirectory is tested explicitly because normal and strict
+backend diagnostic wording differs; no existing diagnostic fixture is skipped.
+The historical runnable control is promoted as [tlbreuse](tests/tlbreuse.c)
+with a new normal-stack performance row. Its MAC and COM are byte-identical
+before/after this fix in both modes; line debug remains release-identical.
+
+Integer production seeds 1-300, with `duplabel` restored, give **255 ok,
+45 INVALID, zero FAIL**. M-a and M-b together tested **600 programs: 510 ok,
+90 INVALID, zero FAIL**. Before this promotion 20 parked programs gave
+**one FIXED, 19 fails**; afterwards all **19 remaining reproducers fail**.
+There are no unrelated flips. Both final censuses preserve all **3,527
+original functions byte-identically** and add only nine functions in the two
+new apps. All **524 original performance rows**, and the **525 rows already
+present at the M-b checkpoint**, are unchanged; only tlbreuse adds a row here.
+
+Both final strict full+extended stack/no-stack gates pass (565 apps, 541
+passed, 24 existing skips). Each fix also passed the strict Python full+
+extended gate. Independent CMake, six sanitized MIR host tests, both sanitized
+probes, ten debugger-host tests, debug pipelines and require-emit checks pass.
+The regular Python gate ran 329 tests: five failures, six errors, two existing
+skips. Two failures are approved #277; the rest are seven distinct loaded
+scheduler/process-supervision checks (two also failed teardown). After all
+heavy M jobs finished, individual Ninja retries passed **six of seven**.
+Only `test_default_serial_and_parallel_are_equal_and_bounded` still times out
+at 180 seconds and remains unverified. No expectation, timeout or skip was
+changed; the periodic prepush suite was not run.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-022](#bug-022) | #242 | [diagnostic matrix](scripts/tests/test_mir_diagnostics.py), [tlbreuse](tests/tlbreuse.c) |
+
+### BUG-022
+
+**When a label name used in one function is reused inside a nested block of
+a later function, dcc stops reporting `MIR emission is required` for the
+functions after it.** It exits 0, and the program hangs or restarts in a
+loop when the function it could not emit is called.
+
+```c
+static uint16_t first(void)  { L1:; return 1; }
+static uint16_t second(void) { { L1:; } return 2; }       /* same name, nested block */
+static int8_t third(void)    { { int32_t b = 0; b = -8305; low = (uint16_t)b; } return 3; }
+```
+
+In the original report, `third` could not be emitted (BUG-008). Without
+`first` and `second` compilation stopped with the fatal error; with them it
+succeeded and the program failed at run time.
+
+- Needs the same label name in both functions and the second one inside a
+  nested block. With the second label renamed, or at function scope, the
+  fatal error is reported as usual.
+- Shown with the functions of BUG-008 and BUG-019. Functions that fail with
+  `missing direct MIR named-home offset` (BUG-014) still stop the compile.
+- This only matters while some function cannot be emitted, but then it turns
+  a compile error into a silently broken program.
+- Its historical program already passed after BUG-008/019 were fixed.
+  M-b originally re-established the mask using BUG-020's then-unsupported
+  release shape; after H fixed it, the aggregate `va_arg` trigger supplies
+  the same proof. The old program is retained as
+  `tlbreuse` rather than mistaking that incidental fixture pass for a fix.
+
+
+## Fixed in cluster M-a
+
+BUG-009 is fixed by resolving the fused wide self-store increment's named
+home in the direct wide location reader. MIR already compares the correct
+updated SSA value, and ordinary wide virtual loads already reload it from
+that object; only the inline relational path wrongly read its unused backend
+slot. Both peep and nopeep retain the same selected emitter, frame and
+instruction sequence, changing only twelve operand offsets in the reproducer.
+
+Promoted as [tndwide](tests/tndwide.c). Integer production seeds 1-300, with
+`nestedwideless` restored, give **255 ok, 45 INVALID, zero FAIL**. Before
+promotion all 21 parked programs gave **one FIXED, 20 fails**, using the
+re-established BUG-022 diagnostic trigger rather than its incidentally fixed
+historical program. All **3,527 existing functions** are byte-identical in
+both MIR censuses, and all **524 existing performance rows** are unchanged.
+Only tndwide adds a normal-stack measured row.
+
+Both strict full+extended stack/no-stack gates and the strict Python full+
+extended gate pass. Full debug and release-identical line debug work through
+both pipelines; ten debugger-host tests, six sanitized MIR host tests, the
+sanitized reproducer and require-emit diagnostics pass. The regular Python
+gate ran 327 tests: the two approved #277 failures, two mock-scheduler timeout
+errors and two existing skips. Both timeout checks were retried individually
+with Ninja and still timed out (the survivor retry also hit teardown cleanup);
+those checks were unverified at the M-a checkpoint; final retry status is
+recorded under M-b. No expectations, timeouts or skips were changed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-009](#bug-009) | #229 | [tndwide](tests/tndwide.c) |
+| [BUG-057](#bug-057) | #304 | [twincadd](tests/twincadd.c) |
+
+### BUG-009
+
+**A `do … while (d < n)` loop nested inside another loop never exits when
+`d` is 32 bits wide.** The comparison behaves as always true.
+
+```c
+int32_t i, d = 0, n = 0;
+for (i = 0; i < 4; i++) {
+    n = limit;
+    do { ++d; } while (d < n);      /* never leaves */
+}
+```
+
+With `&& passes < 100` added to the condition the function returns 103
+instead of 6, which shows the comparison is the part that is wrong.
+
+- Hangs for `int32_t` and `uint32_t` `d`; with `n` a local, a global, 16 or
+  32 bits; with a 16- or 32-bit outer counter; with an outer `for` or `while`;
+  with `++d` in the body or in the condition.
+- Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
+  `d != n`; `n` set from a constant; a 16-bit `d`.
+
+
+### M-a follow-up after merging main
+
+BUG-057/#304 flips with the existing M-a fix: direct wide addition and direct
+wide comparison share `mir_direct_wide_location()`. Its missing fused-result
+home proof is the same stale-slot defect, not a separate H or B2c fix.
+The parked prefix/compound/reversed-operand cases and their decrement,
+literal and no-loop controls are promoted as `twincadd`; no compiler code
+was changed in this follow-up. `wideincadd` is restored to production fuzzing;
+the generator test now checks that `--off known` preserves those additions
+while retaining the optional explicit feature control.
+
+Restored integer production seeds 1-300 give **290 ok, nine INVALID, one
+target-limit-only, zero FAIL**. Before promotion thirteen parked programs
+give one `FIXED` (057) and twelve `fails`; afterwards the twelve remaining
+programs fail. Both merged-baseline censuses preserve all **3,589 existing
+functions**, adding only the seven twincadd functions. All **533 merged
+performance rows** are unchanged; only twincadd adds a measured normal-stack
+row. The replacement diagnostic fixture is independently host-proven and
+masked only by the old guards, as described under M-b. Final build, known-bug,
+strict full+extended stack/no-stack and all 44 selected Python tests pass.
+The after-census launch collided with the canonical linker replacing dcc;
+an unchanged retry after rebuilding confirms both modes. No existing
+expectation, timeout or skip changed. Previously recorded exhaustive-Python
+#277/serial-scheduler exceptions are not refreshed by this targeted follow-up.
+
+### BUG-057
+
+**A fused 32-bit local increment used as an addition operand reads an
+unwritten backend slot instead of the updated named home.** A later loop
+retains the spilled/PHI schedule even when it never runs.
+
+```c
+static int8_t g = -2;
+int32_t x = 0;
+uint16_t limit = 0;
+if ((int32_t)1) { x = 1; }
+g = (++x) + (g ^ (int32_t)63);   /* expected -61, actual -62 */
+for (int8_t i = 2; (uint16_t)i < limit; ++i) --x;
+```
+
+- Prefix `++`, `+= 1`, and either addition-operand order fail in peep and
+  nopeep, with or without stack checking. The parked test has three failing
+  cases and three passing controls: prefix decrement, a literal right
+  operand, and no later loop.
+- MIR correctly uses the increment's updated result. The fused schedule
+  increments the authoritative named local home, but
+  `mir_direct_wide_location()` tries to resolve that `MIR_BINARY` through
+  `mir_direct_named_home_location()` and falls through to a reused backend
+  slot. `mir_emit_direct_wide_add()` reads the stale slot byte by byte.
+  The ordinary wide loader already resolves this fused result's named home.
+- Related to BUG-014's named-home context, but a distinct direct-add consumer
+  defect. This is independent of H's helper-comparison stack handoff:
+  the minimal function has no compound comparison RHS or wide parameter.
+- Found during H acceptance, integer seed 52: only `g0` differs after the
+  three calls of `f3`; reduction gives the example above. Parked and filed
+  as #304, not fixed in H. No historical compiler checks were run.
+- Steered by `wideincadd`: replace only integer additions with a nonconstant
+  peer and a prefix-wide-local `++`/`+= 1` value (including same-width casts)
+  with subtraction, retaining the side effect and all neighboring forms.
+
 
 ## Fixed in cluster E2-bitfield
 
@@ -786,42 +1205,44 @@ float out[2];
   parked reproducer and issue #299; no second compiler fix was added.
 - Parked as `tests/known-bugs/bug056.c`; the existing `fincdecval` steering
   keeps the unsafe shape disabled together with BUG-041. It must stay
-  disabled until both admission and this downstream typing defect are fixed.
+  disabled until admission, this downstream typing defect and BUG-059
+  implicit operand conversion materialization are fixed.
 
-## BUG-057
 
-**A fused 32-bit local increment used as an addition operand reads an
-unwritten backend slot instead of the updated named home.** A later loop
-retains the spilled/PHI schedule even when it never runs.
+## BUG-059
+
+**Latent: deferred float update arithmetic is typed as float but lacks an
+implicit integer-to-float operand conversion.** Found at restored float seed
+224 in the D2e BUG-041/056 admission trial. The trial fixes the AST update's
+unresolved-local provenance and the unary negation, but is withdrawn under
+the stop rule: the shipped admission gate still rejects this reproducer.
 
 ```c
-static int8_t g = -2;
-int32_t x = 0;
-uint16_t limit = 0;
-if ((int32_t)1) { x = 1; }
-g = (++x) + (g ^ (int32_t)63);   /* expected -61, actual -62 */
-for (int8_t i = 2; (uint16_t)i < limit; ++i) --x;
+float result;
+{ float local = 1.5f; result = -(local++) + (uint16_t)1; }
+/* expected bf000000 (-0.5f), trial bfc00000 (-1.5f) */
 ```
 
-- Prefix `++`, `+= 1`, and either addition-operand order fail in peep and
-  nopeep, with or without stack checking. The parked test has three failing
-  cases and three passing controls: prefix decrement, a literal right
-  operand, and no later loop.
-- MIR correctly uses the increment's updated result. The fused schedule
-  increments the authoritative named local home, but
-  `mir_direct_wide_location()` tries to resolve that `MIR_BINARY` through
-  `mir_direct_named_home_location()` and falls through to a reused backend
-  slot. `mir_emit_direct_wide_add()` reads the stale slot byte by byte.
-  The ordinary wide loader already resolves this fused result's named home.
-- Related to BUG-014's named-home context, but a distinct direct-add consumer
-  defect. This is independent of H's helper-comparison stack handoff:
-  the minimal function has no compound comparison RHS or wide parameter.
-- Found during H acceptance, integer seed 52: only `g0` differs after the
-  three calls of `f3`; reduction gives the example above. Parked and filed
-  as #304, not fixed in H. No historical compiler checks were run.
-- Steered by `wideincadd`: replace only integer additions with a nonconstant
-  peer and a prefix-wide-local `++`/`+= 1` value (including same-width casts)
-  with subtraction, retaining the side effect and all neighboring forms.
+- Prefix `--`, reversed operand order and chained arithmetic also fail in
+  peep/nopeep. The parked cases are independently host-clang, ASan and UBSan
+  proven. A function-scope float parameter with the same arithmetic is right.
+- Unlike stopped D2d's `type=34` unsigned-word addition and BUG-056's
+  `type=2` unary negation, the D2e trial has `MIR_UNARY type=5` and
+  `MIR_BINARY type=5 off2=5`. Its right operand is still `MIR_CONST type=2 1`,
+  not float 1.0; it emits float addition over integer bits without `__fuf`.
+- `mir_lower_conversion()` emits no arithmetic conversion when the operand
+  already has the assumed common type (here the explicit `uint16_t` cast).
+  The later deferred-type repair can retag conversions that exist, but cannot
+  retag an absent conversion. The explicit cast must keep its own type;
+  representation-identity cleanup removes it, leaving an integer constant at
+  the float binary. Integer deferred-constant widening excludes float, so it
+  does not supply the missing conversion either. A future fix must preserve
+  and discharge the implicit operand conversion obligation after common-type
+  repair, rather than retagging an explicit cast or a constant's bits.
+- Parked as `tests/known-bugs/bug059.c`; `fincdecval` remains disabled for
+  BUG-041/056/058. No admission, unary repair or binary conversion fix ships
+  in D2e-1.
+
 
 ## Fixed in cluster C1
 
@@ -834,7 +1255,7 @@ use guard that prevents cyclic PHI proofs. The existing carry/borrow schedule
 is retained; no fusion matcher, selection/cost policy or fallback is changed.
 
 The first root clears only 027/038, so the stop rule splits C1 (fixed) from
-C2 (029/037/052, still open). C2's separately traced causes are recorded in
+C2 (029/037 still open; 052 subsequently fixed in C2c). C2's separately traced causes are recorded in
 [fix-plan.md](fix-plan.md#c-assignments-lost-across-control-flow-merges-and-loop-carried-values).
 BUG-037 mutates an old wide-PHI backend slot before its backedge copy; it is
 not BUG-057's stale direct-add named-home-result read. BUG-057 remains open.
