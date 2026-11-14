@@ -7,7 +7,7 @@ wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
 source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `014b0a30` plus the cluster H handoff proof fix (2026-11-15).
+- **Compiler under test:** `db4524d2` plus the cluster C1 word-PHI home proof (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -33,11 +33,9 @@ and their historical diagnoses are retained separately below.
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
-| [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
-| [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
@@ -45,14 +43,15 @@ and their historical diagnoses are retained separately below.
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 
-Eighteen are open: fifteen give wrong results with no diagnostic
+Sixteen are open: twelve give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
 BUG-041 admission, one hangs, one stops the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The highest-priority ordinary-code defect remaining is
 BUG-013.
 
-Thirty-seven reported bugs are fixed: [two in cluster H](#fixed-in-cluster-h),
+Thirty-nine reported bugs are fixed: [two in cluster C1](#fixed-in-cluster-c1),
+[two in cluster H](#fixed-in-cluster-h),
 [one in cluster E1](#fixed-in-cluster-e1),
 [one in cluster D2c](#fixed-in-cluster-d2c),
 [one in cluster B2b](#fixed-in-cluster-b2b),
@@ -324,55 +323,6 @@ the program fails at run time.
   failing function still exits zero with empty function bodies. Steering and
   the historical reproducer are retained for the separate diagnostic fix.
 
-## BUG-027
-
-**A 16-bit local that is assigned in an `if … else` nested inside another
-`if`, and then updated, loses the assignment when a loop follows.** The value
-merged from the two arms is never stored; the update is applied to the old
-value.
-
-```c
-int f(int n)
-{
-    int l = 0, i;
-    if (one) {
-        if (one) { l = n; } else { }
-        l++;
-    }
-    for (i = 0; i < 2; i++)
-        seen = l;
-    return l;                /* f(9): want 10, dcc 1 */
-}
-```
-
-dcc emits, after the inner `if … else`:
-
-```
-L15:
-    ld l,(ix+4)        ; l = n: the value is left in HL
-    ld h,(ix+5)
-L5:
-    inc (ix-2)         ; l++ in place on l's slot, which still holds 0
-    jp nz, L16
-    inc (ix-1)
-```
-
-- Wrong for `l++`, `++l`, `l--`, `l += 2` and `l = l + 1`; with the
-  assignment in the `if` arm, the `else` arm or both
-  (`if (c) l = n; else l = 2;`); with an empty or a non-empty `else`; when the
-  outer `if` has an `else` of its own; for a local and for a parameter;
-  assigned a variable or a constant; with constant or variable conditions.
-- What follows can be a `for` or `while` loop that reads the local, or a
-  conditional expression (`wide = (n ? x : 1);`).
-- Correct: no outer `if`, or a plain block or a loop in its place; the inner
-  `if` without an `else`; `l = c ? n : l;` or a `switch` in place of the
-  inner `if … else`; nothing but `return l;` after it; an `unsigned char` or
-  `long` local.
-- The selected candidate is `spilled-phi-slot` (`DCC_MIR_COST_REPORT=1`).
-- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
-- The symptom is BUG-023's (an update applied to a stale value), but nothing
-  here is assigned from another type, so it is logged separately.
-
 ## BUG-028
 
 **`>>=` on a signed 8-bit object with a count of type `unsigned int` shifts
@@ -472,39 +422,6 @@ dcc emits the increment first and then the copy, which reads the new `i`:
 - Correct for `int16_t` locals, `do … while`, `i = i + 1` and `i += 2` in a
   `do … while`, and a copy outside a loop.
 - Found by fuzzing at `83dc7a91` (seed 7581), with and without `dcc-peep`.
-
-## BUG-038
-
-**A 16-bit local that is assigned in one arm of an `if … else` and then
-updated loses the assignment when an `if` that can return early follows.**
-The update is applied to the old value. It is the loss in BUG-027 with no
-outer `if` and no loop.
-
-```c
-unsigned short l = 0;
-if (z == 0) {            /* volatile int16_t z = 1 */
-} else {
-    l = 1;
-}
-l -= 129;
-if (!arr[1]) {           /* arr[1] is 5 */
-    return 1;
-}
-sink = l;                /* unsigned char sink: want 128, dcc 127 */
-return sink;
-```
-
-- Wrong for `l -= 129`, `l += 2` (want 3, dcc 2), an `int16_t` local, an
-  assignment that is the condition of a nested `if` (`if (l = 1) { }`), and
-  with and without `dcc-peep`.
-- Correct without the update (`if (!arr[1]) return 1; sink = l;`).
-- Without the early-return `if`, `dcc-peep` is still wrong and plain `dcc` is
-  correct in a standalone program. In a larger file with other functions the
-  same code gave different answers, so the result depends on what else is in
-  the file.
-- Found by fuzzing at `83dc7a91` (seed 9056). The reduced program had
-  `if ((int32_t)0) { } else { if (l2 = 1) { } }`, which fails in every
-  configuration including the forced MIR candidates.
 
 ## BUG-039
 
@@ -696,6 +613,147 @@ for (int8_t i = 2; (uint16_t)i < limit; ++i) --x;
 - Steered by `wideincadd`: replace only integer additions with a nonconstant
   peer and a prefix-wide-local `++`/`+= 1` value (including same-width casts)
   with subtraction, retaining the side effect and all neighboring forms.
+
+## Fixed in cluster C1
+
+BUG-027 and BUG-038 now pass in peep and nopeep. Their word PHIs name the
+right object but formerly left the merged value only in a register/backend
+slot; the fused self-store then updated the stale named-memory word.
+`mir_phi_uses_scalar_object_home()` now materializes both incoming edges for
+store-only fused word adjustments, including parameters, with a sole-result
+use guard that prevents cyclic PHI proofs. The existing carry/borrow schedule
+is retained; no fusion matcher, selection/cost policy or fallback is changed.
+
+The first root clears only 027/038, so the stop rule splits C1 (fixed) from
+C2 (029/037/052, still open). C2's separately traced causes are recorded in
+[fix-plan.md](fix-plan.md#c-assignments-lost-across-control-flow-merges-and-loop-carried-values).
+BUG-037 mutates an old wide-PHI backend slot before its backedge copy; it is
+not BUG-057's stale direct-add named-home-result read. BUG-057 remains open.
+
+Before promotion: **3 FIXED / 15 fails**. After promotion: **1 FIXED / 15
+fails** among 16 parked reproducers; the sole remaining FIXED is the
+pre-existing BUG-022 fixture, whose diagnostic defect is untouched.
+Both original **3,558-function** MIR censuses and all **528 existing perf
+rows** are byte-identical in both modes. Only two new measured rows are added.
+`tmerge16` preserves its seven baseline lines; `tearly16` preserves all four
+original lines and adds nested-assignment/carry, decrement and no-early-return
+coverage, proven by optimized and ASan/UBSan clang. The three original
+neighboring control bodies remain byte-identical in peep and nopeep.
+
+Restored integer `nestedifelse`/`wordarm` seeds 1–300: **293 ok, 7 INVALID,
+zero FAIL** across all four production configurations. Float steering is
+unchanged. Strict Python full+extended acceptance and both strict PowerShell
+full+extended release gates pass, as do focused stack/no-stack and host
+validations. CMake, compiler ASan/UBSan, required MIR emission, both extended
+censuses, 31 focused optimizer/line-debug tests and all 10 debugger-host tests
+pass. Full `-g` runs correctly and `-gline` stays release-identical through
+both pipelines, including the final promoted edge cases.
+
+Regular Python tests: **327 run; the two approved #277 failures and one
+synthetic mutation-harness timeout**. In isolation,
+`test_default_serial_and_parallel_are_equal_and_bounded` passes its serial
+phase but still times out after 180 seconds in its parallel phase; that one
+harness method remains unverified under shared load. No expectations, skips,
+harness timing or unrelated code are changed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-027](#bug-027) | #247 | [tmerge16](tests/tmerge16.c) |
+| [BUG-038](#bug-038) | #258 | [tearly16](tests/tearly16.c) |
+
+### BUG-027
+
+**Fixed:** merged word values are materialized in their local/parameter
+object home before a fused update. Regression: [tmerge16.c](tests/tmerge16.c),
+[stdout](tests/baselines/tmerge16.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**A 16-bit local that is assigned in an `if … else` nested inside another
+`if`, and then updated, loses the assignment when a loop follows.** The value
+merged from the two arms is never stored; the update is applied to the old
+value.
+
+```c
+int f(int n)
+{
+    int l = 0, i;
+    if (one) {
+        if (one) { l = n; } else { }
+        l++;
+    }
+    for (i = 0; i < 2; i++)
+        seen = l;
+    return l;                /* f(9): want 10, dcc 1 */
+}
+```
+
+dcc emits, after the inner `if … else`:
+
+```
+L15:
+    ld l,(ix+4)        ; l = n: the value is left in HL
+    ld h,(ix+5)
+L5:
+    inc (ix-2)         ; l++ in place on l's slot, which still holds 0
+    jp nz, L16
+    inc (ix-1)
+```
+
+- Wrong for `l++`, `++l`, `l--`, `l += 2` and `l = l + 1`; with the
+  assignment in the `if` arm, the `else` arm or both
+  (`if (c) l = n; else l = 2;`); with an empty or a non-empty `else`; when the
+  outer `if` has an `else` of its own; for a local and for a parameter;
+  assigned a variable or a constant; with constant or variable conditions.
+- What follows can be a `for` or `while` loop that reads the local, or a
+  conditional expression (`wide = (n ? x : 1);`).
+- Correct: no outer `if`, or a plain block or a loop in its place; the inner
+  `if` without an `else`; `l = c ? n : l;` or a `switch` in place of the
+  inner `if … else`; nothing but `return l;` after it; an `unsigned char` or
+  `long` local.
+- The selected candidate is `spilled-phi-slot` (`DCC_MIR_COST_REPORT=1`).
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+- The symptom is BUG-023's (an update applied to a stale value), but nothing
+  here is assigned from another type, so it is logged separately.
+
+### BUG-038
+
+**Fixed:** merged word values are materialized in their local/parameter
+object home before a fused update. Regression: [tearly16.c](tests/tearly16.c),
+[stdout](tests/baselines/tearly16.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**A 16-bit local that is assigned in one arm of an `if … else` and then
+updated loses the assignment when an `if` that can return early follows.**
+The update is applied to the old value. It is the loss in BUG-027 with no
+outer `if` and no loop.
+
+```c
+unsigned short l = 0;
+if (z == 0) {            /* volatile int16_t z = 1 */
+} else {
+    l = 1;
+}
+l -= 129;
+if (!arr[1]) {           /* arr[1] is 5 */
+    return 1;
+}
+sink = l;                /* unsigned char sink: want 128, dcc 127 */
+return sink;
+```
+
+- Wrong for `l -= 129`, `l += 2` (want 3, dcc 2), an `int16_t` local, an
+  assignment that is the condition of a nested `if` (`if (l = 1) { }`), and
+  with and without `dcc-peep`.
+- Correct without the update (`if (!arr[1]) return 1; sink = l;`).
+- Without the early-return `if`, `dcc-peep` is still wrong and plain `dcc` is
+  correct in a standalone program. In a larger file with other functions the
+  same code gave different answers, so the result depends on what else is in
+  the file.
+- Found by fuzzing at `83dc7a91` (seed 9056). The reduced program had
+  `if ((int32_t)0) { } else { if (l2 = 1) { } }`, which fails in every
+  configuration including the forced MIR candidates.
 
 ## Fixed in cluster H
 

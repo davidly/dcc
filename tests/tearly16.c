@@ -1,8 +1,6 @@
-/* BUG-038: a 16-bit local assigned in one arm of an `if … else` and then
- * updated loses the assignment when an `if` that may return early follows
- * and the local is used after it: the update is applied to the old value.
- * The same loss as BUG-027 without the outer `if` and without a loop. It is
- * correct when the local is not updated. */
+/* Word PHI assignments must reach their named home before fused updates
+ * followed by an early return. Cover signedness, nested assignments, byte
+ * carry, decrement, and the no-update/no-early-return neighboring shapes. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -70,11 +68,57 @@ static int no_update(void)
     return sink;
 }
 
+static int nested_carry(void)
+{
+    unsigned short l = 0;
+    if (z == 0) {
+    } else {
+        if (l = 255) {
+        }
+    }
+    ++l;
+    if (!arr[1]) {
+        return 1;
+    }
+    sink = l;
+    return sink;
+}
+
+static int decrement(void)
+{
+    unsigned short l = 0;
+    if (z == 0) {
+    } else {
+        l = 1;
+    }
+    --l;
+    if (!arr[1]) {
+        return 1;
+    }
+    sink = l;
+    return sink;
+}
+
+static int no_early_return(void)
+{
+    unsigned short l = 0;
+    if (z == 0) {
+    } else {
+        l = 1;
+    }
+    l += 2;
+    sink = l;
+    return sink;
+}
+
 int main(void)
 {
     printf("else arm %d\n", else_arm());
     printf("add constant %d\n", add_constant());
     printf("signed local %d\n", signed_local());
     printf("no update %d\n", no_update());
+    printf("nested carry %d\n", nested_carry());
+    printf("decrement %d\n", decrement());
+    printf("no early return %d\n", no_early_return());
     return 0;
 }

@@ -52,8 +52,8 @@ test:
 `tests/tcmwide.c`, `tests/tcmfloat.c`, `tests/tinc32a.c`, `tests/tflinc.c`,
 `tests/tpephl.c`, `tests/tpost16.c`, `tests/tpostbr.c`, `tests/tpost32.c`,
 `tests/tflcnot.c`, `tests/tflcini.c`, `tests/tconstdz.c`, `tests/tdeadblk.c`,
-`tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c` and `tests/tflncmp.c`
-were promoted this way.
+`tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c`, `tests/tflncmp.c`,
+`tests/tmerge16.c` and `tests/tearly16.c` were promoted this way.
 
 ## Adding one
 

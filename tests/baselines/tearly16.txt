@@ -2,3 +2,6 @@ else arm 128
 add constant 3
 signed local 128
 no update 1
+nested carry 0
+decrement 0
+no early return 3
