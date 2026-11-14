@@ -156,10 +156,9 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
                 is_cmp_op(n->a->op) && ast_expr_supported(n->a) &&
                 (ast_value_is_float_word(n->a->a) || ast_value_is_float_word(n->a->b)))
                 return 1;
-            /* `!<constant-int-expr>` (including chains like `!!0`) folds to a
-             * single 0/1 value, so allow it even though
-             * the operand is itself a constant. */
-            if (n->op == '!') {
+            /* Admit foldable integer unary expressions regardless of the
+             * operand's shape, including logicals and nested binary folds. */
+            {
                 long cv;
                 if (ast_const_scalar_fold(n, &cv))
                     return 1;
@@ -275,22 +274,53 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
     }
 }
 
+/* Numeric compound assignments share MIR's load/convert/compute/narrow/store
+ * contract. Admission depends on the operands, not the lvalue spelling. */
+static int ast_integer_compound_supported(const struct AstNode *n)
+{
+    int type;
+    struct Sym *s;
+
+    switch (n->a->kind) {
+    case AST_IDENT:
+        s = find_sym(n->a->sval);
+        if (s == NULL || s->is_array || s->is_const_value || s->storage == SC_FUNC)
+            return 0;
+        type = s->type;
+        break;
+    case AST_INDEX:
+        if (!ast_index_lvalue_elem_type(n->a, &type))
+            return 0;
+        break;
+    case AST_MEMBER:
+        if (!ast_member_bitfield_lvalue_type(n->a, &type) &&
+            !ast_member_lvalue_type(n->a, &type))
+            return 0;
+        break;
+    case AST_UNARY:
+        if (n->a->op != '*' || !ast_deref_lvalue_type(n->a, &type))
+            return 0;
+        break;
+    default:
+        return 0;
+    }
+    if ((!ast_is_plain_int_type(type) && !type_is_long(type)) ||
+        type_ptr_depth(type) > 0 || type_is_bool(type) ||
+        !ast_expr_supported(n->b))
+        return 0;
+    if (ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b))
+        return 1;
+    return (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
+            n->op == TOK_MULEQ || n->op == TOK_DIVEQ) &&
+           ast_value_is_float_word(n->b);
+}
+
 static int ast_assign_supported_uncached(const struct AstNode *n)
 {
     switch (n->kind) {
     case AST_ASSIGN: {
-        /* Narrow slice: `lhs = rhs` and compound `lhs OP= rhs` where lhs is a
-         * bare plain-int (16-bit, signed or unsigned) scalar reachable by the
-         * direct store helper - an IX-direct local/param or a non-array
-         * global/extern word.  Plain `=` uses the general `=` lowering; the
-         * compound ops (+=,-=,*=,/=,%=,&=,|=,^=) use the general compound-assign
-         * lowering (load lhs, push, eval rhs, combine, store).  The dead-result
-         * `i += const` / `i -= ix_local` fast paths are declined so the AST
-         * never emits a longer sequence.  A plain `=` to a SUBSCRIPT lvalue
-         * `arr[i] = rhs` (int element) is also supported via the general
-         * address+store lowering.  Shift-assigns, other non-identifier lvalues,
-         * char-element subscripts, arrays, consts, structs, pointers, chars,
-         * longs and floats all decline here. */
+        /* Integer compounds share a numeric admission policy. Plain assignments
+         * and other compound types retain the shape-specific gates below. */
         struct Sym *s;
         int is_compound = (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
                            n->op == TOK_MULEQ || n->op == TOK_DIVEQ ||
@@ -298,7 +328,9 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                            n->op == TOK_OREQ  || n->op == TOK_XOREQ ||
                            n->op == TOK_SHLEQ || n->op == TOK_SHREQ);
         if (n->op != '=' && !is_compound)
-            return 0;                     /* shift-assign etc. decline */
+            return 0;
+        if (is_compound && ast_integer_compound_supported(n))
+            return 1;
         if (ast_global_byte_array_const_store(n, NULL, NULL, NULL))
             return 1;
         if (ast_global_byte_array_fast_store(n, NULL, NULL, NULL, NULL,

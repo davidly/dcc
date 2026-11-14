@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has thirty-one open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twenty-eight open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -9,7 +9,8 @@ fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), B1 (#286),
-K (#278) and L (#279) are confirmed and fixed. B3 confirms the common
+K (#278), L (#279), F (#296) and G1 (#295) are confirmed and fixed.
+B3 confirms the common
 forwarded-operand defect in BUG-026 and the formerly E-grouped BUG-017. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
 B was likewise disproved and split into B1–B4. I was disproved and split
@@ -562,9 +563,39 @@ conversion insertion that feeds MIR.
 | BUG-018 | #238 | `op=` of a 32-bit value to a bit-field or to an element of a 16-bit array member: rejected |
 | BUG-043 | #263 | `op=` on an integer lvalue with a float right operand: rejected |
 
-All `DCC-E1002`. Upstream `34e35b3a` handled plain members, elements and
-pointer targets; these are the remaining lvalue kinds and the mixed-type
-case. Likely one lowering switch that enumerates lvalue kinds.
+**Confirmed shared root cause:** stale AST admission gates enumerate legacy
+lvalue/RHS restrictions although the existing MIR numeric compound contract
+already loads, converts, computes, narrows and stores all three shapes.
+One shared integer-compound admission rule validates the existing lvalue proofs
+and numeric operand/operator types. Upstream `34e35b3a` already supplied the
+lowering; no lowering, allocation, selection, emitter or runtime change is
+needed. All three bugs share this cause, so no F1/F2 split or second compiler
+fix is necessary.
+
+- Before promotion: 35 reproducers give three `FIXED`, 32 `fails`; only
+  BUG-011/018/043 flip. BUG-055/#294 is an independent restored-float finding
+  with no integer compounds, parked and narrowly steered, not fixed here.
+- Both censuses are byte-identical across all 3,436 existing functions,
+  including hashes; all 509 old perf rows retain their exact bytes. New
+  byte-member and integer/float sequences match already-supported controls.
+- Restored integer features: 213 ok, 85 INVALID, two target-limit-only,
+  zero FAIL for production seeds 1-300. Restored `icasgf`: final float batch
+  256 ok, 44 INVALID, zero FAIL after triaging seed 241; 3,000-seed steering
+  proof clean. The discovery batch was 255 ok, 44 INVALID, one BUG-055 FAIL.
+- Promoted `tcmbyte`, `tcmwide`, `tcmfloat`, with three newly measured normal-
+  stack PowerShell rows. Strict stack/no-stack full+extended, Python runall,
+  host/sanitizer baselines, native MIR, debugger/metadata and require-emit
+  gates pass.
+
+The final regular Python gate runs 314 tests with the two approved #277
+failures and two existing skips. It also hits the unchanged mock mutation
+fixture's 180-second deadline in
+`test_default_serial_and_parallel_are_equal_and_bounded`, then a directory-
+not-empty cleanup error (two errors). The same fixture timed out in two earlier
+runs; its scripts and manifest are byte-unchanged and it builds a synthetic
+mock compiler, not the modified dcc sources. The #280 fixture's final assertion
+is therefore unverified on this host. No compiler/harness fix, skip, expectation
+refresh, historical compiler check or prepush run was made for these failures.
 
 ### G. Constant expressions in the front end
 
@@ -575,8 +606,73 @@ case. Likely one lowering switch that enumerates lvalue kinds.
 | BUG-040 | #260 | Static float initialiser must be a bare constant |
 | BUG-042 | #262 | Float constant that must be folded or truth-tested: rejected |
 
-Constant folding that stops at the first non-trivial form. BUG-033 needs the
-fold to leave an unevaluated division in place rather than reject.
+The shared-cause hypothesis is disproved: the first root-cause fix clears
+only BUG-012 (**G1**); BUG-033/040/042 remain **G2**. Per the approved stop
+rule, no second independent fix is included.
+
+**G1 — integer unary constant-expression admission.** The AST support gate
+already admits `!` when `ast_const_scalar_fold()` proves the expression, but
+rejects `-`, `+` and `~` over constant logicals or nested binary/unary forms.
+Apply that existing foldability proof to all four unary operators, preserving
+all preceding fast-path gates. MIR already lowers and folds these operations;
+no parser, folder, MIR, emitter or runtime changes are needed. BUG-012's
+original functions now emit byte-identically to their accepted literal
+neighbors, with no instruction or frame cost.
+
+**G2 — separately traced, not fixed:**
+
+- **BUG-033:** `ast_const_plain_int_binary_supported()` explicitly declines a
+  constant zero divisor; the integer folder also correctly declines its
+  evaluation. The generic constant-binary gate then rejects the expression.
+  A future fix must admit and retain the unevaluated `/` or `%` operation,
+  as clang does, never fold it to a made-up value. The variable-numerator
+  neighbor uses the nonconstant arithmetic path.
+- **BUG-040:** `parse_global_init()` and aggregate initializers call
+  `parse_float_init_literal()`. Its compact token parser accepts a bare signed
+  literal or the narrow cast/multiply/divide form, not parentheses and general
+  float constant arithmetic. This is independent of function-body AST
+  admission; automatic initializers can instead reach AST/MIR capture.
+- **BUG-042:** `ast_const_scalar_fold()` has no floating-literal result and
+  its binary evaluator is integer-only. Constant unary/logical gates need
+  that fold proof, while `ast_cond_generic()` explicitly excludes constant
+  floats from its runtime truth-test path. Float comparisons alone have their
+  own condition gate, explaining the accepted neighbors. Extending the
+  integer unary admission proof cannot admit these float forms.
+
+G1 acceptance: **1 FIXED, 33 fails** before promotion, no out-of-cluster
+flips. Integer `negnotconst` is restored; production seeds 1–300 give
+**216 ok, 82 INVALID, two target-limit-only, zero FAIL** in all four
+configurations, and the remaining disabled-shape proof covers 3,000 seeds.
+BUG-012 is promoted as `tconstun`, including constant logicals, the six
+nested unary/binary facets, and variable/single-unary controls. Host and
+ASan/UBSan stdout proof, host validation, and normal-stack performance
+measurement pass; only its new performance row is added.
+
+All **509 existing performance rows are unchanged**. The ordinary census
+retains **3,436 existing functions byte-identically in each mode**; the
+extended census retains **274 functions in each mode** (548 rows), with
+zero hash or metric changes. Strict Python full+extended and PowerShell
+full+extended stack/no-stack runs pass. CMake compiler build and focused
+line-debug tests pass. The original fixed shape has release-identical
+`-gline` bytes and intact full-debug locals/frame locations. After promotion,
+all **33 remaining reproducers fail**, and only the new app adds four
+ordinary-census functions per mode. Full debugger-host tests pass **10/10**;
+the first run's unrelated terminal endpoint-cleanup assertion passed on
+its isolated retry and the subsequent complete run, without changes.
+
+The full Python gate ran **312 tests** with the two approved pre-existing
+#277 failures (`test_mir_campaign_baselines`, `test_mir_exact_controls`),
+two existing skips, and a 180-second timeout in
+`test_default_serial_and_parallel_are_equal_and_bounded`. An unchanged
+isolated retry completed its serial phase but saw two mock host-verifier
+exit-139 results in its parallel phase (the #280 fixture pattern: mutations
+`preprocessor-character-hex` and `phi-consumer-value`). The mixed-outcome
+fixture passed in the full run. These mock compilers build only the test's
+synthetic `mir_verify.c`, never the changed AST module; no test expectations,
+limits, skips, fixtures or production runner code were modified. The same complete serial/parallel fixture passes unchanged with the installed
+Ninja generator. The Makefiles timeout/exit-139 instability is retained as an
+out-of-cluster observation, not hidden or fixed. No historical compiler
+checks or `prepush.ps1` run were performed.
 
 ### H. Comparison with a compound right operand on a 32-bit or float parameter
 
@@ -893,8 +989,10 @@ so it matters more than its size suggests. Both are one-offs.
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
 | D2 | | open | BUG-021/024 stored-home lifetime; BUG-010/041 AST value admission; no independent compiler fixes added |
 | E | | open | |
-| F | | open | |
-| G | | open | |
+| F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
+| G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
+| G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |
+| G2 | | open | 033 zero-divisor admission; 040 static float token parser; 042 float folding/truth gates |
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |

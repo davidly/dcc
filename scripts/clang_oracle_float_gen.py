@@ -49,7 +49,7 @@ FEATURES = frozenset((
     # forms that hit a logged dcc defect; see KNOWN_BUGS
     'fdivround', 'fconstfold', 'icasgf', 'fblockneg', 'fnegcmp', 'fretconv',
     'fintprodadd', 'fu32cast', 'fnegzero_not', 'fparamcmp', 'fblockint', 'finittype',
-    'fconstjump', 'fselfop', 'fconstcond', 'floopcallarg', 'fptrparam'))
+    'fconstjump', 'fselfop', 'fconstcond', 'floopcallarg', 'fptrparam', 'farrloopindex'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering.
@@ -57,7 +57,6 @@ KNOWN_BUGS = {
     'fdivround': 'BUG-039',
     'fincdecval': 'BUG-041',
     'fconstfold': 'BUG-042',
-    'icasgf': 'BUG-043',
     'fblockneg': 'BUG-015',
     'fnegcmp': 'BUG-045',
     'fparamcmp': 'BUG-020',
@@ -65,6 +64,7 @@ KNOWN_BUGS = {
     'finittype': 'BUG-016',
     'fconstjump': 'BUG-019',
     'fconstcond': 'BUG-052',
+    'farrloopindex': 'BUG-055',
 }
 
 
@@ -289,6 +289,42 @@ def simple_const(v, t):
 
 # ---------------------------------------------------------------- shapes
 
+def loop_float_array_stores(fn):
+    """Variable-index local float writes in a branch between nested loops
+    and a later while: the confirmed BUG-055 context (constant indexes pass)."""
+    def statements(root):
+        stack = [root]
+        while stack:
+            st = stack.pop()
+            yield st
+            stack.extend(child for b in st.b if b is not None for child in b.stmts)
+
+    roots = fn.body.stmts
+    nested_loop = False
+    stores = []
+    for i, st in enumerate(roots):
+        if st.op in ('for', 'while') and any(
+                child.op in ('for', 'while') for child in list(statements(st))[1:]):
+            nested_loop = True
+        if st.op != 'if' or not nested_loop or not any(
+                child.op == 'while' for later in roots[i + 1:] for child in statements(later)):
+            continue
+        slots = []
+        for b in st.b:
+            if b is not None:
+                base.block_slots(b, slots)
+        stack = [slot_get(slot) for slot in slots]
+        while stack:
+            e = stack.pop()
+            if e.op == 'asg':
+                lv = e.k[0]
+                if lv.op == 'idx' and lv.a.storage == 'local' and ty(lv) is F32 \
+                        and lv.k[0].op != 'const':
+                    stores.append(lv)
+            stack.extend(e.k)
+    return stores
+
+
 def known_shapes(prog):
     """Disabled bug features whose shapes survived steering or repair."""
     found = set()
@@ -354,6 +390,8 @@ def known_shapes(prog):
             if any(e is not None and is_fconst(e) for e in tests):
                 found.add('fconstfold')
     for fn in prog.funcs:
+        if loop_float_array_stores(fn):
+            found.add('farrloopindex')
         stack = [fn.body]
         while stack:
             b = stack.pop()
@@ -1260,7 +1298,7 @@ class Gen:
     def steer(self):
         """Rewrite the shapes of KNOWN_BUGS that are easier to recognise in
         the finished tree than at the point of generation. Each rewrite
-        keeps the program valid C with the same meaning under clang. A
+        keeps the program valid C for the clang oracle. A
         rewrite can expose another shape, so the pass runs to a fixpoint."""
         for _ in range(4):
             before = self.prog.nid
@@ -1270,6 +1308,9 @@ class Gen:
 
     def steer_pass(self):
         for fn in self.prog.funcs:
+            if not self.on('farrloopindex'):
+                for lv in loop_float_array_stores(fn):
+                    lv.k[0] = self.mk('const', a=0, t=I16)
             paramcmp = not self.on('fparamcmp')
             for slot in expr_slots(self.prog, [fn]):
                 e = slot_get(slot)

@@ -1,8 +1,5 @@
-/* BUG-043: a compound assignment to an integer lvalue whose right operand
- * is a float is rejected with DCC-E1002 for every integer width and
- * operator (`l *= f`, `n += f`, `u -= f`, `c8 += f`, `l -= 1.5f`). The
- * expanded form `l = l * f` and a float lvalue with an integer operand
- * (`f *= l`) are accepted. */
+/* Integer compound assignments with float operands across integer widths,
+ * signedness, local/global storage, variable/constant operands and operators. */
 #include <stdint.h>
 #include <stdio.h>
 
