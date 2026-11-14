@@ -1,0 +1,12 @@
+multiply block 0003ae4e
+multiply outer 0003ae4e
+compare char block 0
+compare char outer 0
+compare int block 0
+compare int outer 0
+byte block 1
+byte outer 1
+shift block 1
+shift outer 1
+divide block 136
+divide outer 136
