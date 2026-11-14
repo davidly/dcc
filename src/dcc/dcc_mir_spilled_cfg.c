@@ -2799,6 +2799,16 @@ static int mir_binary_is_narrow_phi_adjust(
             mir.insns[instruction].src2 == phi->dst ||
             mir_call_uses_value(&mir.insns[instruction], phi->dst))
             return 0;
+    /* Earlier PHIs consume their sources on predecessor edges, not at
+     * their textual instruction. Do not overwrite a pending emitted copy;
+     * unused PHI destinations have no physical edge use. */
+    if (mir_value_live_out_of_instruction(phi->dst, index))
+        for (instruction = mir_next_use(phi->dst, -1);
+             instruction >= 0 && instruction < index;
+             instruction = mir_next_use(phi->dst, instruction))
+            if (mir.insns[instruction].opcode == MIR_PHI &&
+                mir_value_has_use(mir.insns[instruction].dst))
+                return 0;
     if (phi_value != NULL)
         *phi_value = phi->dst;
     if (store_index != NULL)

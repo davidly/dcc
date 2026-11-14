@@ -7,7 +7,7 @@ wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
 source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `014b0a30` plus the cluster H handoff proof fix (2026-11-15).
+- **Compiler under test:** `20385ece` plus the cluster N narrow-PHI edge-use fix (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -38,17 +38,17 @@ and their historical diagnoses are retained separately below.
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
-| [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 
-Fifteen are open: twelve give wrong results with no diagnostic
+Fourteen are open: ten give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
 BUG-041 admission, one hangs, one stops the compile,
 and one (BUG-022) turns a compile error into
 a broken program. BUG-013's unsigned bit-field promotion is fixed below.
 
-Forty reported bugs are fixed: [one in cluster E2-bitfield](#fixed-in-cluster-e2-bitfield),
+Forty-one reported bugs are fixed: [one in cluster N](#fixed-in-cluster-n),
+[one in cluster E2-bitfield](#fixed-in-cluster-e2-bitfield),
 [two in cluster E2-shift](#fixed-in-cluster-e2-shift),
 [two in cluster H](#fixed-in-cluster-h),
 [one in cluster E1](#fixed-in-cluster-e1),
@@ -529,7 +529,48 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
 
-## BUG-055
+---
+
+## Fixed in cluster N
+
+BUG-055 is a narrow-counter PHI edge-use defect, not a lost float store.
+`mir_binary_is_narrow_phi_adjust()` updated the counter's slot in place while
+an earlier PHI still needed its old value on the loop backedge. The array
+store correctly executed, but indexed element 1 instead of 0. The matcher
+now checks existing CFG live-out and earlier used PHI destinations before
+coalescing the update. Unused PHIs do not disable the already-correct
+constant-index schedule; the wide-counter matcher remains unchanged.
+
+Promoted as [tflidx](tests/tflidx.c), retaining every original baseline line
+and adding then-arm, integer-array and decrement-index coverage. Both
+production pipelines and all release/line/full-debug combinations pass;
+line-debug COMs are release-identical. The constant-index and reduced-CFG
+controls retain identical schedules, and the fixed function uses the same
+selected spilled candidate as before, with separate old/update values like
+the reduced-CFG control and no fallback selector.
+
+Restored float production seeds 1-300: **283 ok, 17 INVALID, zero FAIL**;
+remaining-known-shape steering proof: 3,000 seeds clean. No new bug was found.
+Both census TSVs are byte-identical across **3,574 existing functions** and
+all **530 existing performance rows** are unchanged; only `tflidx` adds a
+new measured stack-check row. Pre-promotion tally: **16 reproducers, 2 FIXED,
+14 fails**; post-promotion: **15 reproducers, 1 FIXED, 14 fails**. Only BUG-055
+newly flips; BUG-022's historical fixture-only pass remains pre-existing,
+and BUG-037 still fails.
+
+Strict full+extended release gates, canonical/CMake builds, six MIR host
+tests, ten debugger-host tests, focused compiler/metadata tests,
+require-emit checks and ASan/UBSan with independent liveness/cache verification
+pass. The regular Python gate retains approved #277 golden failures and
+machine-load harness exceptions/retries detailed in [cluster N](fix-plan.md#n-lost-variable-index-local-float-array-store).
+No harness expectations, timeouts, skips or existing baselines were changed;
+no old-compiler/dating checks or `prepush.ps1` were run.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-055](#bug-055) | #294 | [tflidx](tests/tflidx.c) |
+
+### BUG-055
 
 **A variable-index store into a local float array inside an `else` arm can
 be lost between nested loops and a later `while` with conditional float
@@ -549,10 +590,10 @@ in-range float-to-`int32_t` conversion and retains the failing context.
   `while`, or the intervening unused conditional-float expression is removed.
 - A simple 16-bit counter copy followed by the indexed local-array store is
   correct; this is not sufficient evidence to merge the finding into BUG-037.
-- No compiler fix is attempted here. Float steering `farrloopindex` replaces
+- Historical float steering `farrloopindex` replaced
   variable indexes only for local float-array writes inside a root-level branch
-  preceded by a nested loop and followed by a `while`; scalar, global, member,
-  constant-index and other indexed stores remain enabled.
+  preceded by a nested loop and followed by a `while`. That known-bug steer is
+  now removed; the explicit feature opt-out remains available.
 
 ---
 
