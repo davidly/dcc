@@ -34,6 +34,21 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_nested_wide_increment_compare_reads_the_incremented_home(self):
+        for typename in ("int32_t", "uint32_t"):
+            source = ("#include <stdint.h>\n" + typename + " limit = 3; " +
+                      typename + " probe(void) { " + typename +
+                      " d = 0, n = 0; int i; for (i = 0; i < 4; ++i) { "
+                      "n = limit; do { ++d; } while (d < n); } return d; }")
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(typename=typename, options=options):
+                    assembly = self.compile(source, options)
+                    home = re.search(r"inc \(ix(-\d+)\)", assembly)
+                    self.assertIsNotNone(home, assembly)
+                    offset = int(home.group(1))
+                    for byte in range(4):
+                        self.assertIn("ld a,(ix%+d)" % (offset + byte), assembly)
+
     def test_dead_scopes_compile_with_debug_and_vla_metadata(self):
         cases = (
             "if (sel) { return 1; { int b = 1; out += b; } } return 0;",

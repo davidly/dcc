@@ -1430,7 +1430,6 @@ KNOWN_BUGS = {
     'bytevarshl': 'BUG-002',
     'logicinit': 'BUG-004',
     'bfdivasg': 'BUG-006',
-    'nestedwideless': 'BUG-009',
     'bfpromo': 'BUG-013',
     'blockptr': 'BUG-015',
     'inittype': 'BUG-016',

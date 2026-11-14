@@ -26047,8 +26047,13 @@ static int mir_direct_wide_location(int value,
      * holds only its own bytes, so it has no four-byte location to read. */
     if (definition == NULL || type_size(definition->type) != 4)
         return 0;
-    if (mir_value_has_direct_named_home(value) &&
-        mir_direct_named_home_location(definition, &storage, &offset)) {
+    if (mir_value_has_direct_named_home(value)) {
+        /* Fused self-store increments leave their result in the object's
+         * ascending-byte home, not in the unused SSA backend slot. */
+        if (!mir_direct_named_home_location(definition, &storage, &offset) &&
+            !mir_binary_is_selfstore_wide_increment(
+                (int)(definition - mir.insns), NULL, &offset))
+            return 0;
         iy_offset = offset + mir_effective_local_bytes() + mir.aggregate_temp_bytes;
         if (mir_virtual_iy_base && iy_offset >= -128 && iy_offset + 3 <= 127) {
             location->base = "iy";

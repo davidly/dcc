@@ -29,7 +29,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-002](#bug-002) | #223 | wrong result | `unsigned char` local `<<=` an `unsigned char` variable is not truncated on return |
 | [BUG-004](#bug-004) | #225 | wrong result | 16-bit local set from `&&`/`\|\|`, stored to a 32-bit lvalue, leaves a garbage high word |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
-| [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
@@ -48,14 +47,15 @@ and their historical diagnoses are retained separately below.
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 
-Twenty-one are open: sixteen give wrong results with no diagnostic
+Twenty are open: fifteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
-BUG-041 admission, one hangs, three stop the compile,
+BUG-041 admission, three stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-013 and BUG-016.
 
-Thirty-three reported bugs are fixed: [one in cluster B2b](#fixed-in-cluster-b2b),
+Thirty-four reported bugs are fixed: [one in cluster M-a](#fixed-in-cluster-m-a),
+[one in cluster B2b](#fixed-in-cluster-b2b),
 [one in cluster D2b](#fixed-in-cluster-d2b),
 [two in cluster D2a](#fixed-in-cluster-d2a),
 [one in cluster K2](#fixed-in-cluster-k2),
@@ -160,27 +160,6 @@ s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
   `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
   (their low bits do not depend on the extension); a signed bit-field.
 
-## BUG-009
-
-**A `do … while (d < n)` loop nested inside another loop never exits when
-`d` is 32 bits wide.** The comparison behaves as always true.
-
-```c
-int32_t i, d = 0, n = 0;
-for (i = 0; i < 4; i++) {
-    n = limit;
-    do { ++d; } while (d < n);      /* never leaves */
-}
-```
-
-With `&& passes < 100` added to the condition the function returns 103
-instead of 6, which shows the comparison is the part that is wrong.
-
-- Hangs for `int32_t` and `uint32_t` `d`; with `n` a local, a global, 16 or
-  32 bits; with a 16- or 32-bit outer counter; with an outer `for` or `while`;
-  with `++d` in the body or in the condition.
-- Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
-  `d != n`; `n` set from a constant; a 16-bit `d`.
 
 ## BUG-013
 
@@ -764,6 +743,60 @@ in-range float-to-`int32_t` conversion and retains the failing context.
   constant-index and other indexed stores remain enabled.
 
 ---
+
+## Fixed in cluster M-a
+
+BUG-009 is fixed by resolving the fused wide self-store increment's named
+home in the direct wide location reader. MIR already compares the correct
+updated SSA value, and ordinary wide virtual loads already reload it from
+that object; only the inline relational path wrongly read its unused backend
+slot. Both peep and nopeep retain the same selected emitter, frame and
+instruction sequence, changing only twelve operand offsets in the reproducer.
+
+Promoted as [tndwide](tests/tndwide.c). Integer production seeds 1-300, with
+`nestedwideless` restored, give **255 ok, 45 INVALID, zero FAIL**. Before
+promotion all 21 parked programs gave **one FIXED, 20 fails**, using the
+re-established BUG-022 diagnostic trigger rather than its incidentally fixed
+historical program. All **3,527 existing functions** are byte-identical in
+both MIR censuses, and all **524 existing performance rows** are unchanged.
+Only tndwide adds a normal-stack measured row.
+
+Both strict full+extended stack/no-stack gates and the strict Python full+
+extended gate pass. Full debug and release-identical line debug work through
+both pipelines; ten debugger-host tests, six sanitized MIR host tests, the
+sanitized reproducer and require-emit diagnostics pass. The regular Python
+gate ran 327 tests: the two approved #277 failures, two mock-scheduler timeout
+errors and two existing skips. Both timeout checks were retried individually
+with Ninja and still timed out (the survivor retry also hit teardown cleanup);
+these harness checks remain unverified. No expectations, timeouts or skips
+were changed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-009](#bug-009) | #229 | [tndwide](tests/tndwide.c) |
+
+### BUG-009
+
+**A `do … while (d < n)` loop nested inside another loop never exits when
+`d` is 32 bits wide.** The comparison behaves as always true.
+
+```c
+int32_t i, d = 0, n = 0;
+for (i = 0; i < 4; i++) {
+    n = limit;
+    do { ++d; } while (d < n);      /* never leaves */
+}
+```
+
+With `&& passes < 100` added to the condition the function returns 103
+instead of 6, which shows the comparison is the part that is wrong.
+
+- Hangs for `int32_t` and `uint32_t` `d`; with `n` a local, a global, 16 or
+  32 bits; with a 16- or 32-bit outer counter; with an outer `for` or `while`;
+  with `++d` in the body or in the condition.
+- Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
+  `d != n`; `n` set from a constant; a 16-bit `d`.
+
 
 ## Fixed in cluster B2b
 

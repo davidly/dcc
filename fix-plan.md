@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has twenty-one open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twenty open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -1322,7 +1322,54 @@ checks passed. The two regular Python-test failures match clean rebuilt
 | BUG-022 | #242 | Reused label name in a nested block hides `MIR emission is required` for later functions |
 
 BUG-022 is a diagnostic bug that turns a compile error into broken output,
-so it matters more than its size suggests. Both are one-offs.
+so it matters more than its size suggests. Both are one-offs. The maintainer
+approved M-a (009) and M-b (022) as independent single-bug commits in one PR;
+the output-preservation stop rule applies separately to each.
+
+#### M-a trace: BUG-009
+
+MIR lowering correctly compares the updated `d` SSA value with the bound.
+The selected spilled scalar CFG emitter fuses `load d; +1; store d` into
+four ascending-byte in-place increments. Its ordinary wide virtual loader
+already reloads this result from the named object home, but
+`mir_direct_wide_location` only resolved loads/parameters: the relational
+fast path fell through to the unused SSA backend slot. For the signed
+reproducer it incremented IX-8..IX-5 and compared IX-22..IX-23 instead.
+The fix reuses the existing self-store proof in the direct-location resolver,
+keeping the same inline comparison and selector. In both peep and nopeep
+assembly only the twelve operand offsets change across the three functions:
+there are no added instructions, calls, frame bytes or fallbacks.
+
+M-a acceptance: the re-established 21-program known-bugs set gives one
+`FIXED` (009) and twenty `fails`; after promotion twenty parked programs
+remain. Both 3,527-function censuses have zero existing changes, and all 524
+existing perf rows are unchanged. Strict full+extended stack/no-stack and
+Python full+extended gates pass. The 300-seed integer batch gives 255 ok,
+45 INVALID, zero FAIL with `nestedwideless` restored. tndwide has a new
+normal-stack measured row and passes host validation. Debug pipelines,
+require-emit, ten debugger-host and six sanitized MIR host tests pass.
+The 327-test Python gate has the approved two #277 failures plus two mock
+scheduler timeouts and two existing skips. Individual Ninja retries still
+time out; the survivor retry also has a cleanup error. Those harness checks
+remain unverified; nothing was skipped, refreshed or fixed.
+
+#### M-b trace: BUG-022
+
+Re-established the diagnostic failure with the same reused nested-label
+prefix followed by BUG-020's switch/32-bit remainder comparison. The reused
+prefix exits zero and emits an empty `third` body; renamed and function-scope
+label controls exit nonzero with `MIR emission is required`. Full debug can
+emit this BUG-020 shape; release, stack checking and `-gline` cannot.
+
+Frame-sizing scans retain a previous function's label table long enough to
+encounter a suppressed duplicate-label complaint. `g_diag_error_count`
+intentionally counts even suppressed speculative complaints for constant
+expression probes, but both required-MIR failure paths wrongly use its global
+nonzero value to suppress their fatal diagnostic. The appropriate guard is
+`errors`, the count of diagnostics actually reported to the user. This is
+independent of BUG-009 and does not require changing label IDs or body output.
+BUG-020 remains outside scope: diagnostic acceptance must require rejection,
+not silently admit that separate unsupported emission shape.
 
 ## Suggested order
 
@@ -1372,7 +1419,7 @@ so it matters more than its size suggests. Both are one-offs.
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | K2 | [#298](https://github.com/davidly/dcc/pull/298) | PR open | BUG-054 promoted as tpephl; 228 ok/72 INVALID/zero FAIL; all 3,047 MAC files per stack mode and 514 existing perf rows unchanged (except clock literal); #277 and isolated harness retries documented |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
-| M | | open | |
+| M | `fix/cluster-m-diag` | M-a fixed; M-b traced | M-a promotes 009 as tndwide; 255 ok/45 INVALID/zero FAIL; 3,527 existing functions and 524 perf rows unchanged; M-b diagnostic trigger re-established |
 
 Update this table as clusters are taken, and move bugs between clusters when
 a fix shows the hypothesis was wrong.
