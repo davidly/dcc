@@ -564,6 +564,29 @@ def has_block_wide(e):
     return any(has_block_wide(k) for k in e.k)
 
 
+def wide_increment_add(operator, operands):
+    """An addition that can read a fused local-wide increment's stale slot."""
+    if operator != '+' or len(operands) != 2:
+        return False
+    for value, other in (operands, operands[::-1]):
+        if not is_int(ty(other)) or is_constant(other):
+            continue
+        while value.op == 'cast' and is_int(value.t) and value.t.bits == 32 \
+                and is_int(ty(value.k[0])) and ty(value.k[0]).bits == 32:
+            value = value.k[0]
+        if value.op == 'incdec':
+            increment = value.a == ('++', True)
+        elif value.op == 'asg':
+            increment = value.a == '+=' and value.k[1].op == 'const' and value.k[1].a == 1
+        else:
+            continue
+        local = value.k[0]
+        if increment and local.op == 'var' and local.a.storage != 'global' \
+                and is_int(local.a.t) and local.a.t.bits == 32:
+            return True
+    return False
+
+
 def known_shapes(prog):
     """The features in prog.off whose bug shape the program contains anyway.
 
@@ -658,6 +681,8 @@ def known_shapes(prog):
                     e.k[0].op != 'const' and is_constant(e.k[0]))):
                 found.add('negnotconst')
         elif op == 'bin':
+            if wide_increment_add(e.a, e.k):
+                found.add('wideincadd')
             if same_variable(e.k[0], e.k[1]):
                 found.add('selfoperand')
             for i in (0, 1):
@@ -1418,7 +1443,7 @@ FEATURES = frozenset((
     'widecassign', 'bytevarshl', 'castsfx', 'widepostinc', 'structbytecasg', 'negnotconst',
     'bfdivasg', 'wideidxincdec', 'logicinit', 'blockwidediv', 'ptrcallconv',
     'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'blockptr', 'inittype',
-    'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg',
+    'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg', 'wideincadd',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
     'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockcast',
     'blockdec', 'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself'))
@@ -1434,8 +1459,8 @@ KNOWN_BUGS = {
     'bfpromo': 'BUG-013',
     'blockptr': 'BUG-015',
     'inittype': 'BUG-016',
-    'widehelperparam': 'BUG-020',
     'postincvalue': 'BUG-024',
+    'wideincadd': 'BUG-057',
     'duplabel': 'BUG-022',
     'constjump': 'BUG-019',
     'nestedifelse': 'BUG-027',
@@ -1462,6 +1487,9 @@ class Gen:
     # ---- small helpers
 
     def mk(self, op, k=(), a=None, t=None):
+        if op == 'bin' and not self.on('wideincadd') and wide_increment_add(a, k):
+            # Subtraction retains the update without using the faulty direct add.
+            a = '-'
         if op in ('bin', 'asg') and not self.on('peepbyteself') and peep_byte_self(a, k):
             self.prog.nid += 1
             k = [k[0], E('const', (), 1, I16, self.prog.nid)]

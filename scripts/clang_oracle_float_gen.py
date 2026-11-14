@@ -57,8 +57,6 @@ KNOWN_BUGS = {
     'fdivround': 'BUG-039',
     'fincdecval': 'BUG-041, BUG-056',
     'fblockneg': 'BUG-015',
-    'fnegcmp': 'BUG-045',
-    'fparamcmp': 'BUG-020',
     'fblockint': 'BUG-015',
     'finittype': 'BUG-016',
     'fconstjump': 'BUG-019',

@@ -7,7 +7,7 @@ wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
 source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `83dc7a91` (upstream `main` on 2026-11-13).
+- **Compiler under test:** `014b0a30` plus the cluster H handoff proof fix (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -34,7 +34,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
 | [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
-| [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-024](#bug-024) | #244 | wrong result | `if (x++)` in a loop tests the incremented value (8-bit local, later `do … while`) |
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
@@ -44,19 +43,20 @@ and their historical diagnoses are retained separately below.
 | [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
-| [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
+| [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 
-Twenty-two are open: sixteen give wrong results with no diagnostic
+Twenty-one are open: sixteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
-BUG-041 admission, one hangs, four stop the compile,
+BUG-041 admission, one hangs, two stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-013 and BUG-016.
 
-Thirty-two reported bugs are fixed: [one in cluster D2b](#fixed-in-cluster-d2b),
+Thirty-four reported bugs are fixed: [two in cluster H](#fixed-in-cluster-h),
+[one in cluster D2b](#fixed-in-cluster-d2b),
 [two in cluster D2a](#fixed-in-cluster-d2a),
 [one in cluster K2](#fixed-in-cluster-k2),
 [two in cluster D1](#fixed-in-cluster-d1),
@@ -361,59 +361,6 @@ if (sel) {
 - Dead code like this is rare in hand-written programs, so this is low
   priority; it is still valid C.
 
-## BUG-020
-
-**After a `switch` statement, a relational comparison between a variable and
-the 32-bit product, quotient or remainder of a 32-bit parameter stops the
-compile.** `dcc: fatal: MIR emission is required`.
-
-```c
-static int32_t f(int32_t x)
-{
-    switch (sel) { case 5: hits++; }
-    if (g16 >= (x % 115))        /* also x / 115, x * 115, x % g16 */
-        return 1;
-    return 0;
-}
-```
-
-- Fails with `>=` and `<`; with the variable an 8-bit struct array element,
-  an 8-, 16- or 32-bit global, or `(int32_t)g16`; as an `if` or `while`
-  condition and as a value (`hits += (g16 >= (x % 115));`).
-- Accepted: no `switch` before it (an `if` or a `for` loop before it is
-  fine); `==`; the operands the other way round (`(x % 115) <= g16`); a
-  constant on the left; `x + 115` or `x >> 3`; the parameter copied to a
-  local first; the result held in a temporary; a 32-bit global in place of
-  the parameter.
-- Upstream commit `81937302` ("Don't pair a wide helper operand with an
-  unpushed parameter or constant") fixed `if (x < n / x)`, which fails with
-  the same message; this looks like a neighbouring shape.
-- An `if … else` whose *then* branch contains a loop triggers it as well
-  (the `switch` is not essential), and floats are affected: after
-  `if (n) { while (n) n--; } else { }`, `if (fg2 < x0 * fg1)` with `x0` a
-  float parameter and `fg1` a float global is fatal, as is
-  `if (gl < xl * gl)` with 32-bit `xl`. `x0 * 2.0f`, `x0 - 2.0f`, `xl * 2`
-  (a constant right factor), `fg1 * x0` (parameter on the right), the
-  operands swapped (`x0 * fg1 > fg2`), no `else`, a loop in the `else`
-  instead, or a non-loop `then` body are all fine. Found by fuzzing (float
-  generator, seed 26).
-- No loop or `switch` is needed either: a braced early return is enough.
-  `int f(float x) { float l = -2.0f; if (x) { return 1; } return 1.0f >=
-  (x - l); }` is fatal, with any condition (`if (n)`, `if (g)`, `if ((int)
-  (-1.0f))`) and with `>=`, `>`, `==`, `+` or `*`. Fine: `if (x) return 1;`
-  without braces, `return (x - l) <= 1.0f;` (constant on the right), `(l -
-  x)` (parameter on the right), `x >= l`, both operands parameters, `l` a
-  local assigned instead of returned, and the same with `int` or `long`
-  operands. Found by fuzzing (float generator, seed 2017).
-- The right operand of the float arithmetic can be an integer constant:
-  after `if (n) { while (n5 > 0) n5 = 0; } else { }`, `if (7.0f != (x0 +
-  28))` with a float parameter `x0` is fatal, as are `x0 - 28`, `x0 * 28`,
-  `x0 / 28`, `x0 + (float)28`, `==`, `<`, an integer or float global on the
-  left, the value assigned, and an `int` function. Fine: `x0 + 28.0f`, a
-  float global in place of the parameter, the operands swapped (`(x0 + 28)
-  != 7.0f`), `7.0f != x0`, no loop in the `then` body, or the comparison
-  before the `if`. Found by fuzzing (float generator, seed 20063).
-
 ## BUG-022
 
 **When a label name used in one function is reused inside a nested block of
@@ -693,42 +640,6 @@ if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
 - Found by fuzzing (float generator, seed 3).
 
 
-## BUG-045
-
-**A comparison whose right operand is a negative float constant combined
-with a second operand stops the compile.** `dcc: fatal: MIR emission is
-required`, with no line number. The shape is `x REL (-C OP y)` where `-C`
-is a negative float constant (including `-0.0f`, `(-1.0f)` and `-(1.0f)`),
-`OP` is `+ - * /` and `y` is an integer variable or constant of any width, a
-cast, or a float global. The relation can be any of `< <= > >= == !=` and
-the expression can be an `if`/`while` condition, a `?:` test or an
-assigned value.
-
-```c
-if (x < -1.0f - n) r = 1;     /* fatal: n is int, int32_t, uint16_t, char... */
-if (x < -1.0f - 2) r = 1;     /* fatal: even an integer constant */
-if (x < -1.0f - fg) r = 1;    /* fatal: fg a float global */
-if (x < -1.0f - (float)n) r = 1;   /* fatal */
-if (x == -1.0f * n) r = 1;    /* fatal: so are + and / */
-r = (x < -1.0f - n);          /* fatal */
-```
-
-- Accepted: a positive constant (`x < 1.0f - n`), the constant on the right
-  (`x < n - 1.0f`, `x < -n - 1.0f`), the whole thing on the left
-  (`-1.0f - n < x`), a float local/parameter/array element as `y`
-  (`x < -1.0f - fl`), a wider `y` (`x < -1.0f - 2 * n`), or storing to a
-  float first (`t = -1.0f - n; if (x < t)`). The bare value `-1.0f - n`
-  outside a comparison is fine too.
-- Also at v3.6.0 (`20290235`) and every later compiler checked.
-- Found by fuzzing (float generator, seed 28:
-  `(la3[3] - 100.0f) < ((-108.885f) - g1)`).
-- The constant need not be negative: any comparison whose right operand is
-  a float binop with a *constant* left operand is fatal — `1.0f <= (3.0f *
-  fg2)`, `fg < (3.0f * fg2)`, `2 < (3.0f * fg2)`, `1.0f < (1174.3f + 1)`.
-  `1.0f < (fg2 + 1)`, `1.0f < (fg2 * fg)`, `(3.0f * fg2) >= 1.0f` and
-  `1.0f < -fg2` are accepted. Found by fuzzing (float generator, seeds 477
-  and 1347).
-
 ## BUG-052
 
 **In a loop, an expression with a folded `?:` on a 32-bit parameter is
@@ -794,6 +705,196 @@ in-range float-to-`int32_t` conversion and retains the failing context.
   constant-index and other indexed stores remain enabled.
 
 ---
+
+## BUG-056
+
+**Latent: negating a float member-array `++` / `--` value uses integer
+negation and narrowing instead of IEEE sign-bit negation.** Found by D2b's
+float seed 9 after a trial admission fix made BUG-041 compile. The trial is
+withdrawn: no admission producing this wrong code is shipped, and this
+reproducer currently fails with BUG-041's DCC-E1002. This is an additional
+typing defect, not a reason to broaden the D2b compiler fix.
+
+```c
+struct S { float pad, other; uint16_t word; float a[2]; } s[2];
+float out[2];
+/* s[1].a[1] starts at 3.14159f */
+{ float local = 1.0f; out[1] = -(s[1].a[1]++); }
+```
+
+- Trial expected `out[1]` bits **c0490fd0**, actual **fffff030**; the updated
+  member's bits **408487e8** are correct. Prefix `--` also yields fffff030
+  instead of c0490fd0 when the value is negated. Peep/nopeep and stack/no-stack
+  all fail. The 135-line reduction and the small parked baseline are
+  independently host-clang + ASan/UBSan proven.
+- Correct controls under the trial: negating an ordinary member read and
+  negating prefix/postfix updates of a float scalar. A local result instead
+  of the indexed global destination can also mask the defect. Retain the
+  block-local/indexed-destination context in the reproducer.
+- MIR has a correctly typed float load, float 1.0 constant, float add/subtract
+  and float store, followed by `MIR_UNARY type=2` (int) over the float value;
+  scalar controls use `type=5` (float). `mir_lower_simple_unary_chain` uses
+  the unary AST node's earlier type; D1's stored-update type repair does not
+  repair this consumer. Z80 complements/adds as an integer and then sign-
+  extends the narrowed low word. No MIR or AST typing fix was attempted.
+- The stopped batch also found float seed 81, independently reduced to
+  `float result; { float local = (uint16_t)0; result = -(--local); }`.
+  It is the same float update / integer unary consumer mismatch, now on a
+  block-local initialized from an integer. This facet is retained in the
+  parked reproducer and issue #299; no second compiler fix was added.
+- Parked as `tests/known-bugs/bug056.c`; the existing `fincdecval` steering
+  keeps the unsafe shape disabled together with BUG-041. It must stay
+  disabled until both admission and this downstream typing defect are fixed.
+
+## BUG-057
+
+**A fused 32-bit local increment used as an addition operand reads an
+unwritten backend slot instead of the updated named home.** A later loop
+retains the spilled/PHI schedule even when it never runs.
+
+```c
+static int8_t g = -2;
+int32_t x = 0;
+uint16_t limit = 0;
+if ((int32_t)1) { x = 1; }
+g = (++x) + (g ^ (int32_t)63);   /* expected -61, actual -62 */
+for (int8_t i = 2; (uint16_t)i < limit; ++i) --x;
+```
+
+- Prefix `++`, `+= 1`, and either addition-operand order fail in peep and
+  nopeep, with or without stack checking. The parked test has three failing
+  cases and three passing controls: prefix decrement, a literal right
+  operand, and no later loop.
+- MIR correctly uses the increment's updated result. The fused schedule
+  increments the authoritative named local home, but
+  `mir_direct_wide_location()` tries to resolve that `MIR_BINARY` through
+  `mir_direct_named_home_location()` and falls through to a reused backend
+  slot. `mir_emit_direct_wide_add()` reads the stale slot byte by byte.
+  The ordinary wide loader already resolves this fused result's named home.
+- Related to BUG-014's named-home context, but a distinct direct-add consumer
+  defect. This is independent of H's helper-comparison stack handoff:
+  the minimal function has no compound comparison RHS or wide parameter.
+- Found during H acceptance, integer seed 52: only `g0` differs after the
+  three calls of `f3`; reduction gives the example above. Parked and filed
+  as #304, not fixed in H. No historical compiler checks were run.
+- Steered by `wideincadd`: replace only integer additions with a nonconstant
+  peer and a prefix-wide-local `++`/`+= 1` value (including same-width casts)
+  with subtraction, retaining the side effect and all neighboring forms.
+
+## Fixed in cluster H
+
+BUG-020 (#240) and BUG-045 (#265) share one helper-pair proof defect in
+`mir_wide_helper_rhs_pair_consumer()`: the left operand is assumed to have
+been pushed where it is defined. Direct named-home parameter reloads and
+rematerialized unary float constants actually skip definition-time emission.
+Reject pairing for those deferred left values, using the existing home and
+constant proofs. MIR lowering, candidate/cost policy, and runtime helpers are
+unchanged; no fallback is introduced.
+
+Both reproducers pass peep/nopeep and are promoted as `tcmprhs` and `tflncmp`,
+with the logged float control-flow facets and unary/relation variants. All
+3,514 original function rows/hashes in each MIR census and all 523 original
+performance rows are unchanged; only the two new measured rows are added.
+Restored float seeds 1-300 give **283 ok, 17 INVALID, zero FAIL**. The first
+integer batch gives **251 ok, 48 INVALID, one FAIL**: independent BUG-057/#304
+was reduced, parked and narrowly steered, never fixed here. The full rerun
+is **252 ok, 48 INVALID, zero FAIL**, with 3,000 steering seeds clean.
+After promotion, all 21 remaining parked reproducers still fail.
+
+The Python unit run retains the approved #277 failures and five unrelated
+mutation-harness timing failures. Isolated/default and isolated/Ninja retries
+were attempted without editing or skipping the harness; their persistent
+180-second timeouts and missing child-start diagnostics remain documented
+in the PR. Compiler regression, host/sanitizer and debugger checks are separate.
+
+## BUG-020
+
+**After a `switch` statement, a relational comparison between a variable and
+the 32-bit product, quotient or remainder of a 32-bit parameter stops the
+compile.** `dcc: fatal: MIR emission is required`.
+
+```c
+static int32_t f(int32_t x)
+{
+    switch (sel) { case 5: hits++; }
+    if (g16 >= (x % 115))        /* also x / 115, x * 115, x % g16 */
+        return 1;
+    return 0;
+}
+```
+
+- Fails with `>=` and `<`; with the variable an 8-bit struct array element,
+  an 8-, 16- or 32-bit global, or `(int32_t)g16`; as an `if` or `while`
+  condition and as a value (`hits += (g16 >= (x % 115));`).
+- Accepted: no `switch` before it (an `if` or a `for` loop before it is
+  fine); `==`; the operands the other way round (`(x % 115) <= g16`); a
+  constant on the left; `x + 115` or `x >> 3`; the parameter copied to a
+  local first; the result held in a temporary; a 32-bit global in place of
+  the parameter.
+- Upstream commit `81937302` ("Don't pair a wide helper operand with an
+  unpushed parameter or constant") fixed `if (x < n / x)`, which fails with
+  the same message; this looks like a neighbouring shape.
+- An `if … else` whose *then* branch contains a loop triggers it as well
+  (the `switch` is not essential), and floats are affected: after
+  `if (n) { while (n) n--; } else { }`, `if (fg2 < x0 * fg1)` with `x0` a
+  float parameter and `fg1` a float global is fatal, as is
+  `if (gl < xl * gl)` with 32-bit `xl`. `x0 * 2.0f`, `x0 - 2.0f`, `xl * 2`
+  (a constant right factor), `fg1 * x0` (parameter on the right), the
+  operands swapped (`x0 * fg1 > fg2`), no `else`, a loop in the `else`
+  instead, or a non-loop `then` body are all fine. Found by fuzzing (float
+  generator, seed 26).
+- No loop or `switch` is needed either: a braced early return is enough.
+  `int f(float x) { float l = -2.0f; if (x) { return 1; } return 1.0f >=
+  (x - l); }` is fatal, with any condition (`if (n)`, `if (g)`, `if ((int)
+  (-1.0f))`) and with `>=`, `>`, `==`, `+` or `*`. Fine: `if (x) return 1;`
+  without braces, `return (x - l) <= 1.0f;` (constant on the right), `(l -
+  x)` (parameter on the right), `x >= l`, both operands parameters, `l` a
+  local assigned instead of returned, and the same with `int` or `long`
+  operands. Found by fuzzing (float generator, seed 2017).
+- The right operand of the float arithmetic can be an integer constant:
+  after `if (n) { while (n5 > 0) n5 = 0; } else { }`, `if (7.0f != (x0 +
+  28))` with a float parameter `x0` is fatal, as are `x0 - 28`, `x0 * 28`,
+  `x0 / 28`, `x0 + (float)28`, `==`, `<`, an integer or float global on the
+  left, the value assigned, and an `int` function. Fine: `x0 + 28.0f`, a
+  float global in place of the parameter, the operands swapped (`(x0 + 28)
+  != 7.0f`), `7.0f != x0`, no loop in the `then` body, or the comparison
+  before the `if`. Found by fuzzing (float generator, seed 20063).
+
+## BUG-045
+
+**A comparison whose right operand is a negative float constant combined
+with a second operand stops the compile.** `dcc: fatal: MIR emission is
+required`, with no line number. The shape is `x REL (-C OP y)` where `-C`
+is a negative float constant (including `-0.0f`, `(-1.0f)` and `-(1.0f)`),
+`OP` is `+ - * /` and `y` is an integer variable or constant of any width, a
+cast, or a float global. The relation can be any of `< <= > >= == !=` and
+the expression can be an `if`/`while` condition, a `?:` test or an
+assigned value.
+
+```c
+if (x < -1.0f - n) r = 1;     /* fatal: n is int, int32_t, uint16_t, char... */
+if (x < -1.0f - 2) r = 1;     /* fatal: even an integer constant */
+if (x < -1.0f - fg) r = 1;    /* fatal: fg a float global */
+if (x < -1.0f - (float)n) r = 1;   /* fatal */
+if (x == -1.0f * n) r = 1;    /* fatal: so are + and / */
+r = (x < -1.0f - n);          /* fatal */
+```
+
+- Accepted: a positive constant (`x < 1.0f - n`), the constant on the right
+  (`x < n - 1.0f`, `x < -n - 1.0f`), the whole thing on the left
+  (`-1.0f - n < x`), a float local/parameter/array element as `y`
+  (`x < -1.0f - fl`), a wider `y` (`x < -1.0f - 2 * n`), or storing to a
+  float first (`t = -1.0f - n; if (x < t)`). The bare value `-1.0f - n`
+  outside a comparison is fine too.
+- Also at v3.6.0 (`20290235`) and every later compiler checked.
+- Found by fuzzing (float generator, seed 28:
+  `(la3[3] - 100.0f) < ((-108.885f) - g1)`).
+- The constant need not be negative: any comparison whose right operand is
+  a float binop with a *constant* left operand is fatal — `1.0f <= (3.0f *
+  fg2)`, `fg < (3.0f * fg2)`, `2 < (3.0f * fg2)`, `1.0f < (1174.3f + 1)`.
+  `1.0f < (fg2 + 1)`, `1.0f < (fg2 * fg)`, `(3.0f * fg2) >= 1.0f` and
+  `1.0f < -fg2` are accepted. Found by fuzzing (float generator, seeds 477
+  and 1347).
 
 ## Fixed in cluster K2
 
@@ -985,46 +1086,6 @@ while (1.0f) { break; }    /* rejected */
 - Also at v3.6.0 (`20290235`).
 - Found by fuzzing (float generator, seeds 3, 13, 16).
 
-
-## BUG-056
-
-**Latent: negating a float member-array `++` / `--` value uses integer
-negation and narrowing instead of IEEE sign-bit negation.** Found by D2b's
-float seed 9 after a trial admission fix made BUG-041 compile. The trial is
-withdrawn: no admission producing this wrong code is shipped, and this
-reproducer currently fails with BUG-041's DCC-E1002. This is an additional
-typing defect, not a reason to broaden the D2b compiler fix.
-
-```c
-struct S { float pad, other; uint16_t word; float a[2]; } s[2];
-float out[2];
-/* s[1].a[1] starts at 3.14159f */
-{ float local = 1.0f; out[1] = -(s[1].a[1]++); }
-```
-
-- Trial expected `out[1]` bits **c0490fd0**, actual **fffff030**; the updated
-  member's bits **408487e8** are correct. Prefix `--` also yields fffff030
-  instead of c0490fd0 when the value is negated. Peep/nopeep and stack/no-stack
-  all fail. The 135-line reduction and the small parked baseline are
-  independently host-clang + ASan/UBSan proven.
-- Correct controls under the trial: negating an ordinary member read and
-  negating prefix/postfix updates of a float scalar. A local result instead
-  of the indexed global destination can also mask the defect. Retain the
-  block-local/indexed-destination context in the reproducer.
-- MIR has a correctly typed float load, float 1.0 constant, float add/subtract
-  and float store, followed by `MIR_UNARY type=2` (int) over the float value;
-  scalar controls use `type=5` (float). `mir_lower_simple_unary_chain` uses
-  the unary AST node's earlier type; D1's stored-update type repair does not
-  repair this consumer. Z80 complements/adds as an integer and then sign-
-  extends the narrowed low word. No MIR or AST typing fix was attempted.
-- The stopped batch also found float seed 81, independently reduced to
-  `float result; { float local = (uint16_t)0; result = -(--local); }`.
-  It is the same float update / integer unary consumer mismatch, now on a
-  block-local initialized from an integer. This facet is retained in the
-  parked reproducer and issue #299; no second compiler fix was added.
-- Parked as `tests/known-bugs/bug056.c`; the existing `fincdecval` steering
-  keeps the unsafe shape disabled together with BUG-041. It must stay
-  disabled until both admission and this downstream typing defect are fixed.
 
 ## Fixed in cluster D2b
 

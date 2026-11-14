@@ -47,8 +47,8 @@ test:
 `tests/twincg.c`, `tests/tlpcall.c`, `tests/tconstun.c`, `tests/tcmbyte.c`,
 `tests/tcmwide.c`, `tests/tcmfloat.c`, `tests/tinc32a.c`, `tests/tflinc.c`,
 `tests/tpephl.c`, `tests/tpost16.c`, `tests/tpostbr.c`, `tests/tpost32.c`,
-`tests/tflcnot.c`, `tests/tflcini.c` and `tests/tconstdz.c` were promoted
-this way.
+`tests/tflcnot.c`, `tests/tflcini.c`, `tests/tconstdz.c`,
+`tests/tcmprhs.c` and `tests/tflncmp.c` were promoted this way.
 
 ## Adding one
 

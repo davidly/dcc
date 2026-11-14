@@ -5596,10 +5596,12 @@ static int mir_wide_helper_rhs_pair_consumer(
         !mir_wide_helper_handoff_supported(consumer))
         return 0;
     left = mir_definition(consumer->src1);
-    /* The pair expects the left operand pushed where it is defined; a
-     * parameter or constant is materialized where it is used instead
-     * (`x < n / x` with long n, `x < 65536L / x`). */
-    if (left == NULL || left->opcode == MIR_PARAM || left->opcode == MIR_CONST)
+    /* The pair needs a definition-time push. Direct named homes and
+     * rematerialized constants, including unary float literals, are only
+     * loaded at their use and never arm that stack handoff. */
+    if (left == NULL || left->opcode == MIR_PARAM || left->opcode == MIR_CONST ||
+        mir_value_has_direct_named_home(consumer->src1) ||
+        mir_wide_constant_is_rematerializable(consumer->src1))
         return 0;
     left_instruction = (int)(left - mir.insns);
     if (!mir_wide_helper_lhs_consumer(
