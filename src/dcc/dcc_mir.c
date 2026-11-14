@@ -10827,6 +10827,20 @@ static int mir_object_value_is_defined_at_or_after(int value, int instruction)
     return definition != NULL && definition >= &mir.insns[instruction];
 }
 
+static int mir_value_is_untyped_boolean(int value, int depth)
+{
+    const struct MirInsn *source;
+
+    if (depth >= 16 || (source = mir_definition(value)) == NULL ||
+        source->type != 0)
+        return 0;
+    if (source->opcode == MIR_CONST)
+        return source->immediate == 0 || source->immediate == 1;
+    return source->opcode == MIR_PHI &&
+           mir_value_is_untyped_boolean(source->src1, depth + 1) &&
+           mir_value_is_untyped_boolean(source->src2, depth + 1);
+}
+
 /* Promote agreeing reaching definitions or construct a two-predecessor PHI.
  * Undefined entry values and unresolved joins remain memory operations. */
 static int mir_promote_objects(void)
@@ -11032,10 +11046,20 @@ static int mir_promote_objects(void)
                 continue;
             reaching = mir_resolve_alias(aliases, reaching);
             {
-                const struct MirInsn *source = mir_definition(reaching);
+                struct MirInsn *source = mir_mutable_definition(reaching);
                 int size = type_size(insn->type);
                 unsigned long sign_bit = size == 2
                     ? 0x8000UL : 0x80000000UL;
+
+                /* Forwarding happens after conversion repair. A 0/1 phi
+                 * fits either byte interpretation, but must retain a type
+                 * when it replaces the source of an existing wide cast. */
+                if (source != NULL && source->opcode == MIR_PHI &&
+                    source->type == 0 && size == 1 &&
+                    type_ptr_depth(insn->type) == 0 &&
+                    mir_value_has_signedness_use(insn->dst, TYPE_INT, 0) &&
+                    mir_value_is_untyped_boolean(reaching, 0))
+                    source->type = insn->type;
 
                 if (source != NULL && source->type != insn->type &&
                     (size == 2 || size == 4) &&

@@ -110,7 +110,8 @@ class IntegerKnownShapeTests(unittest.TestCase):
                     self.assertEqual(gen.known_shapes(program), set())
 
     def test_logicbyteinit_rewrite_does_not_reintroduce_byte_self_and(self):
-        generator = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS) | {"peepbyteself"})
+        generator = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS) |
+                            {"logicbyteinit", "peepbyteself"})
         variable = gen.E("var", a=gen.Decl("x", gen.U8, "local"))
         expression = generator.mk("bin", [variable, variable], "&&")
         stored = generator.stored(expression, gen.U8, "local")
@@ -137,6 +138,14 @@ class IntegerKnownShapeTests(unittest.TestCase):
                                          ("&" if operator == "&&" else "|")
                                          if guarded else operator)
                         self.assertEqual(gen.known_shapes(generator.prog), set())
+                        if typ.bits == 8:
+                            restored = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS))
+                            rhs = gen.E("bin", [gen.E("const", a=1, t=gen.I16),
+                                               gen.E("const", a=0, t=gen.I16)], operator)
+                            declaration.init = restored.stored(rhs, typ, storage, init=True)
+                            restored.prog.funcs.append(function)
+                            self.assertEqual(declaration.init.a, operator)
+                            self.assertEqual(gen.known_shapes(restored.prog), set())
 
     def test_postfix_steer_restores_all_widths(self):
         for typ in (gen.I8, gen.U8, gen.I16, gen.U16, gen.I32, gen.U32):
