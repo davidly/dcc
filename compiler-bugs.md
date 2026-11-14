@@ -1,7 +1,7 @@
 # dcc compiler bugs
 
 Defects found by differential testing against the host C compiler (Apple
-clang). Every open entry reproduces with a shipped configuration: no
+clang). At filing, every entry reproduced with a shipped configuration: no
 diagnostic environment variables (some require `dccpeep`). Fixed entries
 and their historical diagnoses are retained separately below.
 
@@ -34,7 +34,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
 | [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
-| [BUG-021](#bug-021) | #241 | wrong result | `x++`/`x--` yields the new value for a 16-bit local assigned from a local array element |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-023](#bug-023) | #243 | wrong result | `if (x++ > K) x = v;` leaves `x` as 1 when not taken (local assigned from another type) |
 | [BUG-024](#bug-024) | #244 | wrong result | `if (x++)` in a loop tests the incremented value (8-bit local, later `do … while`) |
@@ -53,13 +52,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 
-Twenty-eight are open: eighteen give wrong results with no diagnostic
+Twenty-seven are open: seventeen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one hangs, eight stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-013 and BUG-016.
 
-Twenty-five reported bugs are fixed: [two in cluster D1](#fixed-in-cluster-d1),
+Twenty-six reported bugs are fixed: [one in cluster D2a](#fixed-in-cluster-d2a),
+[two in cluster D1](#fixed-in-cluster-d1),
 [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
@@ -432,35 +432,6 @@ static int32_t f(int32_t x)
   != 7.0f`), `7.0f != x0`, no loop in the `then` body, or the comparison
   before the `if`. Found by fuzzing (float generator, seed 20063).
 
-## BUG-021
-
-**The value of a post-increment or post-decrement is the new value instead
-of the old one**, for a signed 16-bit local that was assigned from an element
-of a local unsigned 16-bit array, in a function that also has a `signed char`
-local initialised from a narrowing cast.
-
-```c
-static uint8_t a0[8] = { 16, 76, 156, 127, 255, 188, 0, 57 };
-static uint16_t f(void)
-{
-    signed char l1 = (int8_t)(1 - a0[1]);
-    int16_t l3 = 1;
-    uint16_t v6[2] = { 0xffde, 9029 };
-    l3 = v6[1];
-    return l3++;                 /* want 9029, dcc 9030 */
-}
-```
-
-- Wrong for `return l3++`, `return l3--` (9028) and `r = l3++; return r;`,
-  with the element read directly or through a pointer to the array.
-- Correct: without `l1`, or with `l1` initialised from a constant, declared
-  `int16_t` or `int32_t`, or initialised from `g32 - a0[1]`; with the array
-  `static`; with `l3` assigned from a global; with `l3` declared `uint16_t`;
-  `return ++l3`.
-- The trigger is narrow and involves three unrelated-looking locals, so the
-  cause is probably shared state (a slot or register), not the increment
-  itself.
-
 ## BUG-022
 
 **When a label name used in one function is reused inside a nested block of
@@ -487,6 +458,10 @@ the program fails at run time.
   a compile error into a silently broken program.
 
 ## BUG-023
+
+**D2a observation:** the single BUG-021 matcher fix also makes this parked
+reproducer pass in peep/nopeep. It remains open and unpromoted pending its
+owning cluster's acceptance; no separate compiler fix is included here.
 
 **A 16-bit local that was assigned a value of a different type and is then
 updated loses the assigned value when a branch or loop follows.** The update
@@ -974,6 +949,60 @@ uint32_t sub(int8_t p)
 - Steered by `peepbyteself`: non-logical byte binary self-operands
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
+
+## Fixed in cluster D2a
+
+BUG-021 is promoted as `tests/tpost16.c`. Assignment-conversion
+`MIR_UNARY` instructions may carry the destination object's name, but their
+SSA result is not bound to the object's memory. The selfstore increment
+matcher incorrectly treated that metadata as an authoritative named home;
+in a promoted-local-slot schedule the in-place update overwrote the old
+SSA value before its postfix consumer. Require an actual LOAD/PARAM/PHI
+binding instead. This repairs the existing spilled candidate without a
+fallback, selector change or independent byte-PHI fix.
+
+The first root fix clears 021, not BUG-024; the approved partial-fix stop
+rule leaves 024 unchanged. BUG-023 also incidentally reports FIXED and stays
+parked/open, as documented above. Before promotion: **28 reproducers,
+2 FIXED, 26 fails**. After promotion: **27 reproducers, 1 FIXED (023),
+26 fails**. All four tpost16 cases pass host proof and both target modes.
+
+Word postfix-value fuzz coverage is restored; `postincvalue` now only
+steers BUG-024's byte values, while BUG-010's wide-postfix and BUG-023's
+cross-type-assignment guards remain. Production seeds 1-300: **227 ok,
+73 INVALID, zero FAIL**. A 3,000-seed remaining-shape proof passes. Both
+original **3,482-function** censuses are byte-identical, and all **516
+existing performance rows** remain unchanged; only the new tpost16 row is
+added. Full acceptance details and exceptions are recorded in fix-plan.md.
+
+### BUG-021
+
+**The value of a post-increment or post-decrement is the new value instead
+of the old one**, for a signed 16-bit local that was assigned from an element
+of a local unsigned 16-bit array, in a function that also has a `signed char`
+local initialised from a narrowing cast.
+
+```c
+static uint8_t a0[8] = { 16, 76, 156, 127, 255, 188, 0, 57 };
+static uint16_t f(void)
+{
+    signed char l1 = (int8_t)(1 - a0[1]);
+    int16_t l3 = 1;
+    uint16_t v6[2] = { 0xffde, 9029 };
+    l3 = v6[1];
+    return l3++;                 /* want 9029, dcc 9030 */
+}
+```
+
+- Wrong for `return l3++`, `return l3--` (9028) and `r = l3++; return r;`,
+  with the element read directly or through a pointer to the array.
+- Correct: without `l1`, or with `l1` initialised from a constant, declared
+  `int16_t` or `int32_t`, or initialised from `g32 - a0[1]`; with the array
+  `static`; with `l3` assigned from a global; with `l3` declared `uint16_t`;
+  `return ++l3`.
+- The trigger is narrow and involves three unrelated-looking locals, so the
+  cause is probably shared state (a slot or register), not the increment
+  itself.
 
 ## Fixed in cluster D1
 

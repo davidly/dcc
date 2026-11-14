@@ -9,6 +9,9 @@ kept out of `tests/*.c` so the regression suite (`scripts/runall.py`,
 `baselines/bugNNN.txt` is the output the program should print. It is the host
 compiler's output, not dcc's.
 
+BUG-023 is still parked pending its owning cluster's acceptance, although
+the D2a fix for BUG-021 incidentally makes its reproducer report `FIXED`.
+
 ## Checking them
 
 ```sh
@@ -45,7 +48,7 @@ test:
 `tests/tfltret.c`, `tests/tflucast.c`, `tests/tflscast.c`,
 `tests/tandself.c`, `tests/tselfop.c`, `tests/tflmadd.c`, `tests/tflnot.c`,
 `tests/twincg.c`, `tests/tlpcall.c`, `tests/tconstun.c`, `tests/tcmbyte.c`,
-`tests/tcmwide.c`, `tests/tcmfloat.c`, `tests/tinc32a.c` and `tests/tflinc.c`
+`tests/tcmwide.c`, `tests/tcmfloat.c`, `tests/tinc32a.c`, `tests/tflinc.c` and `tests/tpost16.c`
 were promoted this way.
 
 ## Adding one
