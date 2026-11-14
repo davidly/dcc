@@ -4510,6 +4510,10 @@ static int mir_call_argument_cache_target_for_state(
     if ((mir_value_is_wide(value) && wide_cache_occupied) ||
         (!mir_value_is_wide(value) && narrow_cache_occupied))
         return -1;
+    /* Backedge PHI operands precede their definitions in stream order.
+     * A call-only cache cannot supply their later edge copies. */
+    if (mir_value_has_phi_use(value))
+        return -1;
     {
         const struct MirInsn *definition = mir_definition(value);
         if (definition == NULL || definition->opcode == MIR_PHI ||

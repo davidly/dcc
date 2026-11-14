@@ -1450,7 +1450,6 @@ KNOWN_BUGS = {
     'constdivzero': 'BUG-033',
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',
-    'loopcallarg': 'BUG-036',
     'loopcopy': 'BUG-037',
     'wordarm': 'BUG-038',
     'peepbyteself': 'BUG-054',

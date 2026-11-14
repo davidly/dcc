@@ -1,0 +1,20 @@
+for 1
+while 1
+counted 7
+test 100
+expression 1
+narrow 1
+variable 3
+untaken 65537
+float assign -4087.25
+float split -4087.25
+float used -4087.25
+float argument update -8171.50
+float multiply 1.00
+float add 2.50
+long multiply 12
+long add 5
+float expression -4087.25
+float constant 7.00
+float no loop -4087.25
+float used product 1.00
