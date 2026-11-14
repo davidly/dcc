@@ -1,8 +1,10 @@
 # dcc compiler bugs
 
 Defects found by differential testing against the host C compiler (Apple
-clang). At filing, every entry reproduced with a shipped configuration: no
-diagnostic environment variables (some require `dccpeep`). Fixed entries
+clang). Every open entry except BUG-056 reproduces with a shipped configuration: no
+diagnostic environment variables (some require `dccpeep`). BUG-056 is a latent
+wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
+source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
 - **Compiler under test:** `83dc7a91` (upstream `main` on 2026-11-13).
@@ -28,7 +30,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-004](#bug-004) | #225 | wrong result | 16-bit local set from `&&`/`\|\|`, stored to a 32-bit lvalue, leaves a garbage high word |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
-| [BUG-010](#bug-010) | #230 | rejects valid C | Cast or narrowing return of a 32-bit post-increment or post-decrement |
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
@@ -49,14 +50,17 @@ and their historical diagnoses are retained separately below.
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
+| [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 
 Twenty-five are open: sixteen give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, eight stop the compile,
+(BUG-039 is in the runtime), one latent wrong-code finding is blocked by
+BUG-041 admission, one hangs, seven stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-013 and BUG-016.
 
-Twenty-eight reported bugs are fixed: [two in cluster D2a](#fixed-in-cluster-d2a),
+Twenty-nine reported bugs are fixed: [one in cluster D2b](#fixed-in-cluster-d2b),
+[two in cluster D2a](#fixed-in-cluster-d2a),
 [one in cluster K2](#fixed-in-cluster-k2),
 [two in cluster D1](#fixed-in-cluster-d1),
 [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
@@ -179,25 +183,6 @@ instead of 6, which shows the comparison is the part that is wrong.
   with `++d` in the body or in the condition.
 - Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
   `d != n`; `n` set from a constant; a 16-bit `d`.
-
-## BUG-010
-
-**A cast applied to a 32-bit post-increment or post-decrement is rejected,
-and so is returning one from a function with a narrower return type.**
-`DCC-E1002`, reported against the enclosing statement.
-
-```c
-r = (int16_t)(l2++);                   /* int32_t l2 */
-r = (int32_t)(u2--);                   /* uint32_t u2 */
-take((int8_t)(u2++));
-uint8_t f(void) { int32_t l3 = 300; return l3++; }
-```
-
-- Accepted: `r = l2++` with a 32-bit or a 16-bit `r`; `(int16_t)(++l2)`;
-  `(int16_t)(l1++)` on a 16-bit variable.
-- Upstream commit `34e35b3a` fixed the neighbouring "cast of an assignment"
-  rejection, which this entry originally included.
-
 
 ## BUG-013
 
@@ -978,6 +963,95 @@ uint32_t sub(int8_t p)
 - Steered by `peepbyteself`: non-logical byte binary self-operands
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
+
+## BUG-056
+
+**Latent: negating a float member-array `++` / `--` value uses integer
+negation and narrowing instead of IEEE sign-bit negation.** Found by D2b's
+float seed 9 after a trial admission fix made BUG-041 compile. The trial is
+withdrawn: no admission producing this wrong code is shipped, and this
+reproducer currently fails with BUG-041's DCC-E1002. This is an additional
+typing defect, not a reason to broaden the D2b compiler fix.
+
+```c
+struct S { float pad, other; uint16_t word; float a[2]; } s[2];
+float out[2];
+/* s[1].a[1] starts at 3.14159f */
+{ float local = 1.0f; out[1] = -(s[1].a[1]++); }
+```
+
+- Trial expected `out[1]` bits **c0490fd0**, actual **fffff030**; the updated
+  member's bits **408487e8** are correct. Prefix `--` also yields fffff030
+  instead of c0490fd0 when the value is negated. Peep/nopeep and stack/no-stack
+  all fail. The 135-line reduction and the small parked baseline are
+  independently host-clang + ASan/UBSan proven.
+- Correct controls under the trial: negating an ordinary member read and
+  negating prefix/postfix updates of a float scalar. A local result instead
+  of the indexed global destination can also mask the defect. Retain the
+  block-local/indexed-destination context in the reproducer.
+- MIR has a correctly typed float load, float 1.0 constant, float add/subtract
+  and float store, followed by `MIR_UNARY type=2` (int) over the float value;
+  scalar controls use `type=5` (float). `mir_lower_simple_unary_chain` uses
+  the unary AST node's earlier type; D1's stored-update type repair does not
+  repair this consumer. Z80 complements/adds as an integer and then sign-
+  extends the narrowed low word. No MIR or AST typing fix was attempted.
+- The stopped batch also found float seed 81, independently reduced to
+  `float result; { float local = (uint16_t)0; result = -(--local); }`.
+  It is the same float update / integer unary consumer mismatch, now on a
+  block-local initialized from an integer. This facet is retained in the
+  parked reproducer and issue #299; no second compiler fix was added.
+- Parked as `tests/known-bugs/bug056.c`; the existing `fincdecval` steering
+  keeps the unsafe shape disabled together with BUG-041. It must stay
+  disabled until both admission and this downstream typing defect are fixed.
+
+## Fixed in cluster D2b
+
+Fix and verification: [PR #301](https://github.com/davidly/dcc/pull/301).
+
+BUG-010 (#230) is promoted as [tpost32](tests/tpost32.c). A postfix expression
+was admitted only for plain integers and pointers even though the existing
+long-value classifier already resolved long update lvalues. Reuse that proof
+at the expression gate; no MIR or emitted schedule is changed. Explicit casts,
+argument conversions and narrowing returns now consume the correct old value.
+
+The initial shared admission trial also made BUG-041 pass, but restored float
+fuzzing found the separate unary consumer type defect logged as BUG-056 / #299.
+All float admission changes are withdrawn under the stop rule. BUG-041 and
+BUG-056 stay open and steered together by `fincdecval`; no second compiler fix
+is included. Detailed trial and final acceptance are in fix-plan.md.
+
+Only BUG-010 is fixed by the shipped change: after promotion **28 parked
+reproducers still fail**, including the new latent finding. Restored
+`widepostinc`, production integer seeds 1-300: **227 ok, 73 INVALID, zero FAIL**.
+Both **3,482 existing function rows** and all **516 existing performance rows**
+are unchanged. Narrowed long postfix matches the accepted direct-assignment
+control's instructions in peep/nopeep, with permanent release/stack/line-debug
+proofs. Only the new regression's normal-stack performance row is added.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-010](#bug-010) | #230 | [tpost32](tests/tpost32.c) |
+
+### BUG-010
+
+**Fixed:** postfix expression admission now uses the existing long-update
+value proof, without changing MIR lowering, selection or emission.
+
+**A cast applied to a 32-bit post-increment or post-decrement is rejected,
+and so is returning one from a function with a narrower return type.**
+`DCC-E1002`, reported against the enclosing statement.
+
+```c
+r = (int16_t)(l2++);                   /* int32_t l2 */
+r = (int32_t)(u2--);                   /* uint32_t u2 */
+take((int8_t)(u2++));
+uint8_t f(void) { int32_t l3 = 300; return l3++; }
+```
+
+- Accepted: `r = l2++` with a 32-bit or a 16-bit `r`; `(int16_t)(++l2)`;
+  `(int16_t)(l1++)` on a 16-bit variable.
+- Upstream commit `34e35b3a` fixed the neighbouring "cast of an assignment"
+  rejection, which this entry originally included.
 
 ## Fixed in cluster D2a
 

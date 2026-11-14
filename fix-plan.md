@@ -605,6 +605,112 @@ modes; this is not an incidental flip. It is promoted as `tpostbr` alongside
   Restored-cross-type production seeds 1-300: **300 programs: INVALID 34, ok 266**; zero FAIL.
   No compiler code was changed in this follow-up.
 
+**Maintainer-approved D2 split: D2a (021/024) and D2b (010/041).**
+D2a owns stored-home/value-lifetime fixes in a separate branch. D2b tests the
+shared front-end hypothesis: resolve a wide update's stored scalar type once
+and use that proof for both expression admission and long/float value
+classification. D1's typed MIR update arithmetic is already in place; D2b
+must not change MIR lowering or selection. Acceptance is recorded below.
+
+D1 acceptance is recorded below and in Tracking. No out-of-cluster reproducer
+flipped in D1.
+
+#### D2b partial acceptance and stopped float admission
+
+The shared front-end admission hypothesis was confirmed by the first trial:
+**010/041 both FIXED**, with every other parked reproducer still failing.
+The trial resolved a wide update's stored type once for both admission and
+long/float value classification; MIR lowering and emission were unchanged.
+However, restored float-value fuzzing exposed a separate downstream typing
+fault. The maintainer's stop rule is followed: **float admission is withdrawn,
+BUG-041 remains open, and only the safe BUG-010 fix ships in a normal PR**.
+
+The final compiler change is one admission disjunct: use the already correct
+`ast_value_is_long_word` proof when admitting a postfix expression. That
+classifier resolves long update lvalues before calling expression admission,
+so this path does not recurse. Existing direct long assignments and prefix
+updates, plus byte/word/pointer/float admission rules, are unchanged.
+
+- Initial trial: **28 reproducers, 010/041 FIXED, 26 other fails**. Its
+  strict Python full+extended acceptance passes **531 apps**, extended,
+  diagnostics, dccpeep and performance. Both **3,482-function** trial
+  censuses are exactly byte-identical and all **516 existing perf rows**
+  are unchanged. Final long-only acceptance is recorded below.
+- Float seed **9** fails all four production configurations. Its 135-line
+  reduction isolates a negated member-array float update: expected IEEE
+  bits `c0490fd0`, actual `fffff030`, with the stored increment correct.
+  Float seed **81** reduces to the same integer unary consumer after a
+  float prefix update on a block-local initialized from an integer
+  (expected `3f800000`, actual `00000000`). Both are host + ASan/UBSan
+  proven, parked as **BUG-056 / [#299](https://github.com/davidly/dcc/issues/299)**.
+  The issue preserves the admission-only proof patch, explicitly not shipped.
+  The float batch was stopped after these two findings; it is not called clean.
+- MIR's load/update/store are float, but the dependent unary retains AST
+  `TYPE_INT`; `mir_lower_simple_unary_chain` copies that earlier type.
+  D1's update repair does not repair this consumer. No second compiler
+  fix was attempted. BUG-041 / BUG-056 remain behind `fincdecval` steering;
+  the float trial's new classifier and its float-prefix unit test are removed.
+- Narrowed long postfix emits exactly the accepted direct-assignment
+  control in peep/nopeep. Permanent tests check explicit casts and narrowing
+  returns, signed/unsigned long, both update directions, release, stack-check
+  and line-debug. Host + ASan/UBSan probes also cover carry/borrow/wrap,
+  long array/member/deref narrowing and negated long member postfix values.
+- Independent CMake compiler build / MIR host checks **6/6**, focused
+  compiler/debug tests **28/28**, and strict require-emit pass. Line-debug
+  binaries are release-identical; full-debug metadata/output are valid in
+  both pipelines. No source/statement/scope boundaries or existing locations
+  move. The initial debugger-host MI endpoint cleanup assertion under load
+  passes an unchanged **isolated retry**; all ten host tests are covered.
+- Final long-only acceptance: **29 parked reproducers, only 010 FIXED**,
+  with 041/056 rejected and all original out-of-cluster reproducers unchanged.
+  After promoting `tpost32`: **28 reproducers, 28 fails**. Its unchanged host
+  baseline passes validation and normal-stack full-mode measurement; the
+  only new row is **95,435 / 95,464 cycles, 5,248 / 5,248 bytes** (peep/nopeep).
+- Both final strict PowerShell full+extended gates pass **532 apps**, plus
+  extended, diagnostics and dccpeep fixtures; stack-check performance passes.
+  Final censuses have **3,488 functions**: all **3,482 existing rows** are
+  byte-identical in both modes, and exactly six `tpost32` functions are new.
+  All **516 existing CSV performance rows, including row order**, are
+  byte-identical; only the measured new row is appended. The CSV writer's
+  incidental sorting was undone without changing any measured value.
+- Restored integer production seeds **1-300: 227 ok, 73 INVALID, zero FAIL**.
+  Final targeted float-value steering proof passes **3,000 seeds** for the
+  blocked BUG-041/056 shapes; the all-known float proof still has the unrelated
+  BUG-045 gap noted below. The final blocked-float production health batch is also clean: **281 ok,
+  19 INVALID, zero FAIL** (300 seeds).
+- Final independent CMake compiler / MIR host checks **6/6**, targeted
+  compiler/line-debug tests **16/16**, and promoted `tpost32` full/line-debug
+  builds pass both pipelines. Statement/scope boundaries and existing
+  register/stack locations are unchanged.
+- Final integer disabled-shape proof passes **3,000 seeds**. Restoring the
+  still-open float-value steering exposes an unrelated existing BUG-045
+  steering gap at raw seed **1262**: the `fnegcmp` detector flags a comparison
+  of two folded float arithmetic constants even with that feature disabled.
+  The fuzzer classifies such repair/generated logged shapes INVALID rather
+  than using them as new compiler findings. The float 3,000-seed proof is
+  therefore not claimed; no BUG-045 generator/compiler fix is added here.
+- **Python exceptions are not hidden:** initial full discovery (319 tests,
+  including the later-withdrawn float trial unit) reports four failures and
+  two errors; final full discovery (318 tests) reports four failures and five
+  errors. The approved #277 campaign-baseline / exact-control golden failures
+  are unchanged. The remaining failures are process-supervision timing/cleanup
+  assertions; errors cover three compiler-mutation runner cases (two 180-second
+  fixture timeouts, teardown directories still being written, and a missing
+  watchdog-child PID file). The two built-in skips are unchanged.
+- Retrying only those five non-#277 cases with installed Ninja, no other unit
+  tests and no harness/expectation changes still reports two failures and four
+  errors (403.7 s). No failing test was skipped/refreshed and no second compiler
+  or harness fix was added. The three short timing cases are then retried one
+  per fresh Python process after all long jobs finish: all three still fail
+  (overall-deadline cleanup reports descendant PID 0; exit-grace timing exceeds
+  its 3-second bound; exited-worker cleanup has no watchdog PID file).
+  **All five non-#277 harness cases remain unverified.** Production CMake /
+  MIR / debugger-host and strict application gates pass. No expectation,
+  skip, timeout, harness or compiler change was made to hide these failures.
+- D2a owns independent BUG-021/024 stored-home lifetime fixes. No such
+  emitter/lifetime change is included here. No original out-of-cluster
+  reproducer flipped. No prepush or compiler-dating checks were run.
+
 #### D1 acceptance
 
 - Before: 33 parked reproducers fail. After the single root fix: only
@@ -1136,8 +1242,8 @@ so it matters more than its size suggests. Both are one-offs.
 | D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/023/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
 | D2 | | split into D2a / D2b | Stored-home versus AST admission are independent |
-| D2a | [#300](https://github.com/davidly/dcc/pull/300) (`fix/cluster-d2a-postinc-home`) | PR open; verified partial fix | 021/023 promoted as tpost16/tpostbr; 023 moved from C, same root; 024 remains independent; 26 parked reproducers all fail; 3,487 pre-follow-up functions and 517 perf rows unchanged |
-| D2b | | open; separate worktree | BUG-010/041 AST value admission; not changed by D2a |
+| D2a | [#300](https://github.com/davidly/dcc/pull/300) (`fix/cluster-d2a-postinc-home`) | merged | 021/023 promoted as tpost16/tpostbr; 023 moved from C, same root; 024 remains independent (D2c); 3,487 pre-follow-up functions and 517 perf rows unchanged |
+| D2b | [#301](https://github.com/davidly/dcc/pull/301) (`fix/cluster-d2b-postinc-admit`) | PR open; verified partial fix | 010 promoted as tpost32; 041 admission withdrawn after new BUG-056/#299; int 227/73, blocked float 281/19, zero FAIL; 3,482 existing functions and 516 perf rows byte-identical; strict release gates pass; #277 plus five isolated harness exceptions documented |
 | E | | open | |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
