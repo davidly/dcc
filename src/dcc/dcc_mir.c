@@ -1763,6 +1763,21 @@ static int mir_lower_conversion(int value, int target_type)
     return result;
 }
 
+static int mir_deferred_conversion_type(int value, int target_type)
+{
+    const struct MirInsn *source;
+
+    if (value < 0 || target_type == 0)
+        return 0;
+    source = mir_definition(value);
+    if (source == NULL || source->type != 0 ||
+        type_is_struct_object(target_type))
+        return 0;
+    return source->opcode == MIR_LOAD || source->opcode == MIR_LOAD_INDIRECT ||
+           (source->opcode == MIR_UNARY && (source->memory_flags & 512) != 0)
+        ? target_type : 0;
+}
+
 static int mir_lower_ident_assignment_conversion(
     int value, const struct AstNode *ident)
 {
@@ -3868,6 +3883,8 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             insn->src1 = address;
             insn->src2 = value;
             insn->type = node->a->type;
+            insn->deferred_conversion_type =
+                mir_deferred_conversion_type(value, target_type);
             mir_copy_name(insn->name, node->a->sval);
             if (field != NULL)
                 mir_set_field_memory(insn, field);
@@ -3912,6 +3929,8 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             insn->src1 = address;
             insn->src2 = value;
             insn->type = target_type;
+            insn->deferred_conversion_type =
+                mir_deferred_conversion_type(value, target_type);
             mir_set_node_memory(insn, node->a);
             insn->memory_size = type_size(target_type);
             return value;
@@ -4248,6 +4267,8 @@ static void mir_lower_stmt(const struct AstNode *node)
         }
         insn = mir_emit(MIR_RETURN);
         insn->src1 = condition;
+        insn->deferred_conversion_type =
+            mir_deferred_conversion_type(condition, mir.return_type);
         return;
     case AST_IF:
         else_label = mir_new_label();
@@ -8821,23 +8842,16 @@ scoped_type_repair_done:
             struct MirInsn *source =
                 mir_mutable_definition(source_value);
 
-            /* Declaration replay can refine an array load into its real
-             * element pointer type.  That must not replace a fixed call
-             * pointer parameter's ABI type (including for indirect calls).
-             * Pointer-to-pointer conversion preserves the target address
-             * representation, so retain it on MIR_ARG without inserting
-             * an identity cast that would obstruct backend matchers.
-             * Leave scalar promotion/width repair on its existing path. */
+            /* Declaration replay can refine a load or expression type, but
+             * a fixed parameter's ABI type still comes from its prototype.
+             * Keep conversions implied by MIR_ARG for exact call schedules. */
             if (call_id >= 0 && call_id < mir.call_signature_capacity &&
                 mir.call_signatures[call_id].present &&
                 mir.call_signatures[call_id].has_proto && position >= 0 &&
                 position < mir.call_signatures[call_id].parameter_count)
                 target_type =
                     mir.call_signatures[call_id].parameter_types[position];
-            if (target_type != 0 && source != NULL &&
-                type_ptr_depth(source->type) > 0 &&
-                type_ptr_depth(target_type) > 0 &&
-                !type_is_struct_object(mir.insns[i].type)) {
+            if (target_type != 0) {
                 mir.insns[i].type = target_type;
                 continue;
             }
@@ -9287,6 +9301,49 @@ scoped_type_repair_done:
                 insn->dst = -1;
             }
         }
+    }
+    /* Resolve conversion obligations only after load types are known.
+     * Already-supported consumer representations keep the original graph. */
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *consumer = &mir.insns[i];
+        const struct MirInsn *source;
+        struct MirInsn *conversion;
+        int target_type = consumer->deferred_conversion_type;
+        int store = consumer->opcode == MIR_STORE_INDIRECT;
+        int source_value = store ? consumer->src2 : consumer->src1;
+        int source_size;
+        int target_size;
+        int converted_value;
+
+        if (target_type == 0)
+            continue;
+        source = mir_definition(source_value);
+        if (source == NULL || source->type == 0)
+            continue;
+        consumer->deferred_conversion_type = 0;
+        source_size = type_size(source->type);
+        target_size = type_size(target_type);
+        if (source->type == target_type ||
+            (store &&
+             mir_spilled_argument_source_type_valid(source->type, target_type)) ||
+            (!type_is_float(source->type) && !type_is_float(target_type) &&
+             ((source_size == target_size &&
+               (target_size == 2 || target_size == 4)) ||
+              (consumer->opcode == MIR_RETURN && target_size == 2 &&
+               source_size == 1))))
+            continue;
+        converted_value = mir_new_value();
+        conversion = mir_insert_instruction_before(i, MIR_UNARY);
+        if (conversion == NULL)
+            fatal("cannot insert deferred MIR conversion");
+        conversion->dst = converted_value;
+        conversion->src1 = source_value;
+        conversion->type = target_type;
+        ++i;
+        if (store)
+            mir.insns[i].src2 = converted_value;
+        else
+            mir.insns[i].src1 = converted_value;
     }
     mir_preserve_divmod_cast_types();
     for (i = 0; i < mir.count; ++i) {

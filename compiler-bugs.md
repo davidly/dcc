@@ -28,7 +28,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-003](#bug-003) | #224 | wrong result | `++`/`--` on a 32-bit array element is done in 16 bits |
 | [BUG-004](#bug-004) | #225 | wrong result | 16-bit local set from `&&`/`\|\|`, stored to a 32-bit lvalue, leaves a garbage high word |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
-| [BUG-007](#bug-007) | #227 | rejects valid C, or crashes | Indirect call with a nested-block local argument that needs converting |
 | [BUG-008](#bug-008) | #228 | rejects valid C | Negative constant assigned to a 32-bit nested-block local |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-010](#bug-010) | #230 | rejects valid C | Cast or narrowing return of a 32-bit post-increment or post-decrement |
@@ -46,13 +45,11 @@ and their historical diagnoses are retained separately below.
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-023](#bug-023) | #243 | wrong result | `if (x++ > K) x = v;` leaves `x` as 1 when not taken (local assigned from another type) |
 | [BUG-024](#bug-024) | #244 | wrong result | `if (x++)` in a loop tests the incremented value (8-bit local, later `do … while`) |
-| [BUG-025](#bug-025) | #245 | wrong result | `return x;` of a nested-block object is not converted to an 8-bit or 32-bit return type |
 | [BUG-026](#bug-026) | #246 | wrong result | `d = a - b; return d * d;`: the second operand is read from an unallocated stack slot |
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
 | [BUG-030](#bug-030) | #250 | wrong result, or hang | A `for`-init declaration overlaps its enclosing block's locals on the stack (after an earlier sibling scope) |
-| [BUG-031](#bug-031) | #251 | wrong result | Nested-block 32-bit local copied from another local, stored to a 16-bit lvalue: only the low byte is loaded |
 | [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
 | [BUG-036](#bug-036) | #256 | wrong result | A 32-bit local assigned in a loop and passed directly to a call keeps its old value after the loop |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
@@ -71,15 +68,16 @@ and their historical diagnoses are retained separately below.
 | [BUG-050](#bug-050) | #270 | wrong result | `(int32_t)(uint32_t)x` converted to float, with `x` a signed 8- or 16-bit value, converts the unsigned value (`-121` → `4294967175.0f`) |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 
-Forty-six are open: twenty-eight give wrong results with no diagnostic
-(BUG-030 can also hang; BUG-039 is in the runtime), one hangs, sixteen stop the compile (BUG-007
-can instead compile and crash), and one (BUG-022) turns a compile error into
+Forty-three are open: twenty-six give wrong results with no diagnostic
+(BUG-030 can also hang; BUG-039 is in the runtime), one hangs, fifteen stop the compile,
+and one (BUG-022) turns a compile error into
 a broken program. BUG-026 is the
 one most likely to be hit by ordinary code, then BUG-044 (every float `++`
 is wrong), BUG-047 (`f + n * g` is `f`), BUG-030 (it corrupts memory in C99-style code), BUG-003,
-BUG-013, BUG-016 and BUG-025.
+BUG-013 and BUG-016.
 
-Five reported bugs are fixed: [four in cluster K](#fixed-in-cluster-k) and
+Eight reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+[four in cluster K](#fixed-in-cluster-k) and
 [one in cluster L](#fixed-in-cluster-l). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -184,29 +182,6 @@ s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
 - Correct: the same statements when the field's top bit is clear;
   `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
   (their low bits do not depend on the extension); a signed bit-field.
-
-## BUG-007
-
-**A call through a function pointer whose argument is a local declared in a
-nested block or a `for` initialiser, and whose type differs from the
-parameter's, produces invalid MIR.** The verifier prints
-`MIR f: instruction N has incorrect argument ABI type`. Then either the
-compile stops with `MIR verification failed before required emission`, or,
-in other surrounding code, dcc exits 0 and the program crashes at the call.
-
-```c
-static int16_t take(unsigned char x);
-static int16_t (*take_p)(unsigned char) = take;
-{ int32_t v = wide; (*take_p)(v); }                 /* narrowing */
-for (int32_t i = 3; i != 0; --i) (*take_p)(i);      /* for-init local */
-```
-
-- Fails for narrowing and widening conversions, `(*p)(v)` and `p(v)`.
-- Correct: the direct call `take(v)`; `v` declared at function scope; an
-  explicit cast `(*take_p)((unsigned char)v)`; an argument of the parameter's
-  own type.
-- PR #219 fixed the direct-call form of this.
-- Regression since v3.6.0; first-parent bisect: first bad `55fbb06f`.
 
 ## BUG-008
 
@@ -710,46 +685,6 @@ do { l--; } while (++d < 2);
   `while` loop, after the first loop is fine); the `if` not in a loop.
 - BUG-021 is another case where a post-increment yields the new value.
 
-## BUG-025
-
-**`return x;`, where `x` is an object declared in a nested block, is not
-converted to the function's return type.** To an 8-bit return type it is
-not truncated (the caller receives all 16 bits); to a 32-bit return type it
-is not widened (the high word is whatever was in the register).
-
-```c
-static uint8_t f(void)
-{
-    {
-        int16_t b = 300;
-        return b;            /* want 44 (300 truncated to 8 bits), dcc 300 */
-    }
-}
-static int8_t g(void) { { uint8_t b = 200; return b; } }   /* want -56, dcc 200 */
-static uint32_t w(void) { { int16_t b = 7; return b; } }   /* want 7, dcc e.g. 0x012c0007 */
-```
-
-- 8-bit return type (`uint8_t`, `int8_t`, plain `char`): wrong for a
-  nested-block `int16_t`, `uint16_t`, `int32_t` (the low 16 bits are
-  returned) and an 8-bit local of the other signedness.
-- 32-bit return type (`int32_t`, `uint32_t`): wrong for a nested-block
-  `int8_t`, `uint8_t`, `int16_t` and `uint16_t`. A nested-block `int32_t`
-  is correct.
-- Also wrong for a `static` local, an array element (`return b[0];`) and a
-  struct member (`return s.m;`); for `return (b);`, `return b++;` and
-  `return b = n;`.
-- The nested scope can be a plain block, the body of an `if`, `while`,
-  `do`, `for` or `switch`, or a `for` initialiser
-  (`for (int16_t b = 300; …) return b;`).
-- Correct: a local declared at function scope, even when the `return` is
-  inside a nested block; a parameter; `return (uint8_t)b;`, `return b + 1;`,
-  `return -b;`, `return +b;`, `return n ? b : 1;`, `return *p;`,
-  `return (int32_t)b;`, `return b + 0;`; a 16-bit return type; copying to a
-  function-scope local and returning that.
-- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
-- Like BUG-007, BUG-008 and BUG-015 it depends on the object being declared
-  in a nested block.
-
 ## BUG-026
 
 **A variable that is assigned a computed value and is then, in the next
@@ -982,52 +917,6 @@ With a pointer in place of the array, dcc emits (the pointer `q` is at
   the two scopes in the other order; locals that do not need memory (plain
   `uint16_t x, y;`).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
-
-## BUG-031
-
-**A 32-bit local declared in a nested block and initialised from a
-function-scope 32-bit local is stored to a 16-bit lvalue with only its low
-byte loaded.** The high byte stored is whatever was in the register.
-
-```c
-static void f(uint32_t x)              /* f(0x00030201) */
-{
-    uint32_t y = x;
-    {
-        uint32_t b = y;
-        a2[1] = b;                     /* uint16_t a2[]: want 0201, dcc fe01 */
-    }
-}
-```
-
-dcc emits, for the store:
-
-```
-    ld l,(ix+6)        ; low byte of the value; H is not loaded
-    ld (a2+2),hl
-```
-
-- Wrong when the destination is an array element (constant or variable
-  index), a struct member or `*p`; for `uint32_t` and `int32_t`; in a plain
-  block and in an `if` body.
-- Correct: the local declared at function scope; initialised from a global,
-  a constant or an expression (`x + 1`); declared without an initialiser and
-  then assigned (`uint32_t b; b = y;`); stored with a cast (`a2[1] = (uint16_t)b;`) or as
-  `b + 1`; stored to a plain global or to an 8-bit lvalue; a `for`
-  initialiser (`for (uint32_t b = y; …)`).
-- Also wrong: initialised with a constant and then assigned the other local,
-  `{ int32_t b = 0; b = y; a2[1] = b; }` (found by fuzzing, seed 5089).
-  A different type on the right, such as `uint32_t b = 0; b = y;` with an
-  `int32_t y`, is correct.
-- A constant initialiser is also wrong when the destination address is
-  computed: `{ uint32_t b = 0x30201; a2[i] = b; }` with a variable index
-  stores 0 (want `0201`), as do `*p = b` (`p` a global or local pointer)
-  and `ps->m = b`. Right with a constant index, `s.m = b`, `(uint16_t)b`,
-  `b + 1`, an initialiser that is a global or an expression, the local at
-  function scope, or the block an `if` body. Found by fuzzing (seed 20149).
-- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
-- One more case of a nested-block local losing its declared width; see
-  BUG-015 and BUG-025.
 
 ## BUG-033
 
@@ -1508,6 +1397,165 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   loop, `x + 0.0f` as the arm, `x` in the else arm (`c ? 1.0f : x`), no
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
+
+## Fixed in cluster A1
+
+BUG-007, BUG-025 and BUG-031 now pass in peep and nopeep. Their unchanged
+host baselines were promoted with new measured performance rows; all 43
+remaining parked reproducers still fail. No existing performance row or
+selected assembly changed: both stack modes compare identically across
+3,333 existing functions.
+
+Nested declarations are replayed after surrounding MIR is lowered. Return
+and indirect-store conversion requirements now survive an unresolved load
+without speculative instructions; they are fulfilled after declaration
+types resolve. Fixed-prototype arguments retain their ABI target when
+replay retypes their operands, leaving existing exact call schedules and
+selection-time conversion materialization intact.
+
+The integer generator's `ptrcallconv`, `blockret` and `blockwidecopy`
+steering entries were removed. The production batch for seeds 1-300 with
+`--off known` finished with **218 ok, 81 INVALID, one target-limit-only,
+zero FAIL**. Initial failures at seeds 77 and 256 reduced to arithmetic
+block-local arguments whose repaired wide type overwrote a word parameter
+ABI; both facets are covered in the promoted ABI test and host MIR tests.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-007](#bug-007) | #227 | [tblkabi](tests/tblkabi.c) |
+| [BUG-025](#bug-025) | #245 | [tblkret](tests/tblkret.c) |
+| [BUG-031](#bug-031) | #251 | [tblkcopy](tests/tblkcopy.c) |
+
+### BUG-007
+
+**Fixed:** a fixed parameter's prototype, not its repaired operand, owns
+the argument ABI type. Regression: [tblkabi.c](tests/tblkabi.c),
+[stdout](tests/baselines/tblkabi.txt), including the reduced seed-77/256
+arithmetic-argument facets.
+
+The following diagnosis describes the pre-fix behavior.
+
+**A call through a function pointer whose argument is a local declared in a
+nested block or a `for` initialiser, and whose type differs from the
+parameter's, produces invalid MIR.** The verifier prints
+`MIR f: instruction N has incorrect argument ABI type`. Then either the
+compile stops with `MIR verification failed before required emission`, or,
+in other surrounding code, dcc exits 0 and the program crashes at the call.
+
+```c
+static int16_t take(unsigned char x);
+static int16_t (*take_p)(unsigned char) = take;
+{ int32_t v = wide; (*take_p)(v); }                 /* narrowing */
+for (int32_t i = 3; i != 0; --i) (*take_p)(i);      /* for-init local */
+```
+
+- Fails for narrowing and widening conversions, `(*p)(v)` and `p(v)`.
+- Correct: the direct call `take(v)`; `v` declared at function scope; an
+  explicit cast `(*take_p)((unsigned char)v)`; an argument of the parameter's
+  own type.
+- PR #219 fixed the direct-call form of this.
+- Regression since v3.6.0; first-parent bisect: first bad `55fbb06f`.
+
+### BUG-025
+
+**Fixed:** unresolved return loads retain the function's conversion
+requirement until their declaration types are known. Regression:
+[tblkret.c](tests/tblkret.c), [stdout](tests/baselines/tblkret.txt).
+The block return of 300 now emits `ld hl,44`, exactly matching the unchanged
+function-scope control in peep and nopeep.
+
+The following diagnosis describes the pre-fix behavior.
+
+**`return x;`, where `x` is an object declared in a nested block, is not
+converted to the function's return type.** To an 8-bit return type it is
+not truncated (the caller receives all 16 bits); to a 32-bit return type it
+is not widened (the high word is whatever was in the register).
+
+```c
+static uint8_t f(void)
+{
+    {
+        int16_t b = 300;
+        return b;            /* want 44 (300 truncated to 8 bits), dcc 300 */
+    }
+}
+static int8_t g(void) { { uint8_t b = 200; return b; } }   /* want -56, dcc 200 */
+static uint32_t w(void) { { int16_t b = 7; return b; } }   /* want 7, dcc e.g. 0x012c0007 */
+```
+
+- 8-bit return type (`uint8_t`, `int8_t`, plain `char`): wrong for a
+  nested-block `int16_t`, `uint16_t`, `int32_t` (the low 16 bits are
+  returned) and an 8-bit local of the other signedness.
+- 32-bit return type (`int32_t`, `uint32_t`): wrong for a nested-block
+  `int8_t`, `uint8_t`, `int16_t` and `uint16_t`. A nested-block `int32_t`
+  is correct.
+- Also wrong for a `static` local, an array element (`return b[0];`) and a
+  struct member (`return s.m;`); for `return (b);`, `return b++;` and
+  `return b = n;`.
+- The nested scope can be a plain block, the body of an `if`, `while`,
+  `do`, `for` or `switch`, or a `for` initialiser
+  (`for (int16_t b = 300; …) return b;`).
+- Correct: a local declared at function scope, even when the `return` is
+  inside a nested block; a parameter; `return (uint8_t)b;`, `return b + 1;`,
+  `return -b;`, `return +b;`, `return n ? b : 1;`, `return *p;`,
+  `return (int32_t)b;`, `return b + 0;`; a 16-bit return type; copying to a
+  function-scope local and returning that.
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+- Like BUG-007, BUG-008 and BUG-015 it depends on the object being declared
+  in a nested block.
+
+### BUG-031
+
+**Fixed:** indirect stores retain the target conversion for an unresolved
+block-local load, then materialize only the missing conversion.
+Regression: [tblkcopy.c](tests/tblkcopy.c),
+[stdout](tests/baselines/tblkcopy.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**A 32-bit local declared in a nested block and initialised from a
+function-scope 32-bit local is stored to a 16-bit lvalue with only its low
+byte loaded.** The high byte stored is whatever was in the register.
+
+```c
+static void f(uint32_t x)              /* f(0x00030201) */
+{
+    uint32_t y = x;
+    {
+        uint32_t b = y;
+        a2[1] = b;                     /* uint16_t a2[]: want 0201, dcc fe01 */
+    }
+}
+```
+
+dcc emits, for the store:
+
+```
+    ld l,(ix+6)        ; low byte of the value; H is not loaded
+    ld (a2+2),hl
+```
+
+- Wrong when the destination is an array element (constant or variable
+  index), a struct member or `*p`; for `uint32_t` and `int32_t`; in a plain
+  block and in an `if` body.
+- Correct: the local declared at function scope; initialised from a global,
+  a constant or an expression (`x + 1`); declared without an initialiser and
+  then assigned (`uint32_t b; b = y;`); stored with a cast (`a2[1] = (uint16_t)b;`) or as
+  `b + 1`; stored to a plain global or to an 8-bit lvalue; a `for`
+  initialiser (`for (uint32_t b = y; …)`).
+- Also wrong: initialised with a constant and then assigned the other local,
+  `{ int32_t b = 0; b = y; a2[1] = b; }` (found by fuzzing, seed 5089).
+  A different type on the right, such as `uint32_t b = 0; b = y;` with an
+  `int32_t y`, is correct.
+- A constant initialiser is also wrong when the destination address is
+  computed: `{ uint32_t b = 0x30201; a2[i] = b; }` with a variable index
+  stores 0 (want `0201`), as do `*p = b` (`p` a global or local pointer)
+  and `ps->m = b`. Right with a constant index, `s.m = b`, `(uint16_t)b`,
+  `b + 1`, an initialiser that is a global or an expression, the local at
+  function scope, or the block an `if` body. Found by fuzzing (seed 20149).
+- Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+- One more case of a nested-block local losing its declared width; see
+  BUG-015 and BUG-025.
 
 ## Fixed in cluster L
 
