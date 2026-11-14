@@ -12,6 +12,21 @@ finally:
 
 
 class FloatKnownShapeTests(unittest.TestCase):
+    def test_constant_float_comparison_inside_negated_float_sum(self):
+        comparison = gen.E("bin", a="<", k=[
+            gen.E("const", a=0.0625, t=gen.F32),
+            gen.E("const", a=602000.0, t=gen.F32)])
+        expression = gen.E("bin", a="+", k=[comparison,
+            gen.E("const", a=1.5, t=gen.F32)])
+        self.assertTrue(gen.needs_fconst_fold(gen.E("un", a="-", k=[expression])))
+        self.assertFalse(gen.is_fconst(comparison))
+        cast = gen.E("cast", t=gen.F32, k=[comparison])
+        self.assertFalse(gen.needs_fconst_fold(gen.E("un", a="-", k=[cast])))
+        variable = gen.E("var", a=gen.Decl("f", gen.F32, "global"))
+        comparison.k[1] = variable
+        self.assertFalse(gen.needs_fconst_fold(gen.E("un", a="-", k=[expression])))
+        self.assertFalse(gen.known_shapes(gen.generate(219, off=frozenset(gen.KNOWN_BUGS))))
+
     def test_only_disabled_shapes_block_oracle_execution(self):
         integer = gen.E("const", a=-72, t=gen.I32)
         expressions = {
