@@ -8,7 +8,7 @@ should tend towards 1.61803398874989484820458683436563811772030
   at 7 iterations: 1.619048
   at 8 iterations: 1.617647
   at 9 iterations: 1.618182
-  at 10 iterations: 1.617978
+  at 10 iterations: 1.617977
   at 11 iterations: 1.618056
   at 12 iterations: 1.618026
   at 13 iterations: 1.618037
