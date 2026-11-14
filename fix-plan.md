@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has eleven open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has ten open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -171,20 +171,154 @@ typing defect.
 | Bug | Issue | Shape |
 | --- | --- | --- |
 | BUG-015 | #235 | Block pointer to 32-bit object: `*q *= k` in 16 bits, `c <= *q` signed; block `unsigned char` compared as `unsigned int`; `?:` of two block floats |
-| BUG-004 | #225 | `&&`/`||` assigned to a block 32-bit local leaves garbage high word (facet; the function-scope half is in E) |
+| BUG-004 | #225 | Original block-long logical assignment fixed by A2b-1; restored byte-local logical SSA consumers remain open in A2b-3 |
 
-Neither is fixed by A1 or A2a. Their shared nested-block condition is not
-proof of a shared root cause, and BUG-015 itself has many facets. Work A2b
-**after E**: E1 fixes only BUG-004's function-scope half; the block-local
-assignment remains. Its boolean source stays untyped after the canonical
-conversion is repaired to long (E2 below), independently of BUG-015's
-pointer/byte/cast facets. E1 also corrects BUG-015's wrapped word decrement
-widening, but none of those remaining facets. Trace the remaining issues
-independently rather than assuming their shared block scope is a root cause.
-Trace expression typing, conversion insertion and deferred metadata repair in
-`src/dcc/dcc_mir.c` against the neighbouring correct shapes before changing
-anything. The stop rule applies: if a first fix clears one facet of BUG-015
-but not the others, report rather than stack independent fixes.
+The shared nested-block condition was not proof of a shared root cause.
+Following the E1/E2 handoff, the first A2b fix clears **all five original
+BUG-004 reproducer lines**, but not BUG-015: its parked program still has the
+same nine wrong lines and byte-identical peep/nopeep assembly. Restoring
+`logicinit` then exposes a separate **byte-local SSA forwarding facet** of
+BUG-004 (integer seeds 133/143/153/286), so **neither complete issue is closed**.
+The stop rule splits this into **A2b-1** (the fully verified block-long fix),
+**A2b-2** (015's consumers) and **A2b-3** (004's newly traced byte facet).
+No second compiler fix is included and no partial reproducer is promoted.
+`tests/tlogblk.c` is a new, fully host-proven cleared-facet test, not a claim
+that the entire expanded BUG-004 is fixed.
+
+#### A2b-1. Canonical block assignment must type its boolean source
+
+`mir_lower_ident_assignment_conversion()` calls
+`mir_type_untyped_widened_value()` while the nested-block lvalue type is still
+unknown. Later, `mir_resolve_deferred_metadata()` restores the canonical
+conversion's destination to long, but never reapplies that source-typing
+contract: the `&&`/`||` PHI remains untyped and conversion emission stores a
+stale DE as the high word. Reuse the same helper when the named canonical
+conversion is repaired. This types only an untyped PHI widened beyond a word;
+constants and narrow consumers retain their existing representation.
+
+The new block-long shape emits the exact same assembly as its already-correct
+function-scope control (signed/unsigned, `&&`/`||`, stack/no-stack, release and
+`-gline`). The original `block_local` keeps `spilled-scalar-cfg`; its only
+addition is the five-instruction, five-byte signed-word extension already
+emitted for the control: `ld a,h; rlca; sbc a,a; ld d,a; ld e,a`. No emitter,
+selector, schedule, runtime, fallback or AST admission changes.
+
+#### A2b-2. Independently traced BUG-015 consumers (not fixed)
+
+| Facet | Traced cause / next file and function |
+| --- | --- |
+| Block pointer multiplication/comparison and unsigned-word shift/divide | In `src/dcc/dcc_mir.c`, `mir_lower_expr_impl()` / `mir_lower_compound_value()` lower from an untyped indirect load. `mir_resolve_deferred_metadata()` repairs scoped binary types **before** its indirect-load pointee inference: the final load is unsigned long/word, but the consuming multiply, comparison or shift retains the earlier int computation/conversion. Pointer comparisons also retain the prematurely word-promoted signed-char/int operand. |
+| Block byte beside a bit-field | `dcc_ast_build.c:p_binary()` records field-aware int promotion, but the deferred-binary branch of `dcc_mir.c:mir_resolve_deferred_metadata()` recomputes from raw `MIR_LOAD_INDIRECT.type == TYPE_UNSIGNED|TYPE_INT` without the field-width promotion. `(b & s.m5)` and its comparison become unsigned int; the negative signed-char operand becomes 65470. This borders the independently assigned BUG-013 promotion work; no bit-field edit is made here. |
+| Explicit signed-word cast beside a block long | `dcc_mir.c:mir_unary_is_representation_identity()` discards the equal-width unsigned-to-signed cast because its direct consumer is a binary, not a wider conversion. The deferred binary's later width/type reconciliation observes the original unsigned load, so 0x8000 widens as +32768. Preserve the cast's interpretation across deferred/widened binary consumers, not merely its unchanged word bits. |
+| Block float unary / assignment-value unary | `dcc_mir.c:mir_lower_simple_unary_chain()` lowers `-b` and `-(b = value)` with the AST's default int result; `mir_resolve_deferred_metadata()` explicitly excludes a repaired float source from ordinary unary propagation. The stored local is float but its negation is still integer. |
+| Block integer/float mixed arithmetic, compound and `?:` consumers | `dcc_mir.c:mir_lower_conversion()` declines an untyped source, leaving no conversion node for the deferred repair to retype. `mir_lower_expr_impl()` and scoped repair can restore the binary or conditional PHI to float but do not materialize the missing operand conversion (e.g. integer 3 or 7 is used as IEEE bits). A host/sanitizer-proven `7 + (fg ? b : c)` probe has float arms and PHI, yet still computes 1.0f instead of 8.0f. |
+
+The BUG-015 wrapped-word decrement facet was already corrected by E1. Its
+array/member integer-to-float store examples also pass at this starting
+commit (the existing deferred conversion obligations materialize those
+stores); the unary, mixed arithmetic and conditional-consumer probes above
+still fail and are byte-unchanged by A2b-1. No partial BUG-015 test is promoted,
+no BUG-015 steering is removed, and #235 remains open.
+
+
+#### A2b-3. Restored logical-byte initializers lose their SSA source type
+
+The first restored integer batch reduces four failures to:
+
+```c
+int8_t b = 1 && (uint16_t)1;
+a4[3] = b;                 /* uint32_t array: high word is stale */
+uint8_t b = -191 && (uint32_t)0;
+int32_t c = b;
+g = c++;                   /* wrong high word on the zero value */
+uint8_t b = (uint16_t)1 || (uint32_t)1;
+s.m1 = b;                  /* uint32_t member: high word is stale */
+int32_t returns_minus_one_long(void);
+int8_t byte_compare = (uint16_t)1 && 29464;
+g = returns_minus_one_long() >= byte_compare;  /* true instead of false */
+```
+
+`src/dcc/dcc_mir.c:mir_promote_objects()` forwards a byte local's typed load
+to its untyped logical PHI. Its E1 typed-view guard requires a same-width
+2/4-byte source/destination and therefore excludes this byte/word mismatch.
+The already-built long conversion consequently acquires an untyped source
+**after** deferred metadata repair and emits no extension. This is not the
+A2b-1 canonical-assignment repair point; no second implementation is tried.
+
+BUG-004 now parks the exact reduced seed-133 byte facet (host and sanitizer
+proven, failing in both pipelines), while the original five lines and six
+additional signed/unsigned block logical paths are covered separately by
+`tlogblk`. Keep #225 open. The broad `logicinit` steer is removed from
+`KNOWN_BUGS`; only a new, narrowly detected `logicbyteinit` steer (non-global
+8-bit logical stores/initializers) remains mapped to BUG-004. Word and block
+long logical forms are genuinely restored. No new issue is manufactured for
+these additional facets of the existing logical-source bug.
+
+**D2d relationship:** this is the same broad deferred-type pipeline, **not**
+one shared fix. BUG-004 loses the boolean source contract when a canonical
+assignment target becomes known. D2d instead loses AST unresolved-update
+provenance because `dcc_ast_build.c:ast_expr_base_ident_unresolved()` does not
+descend `AST_POSTFIX` or prefix `TOK_INC`/`TOK_DEC`; dependent binary
+conversions never get marked deferred. No update-provenance, unary-float or
+float-admission change is included; BUG-041/056 remain parked behind
+`fincdecval`.
+
+
+#### A2b-1 acceptance — verified fix, both expanded issues remain open
+
+- Original parked inventory: **19 reproducers, 1 FIXED (pre-existing 022),
+  18 fails**. The first fix makes original 004 FIXED (all five lines), with
+  015 still nine wrong lines and identical assembly. After parking the newly
+  reduced byte facet, final inventory returns to **1 FIXED, 18 fails**;
+  there are still **nineteen open, thirty-five fixed issues**. No issue closes.
+- Restored integer discovery, all four production modes, seeds 1-300:
+  **292 ok, 1 INVALID, 3 target-limit-only, 4 FAIL** (133/143/153/286, each
+  independently reduced and traced to the remaining byte PHI). With only
+  `logicbyteinit` steered, final integer batch: **296 ok, 1 INVALID,
+  3 target-limit-only, zero FAIL**. Float steering unchanged: **282 ok,
+  18 INVALID, zero FAIL**. Both final 3,000-seed steering proofs pass.
+- Both original **3,545-function** census files are byte-identical after the
+  compiler fix. Final snapshots add only ten `tlogblk` functions; filtering
+  that new app leaves every existing row/hash byte-identical in both stack
+  modes. All **526 existing perf rows**, including their order and exact
+  bytes, are untouched; the one new normal-stack row is
+  `tlogblk,231255,232566,6400,6656` (peep/nopeep cycles, peep/nopeep sizes).
+- New `tlogblk`: original five lines plus six false/true/nested block logical
+  lines; host clang O0/O2 and ASan/UBSan agree. Host validation and focused
+  strict full run pass. Integer widened bodies match the resolved
+  function-scope controls exactly, before and after dccpeep. The original
+  peep reproducer adds only five machine bytes / 20 cycles; its quantized COM
+  crosses 2304 to 2432 bytes. No selector, schedule, runtime or fallback change.
+- Strict Python full+extended: **541 passed, 24 skipped**, zero failures before
+  adding the new app. Final strict PowerShell stack and no-stack full+extended:
+  **542 passed, 24 skipped**, zero failures; diagnostics, dccpeep, extended and
+  checked stack performance gates pass. Canonical and independent CMake
+  compiler builds, require-emit diagnostics and both **274/274** extended
+  MIR censuses pass.
+- Debug review: only an internal boolean PHI becomes int; declaration types,
+  statement/scope boundaries and existing homes/frames are unchanged. Full
+  debug records block `b` as a four-byte long at its actual stack offset.
+  Existing typing/entrypoint/line-debug tests **51/51**, debugger-host CTest
+  **10/10**, and final new typing/generator cases **11/11** pass. The expanded
+  eleven-line app passes all twelve release/full-debug/line-debug pipeline
+  combinations; every `-gline` COM is release-identical. Generic block-float
+  logical conversions are additionally host/sanitizer-proven in the same
+  twelve modes, with correct `__fif` conversion and release-identical `-gline`.
+  A floated cross-scope exact-assembly experiment retained extra initializer
+  constant loads in the block form, so no float cross-scope identity is
+  claimed; the permanent float test checks the actual conversion and line-debug
+  contracts instead. No initializer-layout optimization is attempted.
+- Full regular Python discovery: **326 tests, six failures, four errors,
+  two existing skips**. Two failures are the approved #277 campaign/exact
+  controls; all eight other timing/harness cases were retried individually.
+  Child environment/timeout, inherited-pipe cleanup and overall deadline pass
+  their retries. Five remain **unverified**: mock default serial/parallel and
+  survivor runs hit 180 seconds (the latter also has a cleanup-directory error),
+  worker-watchdog and exited-worker retries lack the `watchdog-child` marker,
+  and post-exit grace takes 3.118 seconds against its three-second threshold.
+  These unchanged synthetic harnesses are not the modified compiler. No harness
+  fix, expectation refresh, skip, old-compiler check or prepush run was made.
+
 
 ### B. Disproved: split into B1–B4
 
@@ -561,10 +695,10 @@ Materializing the incoming edges is the correct producer/consumer contract.
 A broad home proof recursed through loop PHIs; the store-only result guard
 keeps that proof bounded without perturbing existing loop schedules.
 
-**C2 remains open, traced rather than guessed:**
+**C2 was traced rather than guessed (029 fixed in C2a, 037 fixed in C2b; 052 remains open):**
 
 - **BUG-029:** `dcc_mir.c:mir_compute_liveness_bytes()` and
-  `mir_compute_liveness_words()` stop their PHI-edge-input scan at the first
+  `mir_compute_liveness_bitsets()` stop their PHI-edge-input scan at the first
   non-PHI/non-NOP instruction. In `minus`, the byte PHI is instruction 19,
   its widening unary is 20, and the `x` PHI is 21. The latter's parameter
   operand is therefore not live on the incoming else edge: HL is overwritten
@@ -592,6 +726,158 @@ keeps that proof bounded without perturbing existing loop schedules.
   spilled-all still fails `f2`. This is independent of C1's word self-store
   materialization and B4's call-argument cache.
 
+### C2a. Interleaved PHI-edge liveness (BUG-029/#249)
+
+The C1 trace was independently reproduced before editing: `minus` has byte
+PHI 19, widening unary 20 and parameter-merge PHI 21. The byte and bitset
+liveness scans stopped at unary 20, so parameter v0 had `live in=0 out=0`
+at its definition and was not live on the else edge. Its HL home was reused
+for the byte value 100; the homed emitter already walked all header PHIs,
+but its edge copy therefore copied 100 from the clobbered HL into x's DE.
+The no-cast control has contiguous PHIs 19/20 and keeps v0 live.
+
+Both liveness scans now use the existing `mir_next_phi_in_block()` iterator
+between PHIs, matching the emitter's block-bounded scan through interleaved
+widenings and NOPs. Consecutive leading labels remain aliases; a later label
+or terminator ends the scan. No lowering, selector, schedule, emitter,
+runtime or fallback changed, and C2b's `mir_binary_is_wide_phi_update()` and
+C2c's `mir_prepare_backend_slots()` are untouched.
+
+`minus` retains `homed-scalar-cfg` and its original one-byte local frame:
+x stays in HL and the byte uses DE before the merge, then the ordinary
+parallel edge copies put l in HL and x in DE for `sbc hl,de`. This is the
+same 38-instruction schedule already emitted for the no-cast control,
+not a spill/fallback workaround. The existing no-cast and 16-bit controls
+are byte-identical in both peep modes.
+
+Debug review: this changes register live ranges/homes only for the formerly
+broken shape, not source boundaries, scopes, types or symbol identities.
+Full `-g` disables the affected promotion and keeps memory-backed variables;
+`-gline` must remain release-identical with the corrected locations. Focused
+incoming-parameter tests cover signed/unsigned byte widening and negation,
+stack/release/line-debug/full-debug compilation and byte/bitset verification.
+
+First-root verification: the original twelve reproducers report **2 FIXED /
+10 fails**: BUG-029 alone flips in both production modes; BUG-022 was already
+FIXED before this work, and its diagnostic defect remains open. BUG-037,
+BUG-052 and BUG-057 remain wrong; no out-of-cluster reproducer changed.
+
+Both original **3,603-function** MIR censuses are byte-identical, with zero
+changed apps/functions in stack and no-stack modes, including a full
+`DCC_MIR_LIVENESS_VERIFY=1` byte/bitset cross-check. All **534 existing perf
+rows** remain unchanged. Strict full+extended stack-check and no-stack
+regressions passed
+(549 apps and 196 runnable extended apps per mode, diagnostics and peephole
+fixtures, zero checked performance regressions).
+
+ASan/UBSan compiled the reproducer with byte/bitset verification without
+findings. All **35** focused arithmetic/debug Python tests and all **10**
+debugger-host tests passed. Direct reproducer probes pass in release,
+`-gline` and full `-g`, peep and nopeep; release/`-gline` `.COM` pairs are
+byte-identical, line-debug location records and full-debug frame-variable
+records are present, and function scopes remain balanced.
+
+Restored integer `bytearm` seeds 1–300: **293 ok / 7 INVALID / zero FAIL**
+across all four production configurations. No new bug or out-of-cluster
+finding was uncovered, and no float generator was changed. BUG-029 is
+promoted as `tphiarm` with its unchanged four-line host baseline; only its
+new normal-stack measured row is added. Host validation and strict focused
+stack/no-stack runs pass.
+
+Full Python discovery ran **331 tests**: 324 passed, two skipped, two
+approved pre-existing failures (#277: `test_mir_campaign_baselines` and
+`test_mir_exact_controls`) and three synthetic mutation-harness errors.
+The errors were the serial/parallel fixture's 180-second timeout, the
+survivors/invalid-exits fixture's 180-second timeout, and a watchdog-child
+marker not created before its deadline. Individual sequential isolated
+retries passed the survivors fixture (147.966 seconds) and watchdog fixture
+(6.249 seconds); the serial/parallel fixture again exceeded its unchanged
+180-second timeout (182.829 seconds overall) and remains **unverified**.
+These are mock scheduling/process harness checks, not compiler output
+failures. No harnesses, expectations or skips were fixed or refreshed, and
+no historical compiler or prepush checks were performed.
+
+Final parked reproducers: **11 programs / 1 pre-existing BUG-022 FIXED /
+10 fails**. The bug log and this plan consistently record **eleven open /
+forty-four fixed** reported bugs. The sole new performance row is
+`tphiarm`: **188369/188797 peep/nopeep cycles**, **5632/5632 bytes**. Every
+original CSV row is byte-identical; the canonical baseline updater's whole-
+file CSV reserialization was discarded while retaining the measured new row.
+### C2b. Wide-counter PHI edge use
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-037 | #257 | A for/while body copies the old 32-bit counter before its update |
+
+`mir_binary_is_wide_phi_update()` previously checked only textual uses after
+an update. The loop-header `l` PHI is earlier in the stream, but consumes the
+old counter on the backedge after the increment; sharing old/new slots makes
+that edge copy read the updated value. This is separate from BUG-057's fused
+named-home direct-add read and BUG-029/052's liveness/slot-coalescing defects.
+
+The wide matcher now shares cluster N's exact earlier-used-PHI/CFG-live-out
+proof with the narrow matcher in `mir_value_has_pending_earlier_phi_copy()`.
+It guards both unit and non-unit wide updates. Unused PHI destinations emit
+no copy and do not inhibit coalescing. No selector, profitability threshold,
+`mir_direct_wide_location()`, MIR liveness, or solitary-PHI slot path changes.
+
+- Both original census TSVs are byte-identical across **3,603 functions per
+  mode**; all **534 existing perf rows** are unchanged.
+- BUG-037 flips in both production modes. With the new BUG-058 parked,
+  pre-promotion tally is **13 reproducers: 2 FIXED, 11 fails**; the only other
+  FIXED is BUG-022's historical fixture-only pass. BUG-029/052/057 still fail.
+  Post-promotion tally: **12 reproducers: 1 FIXED, 11 fails**.
+- Promoted as `twphicpy`, retaining all six original lines plus stride,
+  negative-counter, word-carry and zero-iteration cases. Only a new measured
+  normal-stack-check perf row is added.
+- The three original correct controls retain the same instructions in peep
+  and nopeep, modulo label numbering. The selected spilled candidate remains
+  unchanged; broken loops use native wide arithmetic and parallel edge
+  copies, without a fallback/helper. Exact linked `for_loop` body size is
+  **162→236 peep / 185→259 nopeep** (+74 bytes in the new failing shape only).
+- Restored integer 1-300: **287 ok, 11 INVALID, 1 limit-only, 1 FAIL** (seed 43).
+  Reduced in 86 tests to a loop-free cross-signed word initializer widened
+  into a 32-bit array. Hand controls show scalar stores, function-scope
+  locals, same-type initializers and separate assignments are right; both
+  signedness directions and explicit casts fail in the array store.
+  Filed independently as **BUG-058/#315**, parked and steered by
+  `blockwordinit`; sibling compiler paths/BUG-015 steering remain untouched.
+  `loopcopy` is restored; the remaining-known-shape proof passes 3,000 seeds.
+  Repeating restored integer 1-300 after the new steer: **280 ok, 19 INVALID,
+  1 limit-only, zero FAIL** across all four production configurations.
+- Strict Python full+extended and both strict PowerShell stack/no-stack gates
+  pass. Require-emit checks, both 274/274 extended censuses, two sanitized MIR
+  verifier/bitset proofs, ten debugger-host tests and 40 focused Python
+  compiler/generator/line-debug tests pass. The new steer's seven generator
+  tests pass separately. ASan/UBSan compilation checks the original and
+  extended fixtures with independent liveness/cache verification.
+- Debug review: source boundaries/scopes/types are unchanged; corrected
+  backend temporaries and instruction addresses use the normal metadata
+  pipeline. All twelve expanded-fixture release/line/full-debug combinations
+  pass; line-debug COMs are release-identical and full-debug retains named
+  frame-variable metadata.
+
+The full regular Python suite runs **330 tests: seven failures, three errors,
+two pre-existing skips**. Two failures are the approved #277 campaign-golden
+and exact-control gates; their expectations are not refreshed. The other
+five failing methods and two timed-out synthetic mutation-fixture methods
+are retried sequentially in isolation (seven methods, 398.253 seconds): all
+five timing/process-cleanup failures pass. The serial/default scheduler
+fixture and survivors/error-recording fixture still exceed their unchanged
+180-second limits; the latter also reports a cleanup-directory race. Those
+two harness methods remain unverified under shared load. No new compiler/MI
+failure remains, and no harness expectations, timeouts or skips are changed.
+
+The isolated retry methods are
+`test_child_timeout_and_environment_isolation`,
+`test_exited_worker_cleans_nested_process_scopes`,
+`test_worker_watchdog_records_invalid_and_stops_descendants`,
+`test_overall_deadline_and_explicit_stop_clean_live_processes`, and
+`test_post_exit_grace_preempts_long_overall_deadline` (all pass);
+`test_default_serial_and_parallel_are_equal_and_bounded` and
+`test_survivors_invalid_exits_builds_and_worker_errors_are_recorded`
+(remain timed out). No old-compiler/regression-dating checks or
+`prepush.ps1` are run.
 
 ### C2c. Loop-live solitary conditional PHI sources (BUG-052)
 
@@ -1262,7 +1548,7 @@ The final fix applies at the proven reaching-value replacement itself.
 | BUG-006 | #226 | `mir_lower_expr_impl`'s `AST_ASSIGN` member compound path builds its initial `MIR_LOAD_INDIRECT` with `node->a->type == 0`, despite having the resolved `FieldDef`. `mir_emit_bitfield_extract` interprets missing `TYPE_UNSIGNED` as signed, so the top bit sign-extends. Repair explicitly excludes bit-field loads from pointee inference. Preserve the field's declared extraction type separately from its promoted arithmetic type here. |
 | BUG-028 | #248 | **Fixed in E2-shift.** A discarded signed-byte shift had no promoted-left operation, so `mir_resolve_deferred_metadata` widened it to the unsigned word count type. `mir_lower_compound_value` now materializes promoted int and a separate narrowed result; equal-width counts cannot retype it. |
 | BUG-002 | #223 | **Fixed in E2-shift.** `mir_lower_compound_value` left discarded byte shifts nominally byte-typed when a byte count did not widen them. Object promotion forwarded the word result through a byte return. Explicit promoted-left computation plus a distinct narrowed SSA/store value restores truncation. |
-| BUG-004 (remaining block facet) | #225 | `mir_lower_ident_assignment_conversion` sees an unresolved block lvalue type and does not type the boolean PHI. `mir_resolve_deferred_metadata` later restores the conversion target to long, but its source PHI stays untyped; conversion emission therefore leaves the high word uninitialized. Extend `mir_type_untyped_widened_value`'s contract to repaired canonical assignment conversions. The function-scope half is fixed incidentally by E1; A2b may proceed on this explicit remaining facet, not an assumed BUG-015 shared cause. |
+| BUG-004 (block facet; now A2b-1) | #225 | Fixed by replaying `mir_type_untyped_widened_value` when `mir_resolve_deferred_metadata` restores a canonical assignment conversion target. E1 fixed the function-scope half; A2b-1 fixes the block half without changing BUG-015. |
 
 **E2-shift (BUG-002/028) is implementation-proven: one promotion/narrowing
 root fix clears both.** No second independent metadata repair or subgroup
@@ -1414,6 +1700,11 @@ rule is changed here; printing after the scoped helpers retains every checked
 expression and all 15 host-baseline lines, and makes the delivered test's
 `-gline` binaries release-identical in both pipelines. Only that new test's
 normal-stack row is measured again; all 526 incumbent rows remain byte-identical.
+
+No E2 implementation was included in E1. A2b-1 subsequently fixes BUG-004's
+original block facet; restored fuzzing traces a separate byte SSA facet in
+A2b-3. All five expanded issues remain open with their unresolved facets
+steered.
 
 ### F. Compound assignment to complex lvalues
 
@@ -2049,7 +2340,10 @@ addresses require the normal full/line debug pipeline checks.
 | A1 | [#281](https://github.com/davidly/dcc/pull/281) | merged | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
 | A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
-| A2b | | open; E traced | BUG-004 block assignment still untyped at repaired widening; function facet fixed by E1; BUG-015 pointer/byte facets independent |
+| A2b | [#314](https://github.com/davidly/dcc/pull/314) (`fix/cluster-a2b-block-typing`) | split after first root fix | A2b-1 clears original 004, not 015; restored fuzzing finds 004 byte SSA facet (A2b-3); neither issue closes; D2d provenance is a sibling, not the same fix |
+| A2b-1 | [#314](https://github.com/davidly/dcc/pull/314) (`fix/cluster-a2b-block-typing`) | PR open; verified compiler gates; partial issues | Canonical repaired assignment reuses boolean-source widening contract; all original 004 lines pass; new host-proven tlogblk covers cleared facets, no partial reproducer promoted |
+| A2b-2 | | open | BUG-015 pointer-repair ordering, bit-field promotion, discarded signed cast, unary float and missing operand conversions; no second fix |
+| A2b-3 | | open; newly traced | BUG-004 byte local forwarded to untyped logical PHI after metadata repair; same-width 2/4-byte SSA guard excludes bytes; narrow logicbyteinit steering retained |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
@@ -2059,8 +2353,10 @@ addresses require the normal full/line debug pipeline checks.
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | [#293](https://github.com/davidly/dcc/pull/293) | PR open | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
 | C1 | [#313](https://github.com/davidly/dcc/pull/313) (`fix/cluster-c-local-merge`) | PR open; compiler gates verified; accepted Python harness exceptions | BUG-027/#247 and BUG-038/#258: materialize word PHI edges for store-only fused adjustments; original 3,558 functions/mode and 528 perf rows unchanged |
-| C2 | | open; traced | BUG-029/#249: interleaved PHI edge liveness; BUG-037/#257: old wide PHI edge use missed before in-place update; BUG-052/#272: fixed in C2c (loop-live solitary PHI source coalescing/slot lifetime truncation); distinct from BUG-057/#304 |
+| C2 | | closed | BUG-029/037/052 traced at the C1 handoff and fixed in C2a/C2b/C2c; distinct from BUG-057/#304 |
 | C2c | [#317](https://github.com/davidly/dcc/pull/317) (`fix/cluster-c2c-slot-coalesce`) | PR open; compiler gates verified; accepted Python harness exceptions | BUG-052/#272 promoted as tphislot; float 291 ok/9 INVALID/zero FAIL; 3,603 existing functions/mode and 534 existing perf rows unchanged |
+| C2b | [#319](https://github.com/davidly/dcc/pull/319) (`fix/cluster-c2b-wide-phi-edge`) | PR open; compiler gates verified; approved Python harness exceptions | BUG-037/#257 promoted as twphicpy; shared earlier-PHI edge-use proof; restored integer 280 ok/19 INVALID/1 limit-only/zero FAIL; 3,603 existing functions/mode and 534 perf rows unchanged; new BUG-058/#315 parked/steered |
+| C2a | [#320](https://github.com/davidly/dcc/pull/320) (`fix/cluster-c2a-phi-liveness`) | PR open; compiler gates verified; accepted Python harness exceptions | BUG-029/#249 promoted as tphiarm; restored bytearm 293 ok/7 INVALID/zero FAIL; both 3,603-function censuses and all 534 existing perf rows unchanged; #277 plus one isolated mock serial-scheduler timeout unverified |
 | D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/023/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
 | D2 | | split into D2a / D2b / D2c / D2d | Assignment-value lifetime, AST admission, byte-PHI lifetime and float consumer typing are independent |

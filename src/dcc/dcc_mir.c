@@ -8669,8 +8669,12 @@ void mir_resolve_deferred_metadata(void)
         else if (insn->opcode == MIR_ADDRESS)
             insn->type = type_add_ptr(named_type);
         else if (insn->opcode == MIR_UNARY &&
-                 (insn->memory_flags & 512) != 0)
+                 (insn->memory_flags & 512) != 0) {
             insn->type = named_type;
+            /* Replay the widening contract now that a block assignment's
+             * destination type is known. */
+            mir_type_untyped_widened_value(insn->src1, named_type);
+        }
         else if (insn->opcode == MIR_STORE && insn->immediate == 0 &&
                  !type_is_struct_object(named_type)) {
             insn->type = named_type;
@@ -14045,14 +14049,11 @@ static int mir_compute_liveness_bytes(unsigned char *live_in,
                                         mir.next_value + value];
                     if (successor_is_phi[successor]) {
                         int first = successor_phi_first[successor];
-                        while (first < mir.count) {
+                        /* Widenings can separate PHIs in the same header. */
+                        for (; first >= 0;
+                             first = mir_next_phi_in_block(
+                                 insn->successors[successor], first + 1)) {
                             const struct MirInsn *phi = &mir.insns[first];
-                            if (phi->opcode == MIR_NOP) {
-                                ++first;
-                                continue;
-                            }
-                            if (phi->opcode != MIR_PHI)
-                                break;
                             if ((predecessor_label == phi->phi_pred1 &&
                                  value == phi->src1) ||
                                 (predecessor_label == phi->phi_pred2 &&
@@ -14060,7 +14061,6 @@ static int mir_compute_liveness_bytes(unsigned char *live_in,
                                 next_out = 1;
                                 break;
                             }
-                            ++first;
                         }
                     }
                 }
@@ -14196,13 +14196,12 @@ static int mir_compute_liveness_bitsets(MirLiveWord *live_in,
                 predecessor_label = mir_block_label_before(i);
                 predecessor_label_known = 1;
             }
-            for (; first < count; ++first) {
+            /* Match the emitter's block-bounded, interleaved PHI scan. */
+            for (; first >= 0;
+                 first = mir_next_phi_in_block(
+                     insn->successors[successor], first + 1)) {
                 const struct MirInsn *phi = &mir.insns[first];
 
-                if (phi->opcode == MIR_NOP)
-                    continue;
-                if (phi->opcode != MIR_PHI)
-                    break;
                 if (predecessor_label == phi->phi_pred1 &&
                     phi->src1 >= 0 && phi->src1 < values)
                     phi_row[phi->src1 / 64] |= 1ULL << (phi->src1 % 64);
