@@ -2591,14 +2591,12 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     if (operand->kind != AST_IDENT)
         mir.has_indirect_incdec = 1;
     operand_type = operand->type;
-    /* Recover the stored byte type without changing the established MIR
-     * types and matcher shapes for word and pointer increments. */
+    /* Normalize byte and wide arithmetic to the stored type even when its
+     * result is discarded; untyped array operands otherwise update a word.
+     * Keep the established word and pointer matcher shapes. */
     lvalue_type = mir_lvalue_type(operand);
-    /* A used value needs a type, or a long element's old value is read as
-     * a word (`v = q[i]--`). A word postfix keeps its established shape. */
-    if (type_size(lvalue_type) == 1 ||
-        (result_used && operand_type == 0 &&
-         (!postfix || type_size(lvalue_type) > 2)))
+    if (type_size(lvalue_type) == 1 || type_size(lvalue_type) > 2 ||
+        (result_used && operand_type == 0 && !postfix))
         operand_type = lvalue_type;
     if (operand->kind == AST_IDENT) {
         struct Sym *symbol = mir_ident_symbol(operand);
@@ -2630,10 +2628,10 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
             mir_set_node_memory(insn, operand);
     }
     one = mir_new_value();
-    insn = mir_emit(MIR_CONST);
+    insn = mir_emit(type_is_float(operand_type) ? MIR_FLOAT_CONST : MIR_CONST);
     insn->dst = one;
     insn->type = operand_type;
-    insn->immediate = step;
+    insn->immediate = type_is_float(operand_type) ? 0x3f800000L : step;
     /* A prefix ++/-- yields the stored value. For a nested-block local, whose
      * type is unknown until repair, the operation is typed by repair and its
      * value converted back to the local's type, so it wraps as the stored
@@ -2648,6 +2646,7 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
     insn->secondary_offset = operand_type;
     insn->immediate = operation == TOK_INC ? '+' : '-';
     insn->deferred_operand_types = narrow_result;
+    insn->deferred_incdec_type = operand_type == 0;
     if (operand->kind == AST_IDENT) {
         struct Sym *symbol = mir_ident_symbol(operand);
         insn->narrowed_for_counter_update =
@@ -9345,6 +9344,30 @@ scoped_type_repair_done:
                 insn->opcode = MIR_NOP;
                 insn->dst = -1;
             }
+        }
+    }
+    /* An untyped inc/dec must follow the repaired lvalue, not the default
+     * word arithmetic. Its private unit constant also needs float bits.
+     * Leave byte/word shapes unchanged for the incumbent schedules. */
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *insn = &mir.insns[i];
+        struct MirInsn *old_value;
+        struct MirInsn *one;
+
+        if (insn->opcode != MIR_BINARY || !insn->deferred_incdec_type)
+            continue;
+        old_value = mir_mutable_definition(insn->src1);
+        one = mir_mutable_definition(insn->src2);
+        if (old_value == NULL || one == NULL ||
+            type_size(old_value->type) != 4 ||
+            one->opcode != MIR_CONST || one->immediate != 1)
+            continue;
+        insn->type = old_value->type;
+        insn->secondary_offset = old_value->type;
+        one->type = old_value->type;
+        if (type_is_float(old_value->type)) {
+            one->opcode = MIR_FLOAT_CONST;
+            one->immediate = 0x3f800000L;
         }
     }
     /* Resolve conversion obligations only after load types are known.

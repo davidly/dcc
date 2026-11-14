@@ -145,6 +145,8 @@ struct MirInsn {
     /* MIR_BINARY, MIR_PHI, MIR_UNARY: types unknown at build (a nested-block
      * local), so they are re-derived after repair. */
     int deferred_operand_types;
+    /* Inc/dec whose stored type must follow deferred lvalue repair. */
+    int deferred_incdec_type;
     /* Return/store whose load operand was unresolved during lowering. */
     int deferred_conversion_type;
     char name[64];

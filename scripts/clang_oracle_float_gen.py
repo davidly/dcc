@@ -56,7 +56,6 @@ FEATURES = frozenset((
 KNOWN_BUGS = {
     'fdivround': 'BUG-039',
     'fincdecval': 'BUG-041',
-    'fincdec': 'BUG-044',
     'fconstfold': 'BUG-042',
     'fblockneg': 'BUG-015',
     'fnegcmp': 'BUG-045',
@@ -76,7 +75,7 @@ def is_fconst(e):
     if e.op == 'cast' and e.t is F32:
         return is_fconst(e.k[0])
     if e.op in ('un', 'bin') and ty(e) is F32:
-        return all(is_fconst(k) for k in e.k)
+        return all(is_anyconst(k) for k in e.k)
     return False
 
 

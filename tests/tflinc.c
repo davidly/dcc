@@ -1,9 +1,5 @@
-/* BUG-044: `++` and `--` on a float do the wrong thing with no diagnostic.
- * On a scalar (local, global, struct member, `*p`) the statement is a
- * no-op: the value is unchanged. On an array element (`fa[1]++`, `p[1]++`,
- * constant or variable index) the element is treated as a 16-bit integer:
- * its low word is incremented and the high word cleared, so 2.0f becomes
- * the denormal 0x00000001. `f += 1.0f` and `f = f + 1` are correct. */
+/* Float prefix/postfix increment and decrement on locals, globals, members,
+ * dereferences, pointer indexes and nested-block arrays; compare += and +. */
 #include <stdint.h>
 #include <stdio.h>
 
