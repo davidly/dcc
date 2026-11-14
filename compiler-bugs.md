@@ -1064,6 +1064,8 @@ uint32_t sub(int8_t p)
 
 ## Fixed in cluster D1
 
+Fix and verification: [PR #297](https://github.com/davidly/dcc/pull/297).
+
 BUG-003 (#224) and BUG-044 (#264) share incorrectly typed update arithmetic.
 `mir_lower_incdec` used an untyped array operand for the operation even when
 memory repair later recovered a long/float load and store; its unit constant
