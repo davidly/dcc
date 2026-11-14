@@ -2639,6 +2639,23 @@ static int mir_wide_constant_is_signed_relational_immediate(int value)
     return uses == 1;
 }
 
+static int mir_value_has_pending_earlier_phi_copy(int value, int index)
+{
+    int instruction;
+
+    /* Earlier PHIs consume their sources on predecessor edges, not at
+     * their textual instruction. Unused destinations emit no edge copy. */
+    if (!mir_value_live_out_of_instruction(value, index))
+        return 0;
+    for (instruction = mir_next_use(value, -1);
+         instruction >= 0 && instruction < index;
+         instruction = mir_next_use(value, instruction))
+        if (mir.insns[instruction].opcode == MIR_PHI &&
+            mir_value_has_use(mir.insns[instruction].dst))
+            return 1;
+    return 0;
+}
+
 static int mir_binary_is_wide_phi_update(
     int index, int *phi_value, int *store_index)
 {
@@ -2686,6 +2703,8 @@ static int mir_binary_is_wide_phi_update(
          instruction < found_store; ++instruction)
         if (mir.insns[instruction].opcode != MIR_NOP)
             return 0;
+    if (mir_value_has_pending_earlier_phi_copy(phi->dst, index))
+        return 0;
     if (right != NULL && right->opcode == MIR_CONST &&
         right->immediate == 1) {
         for (instruction = index + 1;
@@ -2799,16 +2818,8 @@ static int mir_binary_is_narrow_phi_adjust(
             mir.insns[instruction].src2 == phi->dst ||
             mir_call_uses_value(&mir.insns[instruction], phi->dst))
             return 0;
-    /* Earlier PHIs consume their sources on predecessor edges, not at
-     * their textual instruction. Do not overwrite a pending emitted copy;
-     * unused PHI destinations have no physical edge use. */
-    if (mir_value_live_out_of_instruction(phi->dst, index))
-        for (instruction = mir_next_use(phi->dst, -1);
-             instruction >= 0 && instruction < index;
-             instruction = mir_next_use(phi->dst, instruction))
-            if (mir.insns[instruction].opcode == MIR_PHI &&
-                mir_value_has_use(mir.insns[instruction].dst))
-                return 0;
+    if (mir_value_has_pending_earlier_phi_copy(phi->dst, index))
+        return 0;
     if (phi_value != NULL)
         *phi_value = phi->dst;
     if (store_index != NULL)
@@ -14960,32 +14971,10 @@ static int mir_prepare_backend_slots(void)
                     slot_end[slot] = last[value];
                     continue;
                 }
-                /* A genuine MIR_PHI (as opposed to the MIR_BINARY-
-                 * implementing-a-phi-update shapes just above) gets no
-                 * special treatment here otherwise - its destination
-                 * just falls through to a fresh slot below, distinct
-                 * from either source's own, even when a source's only
-                 * use in the entire function is feeding this one phi.
-                 * mir_coalesce_solitary_phi_sources (dccpeep's post-hoc
-                 * retrofit attempt, reverted) and a direct liveness
-                 * narrowing (also reverted) both tried to close this
-                 * from the outside and each regressed dozens of
-                 * unrelated apps - see their own removed comments in
-                 * git history - by perturbing decisions already made
-                 * (or about to be made) for OTHER values from the same
-                 * shared first[]/last[] numbers or from an
-                 * already-consulted slot. Deciding it right here instead
-                 * touches neither: the phi destination has not been
-                 * assigned anything yet (nothing downstream has
-                 * consulted its slot), and reusing an eligible source's
-                 * slot changes that source's own entry not at all - only
-                 * this one new value's assignment is affected, exactly
-                 * like the two narrower MIR_BINARY cases just above already
-                 * establish this pattern is safe for. Confirmed via
-                 * tests/cobint.c and tests/adaint.c's shared interpreter-
-                 * dispatch shape (a ternary whose result flows into
-                 * exactly one later use), which motivated this in the
-                 * first place. */
+                /* A solitary PHI edge use can execute on every iteration.
+                 * Coalesce only a source dead after this PHI on the CFG;
+                 * otherwise a consumer reusing the PHI slot would overwrite
+                 * the source carried across the backedge. */
                 if (definition != NULL && definition->opcode == MIR_PHI) {
                     int phi_source = definition->src1;
                     int phi_source_slot = -1;
@@ -14993,6 +14982,7 @@ static int mir_prepare_backend_slots(void)
                     if (phi_source >= 0 && phi_source != value &&
                         mir.backend_slots[phi_source] >= 0 &&
                         mir_value_use_count(phi_source) == 1 &&
+                        !mir_value_live_out_of_instruction(phi_source, i) &&
                         mir_value_is_wide(phi_source) == (units == 2))
                         phi_source_slot = mir.backend_slots[phi_source];
                     if (phi_source_slot < 0) {
@@ -15000,6 +14990,7 @@ static int mir_prepare_backend_slots(void)
                         if (phi_source >= 0 && phi_source != value &&
                             mir.backend_slots[phi_source] >= 0 &&
                             mir_value_use_count(phi_source) == 1 &&
+                            !mir_value_live_out_of_instruction(phi_source, i) &&
                             mir_value_is_wide(phi_source) == (units == 2))
                             phi_source_slot = mir.backend_slots[phi_source];
                     }
@@ -26098,8 +26089,13 @@ static int mir_direct_wide_location(int value,
      * holds only its own bytes, so it has no four-byte location to read. */
     if (definition == NULL || type_size(definition->type) != 4)
         return 0;
-    if (mir_value_has_direct_named_home(value) &&
-        mir_direct_named_home_location(definition, &storage, &offset)) {
+    if (mir_value_has_direct_named_home(value)) {
+        /* Fused self-store increments leave their result in the object's
+         * ascending-byte home, not in the unused SSA backend slot. */
+        if (!mir_direct_named_home_location(definition, &storage, &offset) &&
+            !mir_binary_is_selfstore_wide_increment(
+                (int)(definition - mir.insns), NULL, &offset))
+            return 0;
         iy_offset = offset + mir_effective_local_bytes() + mir.aggregate_temp_bytes;
         if (mir_virtual_iy_base && iy_offset >= -128 && iy_offset + 3 <= 127) {
             location->base = "iy";

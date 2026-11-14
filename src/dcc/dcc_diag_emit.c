@@ -347,8 +347,9 @@ void dcc_error_at(const char *file, int line, long ofs, const char *msg, const c
 
     /* Counted unconditionally, even while suppressed below, so structural
      * parser probes and constant-expression attempts can detect that their
-     * tentative parse diagnosed an error without printing it. MIR emission
-     * also refuses to commit after any real diagnostic. */
+     * tentative parse diagnosed an error without printing it. The separate
+     * errors count records reported diagnostics; suppressed probe complaints
+     * must not suppress a later required-MIR failure. */
     g_diag_error_count++;
 
     /* asm_suppress_depth marks source text being parsed for its structural
