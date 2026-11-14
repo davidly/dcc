@@ -163,6 +163,25 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                     if options == ("-gline",):
                         self.assertEqual(actual, release)
 
+    def test_byte_compound_shifts_match_promoted_assignment(self):
+        cases = (
+            ("unsigned char initial, count;", "unsigned char",
+             "unsigned char x = initial;", "<<"),
+            ("signed char x; unsigned int count;", "int", "", ">>"),
+        )
+        for declarations, result_type, initializer, operator in cases:
+            template = (declarations + " " + result_type + " probe(void) { " +
+                        initializer + " %s; return x; }\n")
+            compound = template % ("x " + operator + "= count")
+            expanded = template % ("x = x " + operator + " count")
+            release = self.code(self.compile(compound))
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(operator=operator, options=options):
+                    actual = self.code(self.compile(compound, options))
+                    self.assertEqual(actual, self.code(self.compile(expanded, options)))
+                    if options == ("-gline",):
+                        self.assertEqual(actual, release)
+
     def test_float_conversion_retains_cast_signedness(self):
         cases = (
             ("long x", "(unsigned long)x", "__fulf"),

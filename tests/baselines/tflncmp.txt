@@ -1,0 +1,4 @@
+255
+1 1 1
+negative 9 14
+constant left 4 3

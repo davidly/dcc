@@ -4,3 +4,6 @@ product >= 0 1
 member >= 1 1
 as value 0 1
 switch arms taken 8
+loop 0 1
+return 0 1
+mixed 0 1

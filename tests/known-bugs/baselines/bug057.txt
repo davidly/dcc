@@ -1,0 +1,6 @@
+prefix_add -61
+compound_add -61
+prefix_sub -63
+right_add -61
+constant_rhs 9
+no_loop -61

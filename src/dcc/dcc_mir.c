@@ -2533,11 +2533,19 @@ static int mir_lower_compound_value(int left, int right, int operation,
             right = scaled;
         }
     } else if (operation == TOK_SHL || operation == TOK_SHR) {
-        /* A byte's shift is done in int and narrowed back. When the
-         * assignment's value is used it must be the narrowed one
-         * (`(unsigned char)(c <<= 5)`); a discarded one keeps its form. */
-        if (result_used && type_size(target_type) == 1 &&
-            type_ptr_depth(target_type) == 0) {
+        /* Signed word counts already establish the promoted computation
+         * during repair. Byte counts do not widen it, and unsigned word
+         * counts would give it the wrong signedness: materialize promotion
+         * and narrowing for those discarded shifts as for used results. */
+        right_definition = mir_mutable_definition(right);
+        if (type_size(target_type) == 1 &&
+            type_ptr_depth(target_type) == 0 &&
+            (result_used ||
+             (right_definition != NULL &&
+              type_ptr_depth(right_definition->type) == 0 &&
+              (type_size(right_definition->type) == 1 ||
+               (type_size(right_definition->type) == 2 &&
+                (right_definition->type & TYPE_UNSIGNED) != 0))))) {
             computation_type = promote_int_type(target_type);
             left = mir_lower_conversion(left, computation_type);
         }
