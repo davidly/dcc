@@ -1,0 +1,13 @@
+large 4096
+small 4095
+large size 32768
+type 32768 4096
+shift 4096 4096
+compare 1 1
+negative 0 0
+type top 65535 8191 8191
+top 65535 8191 8191
+global 32768 4096 4096 1
+bounds 4096 8
+pairs 4404 4404
+runtime 4096 4096 1

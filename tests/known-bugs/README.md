@@ -25,12 +25,14 @@ BUG-041 admission; neither parked fixture is promoted by D2e-1.
 `tests/tupdprov.c` separately covers the already-admitted wide update
 provenance repaired by that safe subset.
 
-BUG-061 remains parked after the stopped S1 experiment. Correcting the AST
-`sizeof` result to unsigned clears the reproducer, but changes existing
-function output and selector choices; the trial was withdrawn, so a passing
-experimental compiler is not grounds for promotion. The complete affected
-list and pending maintainer ruling are recorded in
-[fix-plan.md](../../fix-plan.md#s1-stopped-the-unsigned-sizeof-result-changes-existing-output).
+BUG-061 was promoted as `tests/tsizhigh.c` after the maintainer approved
+unsigned typing only for compile-time `sizeof` values at or above `0x8000`.
+The full unsigned-type trial changed existing output and exact schedules and
+is deferred. Its residual small/runtime-size typing deviation is parked as
+BUG-062 (`bug062.c`); no integer-generator steer is needed because that
+generator never emits `sizeof`. See
+[fix-plan.md](../../fix-plan.md#s1-high-bit-constant-sizeof-result-typing)
+for the stop, ruling, narrow fix and deferred typing-recovery track.
 
 ## Checking them
 
@@ -82,7 +84,8 @@ regular test:
 `tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c`, `tests/tflncmp.c`,
 `tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tflidx.c`, `tests/tndwide.c`,
 `tests/tlbreuse.c`, `tests/twincadd.c`, `tests/tmerge16.c`, `tests/tearly16.c`,
-`tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c`, `tests/tbfcomp.c` and `tests/tfdivr.c` were promoted this way.
+`tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c`, `tests/tbfcomp.c`, `tests/tfdivr.c` and
+`tests/tsizhigh.c` were promoted this way.
 
 
 `tests/tlogblk.c` separately covers BUG-004's host-proven word and block-long

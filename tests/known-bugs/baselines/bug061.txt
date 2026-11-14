@@ -1,3 +1,0 @@
-large 4096
-small 4095
-large size 32768

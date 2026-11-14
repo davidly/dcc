@@ -7,7 +7,7 @@ wrong-code findings from withdrawn BUG-041 admission experiments; their parked
 sources remain rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `15db8e69` plus the cluster E2c bit-field compound extraction repair (2026-11-15).
+- **Compiler under test:** `8db72cbd` plus the approved S1 high-bit `sizeof` repair (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -34,14 +34,15 @@ and their historical diagnoses are retained separately below.
 | [BUG-059](#bug-059) | #316 | latent wrong result | Deferred float update arithmetic lacks an implicit integer-to-float conversion after type repair |
 
 | [BUG-060](#bug-060) | #322 | wrong result | `%f` rounds exact IEEE float bits to an incorrect last decimal digit |
-| [BUG-061](#bug-061) | #323 | wrong result | `sizeof` at or above 32768 is sign-extended or divided as a signed 16-bit value |
+| [BUG-062](#bug-062) | #327 | wrong result | Small and runtime `sizeof` results retain signed AST typing; full unsigned typing and exact-schedule recovery are deferred |
 
 Eight are open: five give wrong results with no diagnostic,
 two latent wrong-code findings are blocked by
 BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
 promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Fifty-one reported bugs are fixed: [one in cluster R1](#fixed-in-cluster-r1),
+Fifty-two reported bugs are fixed: [one in cluster S1](#fixed-in-cluster-s1),
+[one in cluster R1](#fixed-in-cluster-r1),
 [two in cluster M-a](#fixed-in-cluster-m-a),
 [one in cluster C2a](#fixed-in-cluster-c2a),
 [two in cluster C1](#fixed-in-cluster-c1),
@@ -105,28 +106,33 @@ was only tried with today's runtime, which is not a reliable pairing.
 - Regression is parked as [bug060.c](tests/known-bugs/bug060.c); host O0/O2,
   ASan and UBSan agree. Formatter implementation is intentionally unchanged.
 
-## BUG-061
+## BUG-062
 
-**`sizeof` at or above 32768 is sign-extended or divided as a signed 16-bit
-value.** For a static `uint8_t large[32768]`, `(unsigned long)sizeof(large)`
-should print `32768`, and `(unsigned long)(sizeof(large) / 8)` should print
-`4096`. Both are wrong; `sizeof(small) / 8` for a 32760-byte array prints
-`4095` correctly. CP/M's unsigned 16-bit `size_t` can represent both sizes.
+**Small constant and runtime `sizeof` results retain signed AST typing.**
+For an eight-byte array `x` and `int i = -1`, both `i < sizeof(x)` and
+`sizeof(x) > -1` must be false: the unsigned `size_t` result converts -1 to
+its unsigned maximum. Both instead evaluate to true. A loop starting at -1
+against `sizeof(x)` runs nine times rather than zero. The type-name form and
+whole-VLA runtime form have the same residual defect.
 
-- Found in the R1 proof harness: a 4404-pair array occupies 35232 bytes and
-  `sizeof(pairs)/sizeof(pairs[0])` compiled to a 61748-iteration bound, instead
-  of 4404. The proof was repaired with an explicit unsigned count; all original
-  4404 division results agreed even before the harness repair.
-- Regression is parked as [bug061.c](tests/known-bugs/bug061.c); host O0/O2,
-  ASan and UBSan agree. No compiler code is changed in cluster R1.
-- S1 traced the defect to the signed result type at all three `sizeof` AST
-  construction/inference sites. A single unsigned-result correction clears
-  this reproducer and high-bit division/shift/comparison, type/object, array
-  bound and R1 loop-count probes, but changes 173 existing functions in each
-  regular MIR census (including 36 exact-to-spilled moves). The hard-gate
-  stop withdrew the compiler trial; BUG-061 remains open and parked pending
-  a maintainer ruling. See [S1 in the fix plan](fix-plan.md#s1-stopped-the-unsigned-sizeof-result-changes-existing-output)
-  for the full affected-function list. No other sizeof defect was fixed.
+- The maintainer-approved interim S1 rule makes `sizeof` unsigned only when
+  its compile-time constant value is at least `0x8000`; smaller, unknown and
+  runtime values deliberately retain today's signed `TYPE_INT`. One shared
+  helper applies this rule at the three AST construction/inference sites.
+  This representation-range repair closes BUG-061, not the full C type defect.
+- A complete unsigned result-type correction at `8db72cbd` changed 173
+  existing functions in both regular censuses, including 36 exact schedules
+  moving to spilled emission. It was withdrawn. The full correction is
+  deferred to the separately planned **correct typing + exact-schedule
+  recovery** track, alongside BUG-015's root typing work; see
+  [S1](fix-plan.md#s1-high-bit-constant-sizeof-result-typing) for all affected
+  functions and the maintainer ruling.
+- Explicit unsigned casts, the repaired high-bit constant-size comparisons,
+  and declaration/global-initializer constant parsing are correct controls.
+- Regression is parked as [bug062.c](tests/known-bugs/bug062.c). Host clang
+  O0/O2 and combined ASan+UBSan agree; both target modes fail four of seven
+  lines. The integer generator `scripts/clang_oracle_gen.py` never emits
+  `sizeof`, so no `KNOWN_BUGS` steer is added and no generator is changed.
 
 
 ## BUG-004
@@ -501,6 +507,43 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   loop, `x + 0.0f` as the arm, `x` in the else arm (`c ? 1.0f : x`), no
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
+
+---
+
+## Fixed in cluster S1
+
+BUG-061's representation-range defect is **fixed in cluster S1**
+([PR #326](https://github.com/davidly/dcc/pull/326)) by the maintainer-approved
+high-bit-only result-type correction. The full unsigned `size_t` type fix
+remains deferred as BUG-062/#327; the interim deviation is explicit rather
+than silently declared conforming. Existing function streams and performance
+rows are unchanged.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-061](#bug-061) | #323 | [tsizhigh](tests/tsizhigh.c) |
+
+The promoted test covers 32768/65535-byte objects and type names, widening,
+unsigned division/shift/comparison (including a negative signed operand),
+array bounds and global initializers, the 32760-byte passing neighbour,
+existing unsigned `size_t` runtime operations, and the actual R1 4404-pair
+loop count. Host clang O0/O2 and combined ASan+UBSan agree, and the expanded
+parked reproducer passed both target modes before promotion.
+
+The following diagnosis describes the pre-fix behavior.
+
+### BUG-061
+
+**`sizeof` at or above 32768 is sign-extended or divided as a signed 16-bit
+value.** For a static `uint8_t large[32768]`, `(unsigned long)sizeof(large)`
+should print `32768`, and `(unsigned long)(sizeof(large) / 8)` should print
+`4096`. Both were wrong; the 32760-byte array's quotient `4095` was correct.
+CP/M's unsigned 16-bit `size_t` can represent both sizes.
+
+The R1 proof harness exposed the defect: a 4404-pair array occupies 35232
+bytes and `sizeof(pairs)/sizeof(pairs[0])` compiled to a 61748-iteration bound
+instead of 4404. R1 temporarily used an explicit count; S1's regression now
+checks both the corrected expression and its actual loop iteration count.
 
 ---
 
