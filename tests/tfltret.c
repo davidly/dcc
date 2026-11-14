@@ -1,8 +1,6 @@
-/* BUG-046: `return` of a 32-bit integer expression from a function that
- * returns `float`, or of a float expression from a function that returns a
- * 32-bit integer, is rejected with DCC-E1002 "unsupported return
- * expression". The implicit conversion works through an assignment or an
- * explicit cast, and 8/16-bit integers convert implicitly. */
+/* Implicit long/float return conversions for signed and unsigned values,
+ * parameters, globals, arithmetic, and call results. Explicit casts,
+ * assignment conversions, and 16-bit return conversions are controls. */
 #include <stdio.h>
 #include <stdint.h>
 
@@ -15,7 +13,7 @@ static int32_t d(float x) { return x; }
 static uint32_t e(float x) { return x * 2.0f; }
 static int32_t ff(void) { return gl; }
 static float g(void) { return ff(); }
-/* accepted */
+/* Explicit-conversion and narrow-integer controls. */
 static float h(int32_t x) { float r = x; return r; }
 static float i(int32_t x) { return (float)x; }
 static float j(int16_t x) { return x; }

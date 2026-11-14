@@ -61,7 +61,6 @@ KNOWN_BUGS = {
     'icasgf': 'BUG-043',
     'fblockneg': 'BUG-015',
     'fnegcmp': 'BUG-045',
-    'fretconv': 'BUG-046',
     'fintprodadd': 'BUG-047',
     'fu32cast': 'BUG-048',
     'fnegzero_not': 'BUG-049',
@@ -131,7 +130,7 @@ def is_negcmp(e):
 
 
 def is_retconv(fn, e):
-    """`return e` in fn needs the long<->float conversion BUG-046 lacks."""
+    """`return e` in fn needs an implicit long<->float conversion."""
     if fn.ret is None or e is None:
         return False
     t = ty(e)
@@ -297,7 +296,7 @@ def simple_const(v, t):
 # ---------------------------------------------------------------- shapes
 
 def known_shapes(prog):
-    """Features of KNOWN_BUGS whose shape prog contains."""
+    """Disabled bug features whose shapes survived steering or repair."""
     found = set()
     for slot in expr_slots(prog):
         e = slot_get(slot)
@@ -370,7 +369,7 @@ def known_shapes(prog):
                 if st.op == 'ret' and st.e and is_retconv(fn, st.e[0]):
                     found.add('fretconv')
                 stack.extend(sub for sub in st.b if sub is not None)
-    return found
+    return found & prog.off
 
 
 def float_contexts(e):

@@ -59,26 +59,26 @@ and their historical diagnoses are retained separately below.
 | [BUG-043](#bug-043) | #263 | compile error | Compound assignment to an integer lvalue with a float right operand is rejected (`l *= f`, `n += 1.5f`) |
 | [BUG-044](#bug-044) | #264 | wrong result | `++`/`--` on a float is a no-op on a scalar and a 16-bit integer increment on an array element |
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
-| [BUG-046](#bug-046) | #266 | compile error | `return` of a 32-bit integer from a `float` function, or of a float from a 32-bit integer function, is rejected; the cast is implicit everywhere else |
 | [BUG-047](#bug-047) | #267 | wrong result | `f + (x * y)` drops the product when `x` is an integer, or when `y` is a local/parameter and `x` is a global, array element, member or sub-expression |
 | [BUG-048](#bug-048) | #268 | wrong result | `(uint32_t)x` converted to float, with `x` a signed 32-bit expression, converts the signed value (`-72` → `-72.0f`, not `4294967224.0f`) |
 | [BUG-049](#bug-049) | #269 | wrong result | `!f` is 0 when `f` is negative zero; `if (f)`, `f ? :` and `f == 0.0f` treat `-0.0f` as zero correctly |
 | [BUG-050](#bug-050) | #270 | wrong result | `(int32_t)(uint32_t)x` converted to float, with `x` a signed 8- or 16-bit value, converts the unsigned value (`-121` → `4294967175.0f`) |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 
-Forty-one are open: twenty-five give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, fourteen stop the compile,
+Forty are open: twenty-five give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, thirteen stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. BUG-026 is the
 one most likely to be hit by ordinary code, then BUG-044 (every float `++`
 is wrong), BUG-047 (`f + n * g` is `f`), BUG-003,
 BUG-013 and BUG-016.
 
-Ten reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Eleven reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
-[four in cluster K](#fixed-in-cluster-k) and
-[one in cluster L](#fixed-in-cluster-l). Two more
+[four in cluster K](#fixed-in-cluster-k),
+[one in cluster L](#fixed-in-cluster-l) and
+[one in cluster I1](#fixed-in-cluster-i1). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
 
@@ -1161,32 +1161,6 @@ r = (x < -1.0f - n);          /* fatal */
   `1.0f < -fg2` are accepted. Found by fuzzing (float generator, seeds 477
   and 1347).
 
-## BUG-046
-
-**`return` does not convert between `float` and a 32-bit integer.** A
-function returning `float` cannot `return` any `int32_t`/`uint32_t`
-expression, and a function returning a 32-bit integer cannot `return` a
-float expression: `DCC-E1002: unsupported return expression`. When the
-`return` is inside an `if`, the error is reported against the `if`.
-
-```c
-static float a(int32_t x) { return x; }        /* rejected */
-static float c(void) { return gl; }            /* rejected: int32_t global */
-static float g(void) { return ff(); }          /* rejected: ff returns int32_t */
-static float b(uint32_t x) { return x + 1; }   /* rejected */
-static int32_t d(float x) { return x; }        /* rejected */
-static uint32_t e(float x) { return x * 2.0f; } /* rejected */
-```
-
-- Accepted: `return (float)x;`, `float r = x; return r;`, `fg = x; return fg;`,
-  and 8- and 16-bit integers in either direction (`float j(int16_t x)
-  { return x; }`, `int16_t k(float x) { return x; }`).
-- The same implicit conversion is accepted in assignments, initialisers and
-  arguments, so only the return-value path lacks the long/float widening.
-- Also at v3.6.0 (`20290235`) and every later compiler checked.
-- Found by fuzzing (float generator, seeds 30 and 35:
-  `return h0(...)` with `h0` returning `int32_t` in a `float` function).
-
 ## BUG-047
 
 **`f + (x * y)` drops the product.** When the right operand of a float `+`
@@ -1332,6 +1306,63 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   loop, `x + 0.0f` as the arm, `x` in the else arm (`c ? 1.0f : x`), no
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
+
+## Fixed in cluster I1
+
+BUG-046 now passes in peep and nopeep. Return admission now accepts long
+expressions in float-returning functions and float expressions in
+long-returning functions; existing MIR lowering already emits the required
+conversion. The fixed program's complete assembly exactly matches an
+explicit-return-cast control in both modes, with the control unchanged.
+
+Before promotion, only BUG-046 flipped: one `FIXED`, 41 `fails`.
+Both stack-mode censuses are identical across 3,366 existing functions;
+strict full+extended regressions pass with all existing performance rows
+unchanged. The float generator's `fretconv` steering entry was removed:
+production seeds 1-300 with `--off known` give **265 ok, 35 INVALID,
+zero FAIL**. The unchanged host baseline is promoted with one new measured
+PowerShell stack-check performance row.
+
+The float shape checker reports only disabled features (`prog.off`), as
+its integer counterpart does. This directly coupled acceptance correction
+keeps restored `fretconv` shapes eligible for execution rather than
+incorrectly counting them as logged-shape INVALID.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-046](#bug-046) | #266 | [tfltret](tests/tfltret.c) |
+
+### BUG-046
+
+**Fixed:** scalar return admission includes implicit long/float conversions.
+Regression: [tfltret.c](tests/tfltret.c),
+[stdout](tests/baselines/tfltret.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**`return` does not convert between `float` and a 32-bit integer.** A
+function returning `float` cannot `return` any `int32_t`/`uint32_t`
+expression, and a function returning a 32-bit integer cannot `return` a
+float expression: `DCC-E1002: unsupported return expression`. When the
+`return` is inside an `if`, the error is reported against the `if`.
+
+```c
+static float a(int32_t x) { return x; }        /* rejected */
+static float c(void) { return gl; }            /* rejected: int32_t global */
+static float g(void) { return ff(); }          /* rejected: ff returns int32_t */
+static float b(uint32_t x) { return x + 1; }   /* rejected */
+static int32_t d(float x) { return x; }        /* rejected */
+static uint32_t e(float x) { return x * 2.0f; } /* rejected */
+```
+
+- Accepted: `return (float)x;`, `float r = x; return r;`, `fg = x; return fg;`,
+  and 8- and 16-bit integers in either direction (`float j(int16_t x)
+  { return x; }`, `int16_t k(float x) { return x; }`).
+- The same implicit conversion is accepted in assignments, initialisers and
+  arguments, so only the return-value path lacks the long/float widening.
+- Also at v3.6.0 (`20290235`) and every later compiler checked.
+- Found by fuzzing (float generator, seeds 30 and 35:
+  `return h0(...)` with `h0` returning `int32_t` in a `float` function).
 
 ## Fixed in cluster B1
 

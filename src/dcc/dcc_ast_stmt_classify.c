@@ -61,12 +61,14 @@ int ast_return_stmt_supported(const struct AstNode *n)
     if (type_is_float(rt)) {
         if (n->a == NULL)
             return 0;
-        return ast_value_is_float_word(n->a) || ast_value_is_plain_int(n->a);
+        return ast_value_is_float_word(n->a) || ast_value_is_plain_int(n->a) ||
+               ast_value_is_long_word(n->a);
     }
     if (type_is_long(rt)) {
         if (n->a == NULL)
             return 0;
-        return ast_value_is_long_word(n->a) || ast_value_is_plain_int(n->a);
+        return ast_value_is_long_word(n->a) || ast_value_is_plain_int(n->a) ||
+               ast_value_is_float_word(n->a);
     }
     if (type_size(rt) == 1) {
         if (n->a == NULL)
