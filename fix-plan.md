@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has forty open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has thirty-eight open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -11,10 +11,9 @@ The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), B1 (#286),
 K (#278) and L (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
-B was likewise disproved and split into B1–B4. I also failed its first
-root-cause experiment and is split with maintainer approval into I1 (return
-admission) and I2 (cast signedness).
-The remaining clusters are still hypotheses.
+B was likewise disproved and split into B1–B4. I was disproved and split
+with maintainer approval into I1 (return admission) and I2 (cast signedness);
+both are now fixed. Other remaining clusters are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
 explicitly approved K as a four-rule exception.
@@ -434,20 +433,50 @@ programs. The corrected batch executes them and gives 265 ok, 35 INVALID.
 | BUG-048 | #268 | `(uint32_t)x` to float, `x` signed 32-bit: signed conversion |
 | BUG-050 | #270 | `(int32_t)(uint32_t)x` to float, `x` signed 8/16-bit: unsigned conversion |
 
-Maintainer-approved mirror-pair hypothesis, separate from I1: the float
-conversion selects signed/unsigned long conversion from an inner operand's
-type rather than the cast result. Generated assembly calls signed `__flf`
-for BUG-048's failing unsigned cast and unsigned `__fulf` for BUG-050's
-failing signed cast. Their stored/correctly typed controls choose the
-opposite, correct helper. Confirmed independently in
-[#287](https://github.com/davidly/dcc/pull/287): identity-cast elimination
-preserved casts before widening but not same-width float conversion.
-Retaining the signedness cast clears both bugs, with 267 ok, 33 INVALID and
-zero FAIL on the corrected 300-seed float batch. I2's fix is not included
-on this I1 branch.
+**Confirmed shared root cause:** `mir_unary_is_representation_identity()`
+preserves an equal-width integer signedness cast before a wider conversion,
+but not before an equal-width long-to-float conversion. Removing the cast
+makes `mir_emit_cast()` correctly choose a helper for the wrong source type:
+`__flf` instead of `__fulf` for 048, and the reverse for 050. The root fix
+retains casts feeding float conversions as well as widening conversions.
 
-Work independently on `fix/cluster-i2-float-conv` from current `origin/main`,
-not on I1's branch. Both subclusters remain independent of A–E.
+The first fix clears both reproducers in peep and nopeep: **2 FIXED,
+40 fails**, with no out-of-cluster flips; I1's BUG-046 still fails on this
+independent branch. Both existing-function censuses are byte-identical
+across 3,366 functions. The complete parked programs' assembly changes only
+conversion helper calls and associated `extrn` placement, not instructions
+around them or their existing correctly typed controls. The logged 050
+folded/arithmetic and global/local/parameter facets also match the sanitized
+host oracle in both modes.
+
+Retaining the cast emits no value-changing instructions. An isolated
+zero-local parameter-only microprobe does retain an extra `ld sp,ix`
+(2 bytes, 10 Z80 T-states) compared with its already-typed control; no
+existing function changes and neither parked reproducer gains that
+instruction. No general/spilled fallback was introduced.
+
+This work uses `fix/cluster-i2-float-conv`, independently based on `origin/main`
+`0d11922d` in its own worktree, not I1. Both subclusters remain independent
+of A–E. BUG-048/050 are promoted as `tflucast`/`tflscast`. Strict Python
+full+extended and both PowerShell stack/no-stack release gates pass; both
+host validations and targeted peep/nopeep tests pass. All 500 existing
+performance rows are preserved verbatim, with exactly two new rows.
+Corrected production float seeds 1-300 give **267 ok, 33 INVALID, zero FAIL**;
+all 40 remaining parked reproducers still fail.
+
+The float shape checker also needed a directly coupled acceptance fix:
+return only shapes in `prog.off`, as the integer checker does. Otherwise
+restored `fu32cast`/`fretconv` forms were excluded as INVALID. The first
+140-ok/160-INVALID batch is superseded, not claimed as restored coverage.
+A focused checker regression protects both features; I1 receives the same
+checker fix independently. MIR/line tests, CMake, ASan/UBSan, debugger-host,
+release-identical `-gline`, and runnable full `-g` checks pass.
+The full Python gate ran 308 tests with the two approved #277 failures and
+two skips; the new checker regression passes separately. Concurrent
+mutation-fixture timeout/cleanup errors all cleared on sequential focused
+reruns (3/3 pass). The known #280 exit-139 fixture did not recur on those
+reruns; no fixture, skip or expectation was modified.
+
 
 ### J. Float arithmetic
 
@@ -542,7 +571,7 @@ so it matters more than its size suggests. Both are one-offs.
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
 | A2b | | open; after E | BUG-004/015; unconfirmed shared cause |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
-| B1 | [#286](https://github.com/davidly/dcc/pull/286) | PR open | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
+| B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | | open | BUG-014/019 bookkeeping fatals; unconfirmed shared cause |
 | B3 | | open | BUG-026 same-value operands |
 | B4 | | open | BUG-036; check overlap with C/D first |
@@ -552,8 +581,8 @@ so it matters more than its size suggests. Both are one-offs.
 | F | | open | |
 | G | | open | |
 | H | | open | |
-| I1 | [#285](https://github.com/davidly/dcc/pull/285) (`fix/cluster-i`) | PR open | BUG-046 promoted as tfltret; 300 float seeds clean (265 ok, 35 INVALID); existing assembly/perf rows unchanged; approved I1/I2 split |
-| I2 | [#287](https://github.com/davidly/dcc/pull/287) (`fix/cluster-i2-float-conv`) | PR open | Independent approved mirror pair confirmed; 048/050 promoted; corrected float batch 267 ok, 33 INVALID; existing assembly/perf unchanged |
+| I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
+| I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |
 | J | | open | |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |

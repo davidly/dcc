@@ -34,6 +34,28 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_float_conversion_retains_cast_signedness(self):
+        cases = (
+            ("long x", "(unsigned long)x", "__fulf"),
+            ("unsigned long x", "(long)x", "__flf"),
+            ("signed char x", "(long)(unsigned long)x", "__flf"),
+            ("int x", "(long)(unsigned long)x", "__flf"),
+        )
+        for parameter, expression, helper in cases:
+            source = ("float out; void probe(" + parameter + ") { out = " +
+                      expression + "; }\n")
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(parameter=parameter, expression=expression,
+                                  options=options):
+                    assembly = self.compile(source, options)
+                    self.assertIn("call " + helper, assembly)
+                    other = "__flf" if helper == "__fulf" else "__fulf"
+                    self.assertNotIn("call " + other, assembly)
+        cast = "long probe(long x) { return (unsigned long)x; }\n"
+        control = "long probe(long x) { return x; }\n"
+        self.assertEqual(self.code(self.compile(cast)),
+                         self.code(self.compile(control)))
+
     def test_little_endian_writers_combine(self):
         for value_type in ("unsigned int", "int"):
             for body in (

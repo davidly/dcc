@@ -62,7 +62,6 @@ KNOWN_BUGS = {
     'fblockneg': 'BUG-015',
     'fnegcmp': 'BUG-045',
     'fintprodadd': 'BUG-047',
-    'fu32cast': 'BUG-048',
     'fnegzero_not': 'BUG-049',
     'fparamcmp': 'BUG-020',
     'fblockint': 'BUG-015',

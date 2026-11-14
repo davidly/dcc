@@ -60,12 +60,10 @@ and their historical diagnoses are retained separately below.
 | [BUG-044](#bug-044) | #264 | wrong result | `++`/`--` on a float is a no-op on a scalar and a 16-bit integer increment on an array element |
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
 | [BUG-047](#bug-047) | #267 | wrong result | `f + (x * y)` drops the product when `x` is an integer, or when `y` is a local/parameter and `x` is a global, array element, member or sub-expression |
-| [BUG-048](#bug-048) | #268 | wrong result | `(uint32_t)x` converted to float, with `x` a signed 32-bit expression, converts the signed value (`-72` → `-72.0f`, not `4294967224.0f`) |
 | [BUG-049](#bug-049) | #269 | wrong result | `!f` is 0 when `f` is negative zero; `if (f)`, `f ? :` and `f == 0.0f` treat `-0.0f` as zero correctly |
-| [BUG-050](#bug-050) | #270 | wrong result | `(int32_t)(uint32_t)x` converted to float, with `x` a signed 8- or 16-bit value, converts the unsigned value (`-121` → `4294967175.0f`) |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 
-Forty are open: twenty-five give wrong results with no diagnostic
+Thirty-eight are open: twenty-three give wrong results with no diagnostic
 (BUG-039 is in the runtime), one hangs, thirteen stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. BUG-026 is the
@@ -73,12 +71,13 @@ one most likely to be hit by ordinary code, then BUG-044 (every float `++`
 is wrong), BUG-047 (`f + n * g` is `f`), BUG-003,
 BUG-013 and BUG-016.
 
-Eleven reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Thirteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [four in cluster K](#fixed-in-cluster-k),
-[one in cluster L](#fixed-in-cluster-l) and
-[one in cluster I1](#fixed-in-cluster-i1). Two more
+[one in cluster L](#fixed-in-cluster-l),
+[one in cluster I1](#fixed-in-cluster-i1) and
+[two in cluster I2](#fixed-in-cluster-i2). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
 
@@ -1196,27 +1195,6 @@ fg + (fv * p)              /* p a parameter: 1.0f */
   compile the reproducer at all (`MIR emission is required`).
 - Found by fuzzing (float generator, seeds 7, 27, 31, 42 and 49).
 
-## BUG-048
-
-**`(uint32_t)x` converted to float converts the signed value.** With `x` a
-signed 32-bit expression, `(float)(uint32_t)x`, `m = (uint32_t)x;`,
-`(uint32_t)x * 1.0f` and `0.0f + (uint32_t)x` all produce the signed
-conversion: `-72` becomes `-72.0f` (`c2900000`) instead of
-`4294967224.0f` (`4f800000`).
-
-```c
-m = (uint32_t)g2;          /* g2 = -72: want 4f800000, dcc c2900000 */
-m = (uint32_t)(g2 + 1);    /* want 4f800000, dcc c28e0000 */
-```
-
-- Right: the cast stored in a `uint32_t` variable first (`u = (uint32_t)g2;
-  m = u;`), a `uint32_t` global, `(uint32_t)gs` with a 16- or 8-bit signed
-  operand, `(uint16_t)gs`, and integer uses of the cast (`(uint32_t)g2 / 2`
-  is 2147483612).
-- With and without `dcc-peep`.
-- Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
-- Found by fuzzing (float generator, seeds 12, 33, 56 and 60).
-
 ## BUG-049
 
 **`!f` is 0 when `f` is negative zero.** `!` on a float tests the raw bits,
@@ -1235,38 +1213,6 @@ if (!m0) puts("yes");      /* want yes, dcc no */
 - With and without `dcc-peep`.
 - Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
 - Found by fuzzing (float generator, seed 45).
-
-## BUG-050
-
-**`(int32_t)(uint32_t)x` converted to float converts the unsigned value.**
-With `x` a signed 8- or 16-bit value, the outer `(int32_t)` cast is lost
-when the result is converted to float: `-121` becomes `4294967175.0f`
-(`4f800000`) instead of `-121.0f` (`c2f20000`). The mirror image of
-BUG-048, where `(uint32_t)` of a signed 32-bit expression converts as
-signed.
-
-```c
-fg = (int32_t)((uint32_t)g4);        /* int8_t g4 = -121: want c2f20000, dcc 4f800000 */
-fg = (int32_t)((uint32_t)g5);        /* int16_t g5: same */
-fg = (int32_t)((uint32_t)g4 + 1);    /* want c2f00000, dcc 4f800000 */
-```
-
-- Right: a 32-bit `x` (`(int32_t)(uint32_t)g6`), `(int32_t)g4` alone, and
-  `(uint32_t)g4` alone (which is correctly `4f800000`).
-- With and without `dcc-peep`.
-- Found by fuzzing (float generator, seed 911).
-- Also wrong when `x` is 32-bit arithmetic, including arithmetic that folds:
-  `(float)((int32_t)(2147483647L + 1UL))` gives `4f000000`
-  (2147483648.0f), not `cf000000`; `(float)((int32_t)(gl + 2147483647UL))`
-  with `long gl` 7 is wrong too. Only a bare 32-bit variable,
-  `(int32_t)(uint32_t)gl`, is right. Found by fuzzing (float generator, seed
-  2036).
-- A bare `uint32_t` variable with its top bit set is wrong too:
-  `fg = (float)(int32_t)gu;` with `uint32_t gu = 0xffffffbd` (so -67)
-  gives `4f800000` (4294967229.0f), not `c2860000`, for a global, a local
-  or a parameter, with the cast explicit or implicit (`fg = (int32_t)gu;`);
-  `g2 = (float)(int32_t)gu;` then stores -1 in the `int32_t`. Found by
-  fuzzing (float generator, seed 3792).
 
 ## BUG-052
 
@@ -1444,6 +1390,101 @@ With a pointer in place of the array, dcc emits (the pointer `q` is at
   the two scopes in the other order; locals that do not need memory (plain
   `uint16_t x, y;`).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
+## Fixed in cluster I2
+
+BUG-048 and BUG-050 now pass in peep and nopeep. Identity-cast elimination
+preserves the result signedness of a same-width integer cast when its
+consumer converts to float, just as it already did for widening consumers.
+The long-to-float emitter now sees the right type and selects `__fulf` for
+048 and `__flf` for 050. The parked programs' full assembly changes only
+those calls and `extrn` placement; correctly typed controls are unchanged.
+
+Before promotion, only these two bugs flipped: **2 FIXED, 40 fails**.
+Both stack-mode censuses are identical across 3,366 existing functions;
+strict full+extended regressions pass with all existing performance rows
+unchanged. The float generator's shared `fu32cast` steering entry is
+removed. Its shape checker now reports only disabled features, matching
+the integer checker, so restored forms are actually executed rather than
+silently marked INVALID. Corrected production seeds 1-300 with `--off known`
+give **267 ok, 33 INVALID, zero FAIL**.
+
+The original expected lines are preserved in the promoted tests, with
+additional logged zero-add, folded/arithmetic and unsigned-global/local/
+parameter facets validated against the sanitized host. Only two new
+PowerShell stack-check performance rows are added. BUG-046 remains open
+on this independent branch; its separate fix is [#285](https://github.com/davidly/dcc/pull/285).
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-048](#bug-048) | #268 | [tflucast](tests/tflucast.c) |
+| [BUG-050](#bug-050) | #270 | [tflscast](tests/tflscast.c) |
+
+### BUG-048
+
+**Fixed:** float conversion retains the integer cast result's signedness.
+Regression: [tflucast.c](tests/tflucast.c),
+[stdout](tests/baselines/tflucast.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**`(uint32_t)x` converted to float converts the signed value.** With `x` a
+signed 32-bit expression, `(float)(uint32_t)x`, `m = (uint32_t)x;`,
+`(uint32_t)x * 1.0f` and `0.0f + (uint32_t)x` all produce the signed
+conversion: `-72` becomes `-72.0f` (`c2900000`) instead of
+`4294967224.0f` (`4f800000`).
+
+```c
+m = (uint32_t)g2;          /* g2 = -72: want 4f800000, dcc c2900000 */
+m = (uint32_t)(g2 + 1);    /* want 4f800000, dcc c28e0000 */
+```
+
+- Right: the cast stored in a `uint32_t` variable first (`u = (uint32_t)g2;
+  m = u;`), a `uint32_t` global, `(uint32_t)gs` with a 16- or 8-bit signed
+  operand, `(uint16_t)gs`, and integer uses of the cast (`(uint32_t)g2 / 2`
+  is 2147483612).
+- With and without `dcc-peep`.
+- Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
+- Found by fuzzing (float generator, seeds 12, 33, 56 and 60).
+
+
+### BUG-050
+
+**Fixed:** float conversion retains the integer cast result's signedness.
+Regression: [tflscast.c](tests/tflscast.c),
+[stdout](tests/baselines/tflscast.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**`(int32_t)(uint32_t)x` converted to float converts the unsigned value.**
+With `x` a signed 8- or 16-bit value, the outer `(int32_t)` cast is lost
+when the result is converted to float: `-121` becomes `4294967175.0f`
+(`4f800000`) instead of `-121.0f` (`c2f20000`). The mirror image of
+BUG-048, where `(uint32_t)` of a signed 32-bit expression converts as
+signed.
+
+```c
+fg = (int32_t)((uint32_t)g4);        /* int8_t g4 = -121: want c2f20000, dcc 4f800000 */
+fg = (int32_t)((uint32_t)g5);        /* int16_t g5: same */
+fg = (int32_t)((uint32_t)g4 + 1);    /* want c2f00000, dcc 4f800000 */
+```
+
+- Right: a 32-bit `x` (`(int32_t)(uint32_t)g6`), `(int32_t)g4` alone, and
+  `(uint32_t)g4` alone (which is correctly `4f800000`).
+- With and without `dcc-peep`.
+- Found by fuzzing (float generator, seed 911).
+- Also wrong when `x` is 32-bit arithmetic, including arithmetic that folds:
+  `(float)((int32_t)(2147483647L + 1UL))` gives `4f000000`
+  (2147483648.0f), not `cf000000`; `(float)((int32_t)(gl + 2147483647UL))`
+  with `long gl` 7 is wrong too. Only a bare 32-bit variable,
+  `(int32_t)(uint32_t)gl`, is right. Found by fuzzing (float generator, seed
+  2036).
+- A bare `uint32_t` variable with its top bit set is wrong too:
+  `fg = (float)(int32_t)gu;` with `uint32_t gu = 0xffffffbd` (so -67)
+  gives `4f800000` (4294967229.0f), not `c2860000`, for a global, a local
+  or a parameter, with the cast explicit or implicit (`fg = (int32_t)gu;`);
+  `g2 = (float)(int32_t)gu;` then stores -1 in the `int32_t`. Found by
+  fuzzing (float generator, seed 3792).
+
 
 ## Fixed in cluster A2a
 
