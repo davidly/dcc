@@ -82,7 +82,8 @@ were found and then fixed upstream before they were reported; see
 
 ### History
 
-Every open entry also reproduces with compilers built from `32d3e46d` (before
+The original campaign entries (through BUG-053) also reproduce with
+compilers built from `32d3e46d` (before
 PRs #219 and #220), `5f733050` (tag 3.8.0) and `5bcac74e` (28 October), so
 none is a regression from the last two weeks. Two are regressions since
 v3.6.0 (`20290235`); a first-parent bisect gives:
