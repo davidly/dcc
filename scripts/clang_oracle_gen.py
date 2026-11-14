@@ -1447,7 +1447,6 @@ KNOWN_BUGS = {
     'nestedifelse': 'BUG-027',
     'bytesarcount': 'BUG-028',
     'bytearm': 'BUG-029',
-    'constdivzero': 'BUG-033',
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',
     'loopcopy': 'BUG-037',

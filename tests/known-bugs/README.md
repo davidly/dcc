@@ -45,7 +45,7 @@ test:
 `tests/tfltret.c`, `tests/tflucast.c`, `tests/tflscast.c`,
 `tests/tandself.c`, `tests/tselfop.c`, `tests/tflmadd.c`, `tests/tflnot.c`,
 `tests/twincg.c`, `tests/tlpcall.c` and `tests/tconstun.c` were promoted
-this way.
+this way. `tests/tconstdz.c` covers guarded constant-zero division and remainder.
 
 ## Adding one
 

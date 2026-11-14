@@ -44,7 +44,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
-| [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 | [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
@@ -57,14 +56,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 
-Thirty-two are open: nineteen give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, eleven stop the compile,
+Thirty-one are open: nineteen give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, ten stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Twenty reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Twenty-one reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [one in cluster B2a](#fixed-in-cluster-b2a),
@@ -74,7 +73,8 @@ Twenty reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster L](#fixed-in-cluster-l),
 [one in cluster I1](#fixed-in-cluster-i1),
 [two in cluster I2](#fixed-in-cluster-i2),
-[one in cluster G1](#fixed-in-cluster-g1) and
+[one in cluster G1](#fixed-in-cluster-g1),
+[one in cluster G2](#fixed-in-cluster-g2) and
 [two in cluster J](#fixed-in-cluster-j). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -729,27 +729,6 @@ L4:
 - The selected emitter is `homed-scalar-cfg` (`DCC_MIR_COST_REPORT=1`).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
 
-## BUG-033
-
-**A constant divided by a constant zero is rejected, even in code that never
-runs.** `DCC-E1002: unsupported if condition or branch` (or
-`unsupported AST statement`), a message that does not mention division.
-
-```c
-if (never)
-    return 1000 / 0;
-if (never)
-    out = 7 % 0;
-```
-
-- The division is undefined only if it is evaluated, so a program that
-  never reaches it is valid; clang compiles it with a warning.
-- Accepted: `n / 0` and `n % 0` with a variable `n`.
-- Low priority: nobody writes this on purpose. It can come out of macros
-  (`SIZE / UNITS` in a branch guarded by `if (UNITS)`), and when it does the
-  diagnostic points at the enclosing `if` rather than at the division.
-- Already present in v3.6.0 (`20290235`).
-
 ## BUG-037
 
 **In a `for` or `while` loop whose counter is 32 bits wide, a copy of the
@@ -1079,6 +1058,36 @@ uint32_t sub(int8_t p)
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
 
+## Fixed in cluster G2
+
+The maintainer approved three independent single-bug fixes, verified and
+committed in G2a/G2b/G2c order. G2a fixes BUG-033 (#253): the plain-integer
+AST admission gate no longer confuses evaluating a division with admitting
+it. The integer folder still declines zero divisors, so generated MIR/Z80
+retains the guarded runtime `__divs`/`__mods` operation without a diagnostic
+or invented constant. Promoted as `tconstdz`.
+
+## BUG-033
+
+**A constant divided by a constant zero is rejected, even in code that never
+runs.** `DCC-E1002: unsupported if condition or branch` (or
+`unsupported AST statement`), a message that does not mention division.
+
+```c
+if (never)
+    return 1000 / 0;
+if (never)
+    out = 7 % 0;
+```
+
+- The division is undefined only if it is evaluated, so a program that
+  never reaches it is valid; clang compiles it with a warning.
+- Accepted: `n / 0` and `n % 0` with a variable `n`.
+- Low priority: nobody writes this on purpose. It can come out of macros
+  (`SIZE / UNITS` in a branch guarded by `if (UNITS)`), and when it does the
+  diagnostic points at the enclosing `if` rather than at the division.
+- Already present in v3.6.0 (`20290235`).
+
 ## Fixed in cluster G1
 
 BUG-012's constant logical and nested-binary unary forms now pass in both
@@ -1092,7 +1101,7 @@ pipelines, with no added instructions or frame cost.
 
 The first fix flips only BUG-012 (**1 FIXED, 33 fails** before promotion).
 Per the approved stop rule, cluster G is split into G1 (BUG-012 fixed) and
-G2 (BUG-033/040/042 still parked). G2 needs separate zero-divisor admission,
+G2 (BUG-040/042 still parked; BUG-033 is fixed above). G2 needs separate zero-divisor admission,
 static float token parsing, and floating-constant truth/folding work; its
 traces are in [fix-plan.md](fix-plan.md#g-constant-expressions-in-the-front-end).
 In particular, BUG-033 must retain the unevaluated division, not fabricate a

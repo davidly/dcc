@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has thirty-two open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has thirty-one open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -509,8 +509,10 @@ case. Likely one lowering switch that enumerates lvalue kinds.
 | BUG-042 | #262 | Float constant that must be folded or truth-tested: rejected |
 
 The shared-cause hypothesis is disproved: the first root-cause fix clears
-only BUG-012 (**G1**); BUG-033/040/042 remain **G2**. Per the approved stop
-rule, no second independent fix is included.
+only BUG-012 (**G1**); BUG-033/040/042 form **G2**. The maintainer has
+approved G2 as three independent single-bug fixes (G2a/G2b/G2c), each with
+its own commit and independent verification; the stop rule does not apply
+between these three fixes.
 
 **G1 — integer unary constant-expression admission.** The AST support gate
 already admits `!` when `ast_const_scalar_fold()` proves the expression, but
@@ -521,12 +523,12 @@ no parser, folder, MIR, emitter or runtime changes are needed. BUG-012's
 original functions now emit byte-identically to their accepted literal
 neighbors, with no instruction or frame cost.
 
-**G2 — separately traced, not fixed:**
+**G2 — independently verified fixes:**
 
-- **BUG-033:** `ast_const_plain_int_binary_supported()` explicitly declines a
-  constant zero divisor; the integer folder also correctly declines its
-  evaluation. The generic constant-binary gate then rejects the expression.
-  A future fix must admit and retain the unevaluated `/` or `%` operation,
+- **G2a BUG-033 — fixed:** `ast_const_plain_int_binary_supported()` explicitly declined a
+  constant zero divisor; the integer folder correctly declines its evaluation.
+  The generic constant-binary gate consequently rejected the expression.
+  The admission fix retains the unevaluated `/` or `%` operation,
   as clang does, never fold it to a made-up value. The variable-numerator
   neighbor uses the nonconstant arithmetic path.
 - **BUG-040:** `parse_global_init()` and aggregate initializers call
@@ -540,6 +542,17 @@ neighbors, with no instruction or frame cost.
   floats from its runtime truth-test path. Float comparisons alone have their
   own condition gate, explaining the accepted neighbors. Extending the
   integer unary admission proof cannot admit these float forms.
+
+G2a acceptance: **1 FIXED, 31 fails**, with no out-of-cluster flips. Both
+censuses retain **3,465 existing functions byte-identically** with zero hash,
+selector or metric changes. Strict Python full+extended is SUCCESS, and all
+**511 existing performance rows are unchanged**. G2a's 300-seed integer
+production fuzz is clean: **229 ok, 71 INVALID, zero FAIL**. The Python gate
+ran 313 tests with the two approved #277 failures, two existing skips and
+a load-related 180-second harness timeout and ensuing teardown race; an
+unchanged isolated retry is pending.
+`-gline`/full-`-g` guarded operations preserve runtime helpers and diagnostics
+are empty; focused line-debug tests pass. Promoted as `tconstdz`.
 
 G1 acceptance: **1 FIXED, 33 fails** before promotion, no out-of-cluster
 flips. Integer `negnotconst` is restored; production seeds 1–300 give
@@ -892,7 +905,7 @@ so it matters more than its size suggests. Both are one-offs.
 | F | | open | |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
 | G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |
-| G2 | | open | 033 zero-divisor admission; 040 static float token parser; 042 float folding/truth gates |
+| G2 | `fix/cluster-g2-const-fold-rest` | in progress; G2a fixed | Three approved independent commits; 033 promoted as tconstdz; 040/042 pending; both 3,465-function censuses unchanged |
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |

@@ -34,6 +34,18 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_guarded_constant_zero_divisors_remain_runtime_operations(self):
+        for op, helper in (("/", "__divs"), ("%", "__mods")):
+            source = ("int probe(int run) { if (run) return 1000 " +
+                      op + " (1 - 1); return 7; }\n")
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(op=op, options=options):
+                    assembly, diagnostics = self.compile_report(source, options)
+                    self.assertEqual(diagnostics, "")
+                    self.assertIn("call " + helper, assembly)
+                    self.assertIn("ld de,0", assembly)
+                    self.assertRegex(assembly, r"ld hl,1000")
+
     def test_float_conversion_retains_cast_signedness(self):
         cases = (
             ("long x", "(unsigned long)x", "__fulf"),
