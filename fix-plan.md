@@ -512,6 +512,7 @@ with BUG-038, the smallest.
 | BUG-024 | #244 | `if (x++)` in a loop tests the new value (8-bit local) |
 | BUG-010 | #230 | Cast or narrowing return of a 32-bit post-increment: rejected |
 | BUG-041 | #261 | Value of a float `++`/`--` rejected |
+| BUG-056 | #299 | Latent integer unary consumer of a float update value after admission |
 
 **Confirmed split: D1 (003/044) and D2 (021/023/024/010/041).** The first
 root-cause change fixes D1 only; do not extend it with independent D2 fixes.
@@ -544,8 +545,9 @@ BUG-044 is the maintainer's second priority.
 
 D1 acceptance is recorded below and in Tracking. D2 is split into **D2a
 (021/023: assignment-value lifetime)**, **D2c (024: byte-PHI lifetime)**
-and **D2b (010/041: AST admission)**;
-D2b is being investigated independently.
+and **D2b (010/041: AST admission)**. D2b shipped only the safe long
+admission for 010; **D2d (041/056: float update-value consumer typing and
+admission)** remains stopped as recorded below.
 
 #### D2c byte-PHI lifetime proof (BUG-024)
 
@@ -835,6 +837,122 @@ updates, plus byte/word/pointer/float admission rules, are unchanged.
 - D2a owns independent BUG-021/024 stored-home lifetime fixes. No such
   emitter/lifetime change is included here. No original out-of-cluster
   reproducer flipped. No prepush or compiler-dating checks were run.
+
+#### D2d stopped: float update provenance is lost at a binary consumer (BUG-041/056)
+
+The first root-cause trial on `a8843888` repaired unary float-value typing
+before restoring float admission: `mir_lower_simple_unary_chain` derived
+unary `+`/`-` from the lowered float operand, and a corresponding pass after
+lvalue/incdec metadata repair propagated float through dependent unary
+instructions before resolving destination conversions. Casts and logical
+`!` retained their own result types. The restored admission used a
+non-recursive stored-lvalue float proof for prefix/postfix updates and the
+float-value classifier; no emitter, selector, schedule or runtime changed.
+
+That trial made **041/056 both FIXED** in peep/nopeep, including both parked
+056 facets. It emitted IEEE sign-bit negation (`xor 128`) rather than integer
+complement/add and narrowing. However, a defined-C dependent binary consumer
+still emitted wrong code, so **the entire trial is withdrawn under the stop
+rule: no float admission or unary typing change ships, no reproducer is
+promoted, and 041/056 remain open behind `fincdecval`**.
+
+Minimal failing facet (print `result` as IEEE bits through a union, as in
+`bug056.c`; host clang and ASan/UBSan independently agree):
+
+```c
+float result;
+{
+    float local = 1.5f;
+    result = -(local++) + (uint16_t)1;
+}
+/* expected result bf000000 (-0.5f), actual 40000000 (+2.0f). */
+```
+
+The stored update is correctly float. The MIR unary negation is now correctly
+`type=5`, but the following **implicit conversion and addition still use
+`type=34` (unsigned int)**, then convert that integer result back to float.
+A matched member-array version in the same probe is correct (`bf000000`),
+so this is not a float add runtime or unary emitter defect. Both peep/nopeep
+and stack/no-stack fail the block-local form. Its Z80 converts the negative
+float to an unsigned word and adds as a word instead of doing float addition:
+
+```asm
+ld hl,0
+ld de,49088             ; -1.5f in DE:HL
+call __ffu
+ld de,1
+add hl,de
+call __fuf
+```
+
+Trace: `ast_types_deferred` descends ordinary unary `+`/`-`/`~`, but
+`ast_expr_base_ident_unresolved` does not descend `AST_POSTFIX` or prefix
+`TOK_INC`/`TOK_DEC`; an update rooted in an unentered block declaration loses
+its unresolved-type provenance. `p_binary` therefore records int operand
+conversion types without `deferred_types`, and `mir_lower_expr_impl` lowers
+those stale conversions. Repairing the unary instruction later cannot
+repair these unmarked consumers. A future root fix must preserve update-value
+type/provenance through the AST and all dependent arithmetic consumers,
+not merely retag the immediate unary instruction. No second fix was tried.
+
+Trial verification:
+
+- **20 parked reproducers: 3 FIXED, 17 fails**. Only 041/056 flip in this
+  trial; 022 was already FIXED at the starting commit because B2b incidentally
+  made its historical fixture pass. Its diagnostic defect stays open and is
+  not changed here.
+- Both strict **3,532-function** census TSVs are byte-identical to the initial
+  canonical build: zero existing-function changes, in stack and no-stack
+  modes. All **525 existing performance rows**, including row order, are
+  untouched. No unit test or baseline is added/refreshed.
+- Strict Python full+extended regression: **540 passed, 24 skipped, zero
+  failures**, with extended, diagnostic, dccpeep and checked performance
+  gates passed. Canonical build and independent CMake compiler build pass.
+- Targeted compiler / line-debug tests: **31/31**. Debugger-host CTest:
+  **10/10**, including both MI/compiler integration fixtures, passes without
+  an isolated retry. The trial changes value types, not source/statement or
+  scope boundaries; existing source-symbol locations and code hashes are
+  unchanged. The new admitted consumer probe retains the same wrong result
+  in full-debug and line-debug, in both pipelines. Its `-gline` binary is
+  **not release-identical**: redundant `exx; exx` pairs appear around calls
+  in both MAC outputs. This additional unshipped metadata/code interaction
+  is recorded, not fixed or described as a passed new-shape contract.
+- Full Python discovery and final strict PowerShell stack/no-stack release
+  gates were not run: the wrong-code stop fired before promotion/release
+  acceptance. The approved #277 failures remain untouched; no timing
+  harness, expectation or skip is changed. No prepush or compiler-dating
+  checks were run.
+
+- Restored float production seeds **1-300: 288 ok, 11 INVALID, 1 FAIL**.
+  Only **224** fails, in all four production configurations, with the six
+  global-state checksum lines `400d` through `4012` differing. This is not
+  called a clean batch. The failing seed reduces under nopeep to **81 lines
+  / 104 reduction tests**; host clang + sanitizers prove its source/baseline.
+  Its core is another dependent consumer of a block-local float update:
+
+  ```c
+  uint16_t g1 = 0xc217;
+  { float b1 = 1.0f; fa[1] = (uint32_t)0 > ((b1++) - g1); }
+  /* fa[1] should be 1.0f: 0.0f > -49686.0f. */
+  ```
+
+  Here the inner subtraction is repaired to float (`type=5`, `off2=5`),
+  but an implicit cast to unsigned long remains between it and the outer
+  comparison (`type=2`, `off2=36`). This confirms that repairing an update
+  or its immediate unary consumer does not repair all dependent AST-typed
+  conversions/comparisons. A nine-line scalar-destination version independently
+  confirms host + ASan/UBSan **1**, dcc **0** in all four production
+  configurations. No second compiler fix or generator steer is
+  added for this stopped trial.
+
+Final withdrawal verification: the canonical build passes after restoring
+both compiler files and the generator byte-for-byte to `a8843888`.
+**20 reproducers: 1 FIXED (pre-existing 022), 19 fails**, with 041/056 again
+rejected by DCC-E1002 and every other original verdict unchanged. The only
+committed file is `fix-plan.md`; counts remain **twenty open / thirty-four
+fixed**. No issues are closed. All code, admission and generator edits are
+withdrawn, with the stopped-trial patch and probe artifacts retained only
+under `build/` for inspection.
 
 #### D1 acceptance
 
@@ -1435,10 +1553,11 @@ so it matters more than its size suggests. Both are one-offs.
 | C | | open | |
 | D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/023/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
-| D2 | | split into D2a / D2b / D2c | Assignment-value lifetime, AST admission and byte-PHI lifetime are independent |
+| D2 | | split into D2a / D2b / D2c / D2d | Assignment-value lifetime, AST admission, byte-PHI lifetime and float consumer typing are independent |
 | D2a | [#300](https://github.com/davidly/dcc/pull/300) (`fix/cluster-d2a-postinc-home`) | merged | 021/023 promoted as tpost16/tpostbr; 023 moved from C, same root; 024 remains independent (D2c); 3,487 pre-follow-up functions and 517 perf rows unchanged |
 | D2b | [#301](https://github.com/davidly/dcc/pull/301) (`fix/cluster-d2b-postinc-admit`) | merged | 010 promoted as tpost32; 041 admission withdrawn after new BUG-056/#299; int 227/73, blocked float 281/19, zero FAIL; 3,482 existing functions and 516 perf rows byte-identical; strict release gates pass; #277 plus five isolated harness exceptions documented |
 | D2c | [#305](https://github.com/davidly/dcc/pull/305) (`fix/cluster-d2c-byte-phi-home`) | PR open; verified compiler gates | 024 promoted as tpost8; 266 ok/34 INVALID/zero FAIL; 3,503 existing functions and 519 perf rows unchanged; 24 parked reproducers all fail; approved #277 and four isolated harness failures documented |
+| D2d | `fix/cluster-d2d-float-incdec-value` | stopped; admission withdrawn | 041/056 trial FIXED; dependent block-local float update arithmetic/comparison still wrong; restored float 288 ok/11 INVALID/1 FAIL (224); full trial withdrawn; final 20 reproducers: pre-existing 022 FIXED, 19 fails; both 3,532-function censuses and all 525 existing perf rows unchanged |
 | E | | open | |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1/G2 fixed | G1 clears 012; approved G2 fixes 033/040/042 independently |
