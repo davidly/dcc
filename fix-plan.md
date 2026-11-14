@@ -8,8 +8,8 @@ one fix, made in the right place, closes several issues, and so that the
 fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
-neighbouring shapes that pass in each entry. A1 (#281), A2a, K (#278) and L
-(#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
+neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), K (#278)
+and L (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
 remaining clusters are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
@@ -382,7 +382,7 @@ so it matters more than its size suggests. Both are one-offs.
 | --- | --- | --- | --- |
 | A1 | [#281](https://github.com/davidly/dcc/pull/281) | merged | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
 | A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |
-| A2a | `fix/cluster-a2a-constant-payload` | fixed; awaiting merge | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
+| A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
 | A2b | | open; after E | BUG-004/015; unconfirmed shared cause |
 | B | | open | |
 | C | | open | |
