@@ -33,7 +33,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-011](#bug-011) | #231 | rejects valid C | Compound assignment to an element of a byte array inside a struct |
 | [BUG-012](#bug-012) | #232 | rejects valid C | Unary `-` or `~` applied to `!`, `&&` or `\|\|` of constants |
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
-| [BUG-014](#bug-014) | #234 | rejects valid C | 32-bit local with two definitions, incremented, stored to a global |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
 | [BUG-018](#bug-018) | #238 | rejects valid C | 32-bit value compound-assigned to a bit-field or to an element of a 16-bit array member |
@@ -61,16 +60,17 @@ and their historical diagnoses are retained separately below.
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 
-Thirty-six are open: twenty-one give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, thirteen stop the compile,
+Thirty-five are open: twenty-one give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, twelve stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Sixteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Seventeen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
+[one in cluster B2a](#fixed-in-cluster-b2a),
 [two in cluster B3](#fixed-in-cluster-b3),
 [four in cluster K](#fixed-in-cluster-k),
 [one in cluster L](#fixed-in-cluster-l),
@@ -280,26 +280,6 @@ if ((sel ? -21931 : s.m1) > 1)   /* false; dcc takes the branch */
 
 - Wrong for `- ~ | ^ & + * / % >> <<` and `?:`.
 - Correct: `s.m2 - 1000`; `sel ? s.m2 : -1` assigned directly.
-
-## BUG-014
-
-**A 32-bit local that has two reaching definitions, is incremented by
-one and is then stored to a global stops the compile.**
-`dcc: fatal: missing direct MIR named-home offset`.
-
-```c
-int32_t l = 1;
-if (sel) l = 5;
-l++;                 /* also ++l, l += 1, l = l + 1, g = ++l */
-g = l;
-```
-
-- The second definition can come from `if`, `switch`, a `goto` or a loop
-  (`do { g = ++l; } while (…);`).
-- It also fails for a `uint32_t` local stored to a `uint32_t` global.
-- Accepted: `--l`; `l += 2`; storing to an array element or a local; storing
-  through a conversion (`g = (int32_t)u;` with a `uint32_t u`); a local with a
-  single definition.
 
 ## BUG-015
 
@@ -1177,6 +1157,74 @@ uint32_t sub(int8_t p)
 - Steered by `peepbyteself`: non-logical byte binary self-operands
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
+
+## Fixed in cluster B2a
+
+BUG-014 now passes in peep and nopeep. The general spilled store tried to
+load a wide value through the narrow loader before its full four-byte load.
+A fused increment result lives directly in its named local home, which the
+wide loader already resolves with the self-store proof; the preliminary
+narrow loader instead looked for a plain load/object on the binary definition
+and stopped the compile. Skip only that unnecessary preload for the proven
+fused increment, preserving the existing in-place carry chain and wide load,
+without adding spill slots or changing frames, allocation or selection.
+
+The first fix clears only BUG-014: one `FIXED`, 35 `fails`, no unexpected
+flips. B2 is therefore split into B2a (this fix) and B2b (BUG-019, still
+parked). BUG-019 was traced separately: the metadata walk skips a dead nested
+scope whose declaration placeholder MIR lowering retained. That unreplayed
+placeholder and unresolved local leave no acceptable generated candidate;
+none of its lowering or metadata code is changed here.
+
+Integer `widelocalinc` is restored. Production seeds 1-300 give **213 ok,
+85 INVALID, two target-limit-only, zero FAIL**, in peep/nopeep and stack/no-stack
+configurations. A 3,000-seed steering proof is clean. The reproducer is
+promoted as `twincg`, with carry, unsigned wraparound, assigned-add, loop,
+untaken-arm and decrement/add-two coverage and a host/sanitizer-proven
+baseline. After promotion all 35 remaining parked reproducers still fail.
+
+Both MIR censuses preserve all **3,426 existing function rows byte-identically**;
+only `twincg` adds nine functions. All **507 existing performance rows are
+unchanged**; only its new row was measured through normal-stack PowerShell
+runall. Strict full+extended stack and no-stack suites pass, as does the new
+app's strict full-mode no-stack run. CMake MIR tests, debugger tests,
+require-emit and focused metadata checks pass; the fixed shape has
+release-identical `-gline` bytes and intact full-debug local/frame metadata
+in both pipelines.
+
+The full Python gate runs 312 tests with two approved pre-existing #277
+failures (`test_mir_campaign_baselines`, `test_mir_exact_controls`) and two
+existing skips. The #280 exit-139 mutation fixture passes in this run.
+No expectation was fixed, skipped or refreshed; no historical compiler
+checks or `prepush.ps1` run were performed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-014](#bug-014) | #234 | [twincg](tests/twincg.c) |
+
+### BUG-014
+
+**Fixed:** suppress the redundant narrow preload before a wide store of a
+fused increment result. Regression: [twincg.c](tests/twincg.c),
+[baseline](tests/baselines/twincg.txt).
+
+**A 32-bit local that has two reaching definitions, is incremented by
+one and is then stored to a global stops the compile.**
+`dcc: fatal: missing direct MIR named-home offset`.
+
+```c
+int32_t l = 1;
+if (sel) l = 5;
+l++;                 /* also ++l, l += 1, l = l + 1, g = ++l */
+g = l;
+```
+
+- The second definition can come from `if`, `switch`, a `goto` or a loop
+  (`do { g = ++l; } while (…);`).
+- It also fails for a `uint32_t` local stored to a `uint32_t` global.
+- Accepted: `--l`; `l += 2`; storing to an array element or a local; storing
+  through a conversion (`g = (int32_t)u;` with a `uint32_t u`); a local with a
+  single definition.
 
 ## Fixed in cluster B3
 

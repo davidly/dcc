@@ -261,7 +261,7 @@ Both censuses must continue to require zero existing-function changes. The rejec
 census comparisons from the first attempt are in the agent's
 `build/cluster-b/` (not committed); re-derive rather than reuse.
 
-### B2. Declaration and home bookkeeping fatals (unconfirmed)
+### B2. Disproved: split into B2a and B2b
 
 | Bug | Issue | Shape |
 | --- | --- | --- |
@@ -273,6 +273,61 @@ the emitter uses. Not the B1 offset defect (unchanged by it). Trace where the
 named home is looked up for BUG-014 and where an unreachable scope's
 declaration is dropped for BUG-019 before assuming they share a cause; stop
 and split if the first fix clears only one.
+
+The first root-cause fix clears BUG-014 only; BUG-019 still fails with
+`MIR emission is required`. The shared-home hypothesis is disproved.
+Under the approved stop rule, B2a is completed on this branch and B2b is
+left untouched for separate work.
+
+### B2a. Redundant narrow preload of a fused wide increment
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-014 | #234 | A two-definition 32-bit local incremented and stored to a global |
+
+The spilled emitter fuses the increment into its authoritative named home.
+`mir_value_has_direct_named_home()` recognizes that binary result, and the
+wide loader resolves its offset via `mir_binary_is_selfstore_wide_increment()`.
+However, the generic store first invokes the narrow loader before loading
+all four bytes. That unnecessary preload attempts to resolve the binary
+instruction as a plain load/object and fatals. Suppress that preload for
+the already-proven fused increment; retain the existing wide load and fused
+schedule, without changing homes, frames or candidate selection.
+
+Acceptance: before promotion, only BUG-014 flips (one `FIXED`, 35 `fails`);
+after promotion all 35 remaining reproducers still fail. `twincg` adds the
+logged spellings plus carry, unsigned wraparound, loop, untaken-arm and
+neighbouring decrement/add-two controls. Their baseline is host/sanitizer
+proven and its only new perf row is measured by normal-stack PowerShell.
+Integer production seeds 1-300: **213 ok, 85 INVALID, two target-limit-only,
+zero FAIL** after restoring `widelocalinc`; a 3,000-seed steering proof is clean.
+
+All **3,426 existing functions are byte-identical in both MIR censuses**,
+and all **507 existing perf rows are unchanged**. Strict full+extended stack
+and no-stack suites pass; the promoted app passes full mode in both. CMake
+MIR (6/6), debugger host (10/10), line-debug (2/2), compiler-entrypoint (13/13)
+and require-emit tests pass. The fixed shape retains release-identical
+`-gline` output and full-debug local/frame metadata through both pipelines.
+The final Python gate runs **312 tests: two approved #277 failures, two
+existing skips**. #280's mutation fixture passes. No expectation, skip or
+baseline was refreshed; no dating checks or `prepush.ps1` run were made.
+
+### B2b. Unreplayed declaration in an unreachable nested scope
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-019 | #239 | Unreachable nested block or for-init declaration after an exiting statement |
+
+Traced independently, not fixed here: `mir_lower_stmt()` lowers every child
+of `AST_COMPOUND`, including a dead declaration placeholder. The metadata
+walk in `ast_process_stmt_metadata()` skips a dead nested compound/for, so
+`mir_begin_declaration()` / `mir_end_declaration()` never replay that
+placeholder. The resulting MIR retains `decl`, a load of unresolved `b`,
+and a scope restore after the return; no generated candidate accepts it.
+Function-scope declarations take a different replay path. This is a
+lowering/metadata reachability mismatch, not BUG-014's wide-store reload.
+Preserve labels/re-entry, declaration diagnostics, scope/VLA accounting and
+debug metadata when investigating separately. No B2b code was changed.
 
 ### B3. Same-value binary operands read an unallocated slot
 
@@ -621,7 +676,7 @@ so it matters more than its size suggests. Both are one-offs.
 2. **A1** — merged (#281). **A2a** — fixed and verified.
    **A2b** is deferred until after E.
 3. **B1** (BUG-030 memory corruption), **B3** (BUG-026, maintainer's first
-   priority), then **B2**, **B4**.
+   priority), then remaining **B2b**, **B4**; **B2a** is verified separately.
 4. **D** — BUG-044 and BUG-003.
 5. **E**, then **A2b**, then **C** — E and C are in the emitter's
    typing/merge paths; A2b waits for E's BUG-004 facet; C is the least
@@ -638,7 +693,9 @@ so it matters more than its size suggests. Both are one-offs.
 | A2b | | open; after E | BUG-004/015; unconfirmed shared cause |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
-| B2 | | open | BUG-014/019 bookkeeping fatals; unconfirmed shared cause |
+| B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
+| B2a | `fix/cluster-b2-home-fatals` | acceptance complete; PR pending | BUG-014 promoted as twincg; 300 integer seeds clean; 3,426 census functions and 507 perf rows unchanged; approved #277 failures only (#280 passes) |
+| B2b | | open | BUG-019 unreachable nested-scope metadata skips declaration replay; untouched |
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | | open | BUG-036; check overlap with C/D first |
 | C | | open | |
