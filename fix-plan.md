@@ -9,8 +9,8 @@ fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. They have not been confirmed in
-the source, except K, whose four independent rules have now been fixed, and L, whose
-preprocessing-token boundary defect is confirmed and fixed.
+the source, except K, whose four independent rules have now been fixed, and
+L, whose preprocessing-token boundary defect is confirmed and fixed.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
 explicitly approved K as a four-rule exception.
@@ -300,7 +300,7 @@ so it matters more than its size suggests. Both are one-offs.
 | I | | open | |
 | J | | open | |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
-| L | `fix/cluster-l-pp-numbers` | fixed; PR pending | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
+| L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
 | M | | open | |
 
 Update this table as clusters are taken, and move bugs between clusters when
@@ -319,7 +319,7 @@ MIR selection, schedules, or allocation.
 
 ## Task
 
-Fix cluster **K** in `fix-plan.md`. Read the cluster's table, then every
+Fix cluster **A** in `fix-plan.md`. Read the cluster's table, then every
 `## BUG-NNN` entry it lists in `compiler-bugs.md`, including the bullets
 describing which neighbouring shapes are already correct — those are your
 strongest clue to the root cause and to what the fixed code should emit.
