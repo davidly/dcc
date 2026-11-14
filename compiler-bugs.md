@@ -40,26 +40,23 @@ and their historical diagnoses are retained separately below.
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
-| [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 | [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
-| [BUG-040](#bug-040) | #260 | compile error | A static-storage float initializer must be a bare constant: `(2.5f)`, `-(2.5f)` and `1.0f + 2.0f` are rejected |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
-| [BUG-042](#bug-042) | #262 | compile error | A float constant that must be folded or tested for truth is rejected: `-(-2.5f)`, `!2.5f`, `2.5f && n`, `if (2.3f)` |
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 
-Twenty-five are open: sixteen give wrong results with no diagnostic
+Twenty-two are open: sixteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
-BUG-041 admission, one hangs, seven stop the compile,
+BUG-041 admission, one hangs, four stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-013 and BUG-016.
 
-Twenty-nine reported bugs are fixed: [one in cluster D2b](#fixed-in-cluster-d2b),
+Thirty-two reported bugs are fixed: [one in cluster D2b](#fixed-in-cluster-d2b),
 [two in cluster D2a](#fixed-in-cluster-d2a),
 [one in cluster K2](#fixed-in-cluster-k2),
 [two in cluster D1](#fixed-in-cluster-d1),
@@ -73,7 +70,8 @@ Twenty-nine reported bugs are fixed: [one in cluster D2b](#fixed-in-cluster-d2b)
 [one in cluster L](#fixed-in-cluster-l),
 [one in cluster I1](#fixed-in-cluster-i1),
 [two in cluster I2](#fixed-in-cluster-i2),
-[one in cluster G1](#fixed-in-cluster-g1) and
+[one in cluster G1](#fixed-in-cluster-g1),
+[three in cluster G2](#fixed-in-cluster-g2) and
 [two in cluster J](#fixed-in-cluster-j). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -580,27 +578,6 @@ L4:
 - The selected emitter is `homed-scalar-cfg` (`DCC_MIR_COST_REPORT=1`).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
 
-## BUG-033
-
-**A constant divided by a constant zero is rejected, even in code that never
-runs.** `DCC-E1002: unsupported if condition or branch` (or
-`unsupported AST statement`), a message that does not mention division.
-
-```c
-if (never)
-    return 1000 / 0;
-if (never)
-    out = 7 % 0;
-```
-
-- The division is undefined only if it is evaluated, so a program that
-  never reaches it is valid; clang compiles it with a warning.
-- Accepted: `n / 0` and `n % 0` with a variable `n`.
-- Low priority: nobody writes this on purpose. It can come out of macros
-  (`SIZE / UNITS` in a branch guarded by `if (UNITS)`), and when it does the
-  diagnostic points at the enclosing `if` rather than at the division.
-- Already present in v3.6.0 (`20290235`).
-
 ## BUG-037
 
 **In a `for` or `while` loop whose counter is 32 bits wide, a copy of the
@@ -691,30 +668,6 @@ va = 1.0f; vb = 1.85f;  /* want 3f0a60dd, dcc 3f0a60de */
 - Also at v3.6.0 (`20290235`) with today's runtime.
 - Found by hand probing (the float generator excludes `/` as `fdivround`).
 
-## BUG-040
-
-**The initializer of a float with static storage must be a bare floating
-constant, optionally negated, or `(float)` of an integer constant.** A
-parenthesised constant, a negated parenthesised constant or a constant
-expression is rejected: `DCC-E1102 expected ';'` at file scope, `DCC-E0912
-float initializer must be constant` for an element of a static array.
-
-```c
-static float a = (2.5f);              /* rejected */
-static float b = -(2.5f);             /* rejected */
-static float c = 1.0f + 2.0f;         /* rejected */
-static float arr[2] = { (0.5f), 1.0f - 0.75f };   /* rejected */
-static int ok = (-2) + 1 * 3;         /* accepted */
-```
-
-- Accepted: `-2.5f`, `(float)3`, every form as an automatic initializer
-  (`float la = (2.5f);`) and as an assignment.
-- The conformance table lists global initializers as supported without a
-  float exception.
-- Also at v3.6.0 (`20290235`).
-- Found by fuzzing (float generator, seeds 1, 2, 4, 5, …): it rendered
-  negative constants in parentheses.
-
 ## BUG-041
 
 **The value of a float `++` or `--` expression is rejected.** `DCC-E1002`
@@ -738,41 +691,6 @@ if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
 - The limitation is not documented.
 - Also at v3.6.0 (`20290235`).
 - Found by fuzzing (float generator, seed 3).
-
-## BUG-042
-
-**A floating constant that has to be folded or tested for truth is
-rejected.** `DCC-E1002`, reported against the enclosing statement: unary `-`
-of a negated or computed float constant, `!`, `&&` or `||` with a float
-constant operand, and a float constant as the condition of `if` or `while`.
-
-```c
-g = -(-2.5f);              /* rejected; -(2.5f) is accepted */
-g = -(1.0f + 2.0f);        /* rejected; -(1.0f + f) is accepted */
-n = !255.0f;               /* rejected; !f is accepted */
-n = 2.5f && 1;             /* rejected; 2.5f ? 1 : 2 is accepted */
-if (2.3f) n = 7;           /* rejected; if (f), if (1.0f + f), if (1.0f > 2.0f) accepted */
-while (1.0f) { break; }    /* rejected */
-```
-
-- Integer constants in every one of these positions are accepted, so it is
-  the float constant folder that lacks `-` of a folded value and the truth
-  test; compare BUG-012 (`-`/`~` of `!`, `&&`, `||` of integer constants).
-- `&&`/`||` whose operands are *all* constant is also rejected when at least
-  one operand is a float comparison: `if ((1.0f > 2.0f) && (0.0f == 0.0f))`,
-  `if ((1.0f > 2.0f) && (1 == 1))`, `n = (1.0f > 2.0f) && 1`. Each
-  comparison alone (`if (1.0f > 2.0f)`), a non-constant operand
-  (`(1.0f > 2.0f) && n`), and the all-integer form (`(1 > 2) && (0 == 0)`)
-  are accepted. Found by fuzzing (float generator, seed 30).
-- A constant float comparison inside a negated float sum also needs that
-  missing fold: `g = -((0.0625f < 602000.0f) + 1.5f)` is rejected, while the
-  sum without unary minus is accepted. Restoring float statement increments
-  in D1 exposed this existing BUG-042 facet at float seed 219; the reduced
-  program has no increment/decrement. Its generator guard now recognizes
-  constant comparisons inside float expressions without excluding an
-  accepted standalone float comparison. No compiler change for BUG-042.
-- Also at v3.6.0 (`20290235`).
-- Found by fuzzing (float generator, seeds 3, 13, 16).
 
 
 ## BUG-045
@@ -963,6 +881,110 @@ uint32_t sub(int8_t p)
 - Steered by `peepbyteself`: non-logical byte binary self-operands
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
+
+## Fixed in cluster G2
+
+The maintainer approved three independent single-bug fixes, verified and
+committed in G2a/G2b/G2c order. G2a fixes BUG-033 (#253): the plain-integer
+AST admission gate no longer confuses evaluating a division with admitting
+it. The integer folder still declines zero divisors, so generated MIR/Z80
+retains the guarded runtime `__divs`/`__mods` operation without a diagnostic
+or invented constant. Promoted as `tconstdz`.
+
+## BUG-033
+
+**A constant divided by a constant zero is rejected, even in code that never
+runs.** `DCC-E1002: unsupported if condition or branch` (or
+`unsupported AST statement`), a message that does not mention division.
+
+```c
+if (never)
+    return 1000 / 0;
+if (never)
+    out = 7 % 0;
+```
+
+- The division is undefined only if it is evaluated, so a program that
+  never reaches it is valid; clang compiles it with a warning.
+- Accepted: `n / 0` and `n % 0` with a variable `n`.
+- Low priority: nobody writes this on purpose. It can come out of macros
+  (`SIZE / UNITS` in a branch guarded by `if (UNITS)`), and when it does the
+  diagnostic points at the enclosing `if` rather than at the division.
+- Already present in v3.6.0 (`20290235`).
+
+G2b fixes BUG-040 (#260): a static-only fallback reuses the expression AST
+and bounded typed float evaluation after the old compact initializer parser
+declines. Parentheses and float constant arithmetic are evaluated with host
+single-precision semantics; automatic initializer paths and every existing
+compact static initializer are preserved. Both complete reproducer MAC files
+are byte-identical to their accepted literal neighbors. Promoted as `tflcini`,
+including precedence, mixed integer arithmetic, casts and exact float-bit
+rounding controls proven by clang and ASan/UBSan. Parenthesized/computed
+float-to-integer casts, Boolean casts and constant selections use private
+typed evaluation with target-width range checks. Function-body admission
+remains a separate G2c change.
+
+## BUG-040
+
+**The initializer of a float with static storage must be a bare floating
+constant, optionally negated, or `(float)` of an integer constant.** A
+parenthesised constant, a negated parenthesised constant or a constant
+expression is rejected: `DCC-E1102 expected ';'` at file scope, `DCC-E0912
+float initializer must be constant` for an element of a static array.
+
+```c
+static float a = (2.5f);              /* rejected */
+static float b = -(2.5f);             /* rejected */
+static float c = 1.0f + 2.0f;         /* rejected */
+static float arr[2] = { (0.5f), 1.0f - 0.75f };   /* rejected */
+static int ok = (-2) + 1 * 3;         /* accepted */
+```
+
+- Accepted: `-2.5f`, `(float)3`, every form as an automatic initializer
+  (`float la = (2.5f);`) and as an assignment.
+- The conformance table lists global initializers as supported without a
+  float exception.
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seeds 1, 2, 4, 5, …): it rendered
+  negative constants in parentheses.
+
+G2c fixes BUG-042 (#262): typed float and integer-result truth/logical
+proofs admit the formerly rejected constants. MIR materializes only these
+newly admitted unary/logical values and statement controls as literal
+constants, so the existing literal candidates remain frameless and concise.
+Already accepted single-unary literals, direct float comparisons, cast forms
+and ternary controls, and the old integer-only exit/return facts, are preserved.
+Promoted as `tflcnot`, with fractional/signed-zero truth, nested unary,
+constant-comparison logicals and short-circuit side-effect controls.
+
+## BUG-042
+
+**A floating constant that has to be folded or tested for truth is
+rejected.** `DCC-E1002`, reported against the enclosing statement: unary `-`
+of a negated or computed float constant, `!`, `&&` or `||` with a float
+constant operand, and a float constant as the condition of `if` or `while`.
+
+```c
+g = -(-2.5f);              /* rejected; -(2.5f) is accepted */
+g = -(1.0f + 2.0f);        /* rejected; -(1.0f + f) is accepted */
+n = !255.0f;               /* rejected; !f is accepted */
+n = 2.5f && 1;             /* rejected; 2.5f ? 1 : 2 is accepted */
+if (2.3f) n = 7;           /* rejected; if (f), if (1.0f + f), if (1.0f > 2.0f) accepted */
+while (1.0f) { break; }    /* rejected */
+```
+
+- Integer constants in every one of these positions are accepted, so it is
+  the float constant folder that lacks `-` of a folded value and the truth
+  test; compare BUG-012 (`-`/`~` of `!`, `&&`, `||` of integer constants).
+- `&&`/`||` whose operands are *all* constant is also rejected when at least
+  one operand is a float comparison: `if ((1.0f > 2.0f) && (0.0f == 0.0f))`,
+  `if ((1.0f > 2.0f) && (1 == 1))`, `n = (1.0f > 2.0f) && 1`. Each
+  comparison alone (`if (1.0f > 2.0f)`), a non-constant operand
+  (`(1.0f > 2.0f) && n`), and the all-integer form (`(1 > 2) && (0 == 0)`)
+  are accepted. Found by fuzzing (float generator, seed 30).
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seeds 3, 13, 16).
+
 
 ## BUG-056
 
@@ -1403,9 +1425,9 @@ pipelines, with no added instructions or frame cost.
 
 The first fix flips only BUG-012 (**1 FIXED, 33 fails** before promotion).
 Per the approved stop rule, cluster G is split into G1 (BUG-012 fixed) and
-G2 (BUG-033/040/042 still parked). G2 needs separate zero-divisor admission,
-static float token parsing, and floating-constant truth/folding work; its
-traces are in [fix-plan.md](fix-plan.md#g-constant-expressions-in-the-front-end).
+G2 (all three are fixed above). Their independent fixes use zero-divisor admission,
+static float parsing/evaluation, and floating-constant truth/folding work;
+their traces are in [fix-plan.md](fix-plan.md#g-constant-expressions-in-the-front-end).
 In particular, BUG-033 must retain the unevaluated division, not fabricate a
 constant result. No out-of-cluster reproducer flips.
 

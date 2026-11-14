@@ -697,6 +697,7 @@ static int ast_cond_not_indexed_array_row(const struct AstNode *n)
 int ast_cond_generic(const struct AstNode *n)
 {
     long cv;
+    float fv;
     if (n == NULL)
         return 0;
     if (n->kind == AST_COMMA)
@@ -708,7 +709,9 @@ int ast_cond_generic(const struct AstNode *n)
          * accepted) and require the right operand to be a generic condition. */
         return (ast_is_local_self_add_stmt(n->a) || ast_dead_expr_supported(n->a)) &&
                ast_cond_generic(n->b);
-    if (ast_const_condition_fold(n, &cv))
+    if (ast_const_scalar_fold(n, &cv) ||
+        (type_is_float(ast_expr_type_for_sizeof(n)) &&
+         ast_const_float_fold(n, &fv)))
         return 1;
     if (ast_is_const_cmp_cond(n))
         return 1;

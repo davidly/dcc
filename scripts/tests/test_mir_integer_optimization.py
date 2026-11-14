@@ -34,6 +34,73 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_guarded_constant_zero_divisors_remain_runtime_operations(self):
+        for op, helper in (("/", "__divs"), ("%", "__mods")):
+            source = ("int probe(int run) { if (run) return 1000 " +
+                      op + " (1 - 1); return 7; }\n")
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(op=op, options=options):
+                    assembly, diagnostics = self.compile_report(source, options)
+                    self.assertEqual(diagnostics, "")
+                    self.assertIn("call " + helper, assembly)
+                    self.assertIn("ld de,0", assembly)
+                    self.assertRegex(assembly, r"ld hl,1000")
+
+    def test_static_float_arithmetic_matches_literal_data(self):
+        cases = (
+            ("(2.5f)", "2.5f"),
+            ("-(2.5f)", "-2.5f"),
+            ("1.0f + 2.0f * 3.0f", "7.0f"),
+            ("(1.0f + 2.0f) * 3.0f", "9.0f"),
+            ("3 * (0.5f + 0.25f) / 2 - 0.125f", "1.0f"),
+            ("(16777216.0f + 1.0f) - 16777216.0f", "0.0f"),
+            ("(1 / 2) + 0.25f", "0.25f"),
+            ("((float)(3 + 2)) * 0.5f", "2.5f"),
+            ("((int)2.75f)", "2.0f"),
+            ("(float)((int)(1.25f + 2.0f)) + 0.5f", "3.5f"),
+            ("((int)1.75f + (int)2.5f) * 0.5f", "1.5f"),
+            ("(float)((_Bool)0.25f)", "1.0f"),
+            ("(float)sizeof(\"ab\")", "3.0f"),
+            ("0.0f ? 1.0f : 2.5f", "2.5f"),
+            ("(float)(uint16_t)65535.75f", "65535.0f"),
+            ("(float)(int16_t)-32768.75f", "-32768.0f"),
+            ("(float)(uint32_t)4000000000.0f", "4000000000.0f"),
+            ("(float)(int8_t)-128.75f", "-128.0f"),
+        )
+        for expression, literal in cases:
+            source = "#include <stdint.h>\nfloat probe = " + expression + ";\n"
+            neighbor = "#include <stdint.h>\nfloat probe = " + literal + ";\n"
+            with self.subTest(expression=expression):
+                self.assertEqual(self.code(self.compile(source)),
+                                 self.code(self.compile(neighbor)))
+
+    def test_nested_float_constant_unary_matches_literal(self):
+        for expression in ("-(-2.5f)", "+(-(-2.5f))"):
+            source = "float out; void probe(void) { out = " + expression + "; }\n"
+            neighbor = "float out; void probe(void) { out = 2.5f; }\n"
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(expression=expression, options=options):
+                    self.assertEqual(self.code(self.compile(source, options)),
+                                     self.code(self.compile(neighbor, options)))
+
+    def test_float_constant_truth_matches_integer_literal(self):
+        cases = (
+            ("return !0.25f;", "return 0;"),
+            ("return !(-0.0f);", "return 1;"),
+            ("return !!0.25f;", "return 1;"),
+            ("return 2.5f && 1;", "return 1;"),
+            ("return (1.0f > 2.0f) || (1 == 1);", "return 1;"),
+            ("if (2.3f) return 7; return 0;", "if (1) return 7; return 0;"),
+            ("if (0.0f) return 7; return 0;", "if (0) return 7; return 0;"),
+            ("while (1.0f) { break; } return 7;", "while (1) { break; } return 7;"),
+        )
+        for body, control in cases:
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(body=body, options=options):
+                    source = "int probe(void) { " + body + " }\n"
+                    neighbor = "int probe(void) { " + control + " }\n"
+                    self.assertEqual(self.code(self.compile(source, options)),
+                                     self.code(self.compile(neighbor, options)))
     def test_integer_compound_lvalues_match_expanded_assignment(self):
         cases = (
             ("struct S { unsigned char b[4]; } s;", "s.b[2]", "^", "1"),
