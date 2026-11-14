@@ -614,7 +614,7 @@ so it matters more than its size suggests. Both are one-offs.
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | | open | BUG-014/019 bookkeeping fatals; unconfirmed shared cause |
-| B3 | `fix/cluster-b3-same-operand` | verified; PR pending | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
+| B3 | [#289](https://github.com/davidly/dcc/pull/289) | PR open | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | | open | BUG-036; check overlap with C/D first |
 | C | | open | |
 | D | | open | |
