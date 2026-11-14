@@ -1,4 +1,4 @@
-"""Steer parked byte and fused-wide shapes while preserving restored value forms."""
+"""Keep parked byte shapes separate from restored wide and scalar value forms."""
 
 from pathlib import Path
 import sys
@@ -42,7 +42,7 @@ class IntegerKnownShapeTests(unittest.TestCase):
                     function.body.decls[0].init = steered[0]
                     self.assertEqual(gen.known_shapes(program), set())
 
-    def test_fused_wide_increment_add_steer_is_narrow(self):
+    def test_restored_wide_increment_add_preserves_operands(self):
         cases = ((gen.I32, 'local', '++', True, False, True),
                  (gen.U32, 'param', '++', True, False, True),
                  (gen.I32, 'local', '+=', True, False, True),
@@ -63,7 +63,7 @@ class IntegerKnownShapeTests(unittest.TestCase):
                     other = (gen.E('const', a=7, t=gen.I32) if literal else
                              gen.E('var', a=gen.Decl('y', gen.I32, 'global')))
                     operands = [other, update] if reverse else [update, other]
-                    enabled = gen.Gen(0).mk('bin', operands, '+')
+                    enabled = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS)).mk('bin', operands, '+')
                     steered = gen.Gen(0, off={'wideincadd'}).mk('bin', operands, '+')
                     self.assertEqual(enabled.a, '+')
                     self.assertEqual(steered.a, '-' if blocked else '+')

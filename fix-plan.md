@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has ten open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has seven open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -18,8 +18,9 @@ with maintainer approval into I1 (return admission) and I2 (cast signedness);
 both are now fixed. Other remaining clusters are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
-explicitly approved K as a four-rule exception, and J2 as two independent
-fixes with narrowly specified existing-baseline exceptions. J2's numeric
+explicitly approved K as a four-rule exception, J2 as two independent
+fixes with narrowly specified existing-baseline exceptions, and M as two
+independent single-bug commits. J2's numeric
 stdout refreshes still require independent host-clang proof.
 
 ## Rules
@@ -2253,7 +2254,113 @@ checks passed. The two regular Python-test failures match clean rebuilt
 | BUG-022 | #242 | Reused label name in a nested block hides `MIR emission is required` for later functions |
 
 BUG-022 is a diagnostic bug that turns a compile error into broken output,
-so it matters more than its size suggests. Both are one-offs.
+so it matters more than its size suggests. Both are one-offs. The maintainer
+approved M-a (009) and M-b (022) as independent single-bug commits in one PR;
+the output-preservation stop rule applies separately to each.
+
+#### M-a trace: BUG-009
+
+MIR lowering correctly compares the updated `d` SSA value with the bound.
+The selected spilled scalar CFG emitter fuses `load d; +1; store d` into
+four ascending-byte in-place increments. Its ordinary wide virtual loader
+already reloads this result from the named object home, but
+`mir_direct_wide_location` only resolved loads/parameters: the relational
+fast path fell through to the unused SSA backend slot. For the signed
+reproducer it incremented IX-8..IX-5 and compared IX-22..IX-23 instead.
+The fix reuses the existing self-store proof in the direct-location resolver,
+keeping the same inline comparison and selector. In both peep and nopeep
+assembly only the twelve operand offsets change across the three functions:
+there are no added instructions, calls, frame bytes or fallbacks.
+
+M-a acceptance: the re-established 21-program known-bugs set gives one
+`FIXED` (009) and twenty `fails`; after promotion twenty parked programs
+remain. Both 3,527-function censuses have zero existing changes, and all 524
+existing perf rows are unchanged. Strict full+extended stack/no-stack and
+Python full+extended gates pass. The 300-seed integer batch gives 255 ok,
+45 INVALID, zero FAIL with `nestedwideless` restored. tndwide has a new
+normal-stack measured row and passes host validation. Debug pipelines,
+require-emit, ten debugger-host and six sanitized MIR host tests pass.
+The 327-test Python gate has the approved two #277 failures plus two mock
+scheduler timeouts and two existing skips. Individual Ninja retries still
+time out; the survivor retry also has a cleanup error. Those harness checks
+were unverified at the M-a checkpoint; final retry outcomes are below.
+Nothing was skipped, refreshed or fixed.
+
+#### M-b trace: BUG-022
+
+The original proof used reused nested labels ahead of BUG-020's switch/
+remainder comparison. H #308 fixed that language/codegen shape; the current
+fixture instead initializes a local aggregate with `va_arg` in a variadic
+function. Its last named parameter is int32_t (promotion-compatible on host
+and target), and the host-proven stdout is `labels 1 2`, `third 7`.
+
+Frame-sizing scans retain a previous function's label table long enough to
+encounter a suppressed duplicate-label complaint. `g_diag_error_count`
+intentionally counts even suppressed speculative complaints for constant
+expression probes, but both required-MIR failure paths wrongly use its global
+nonzero value to suppress their fatal diagnostic. The appropriate guard is
+`errors`, the count of diagnostics actually reported to the user. This is
+independent of BUG-009 and does not require changing label IDs or body output.
+Aggregate va_arg initialization remains outside scope: diagnostic acceptance
+requires the existing rejection, not admitting another unsupported shape.
+
+M-b acceptance: the re-established trigger reports `FIXED` in both modes
+by rejecting compilation, not by fixing the aggregate va_arg initializer. Before promotion the twenty
+parked programs give one `FIXED` and nineteen `fails`; after promotion all
+nineteen remaining programs fail. The negative source and host baseline are
+in `tests/diagnostics/fixtures/`, tested by the regular Python diagnostic
+matrix; the already-correct historical program is promoted as tlbreuse.
+Its MAC/COM are unchanged by M-b in both modes and all debug pipelines pass.
+
+The second integer batch gives 255 ok, 45 INVALID, zero FAIL with `duplabel`
+restored. Combined M tally: 600 programs, 510 ok, 90 INVALID, zero FAIL.
+Both final censuses preserve all 3,527 original functions and add only the
+nine functions in tndwide/tlbreuse. All 524 original perf rows and all 525
+rows present before M-b are unchanged; each new app has its own measured
+normal-stack row and passes host validation. Both final strict full+extended
+stack/no-stack gates pass, as do each fix's strict Python full+extended gate,
+CMake, six sanitized MIR host tests, two sanitized probes, ten debugger-host
+tests, require-emit and focused metadata/diagnostic checks.
+
+The final regular Python gate runs 329 tests with five failures, six errors
+and two existing skips. Two failures are approved #277; the other results
+are seven loaded scheduler/supervision checks, including teardown races.
+After heavy M jobs ended, each was retried individually with Ninja: six pass;
+only the mock serial/parallel equality test still times out at 180 seconds.
+That check remains unverified. No expectation, timeout or skip was changed,
+and prepush was not run. The original BUG-020 trigger was superseded by H;
+the replacement aggregate va_arg initializer is not fixed by this PR.
+
+#### M follow-up on merged main 902aca64
+
+A bounded search probed 1,584 arithmetic/control variants, 110 aggregate/
+indirect-call/VLA variants and 32 ABI variants. A valid aggregate va_arg
+initializer supplies a fresh production MIR decline; rejected oversized
+analysis-budget probes were discarded because their early fatal path does
+not observe the M-b guards. No diagnostic forcing or skip is needed.
+The fixture rejects in all release/stack/line/full-debug modes, including
+both strict flags. A CMake compiler copied under build/ with only the two
+M-b guards reverted silently emits an empty third and exits zero for all
+eight reused-label modes; renamed/flat controls remain diagnosed. The 48-case
+proof has eight masks and forty correct rejections. The live compiler and
+merged source were never reverted or replaced during the restored fuzz run.
+
+BUG-057/#304 is the same M-a stale direct-location slot fault, shared by
+addition and comparison. Promote it as twincadd, restore wideincadd, and move
+the B2c ownership here. The restored 300-seed batch gives 290 ok, nine INVALID,
+one target-limit-only, zero FAIL. Counts become twelve open / forty-three
+fixed; after promotion all twelve remaining parked programs fail.
+Both merged-baseline censuses retain all 3,589 existing functions and add
+only seven twincadd functions. All 533 merged perf rows remain unchanged;
+twincadd alone adds a new normal-stack measured row. Its host validation and
+the replacement diagnostic matrix pass. Final build, twelve-reproducer
+known-bug gate, strict full+extended stack/no-stack regressions (573 apps,
+549 passed, 24 existing skips), and all 44 tests in the four requested
+Python modules pass. The first after-census attempt overlapped the canonical
+linker replacing ./dcc and failed to launch it; an unchanged retry after the
+build completed passed both modes. No timing, expectation or skip changed.
+The exhaustive Python discovery/prepush suites were not rerun; previously
+documented #277 and the mock serial-scheduler timeout remain outside scope.
 
 ### N. Lost variable-index local float-array store
 
@@ -2349,7 +2456,7 @@ addresses require the normal full/line debug pipeline checks.
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
 | B2a | [#292](https://github.com/davidly/dcc/pull/292) | PR open | BUG-014 promoted as twincg; 300 integer seeds clean; 3,426 census functions and 507 perf rows unchanged; approved #277 failures only (#280 passes) |
 | B2b | [#303](https://github.com/davidly/dcc/pull/303) (`fix/cluster-b2b-dead-decl`) | PR open | BUG-019 promoted as tdeadblk; 300 integer/float seeds clean; 3,489 existing functions and 517 perf rows unchanged; BUG-022 reproducer-only flip, diagnostic mask remains open; 13/14 isolated Ninja harness tests pass; one mock serial-scheduler timeout remains unverified |
-| B2c | | open | BUG-057/#304: fused wide increment result read through stale direct-add slot; `mir_direct_wide_location()` owns the missing home proof; not fixed in H |
+| B2c | [#311](https://github.com/davidly/dcc/pull/311) | fixed in M-a | BUG-057/#304 shares M-a direct-location home fix; promoted as twincadd; no extra compiler change |
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | [#293](https://github.com/davidly/dcc/pull/293) | PR open | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
 | C1 | [#313](https://github.com/davidly/dcc/pull/313) (`fix/cluster-c-local-merge`) | PR open; compiler gates verified; accepted Python harness exceptions | BUG-027/#247 and BUG-038/#258: materialize word PHI edges for store-only fused adjustments; original 3,558 functions/mode and 528 perf rows unchanged |
@@ -2381,7 +2488,7 @@ addresses require the normal full/line debug pipeline checks.
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | K2 | [#298](https://github.com/davidly/dcc/pull/298) | PR open | BUG-054 promoted as tpephl; 228 ok/72 INVALID/zero FAIL; all 3,047 MAC files per stack mode and 514 existing perf rows unchanged (except clock literal); #277 and isolated harness retries documented |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
-| M | | open | |
+| M | [#311](https://github.com/davidly/dcc/pull/311) | fixed; main merged | 009/057 share direct-location fix (tndwide/twincadd); 022 uses fresh aggregate va_arg diagnostic fixture + tlbreuse; restored batch 290 ok/9 INVALID/1 limit-only/zero FAIL; merged existing census/perf unchanged |
 
 Update this table as clusters are taken, and move bugs between clusters when
 a fix shows the hypothesis was wrong.

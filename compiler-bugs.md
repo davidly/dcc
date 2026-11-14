@@ -7,7 +7,8 @@ wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
 source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `6e5a05ea` plus the cluster C2c loop-live PHI slot proof (2026-11-15).
+- **Compiler under test:** `902aca64` plus cluster M fixes
+  (`fix/cluster-m-diag`, 2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -28,22 +29,19 @@ and their historical diagnoses are retained separately below.
 |---|---|---|---|
 | [BUG-004](#bug-004) | #225 | wrong result | Byte local initialized from `&&`/`\|\|`, forwarded into 32-bit consumers loses its source type |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
-| [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
-| [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
-| [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 | [BUG-058](#bug-058) | #315 | wrong result | A nested-block word initialized across signedness is widened with the initializer type when stored to a 32-bit array |
 
-Ten are open: six give wrong results with no diagnostic
+Seven are open: five give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
-BUG-041 admission, one hangs, one stops the compile,
-and one (BUG-022) turns a compile error into
-a broken program. BUG-013's unsigned bit-field promotion is fixed below.
+BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
+promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Forty-six reported bugs are fixed: [one in cluster C2c](#fixed-in-cluster-c2c),
+Forty-nine reported bugs are fixed: [one in cluster M-b](#fixed-in-cluster-m-b),
+[two in cluster M-a](#fixed-in-cluster-m-a),
 [one in cluster C2a](#fixed-in-cluster-c2a),
 [two in cluster C1](#fixed-in-cluster-c1),
 [one in cluster N](#fixed-in-cluster-n),
@@ -178,27 +176,6 @@ s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
   `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
   (their low bits do not depend on the extension); a signed bit-field.
 
-## BUG-009
-
-**A `do … while (d < n)` loop nested inside another loop never exits when
-`d` is 32 bits wide.** The comparison behaves as always true.
-
-```c
-int32_t i, d = 0, n = 0;
-for (i = 0; i < 4; i++) {
-    n = limit;
-    do { ++d; } while (d < n);      /* never leaves */
-}
-```
-
-With `&& passes < 100` added to the condition the function returns 103
-instead of 6, which shows the comparison is the part that is wrong.
-
-- Hangs for `int32_t` and `uint32_t` `d`; with `n` a local, a global, 16 or
-  32 bits; with a 16- or 32-bit outer counter; with an outer `for` or `while`;
-  with `++d` in the body or in the condition.
-- Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
-  `d != n`; `n` set from a constant; a 16-bit `d`.
 
 ## BUG-015
 
@@ -286,34 +263,6 @@ widening. The parked program improves from 10 to 9 wrong lines out of 13;
 all remaining pointer, byte, and cast facets still fail. No independent
 BUG-015 implementation or steering change is included.
 
-## BUG-022
-
-**When a label name used in one function is reused inside a nested block of
-a later function, dcc stops reporting `MIR emission is required` for the
-functions after it.** It exits 0, and the program hangs or restarts in a
-loop when the function it could not emit is called.
-
-```c
-static uint16_t first(void)  { L1:; return 1; }
-static uint16_t second(void) { { L1:; } return 2; }       /* same name, nested block */
-static int8_t third(void)    { { int32_t b = 0; b = -8305; low = (uint16_t)b; } return 3; }
-```
-
-`third` is a function dcc cannot emit (BUG-008). Without `first` and
-`second` the compile stops with the fatal error. With them it succeeds and
-the program fails at run time.
-
-- Needs the same label name in both functions and the second one inside a
-  nested block. With the second label renamed, or at function scope, the
-  fatal error is reported as usual.
-- Shown with the functions of BUG-008 and BUG-019. Functions that fail with
-  `missing direct MIR named-home offset` (BUG-014) still stop the compile.
-- This only matters while some function cannot be emitted, but then it turns
-  a compile error into a silently broken program.
-- Its historical parked program now passes after BUG-008/019 were fixed.
-  This does not close BUG-022: the same reused-label prefix before a BUG-020
-  failing function still exits zero with empty function bodies. Steering and
-  the historical reproducer are retained for the separate diagnostic fix.
 
 
 ## BUG-037
@@ -757,6 +706,217 @@ in-range float-to-`int32_t` conversion and retains the failing context.
 
 ---
 
+## Fixed in cluster M-b
+
+BUG-022 is fixed by checking reported `errors`, not `g_diag_error_count`, in
+both required-MIR failure paths. Frame-sizing probes can inherit a prior
+function's label table and count a suppressed duplicate-label complaint.
+The probe counter must keep those complaints for constant-expression
+attempts, but they must not veto an unrelated later emission diagnostic.
+Label IDs, selection and all accepted function bodies are unchanged.
+
+The original M-b proof used reused nested labels before BUG-020's switch/
+wide remainder comparison. H #308 subsequently fixed that trigger. After
+merging `902aca64`, the fixture was re-established using a local aggregate
+initialized by `va_arg(ap, struct S)` in a variadic function. The fixed-width
+last named parameter is compatible with its default argument promotion, and
+host O0/O2/ASan/UBSan all print the same baseline; this is valid C.
+
+Current release, stack, line debug and full debug all decline that initializer
+with `MIR emission is required` (strict diagnostics name `third`, reason
+`selector`). An isolated copy of the merged compiler with only the two
+`errors > 0` guards regressed to `g_diag_error_count > 0` still exits zero and
+emits an empty `third` body for reused nested labels in all eight normal/
+strict/debug combinations. Renamed and flat controls, and all fixed-compiler
+cases, correctly reject: 48 cases total, eight masked and forty diagnosed.
+This replaces the obsolete BUG-020 dependency without a skip or a new
+compiler change. Aggregate `va_arg` initialization itself is not fixed here.
+
+`DCC-EXPECT-ERROR` headers let the known-bugs runner classify a diagnostic fix
+as `FIXED` only for a failed build with the actual expected primary diagnostic,
+not an incidental occurrence of its text. The proven source and host stdout
+baseline are promoted to
+[the diagnostic fixture](tests/diagnostics/fixtures/mir-required-after-reused-label.c).
+The regular Python matrix proves it at host O0/O2/ASan/UBSan and tests reused,
+renamed and flat labels with normal/strict, release/stack/line/full debug.
+The fixtures subdirectory is tested explicitly because normal and strict
+backend diagnostic wording differs; no existing diagnostic fixture is skipped.
+The historical runnable control is promoted as [tlbreuse](tests/tlbreuse.c)
+with a new normal-stack performance row. Its MAC and COM are byte-identical
+before/after this fix in both modes; line debug remains release-identical.
+
+Integer production seeds 1-300, with `duplabel` restored, give **255 ok,
+45 INVALID, zero FAIL**. M-a and M-b together tested **600 programs: 510 ok,
+90 INVALID, zero FAIL**. Before this promotion 20 parked programs gave
+**one FIXED, 19 fails**; afterwards all **19 remaining reproducers fail**.
+There are no unrelated flips. Both final censuses preserve all **3,527
+original functions byte-identically** and add only nine functions in the two
+new apps. All **524 original performance rows**, and the **525 rows already
+present at the M-b checkpoint**, are unchanged; only tlbreuse adds a row here.
+
+Both final strict full+extended stack/no-stack gates pass (565 apps, 541
+passed, 24 existing skips). Each fix also passed the strict Python full+
+extended gate. Independent CMake, six sanitized MIR host tests, both sanitized
+probes, ten debugger-host tests, debug pipelines and require-emit checks pass.
+The regular Python gate ran 329 tests: five failures, six errors, two existing
+skips. Two failures are approved #277; the rest are seven distinct loaded
+scheduler/process-supervision checks (two also failed teardown). After all
+heavy M jobs finished, individual Ninja retries passed **six of seven**.
+Only `test_default_serial_and_parallel_are_equal_and_bounded` still times out
+at 180 seconds and remains unverified. No expectation, timeout or skip was
+changed; the periodic prepush suite was not run.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-022](#bug-022) | #242 | [diagnostic matrix](scripts/tests/test_mir_diagnostics.py), [tlbreuse](tests/tlbreuse.c) |
+
+### BUG-022
+
+**When a label name used in one function is reused inside a nested block of
+a later function, dcc stops reporting `MIR emission is required` for the
+functions after it.** It exits 0, and the program hangs or restarts in a
+loop when the function it could not emit is called.
+
+```c
+static uint16_t first(void)  { L1:; return 1; }
+static uint16_t second(void) { { L1:; } return 2; }       /* same name, nested block */
+static int8_t third(void)    { { int32_t b = 0; b = -8305; low = (uint16_t)b; } return 3; }
+```
+
+In the original report, `third` could not be emitted (BUG-008). Without
+`first` and `second` compilation stopped with the fatal error; with them it
+succeeded and the program failed at run time.
+
+- Needs the same label name in both functions and the second one inside a
+  nested block. With the second label renamed, or at function scope, the
+  fatal error is reported as usual.
+- Shown with the functions of BUG-008 and BUG-019. Functions that fail with
+  `missing direct MIR named-home offset` (BUG-014) still stop the compile.
+- This only matters while some function cannot be emitted, but then it turns
+  a compile error into a silently broken program.
+- Its historical program already passed after BUG-008/019 were fixed.
+  M-b originally re-established the mask using BUG-020's then-unsupported
+  release shape; after H fixed it, the aggregate `va_arg` trigger supplies
+  the same proof. The old program is retained as
+  `tlbreuse` rather than mistaking that incidental fixture pass for a fix.
+
+
+## Fixed in cluster M-a
+
+BUG-009 is fixed by resolving the fused wide self-store increment's named
+home in the direct wide location reader. MIR already compares the correct
+updated SSA value, and ordinary wide virtual loads already reload it from
+that object; only the inline relational path wrongly read its unused backend
+slot. Both peep and nopeep retain the same selected emitter, frame and
+instruction sequence, changing only twelve operand offsets in the reproducer.
+
+Promoted as [tndwide](tests/tndwide.c). Integer production seeds 1-300, with
+`nestedwideless` restored, give **255 ok, 45 INVALID, zero FAIL**. Before
+promotion all 21 parked programs gave **one FIXED, 20 fails**, using the
+re-established BUG-022 diagnostic trigger rather than its incidentally fixed
+historical program. All **3,527 existing functions** are byte-identical in
+both MIR censuses, and all **524 existing performance rows** are unchanged.
+Only tndwide adds a normal-stack measured row.
+
+Both strict full+extended stack/no-stack gates and the strict Python full+
+extended gate pass. Full debug and release-identical line debug work through
+both pipelines; ten debugger-host tests, six sanitized MIR host tests, the
+sanitized reproducer and require-emit diagnostics pass. The regular Python
+gate ran 327 tests: the two approved #277 failures, two mock-scheduler timeout
+errors and two existing skips. Both timeout checks were retried individually
+with Ninja and still timed out (the survivor retry also hit teardown cleanup);
+those checks were unverified at the M-a checkpoint; final retry status is
+recorded under M-b. No expectations, timeouts or skips were changed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-009](#bug-009) | #229 | [tndwide](tests/tndwide.c) |
+| [BUG-057](#bug-057) | #304 | [twincadd](tests/twincadd.c) |
+
+### BUG-009
+
+**A `do … while (d < n)` loop nested inside another loop never exits when
+`d` is 32 bits wide.** The comparison behaves as always true.
+
+```c
+int32_t i, d = 0, n = 0;
+for (i = 0; i < 4; i++) {
+    n = limit;
+    do { ++d; } while (d < n);      /* never leaves */
+}
+```
+
+With `&& passes < 100` added to the condition the function returns 103
+instead of 6, which shows the comparison is the part that is wrong.
+
+- Hangs for `int32_t` and `uint32_t` `d`; with `n` a local, a global, 16 or
+  32 bits; with a 16- or 32-bit outer counter; with an outer `for` or `while`;
+  with `++d` in the body or in the condition.
+- Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
+  `d != n`; `n` set from a constant; a 16-bit `d`.
+
+
+### M-a follow-up after merging main
+
+BUG-057/#304 flips with the existing M-a fix: direct wide addition and direct
+wide comparison share `mir_direct_wide_location()`. Its missing fused-result
+home proof is the same stale-slot defect, not a separate H or B2c fix.
+The parked prefix/compound/reversed-operand cases and their decrement,
+literal and no-loop controls are promoted as `twincadd`; no compiler code
+was changed in this follow-up. `wideincadd` is restored to production fuzzing;
+the generator test now checks that `--off known` preserves those additions
+while retaining the optional explicit feature control.
+
+Restored integer production seeds 1-300 give **290 ok, nine INVALID, one
+target-limit-only, zero FAIL**. Before promotion thirteen parked programs
+give one `FIXED` (057) and twelve `fails`; afterwards the twelve remaining
+programs fail. Both merged-baseline censuses preserve all **3,589 existing
+functions**, adding only the seven twincadd functions. All **533 merged
+performance rows** are unchanged; only twincadd adds a measured normal-stack
+row. The replacement diagnostic fixture is independently host-proven and
+masked only by the old guards, as described under M-b. Final build, known-bug,
+strict full+extended stack/no-stack and all 44 selected Python tests pass.
+The after-census launch collided with the canonical linker replacing dcc;
+an unchanged retry after rebuilding confirms both modes. No existing
+expectation, timeout or skip changed. Previously recorded exhaustive-Python
+#277/serial-scheduler exceptions are not refreshed by this targeted follow-up.
+
+### BUG-057
+
+**A fused 32-bit local increment used as an addition operand reads an
+unwritten backend slot instead of the updated named home.** A later loop
+retains the spilled/PHI schedule even when it never runs.
+
+```c
+static int8_t g = -2;
+int32_t x = 0;
+uint16_t limit = 0;
+if ((int32_t)1) { x = 1; }
+g = (++x) + (g ^ (int32_t)63);   /* expected -61, actual -62 */
+for (int8_t i = 2; (uint16_t)i < limit; ++i) --x;
+```
+
+- Prefix `++`, `+= 1`, and either addition-operand order fail in peep and
+  nopeep, with or without stack checking. The parked test has three failing
+  cases and three passing controls: prefix decrement, a literal right
+  operand, and no later loop.
+- MIR correctly uses the increment's updated result. The fused schedule
+  increments the authoritative named local home, but
+  `mir_direct_wide_location()` tries to resolve that `MIR_BINARY` through
+  `mir_direct_named_home_location()` and falls through to a reused backend
+  slot. `mir_emit_direct_wide_add()` reads the stale slot byte by byte.
+  The ordinary wide loader already resolves this fused result's named home.
+- Related to BUG-014's named-home context, but a distinct direct-add consumer
+  defect. This is independent of H's helper-comparison stack handoff:
+  the minimal function has no compound comparison RHS or wide parameter.
+- Found during H acceptance, integer seed 52: only `g0` differs after the
+  three calls of `f3`; reduction gives the example above. Parked and filed
+  as #304, not fixed in H. No historical compiler checks were run.
+- Steered by `wideincadd`: replace only integer additions with a nonconstant
+  peer and a prefix-wide-local `++`/`+= 1` value (including same-width casts)
+  with subtraction, retaining the side effect and all neighboring forms.
+
+
 ## Fixed in cluster E2-bitfield
 
 BUG-013 passes in peep/nopeep and stack/no-stack modes. AST result typing
@@ -963,40 +1123,6 @@ float out[2];
   keeps the unsafe shape disabled together with BUG-041. It must stay
   disabled until both admission and this downstream typing defect are fixed.
 
-## BUG-057
-
-**A fused 32-bit local increment used as an addition operand reads an
-unwritten backend slot instead of the updated named home.** A later loop
-retains the spilled/PHI schedule even when it never runs.
-
-```c
-static int8_t g = -2;
-int32_t x = 0;
-uint16_t limit = 0;
-if ((int32_t)1) { x = 1; }
-g = (++x) + (g ^ (int32_t)63);   /* expected -61, actual -62 */
-for (int8_t i = 2; (uint16_t)i < limit; ++i) --x;
-```
-
-- Prefix `++`, `+= 1`, and either addition-operand order fail in peep and
-  nopeep, with or without stack checking. The parked test has three failing
-  cases and three passing controls: prefix decrement, a literal right
-  operand, and no later loop.
-- MIR correctly uses the increment's updated result. The fused schedule
-  increments the authoritative named local home, but
-  `mir_direct_wide_location()` tries to resolve that `MIR_BINARY` through
-  `mir_direct_named_home_location()` and falls through to a reused backend
-  slot. `mir_emit_direct_wide_add()` reads the stale slot byte by byte.
-  The ordinary wide loader already resolves this fused result's named home.
-- Related to BUG-014's named-home context, but a distinct direct-add consumer
-  defect. This is independent of H's helper-comparison stack handoff:
-  the minimal function has no compound comparison RHS or wide parameter.
-- Found during H acceptance, integer seed 52: only `g0` differs after the
-  three calls of `f3`; reduction gives the example above. Parked and filed
-  as #304, not fixed in H. No historical compiler checks were run.
-- Steered by `wideincadd`: replace only integer additions with a nonconstant
-  peer and a prefix-wide-local `++`/`+= 1` value (including same-width casts)
-  with subtraction, retaining the side effect and all neighboring forms.
 
 ## Fixed in cluster C1
 

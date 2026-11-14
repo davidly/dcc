@@ -1,9 +1,6 @@
-/* BUG-022: when a label name used in one function is reused inside a nested
- * block of a later function, dcc stops reporting "MIR emission is required"
- * for functions after that. It exits 0 and the program hangs or restarts in
- * a loop when the function it could not emit is called. With the second
- * label renamed, or not inside a nested block, the compile fails as it
- * should (see BUG-008 and BUG-019 for the function it cannot emit). */
+/* Function-scoped label reuse inside nested blocks, followed by nested
+ * declarations, wide-to-narrow casts and dead declarations after return.
+ * Earlier functions' label metadata must not contaminate later functions. */
 #include <stdint.h>
 #include <stdio.h>
 
