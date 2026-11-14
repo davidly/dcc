@@ -33,15 +33,15 @@ and their historical diagnoses are retained separately below.
 | [BUG-058](#bug-058) | #315 | wrong result | A nested-block word initialized across signedness is widened with the initializer type when stored to a 32-bit array |
 | [BUG-059](#bug-059) | #316 | latent wrong result | Deferred float update arithmetic lacks an implicit integer-to-float conversion after type repair |
 
-| [BUG-060](#bug-060) | #322 | wrong result | `%f` rounds exact IEEE float bits to an incorrect last decimal digit |
 | [BUG-061](#bug-061) | #323 | wrong result | `sizeof` at or above 32768 is sign-extended or divided as a signed 16-bit value |
 
-Eight are open: five give wrong results with no diagnostic,
+Seven are open: four give wrong results with no diagnostic,
 two latent wrong-code findings are blocked by
 BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
 promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Fifty-one reported bugs are fixed: [one in cluster R1](#fixed-in-cluster-r1),
+Fifty-two reported bugs are fixed: [one in cluster F1](#fixed-in-cluster-f1),
+[one in cluster R1](#fixed-in-cluster-r1),
 [two in cluster M-a](#fixed-in-cluster-m-a),
 [one in cluster C2a](#fixed-in-cluster-c2a),
 [two in cluster C1](#fixed-in-cluster-c1),
@@ -90,20 +90,6 @@ The wrong-result bugs and the hang also show with the v3.6.0 compiler, but it
 was only tried with today's runtime, which is not a reliable pairing.
 
 ---
-
-## BUG-060
-
-**`%f` rounds exact IEEE single-precision bits to an incorrect last decimal
- digit.** No arithmetic or libm is needed to reproduce it: printing
-`41649249` gives `14.285715` instead of `14.285714`; `c0b55555` gives
-`-5.666666` instead of `-5.666667`, and `40b55555` gives `5.666666` instead of
-`5.666667`. The hexadecimal bits themselves are correct in both modes.
-
-- Control: `3fc00000` prints `1.500000` correctly.
-- Found during cluster R1: corrected division exposes the independent formatter
-  defect in `tfdedge`. The old divider accidentally masked the negative case.
-- Regression is parked as [bug060.c](tests/known-bugs/bug060.c); host O0/O2,
-  ASan and UBSan agree. Formatter implementation is intentionally unchanged.
 
 ## BUG-061
 
@@ -418,6 +404,31 @@ if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
   steering: the restored admission trial clears this fixture and BUG-056,
   then exposes latent BUG-059/#316 (missing implicit float operand conversion).
 
+
+## Fixed in cluster F1
+
+### BUG-060 — exact-bit fixed-decimal rounding
+
+The `%f` formatter added a single-precision `0.5 * 10^-precision` before
+splitting the integer/fraction, then repeatedly multiplied the residual by ten
+in float. Both stages rounded binary intermediates, so the final decimal digit
+could be wrong even when the input bits were correct. The shared formatter now
+scales the exact significand in a small decimal vector, cancels powers of two,
+and rounds once from binary guard/sticky bits, with ties to even. No compiler
+or libm implementation changes; IX/IY and printf's character-count ABI survive.
+
+`41649249`, `c0b55555` and `40b55555` now print `14.285714`, `-5.666667`
+and `5.666667`, matching clang. The regression is promoted as
+[`tfpround.c`](tests/tfpround.c), with precision-zero/decimal ties, a decimal
+carry, signed zero and a subnormal fraction. The reproducible linked proof is
+[`scripts/printf-float-proof.py`](scripts/printf-float-proof.py): 6000 finite
+patterns at `%f`/precisions 0..6 plus 227 patterns at precisions
+7/9/16/32/64/149/150/255 agree in peep and nopeep (99632 conversions).
+`%e` and `%g` are pre-existing unsupported conversions, not formatter failures.
+
+The maintainer approved the sixteen host-bit-proven stdout line updates and
+runtime-driven performance updates; [F1 in the fix plan](fix-plan.md#f1-exact-bit-fixed-decimal-rounding)
+records every changed line/row and the size/performance alternatives.
 
 ## Fixed in cluster C2c
 

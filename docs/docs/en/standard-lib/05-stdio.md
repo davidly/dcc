@@ -108,17 +108,19 @@ Length modifiers:
 Field width and flags:
 
 - A decimal **field width** (`%6d`, `%10s`, `%8lx`) pads with spaces on the
-  left for characters, strings, and integer conversions. `%f` does not apply
-  field width.
+  left for characters, strings, integer conversions, and `%f`. Floating
+  output also honors `-` and zero fill; `nan`/`inf` ignore zero fill.
 - The `-` flag (`%-6d`) left-justifies `%c`, `%s`, and integer conversions
   within the field. `%ls` uses right justification only.
 - A leading `0` flag on integer conversions (`%04d`, `%08lx`) zero-pads when
   there is no `-` flag and no explicit precision.
 - A **precision** on integer conversions (`%.4d`) zero-fills to at least that
   many digits.
-- A positive precision on `printf` `%f` (`%.2f`) controls the number of digits
-  after the decimal point. Without a positive precision, `%f` prints six
-  fractional digits. `%f` always emits a decimal point.
+- A precision on `printf` `%f` (`%.2f`) controls the number of digits
+  after the decimal point; the default is six. `%.0f` prints no decimal
+  point. Finite values, including exact subnormal bit patterns, are rounded
+  once to nearest, with exact halfway cases rounded to an even last digit.
+  Width and precision are limited to 255. `%e` and `%g` remain unsupported.
 - A precision on `%s` (`%.3s`) limits output to at most that many characters,
   stopping at NUL first when the string is shorter. `%.0s` emits no characters
   and does not dereference the string argument.
