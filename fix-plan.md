@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has twelve open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has eleven open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -591,6 +591,84 @@ keeps that proof bounded without perturbing existing loop schedules.
   retains a separate/stable source and is correct. Forced homed is correct;
   spilled-all still fails `f2`. This is independent of C1's word self-store
   materialization and B4's call-argument cache.
+
+
+### C2c. Loop-live solitary conditional PHI sources (BUG-052)
+
+The C1 trace independently reproduces: in production `f1`, parameter v0
+(first 1, last 34), conditional PHI v15 and subtraction v17 share backend
+slot 0. v0 has one syntactic use, but it is live out of PHI instruction 25
+and survives the loop backedge at 34. The subtraction consumes the aliased
+PHI slot and truncates its physical end to 28, letting counter v20 overwrite
+its low word; subsequent iterations subtract from the previous result.
+
+`mir_prepare_backend_slots()` now requires a solitary source to be dead
+**on the CFG after the PHI**, using the existing live-out query, before
+coalescing either incoming operand. The parameter retains its loop lifetime
+and the conditional/subtraction use a distinct slot. This is an allocation
+legality check, not a new selector, schedule, fallback or cost-policy gate.
+No edits are made to C2a's liveness computation or C2b's wide-update matcher;
+BUG-029, BUG-037 and BUG-057 still fail unchanged.
+
+A first experiment requiring `last[source] <= phi_instruction` was rejected:
+legal loop-header/backedge copies also have later linear interval ends,
+and it changed 228 existing functions across 69 applications. Actual CFG
+deadness preserves those copies: both original **3,603-function** census
+TSVs are byte-identical (549 apps), and all **534 existing performance
+rows** are unchanged. The original `ok1`/`ok2`/`ok3` instruction bodies are
+unchanged in peep/nopeep after local-label renumbering.
+
+The nine original reproducer lines now pass, as do six added lines for
+nonconstant conditions (both arms), float/long conditional accumulators and
+float/long struct-member stores. All 15 lines pass in both release/line/full
+debug pipelines and forced `spilled-all` peep/nopeep; `-gline` COMs are
+release-identical. The normal spilled selector remains selected: preserving
+the live parameter costs copies and a larger frame only in these formerly
+broken functions. Source scopes, types and statement boundaries are untouched;
+changed temporary/frame locations are checked by the focused metadata and
+ten debugger-host tests.
+
+
+Restored float `fconstcond` seeds 1-300 across all four production
+configurations: **291 ok, 9 INVALID, zero FAIL**; the remaining-known-shape
+steering proof passes 3,000 seeds. No new bug is found. BUG-052 is promoted
+as `tphislot`, retaining nine baseline lines and adding six. Before promotion:
+**12 reproducers, 2 FIXED / 10 fails**; afterwards: **11 reproducers,
+1 FIXED / 10 fails**, with only BUG-022's pre-existing fixture pass remaining.
+Canonical/CMake builds, ASan/UBSan and six host MIR tests, both strict
+full+extended release gates, strict Python full+extended acceptance, required
+emission checks, both 274-function extended census modes, host validation
+and 34 focused compiler/metadata tests pass. No old-compiler/dating check or
+`prepush.ps1` is run, and no harness expectations, skips or timeouts change.
+
+
+Regular Python unit gate: **330 tests, 7 failures / 5 errors, 2 pre-existing
+skips**, in 1,069 s. The two golden-control failures are the approved #277
+`test_mir_campaign_baselines` and `test_mir_exact_controls` findings; neither
+expectation is changed. Nine other load-sensitive harness selectors are
+retried in isolation after all this branch's long jobs finish: **3 pass;
+6 remain unverified** (3 failures / 4 errors, including a teardown error).
+These exercise mocked workers/process supervision, not changed compiler code.
+No timeout, diagnostic expectation, scheduler, process cleanup or skip is
+modified. The final restored-generator unit tests also pass (3 tests).
+
+| Isolated selector | Result / evidence |
+| --- | --- |
+| `CompilerMutationTests.test_default_serial_and_parallel_are_equal_and_bounded` | unverified: 180 s mock-runner timeout; teardown directory still busy |
+| `CompilerMutationTests.test_exited_worker_cleans_nested_process_scopes` | pass |
+| `CompilerMutationTests.test_survivors_invalid_exits_builds_and_worker_errors_are_recorded` | unverified: 180 s mock-runner timeout |
+| `CompilerMutationTests.test_child_timeout_and_environment_isolation` | unverified: startup/timeout loses expected child diagnostic |
+| `CompilerMutationTests.test_worker_watchdog_records_invalid_and_stops_descendants` | unverified: watchdog fires before child PID file exists |
+| `ProcessSupervisionTests.test_environment_is_inherited_and_policy_is_explicit` | pass |
+| `ProcessSupervisionTests.test_completed_process_can_be_collected_with_zero_budget` | pass |
+| `ProcessSupervisionTests.test_overall_deadline_and_explicit_stop_clean_live_processes` | unverified: child PID reported as 0 after the startup/deadline race |
+| `ProcessSupervisionTests.test_post_exit_grace_preempts_long_overall_deadline` | unverified: 4.387 s exceeds the unchanged 3 s bound |
+
+Only `tphislot` adds a measured stack-check row: **271,313 / 279,535 cycles**
+and **8,448 / 8,960 COM bytes** (peep / nopeep). Its checked stack/no-stack
+runs and optimized/ASan/UBSan host validation pass. All 534 old rows retain
+exact values; BUG-022's fixture-only pass is ignored as pre-answered. No
+out-of-cluster compiler finding is made or fixed.
 
 ### D. Post-increment and post-decrement
 
@@ -1981,7 +2059,8 @@ addresses require the normal full/line debug pipeline checks.
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | [#293](https://github.com/davidly/dcc/pull/293) | PR open | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
 | C1 | [#313](https://github.com/davidly/dcc/pull/313) (`fix/cluster-c-local-merge`) | PR open; compiler gates verified; accepted Python harness exceptions | BUG-027/#247 and BUG-038/#258: materialize word PHI edges for store-only fused adjustments; original 3,558 functions/mode and 528 perf rows unchanged |
-| C2 | | open; traced | BUG-029/#249: interleaved PHI edge liveness; BUG-037/#257: old wide PHI edge use missed before in-place update; BUG-052/#272: loop-live solitary PHI source coalescing/slot lifetime truncation; distinct from BUG-057/#304 |
+| C2 | | open; traced | BUG-029/#249: interleaved PHI edge liveness; BUG-037/#257: old wide PHI edge use missed before in-place update; BUG-052/#272: fixed in C2c (loop-live solitary PHI source coalescing/slot lifetime truncation); distinct from BUG-057/#304 |
+| C2c | `fix/cluster-c2c-slot-coalesce` | PR open; compiler gates verified; accepted Python harness exceptions | BUG-052/#272 promoted as tphislot; float 291 ok/9 INVALID/zero FAIL; 3,603 existing functions/mode and 534 existing perf rows unchanged |
 | D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/023/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
 | D2 | | split into D2a / D2b / D2c / D2d | Assignment-value lifetime, AST admission, byte-PHI lifetime and float consumer typing are independent |

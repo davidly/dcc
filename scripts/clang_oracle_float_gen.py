@@ -58,7 +58,6 @@ KNOWN_BUGS = {
     'fincdecval': 'BUG-041, BUG-056',
     'fblockneg': 'BUG-015',
     'fblockint': 'BUG-015',
-    'fconstcond': 'BUG-052',
 }
 
 

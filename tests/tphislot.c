@@ -1,13 +1,6 @@
-/* BUG-052: in a loop, `a[1] = (0 ? K : x) - 1.0f;` with `x` a 32-bit
- * parameter that is assigned (and not read) after the loop is accumulated
- * into the parameter: each iteration subtracts 1 again, so three
- * iterations store x - 3. The constant condition is folded and the
- * parameter is then treated as the expression's own temporary. In a `for`
- * loop the low word of the float is also overwritten by the counter
- * (`c0560002` for -0.35f - 3). A `float` or `long` parameter is wrong; an
- * `int` one, a local copy of the parameter, `(x + 0.0f) - 1.0f` without
- * the `?:`, an element that varies with the counter (`a[i]`), a plain
- * global target, and reading `x` after the loop are all right. */
+/* Regression for loop-live conditional PHI sources and backend slot lifetimes.
+ * Covers folded and nonconstant conditions, float/long parameters, for/while
+ * loops, accumulators and array/member stores, with stable-source controls. */
 #include <stdio.h>
 #include <stdint.h>
 
@@ -32,6 +25,13 @@ static void ok1(float x) { int i; for (i = 0; i < 3; ++i) fa[1] = (x + 0.0f) - 1
 static void ok2(float x) { float y = x; int i; for (i = 0; i < 3; ++i) fa[1] = (0 ? 2.0f : y) - 1.0f; y = -1.0f; }
 static void ok3(float x) { int i; for (i = 0; i < 3; ++i) fa[1] = (0 ? 2.0f : x) - 1.0f; fa[2] = x; }
 
+static struct { float f; long l; } member;
+static void f6(float x, float c) { int i; for (i = 0; i < 3; ++i) fa[1] = (c ? x : 1.0f) - 1.0f; x = -1.0f; }
+static float f7(float x) { float l = 10000.0f, c = 2.0f; int i; for (i = 0; i < 3; ++i) l -= (c ? x : 1.0f); x = 1.0f; return l; }
+static long f8(long x) { long l = 25000L; int c = 1, i; for (i = 0; i < 3; ++i) l -= (c ? x : 16777216L); x = 1L; return l; }
+static void f9(float x) { int i; for (i = 0; i < 3; ++i) member.f = (0 ? 2.0f : x) - 1.0f; x = -1.0f; }
+static void f10(long x) { int i; i = 0; while (i < 3) { member.l = (1 ? x : 2L) - 1L; ++i; } x = -1L; }
+
 int main(void)
 {
     f1(-0.35f); pf("f1", fa[1]);
@@ -42,5 +42,10 @@ int main(void)
     ok1(-0.35f); pf("ok1", fa[1]);
     ok2(-0.35f); pf("ok2", fa[1]);
     ok3(-0.35f); pf("ok3", fa[1]); pf("ok3", fa[2]);
+    f6(-0.35f, 2.0f); pf("f6 true", fa[1]);
+    f6(-0.35f, 0.0f); pf("f6 false", fa[1]);
+    pf("f7", f7(5.0f)); printf("f8 %ld\n", f8(5L));
+    f9(-0.35f); pf("f9", member.f);
+    f10(5L); printf("f10 %ld\n", member.l);
     return 0;
 }
