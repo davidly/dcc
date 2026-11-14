@@ -42,6 +42,7 @@
 typedef struct PeepOptions {
     int optimize_size;
     int stats_enabled;
+    int closed_program;
 } PeepOptions;
 
 typedef struct PeepRunStats {

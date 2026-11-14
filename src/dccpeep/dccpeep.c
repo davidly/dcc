@@ -443,7 +443,7 @@ static int may_access_escaped_frame(const char *s)
  * ever reading the offset again.
  *
  * Conservative behaviour:
- *   - Internal labels (L\d+:) and forward/backward jumps flush all pending
+ *   - Internal labels (L...:) and forward/backward jumps flush all pending
  *     stores (we can no longer prove they are overwritten before read).
  *   - Segment boundaries (_Z...: labels etc.) also flush — the new segment's
  *     IX frame is different from the old one.
@@ -473,18 +473,10 @@ static int pass_elim_dead_ix_stores(void)
         strip_peep_comment_copy(tmp, lines[i]);
         n = (int)strlen(tmp);
 
-        /* Any label ending in ':' that is not an internal 'L<digits>:' label
-           is a segment boundary (new function or data).  Reset all state. */
+        /* Compiler and optimizer local labels all start with L, including
+         * LS/LI/LR and the longer optimizer-generated prefixes. */
         if (n > 1 && tmp[n-1] == ':' && tmp[0] != ' ' && tmp[0] != '\t') {
-            /* Check whether it is an internal local label L\d+: */
-            int is_local = 0;
-            if (tmp[0] == 'L') {
-                int j;
-                is_local = 1;
-                for (j = 1; j < n-1; j++)
-                    if (tmp[j] < '0' || tmp[j] > '9') { is_local = 0; break; }
-            }
-            if (!is_local) {
+            if (tmp[0] != 'L') {
                 /* Segment boundary: flush (remaining stores from previous
                    segment are addressed by the old IX — not our problem) */
                 memset(last_store, -1, sizeof(last_store));
@@ -505,7 +497,6 @@ static int pass_elim_dead_ix_stores(void)
                 if (last_store[idx] >= 0)
                     is_dead[last_store[idx]] = 1;
             memset(last_store, -1, sizeof(last_store));
-            escaped_from = 128;
             continue;
         }
 
@@ -8291,11 +8282,12 @@ static int peep_parse_ld_de_small_const(const char *s, int *k)
  */
 /* True if "hl" is mentioned at all - as a register or as a "(hl)"
  * dereference, read or write, no distinction - anywhere from line `from`
- * up to the next label, call, or function marker (dcc's own "reuse
+ * up to the next label or function marker (dcc's own "reuse
  * whatever's already in a register" convention, the same one this
  * function exists to protect, doesn't survive any of those either: a
  * label may be reached from elsewhere with hl holding something
- * unrelated, and a call clobbers every register). Used by
+ * unrelated). Byte-register consumers and register-ABI call inputs must
+ * also be preserved until both bytes have been overwritten. Used by
  * pass_small_const_incr_carry_skip to decide whether the line right after
  * its own match could be relying on the leftover hl value the original
  * "add hl,de / store back" sequence left resident there - see that pass's
@@ -8310,16 +8302,24 @@ static int hl_relied_on_after(int from)
 {
     int j;
     char clean[MAX_LINE];
+    unsigned pending = PEEP_REG_HL;
 
     for (j = from; j < nlines; j++) {
+        const PeepLineInfo *info;
+
         if (starts_label(lines[j]) || line_starts_function_marker(lines[j]))
             return 0;
         strip_peep_comment_lower_copy(clean, lines[j]);
         if (strncmp(clean, "call", 4) == 0 &&
             (clean[4] == ' ' || clean[4] == '\t'))
-            return 0;
+            return pending != 0;
         if (strstr(clean, "hl") != NULL)
             return 1;
+        info = peep_line_info(j);
+        if (info && (info->effects.reads & pending))
+            return 1;
+        if (info)
+            pending &= ~info->effects.writes;
     }
     return 0;
 }
@@ -10970,6 +10970,284 @@ static int pass_elim_redundant_ld_a_reg(void)
  *   ld a,c          ; ← redundant: A = C = score still
  */
 
+/* A local straight-line definition can prove the byte is in 0..8.
+ * Parameters, joins, calls, and possible indirect writes remain unknown. */
+static int ix_byte_bounded_for_cp8(int from, int offset)
+{
+    unsigned source = 0;
+    int j;
+
+    for (j = from - 1; j >= 0; --j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        const PeepOperand *value;
+
+        if (!info || starts_label(lines[j]) ||
+            line_starts_function_marker(lines[j]) ||
+            info->effects.unknown || info->effects.control_flow ||
+            (info->effects.memory_written &
+             (PEEP_MEM_INDIRECT | PEEP_MEM_OPAQUE)) ||
+            (info->effects.writes & PEEP_REG_IX))
+            return 0;
+        if (!source) {
+            if (info->left.kind != PEEP_OPERAND_FRAME ||
+                !info->left.frame_offset_valid ||
+                info->left.frame_offset != offset ||
+                !info->effects.memory_written)
+                continue;
+        } else if (!(info->effects.writes & source)) {
+            continue;
+        }
+        if (source == PEEP_REG_A && !strcmp(info->mnemonic, "and") &&
+            info->left.immediate_valid)
+            return info->left.immediate >= 0 &&
+                   (info->left.immediate <= 7 || info->left.immediate == 8);
+        if (info->opcode != PEEP_OPCODE_LD)
+            return 0;
+        value = &info->right;
+        if (value->immediate_valid)
+            return value->immediate >= 0 && value->immediate <= 8;
+        if (value->kind != PEEP_OPERAND_REGISTER ||
+            !(value->registers & (PEEP_REG_A | PEEP_REG_BC |
+                                  PEEP_REG_DE | PEEP_REG_HL)) ||
+            (value->registers & (value->registers - 1)))
+            return 0;
+        source = value->registers;
+    }
+    return 0;
+}
+
+/* Return 1 for a bounded initial argument, 2 for this frame byte + 1. */
+static int bounded_byte_call_arg(int call, int offset, int recursive)
+{
+    int word = (offset - 4) / 2;
+    int j;
+    unsigned byte = 0;
+
+    for (j = call - 1; j >= 0 && j >= call - 24; --j) {
+        const PeepLineInfo *info = peep_line_info(j);
+
+        if (!info || info->effects.unknown || info->effects.control_flow ||
+            starts_label(lines[j]) || line_starts_function_marker(lines[j]))
+            return 0;
+        if (info->opcode == PEEP_OPCODE_PUSH) {
+            unsigned pair = info->left.registers;
+
+            if (word-- != 0)
+                continue;
+            if (pair != PEEP_REG_BC && pair != PEEP_REG_DE &&
+                pair != PEEP_REG_HL)
+                return 0;
+            byte = (offset & 1) ? (pair & (PEEP_REG_B | PEEP_REG_D | PEEP_REG_H))
+                                : (pair & (PEEP_REG_C | PEEP_REG_E | PEEP_REG_L));
+            break;
+        }
+        if (info->effects.writes & PEEP_REG_SP)
+            return 0;
+    }
+    if (!byte)
+        return 0;
+    for (--j; j >= 0 && j >= call - 24; --j) {
+        const PeepLineInfo *info = peep_line_info(j);
+
+        if (!info || info->effects.unknown || info->effects.control_flow ||
+            starts_label(lines[j]) || line_starts_function_marker(lines[j]))
+            return 0;
+        if (!(info->effects.writes & byte))
+            continue;
+        if (info->opcode != PEEP_OPCODE_LD)
+            return 0;
+        if (info->right.immediate_valid) {
+            unsigned value = (unsigned)info->right.immediate & 65535u;
+
+            if (info->left.registers & (info->left.registers - 1))
+                value = (byte & (PEEP_REG_B | PEEP_REG_D | PEEP_REG_H))
+                      ? value >> 8 : value & 255u;
+            else
+                value &= 255u;
+            return value <= 8;
+        }
+        if (recursive && info->right.kind == PEEP_OPERAND_REGISTER &&
+            info->right.registers == PEEP_REG_A && j >= 2 &&
+            eq(j - 1, "inc a")) {
+            char off[32];
+            int source_offset;
+
+            if (peep_parse_ld_a_ix(lines[j - 2], off) &&
+                parse_ix_off_numeric(off, &source_offset) &&
+                source_offset == offset)
+                return 2;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+static int line_has_symbol(const char *line, const char *symbol)
+{
+    const char *p = strstr(line, symbol);
+    size_t length = strlen(symbol);
+
+    while (p) {
+        char before = p == line ? 0 : p[-1];
+        char after = p[length];
+
+        if (!isalnum((unsigned char)before) && before != '_' &&
+            before != '$' && before != '?' && before != '@' &&
+            !isalnum((unsigned char)after) && after != '_' &&
+            after != '$' && after != '?' && after != '@')
+            return 1;
+        p = strstr(p + 1, symbol);
+    }
+    return 0;
+}
+
+/* Prove the inductive bound: visible roots pass 0..8, recursive edges pass
+ * this immutable byte + 1, and no recursive edge is reachable when it is 8.
+ * The driver must guarantee there are no unseen C callers. */
+static int recursive_byte_bounded_for_cp8(int from, int offset)
+{
+    int start, end, entry, j, roots = 0, recursions = 0;
+    int head = 0, tail = 0, result = 0;
+    unsigned char *visited;
+    int *queue;
+    char symbol[128], call_text[144], label_text[144];
+    char public_text[144], extern_text[144], clean[MAX_LINE];
+
+    if (!peep_context.options.closed_program || !input_is_dcc_generated ||
+        offset < 4 || offset > 32 ||
+        mask_range_is_user_asm(0, nlines - 1))
+        return 0;
+    find_function_bounds_any(from, &start, &end);
+    entry = start;
+    while (entry < end && !starts_label(lines[entry]))
+        ++entry;
+    if (entry + 3 >= end || !label_name_at(entry, symbol) ||
+        !eq(entry + 1, "push ix") || !eq(entry + 2, "ld ix,0") ||
+        !eq(entry + 3, "add ix,sp"))
+        return 0;
+    for (j = 0; symbol[j]; ++j)
+        symbol[j] = (char)tolower((unsigned char)symbol[j]);
+    sprintf(call_text, "call %s", symbol);
+    sprintf(label_text, "%s:", symbol);
+    sprintf(public_text, "public %s", symbol);
+    sprintf(extern_text, "extrn %s", symbol);
+
+    for (j = entry + 4; j < end; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        char target[128];
+
+        strip_peep_comment_copy(clean, lines[j]);
+        if (!info ||
+            (info->effects.unknown && info->opcode != PEEP_OPCODE_CALL &&
+             !eq(j, "ex de,hl") && strcmp(info->mnemonic, "bit") &&
+             strncmp(clean, "djnz ", 5)) ||
+            eq(j, "push ix") || eq(j, "add hl,sp") ||
+            !strncmp(clean, "ret ", 4) ||
+            (info->effects.memory_written &&
+             info->left.kind == PEEP_OPERAND_FRAME &&
+             (!info->left.frame_offset_valid ||
+              info->left.frame_offset == offset)) ||
+            (info->left.kind == PEEP_OPERAND_REGISTER &&
+             (info->effects.writes & PEEP_REG_IX) &&
+             !(eq(j, "pop ix") && j + 1 < end && eq(j + 1, "ret"))))
+            return 0;
+        if (jump_target_any(clean, target) &&
+            find_label_line_in_range(target, start, end) < 0)
+            return 0;
+    }
+    for (j = 0; j < nlines; ++j) {
+        int caller_start, caller_end, kind;
+
+        strip_peep_comment_lower_copy(clean, lines[j]);
+        if (!line_has_symbol(clean, symbol))
+            continue;
+        if (!strcmp(clean, public_text) || !strcmp(clean, extern_text) ||
+            (j == entry && !strcmp(clean, label_text)))
+            continue;
+        if (strcmp(clean, call_text))
+            return 0; /* Address taken, tail entry, data reference, or alias. */
+        find_function_bounds_any(j, &caller_start, &caller_end);
+        kind = bounded_byte_call_arg(j, offset, caller_start == start);
+        if (!kind)
+            return 0;
+        if (caller_start == start) {
+            if (kind != 2)
+                return 0;
+            ++recursions;
+        } else {
+            if (kind != 1)
+                return 0;
+            ++roots;
+        }
+    }
+    if (!roots || !recursions)
+        return 0;
+
+    visited = (unsigned char *)calloc((size_t)(end - start), 1);
+    queue = (int *)malloc((size_t)(end - start) * sizeof(*queue));
+    if (!visited || !queue) {
+        free(visited);
+        free(queue);
+        fprintf(stderr, "out of memory\n");
+        exit(1);
+    }
+    queue[tail++] = entry;
+    visited[entry - start] = 1;
+    while (head < tail) {
+        int line = queue[head++];
+        const PeepFlowLine *flow = peep_flow_line(line);
+        int chosen = -1, successor;
+        char cond[16], target[128];
+
+        strip_peep_comment_lower_copy(clean, lines[line]);
+        if (!flow || !strcmp(clean, call_text))
+            goto done;
+        if (line >= start + 2 &&
+            peep_parse_any_cond_jump(clean, cond, target)) {
+            const PeepLineInfo *compare = peep_line_info(line - 1);
+            char off[32];
+            int compared_offset;
+
+            if (compare && !strcmp(compare->mnemonic, "cp") &&
+                compare->left.immediate_valid &&
+                compare->left.immediate >= 0 && compare->left.immediate <= 255 &&
+                peep_parse_ld_a_ix(lines[line - 2], off) &&
+                parse_ix_off_numeric(off, &compared_offset) &&
+                compared_offset == offset) {
+                long value = compare->left.immediate;
+                int taken = -1;
+
+                if (!strcmp(cond, "z")) taken = value == 8;
+                if (!strcmp(cond, "nz")) taken = value != 8;
+                if (!strcmp(cond, "c")) taken = 8 < value;
+                if (!strcmp(cond, "nc")) taken = 8 >= value;
+                if (taken >= 0)
+                    chosen = taken ? find_label_line_in_range(target, start, end)
+                                   : line + 1;
+            }
+        }
+        if (!flow->successor_count && !eq(line, "ret"))
+            goto done;
+        for (successor = 0; successor < flow->successor_count; ++successor) {
+            int next = flow->successors[successor];
+
+            if (chosen >= 0 && next != chosen)
+                continue;
+            if (next < start || next >= end)
+                goto done;
+            if (!visited[next - start]) {
+                visited[next - start] = 1;
+                queue[tail++] = next;
+            }
+        }
+    }
+    result = 1;
+done:
+    free(visited);
+    free(queue);
+    return result;
+}
+
 /*
  * pass_and1_ix_to_bit:
  *
@@ -11018,6 +11296,12 @@ static int pass_and1_ix_to_bit(void)
         if (eq(i + 1, "cp 8") &&
             parse_jp_nz_label(lines[i + 2], lab)) {
             char newjp[MAX_LINE];
+            int offset;
+
+            if (!parse_ix_off_numeric(kstr, &offset) ||
+                (!ix_byte_bounded_for_cp8(i, offset) &&
+                 !recursive_byte_bounded_for_cp8(i, offset)))
+                continue;
             sprintf(new_bit, "bit 3,(ix%s)", kstr);
             sprintf(newjp, "jp z, %s", lab);
             replace1_tagged(i, new_bit, "cp8_to_bit3");
@@ -11508,6 +11792,8 @@ static int pass_preserve_ix_word_across_signed_range(void)
         if (!peep_parse_ld_hl_ix_pair(i, &offset))
             continue;
         for (scan = i + 2; scan < nlines && scan <= i + 14; ++scan) {
+            const PeepLineInfo *info;
+
             if (scan > i + 2 && eq(scan - 1, "sbc hl,de") &&
                 parse_carry_branch(lines[scan], mnemonic, cond, target) &&
                 !strcmp(cond, "c")) {
@@ -11516,6 +11802,12 @@ static int pass_preserve_ix_word_across_signed_range(void)
             }
             if (starts_label(lines[scan]) || line_is_call_or_rst(lines[scan]) ||
                 line_clobbers_bc(lines[scan]))
+                break;
+            info = peep_line_info(scan);
+            if (!info ||
+                (info->effects.unknown && !eq(scan, "ex de,hl")) ||
+                info->effects.control_flow ||
+                ((info->effects.reads | info->effects.writes) & PEEP_REG_SP))
                 break;
         }
         if (branch < 0 || branch + 2 >= nlines ||
@@ -11594,6 +11886,8 @@ int main(int argc, char **argv)
             peep_context.options.optimize_size = 0;
         } else if (strcmp(argv[ai], "-fstats") == 0) {
             peep_context.options.stats_enabled = 1;
+        } else if (strcmp(argv[ai], "-closed-program") == 0) {
+            peep_context.options.closed_program = 1;
         } else if (infile == NULL) {
             infile = argv[ai];
         } else if (outfile == NULL) {
@@ -11605,7 +11899,7 @@ int main(int argc, char **argv)
     }
     if (infile == NULL || outfile == NULL) {
         fprintf(stderr,
-            "usage: dccpeep [-Ot|-Os] [-fstats] input.mac output.mac\n");
+            "usage: dccpeep [-Ot|-Os] [-fstats] [-closed-program] input.mac output.mac\n");
         return 1;
     }
 

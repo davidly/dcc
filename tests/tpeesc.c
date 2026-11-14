@@ -1,11 +1,6 @@
-/* BUG-053: with dccpeep, a 32-bit parameter that is assigned after an empty
- * counted loop and then read through a pointer that holds its address returns
- * the old parameter value. dccpeep's pass_elim_dead_ix_stores remembers that
- * the parameter's address escaped, but it treats every label that is not
- * `L<digits>:` as a new function and forgets the escape; the loop's signed
- * compare is rewritten by fold_signed_cmp_via_bytes with an `LS<n>:` label,
- * so the stores of `x0 = 1.0f` to (ix+4..7) are deleted as dead at `ret`.
- * dcc without dccpeep (dcc-peep=false) is correct. */
+/* Stores to an escaped float parameter remain visible through its pointer
+ * after counted-loop local labels. Covers nested/conditional/plain blocks,
+ * direct reads, pointer stores, and a no-loop control using float bit patterns. */
 #include <stdint.h>
 #include <stdio.h>
 

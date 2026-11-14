@@ -1,0 +1,41 @@
+; static function unknown_parameter
+_unknown:
+ld a,(ix+4)
+cp 8
+jp nz, L1
+ld a,1
+ret
+L1:
+ld a,0
+ret
+; static function bounded_byte
+_bounded:
+ld a,(ix+4)
+and 8
+ld (ix-2),a
+ld a,(ix+6)
+ld e,(ix+5)
+ld a,(ix-2)
+cp 8
+jp nz, L2
+ld a,1
+ret
+L2:
+ld a,0
+ret
+; static function unbounded_mask
+_mask:
+ld a,(ix+4)
+and 15
+ld (ix-2),a
+ld a,(ix+6)
+ld e,(ix+5)
+ld a,(ix-2)
+cp 8
+jp nz, L3
+ld a,1
+ret
+L3:
+ld a,0
+ret
+end

@@ -352,7 +352,7 @@ input order.
 invoked directly:
 
 ```sh
-dccpeep [-Ot|-Os] [-fstats] input.mac output.mac
+dccpeep [-Ot|-Os] [-fstats] [-closed-program] input.mac output.mac
 ```
 
 | Option | Purpose |
@@ -360,6 +360,15 @@ dccpeep [-Ot|-Os] [-fstats] input.mac output.mac
 | `-Ot` | Optimize for execution time (default) |
 | `-Os` | Optimize for code size |
 | `-fstats` | Print optimization statistics |
+| `-closed-program` | Assert that all C callers and function-address uses are present in this file |
+
+`dccmake` supplies `-closed-program` only for single-source applications,
+never libraries or multi-module builds. Direct invocations must omit it if
+other modules can call the file's public functions. It permits an inductive
+range proof for immutable byte parameters: all initial callers pass a value
+in 0..8, recursive callers add one, and the terminal value 8 cannot reach a
+recursive call. Unproven ranges retain exact `cp 8` equality tests; only
+proven ranges may use a bit-3 test.
 
 ## Test Suite Runner (`runall.ps1`)
 

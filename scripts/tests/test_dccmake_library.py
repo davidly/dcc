@@ -93,6 +93,7 @@ class DccmakeLibraryTests(unittest.TestCase):
         result = self.build()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((self.folder / "build/SPREADS.COM").is_file())
+        self.assertIn("-closed-program", result.stdout)
         self.assertFalse((self.folder / "build/SPREADS.LIB").exists())
         self.assertIn("start:", (self.folder / "build/RTLMIN.MAC").read_text())
 
@@ -101,6 +102,7 @@ class DccmakeLibraryTests(unittest.TestCase):
         self.configure()
         result = self.build()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("-closed-program", result.stdout)
         library = (self.folder / "build/SPREADS.LIB").read_bytes()
         word = lambda offset: int.from_bytes(library[offset:offset + 2], "little")
         self.assertEqual(library[:8], b"B1LB\x01\x01\x00\x01")

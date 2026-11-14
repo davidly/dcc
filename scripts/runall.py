@@ -494,6 +494,7 @@ def dccpeep_fixtures(workers: int):
             expected = fixture_dir / f"{stem}.expected.mac"
             if not expected.is_file(): return False
             opts = ["-Os"] if stem.endswith(".os") else []
+            if stem.endswith(".closed"): opts += ["-closed-program"]
             if run([peep, *opts, str(source), str(actual)], ROOT, 60)[0] or not actual.is_file(): return False
             actual_text = actual.read_text().replace("\r\n", "\n")
             if actual_text != expected.read_text().replace("\r\n", "\n"): return False

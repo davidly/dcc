@@ -1,11 +1,6 @@
-/* BUG-035: with dccpeep, `x < low || x > high` style tests of a 16-bit local
- * can compare the local with itself. dccpeep's preserve_ix_word_signed_range
- * pass inserts a `push hl` after the first `ld l,(ix-N)` / `ld h,(ix-M)` of
- * the local, on the assumption that the word is the left operand of the
- * `sbc hl,de`. Here the local is the right operand and the other operand
- * (a struct parameter's member) is already on the stack, so the inserted push
- * makes `pop de` and `pop hl` both yield the local. The program is correct
- * without dccpeep (dcc-peep=false). */
+/* Range comparisons preserve operand-stack order when a 16-bit local is
+ * the right operand after a struct member. Covers byte/wide loop counters,
+ * switch variants, and controls without a switch, tail store, or second test. */
 #include <stdint.h>
 #include <stdio.h>
 

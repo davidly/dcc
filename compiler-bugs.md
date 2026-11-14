@@ -2,8 +2,8 @@
 
 Defects found by differential testing against the host C compiler (Apple
 clang). Every open entry reproduces with the shipped configuration: no
-diagnostic environment variables, with and without `dccpeep`. Nothing here
-has been fixed by this work; this file is the log.
+diagnostic environment variables, with and without `dccpeep`. Fixed entries
+and their historical diagnoses are retained separately below.
 
 - **Compiler under test:** `83dc7a91` (upstream `main` on 2026-11-13).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
@@ -51,10 +51,7 @@ has been fixed by this work; this file is the log.
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
 | [BUG-030](#bug-030) | #250 | wrong result, or hang | A `for`-init declaration overlaps its enclosing block's locals on the stack (after an earlier sibling scope) |
 | [BUG-031](#bug-031) | #251 | wrong result | Nested-block 32-bit local copied from another local, stored to a 16-bit lvalue: only the low byte is loaded |
-| [BUG-032](#bug-032) | #252 | wrong result (`dccpeep` only) | `dccpeep` drops `x + K` (K from 2 to 255) when the sum is copied to another slot |
 | [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
-| [BUG-034](#bug-034) | #254 | wrong result (`dccpeep` only) | `dccpeep` turns `8 == v` into a test of bit 3 |
-| [BUG-035](#bug-035) | #255 | wrong result (`dccpeep` only) | `dccpeep` compares a 16-bit local with itself in `a > x \|\| x < k` after a struct member on the stack |
 | [BUG-036](#bug-036) | #256 | wrong result | A 32-bit local assigned in a loop and passed directly to a call keeps its old value after the loop |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 | [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
@@ -72,18 +69,17 @@ has been fixed by this work; this file is the log.
 | [BUG-050](#bug-050) | #270 | wrong result | `(int32_t)(uint32_t)x` converted to float, with `x` a signed 8- or 16-bit value, converts the unsigned value (`-121` → `4294967175.0f`) |
 | [BUG-051](#bug-051) | #271 | compile error | A macro parameter named like a constant's suffix (`f`, `u`, `L`) is substituted inside the constant: `#define T(f) g = 9.0f; f(1)` gives `g = 9.0a1` |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
-| [BUG-053](#bug-053) | #273 | wrong result (`dccpeep` only) | `float *p = &x; { for (...) {} } x = 1.0f; return *p;` returns the old parameter: `dccpeep` forgets the escaped address at its own `LS<n>:` label and deletes the store |
 
-Fifty-one are open: thirty-two give wrong results with no diagnostic
-(BUG-030 can also hang; BUG-032, BUG-034, BUG-035 and BUG-053 need `dccpeep`;
-BUG-039 is in the runtime), one hangs, seventeen stop the compile (BUG-007
+Forty-seven are open: twenty-eight give wrong results with no diagnostic
+(BUG-030 can also hang; BUG-039 is in the runtime), one hangs, seventeen stop the compile (BUG-007
 can instead compile and crash), and one (BUG-022) turns a compile error into
 a broken program. BUG-026 is the
 one most likely to be hit by ordinary code, then BUG-044 (every float `++`
 is wrong), BUG-047 (`f + n * g` is `f`), BUG-030 (it corrupts memory in C99-style code), BUG-003,
 BUG-013, BUG-016 and BUG-025.
 
-Two more were found and then fixed upstream before they were reported; see
+Four reported bugs are [fixed in cluster K](#fixed-in-cluster-k). Two more
+were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
 
 ### History
@@ -1031,52 +1027,6 @@ dcc emits, for the store:
 - One more case of a nested-block local losing its declared width; see
   BUG-015 and BUG-025.
 
-## BUG-032
-
-**With `dccpeep`, a 16-bit local plus a constant from 2 to 255, copied to
-another slot, loses the sum.** The copy stores whatever HL held before the
-add. Without `dccpeep` the program is correct.
-
-```c
-static uint32_t g6 = 256;
-static uint8_t g8 = 69;
-static uint16_t f(int16_t x)
-{
-    x = x;
-    return (g6 <= 1) ? g8 : (uint16_t)(x + 200);   /* f(1): want 201, with dccpeep 0 */
-}
-```
-
-dcc's output for the false arm, and what `dccpeep` makes of it:
-
-```
-    ld l,(ix-2)            |    ld a,(ix-2) ; peep: small_const_incr_carry_skip
-    ld h,(ix-1)            |    add a,200
-    ld de,200              |    ld (ix-2),a
-    add hl,de              |    jr nc,LI0
-    ld (ix-2),l            |    inc (ix-1)
-    ld (ix-1),h            | LI0:
-    ld l,(ix-2)            |
-    ld h,(ix-1)            |
-    ld (ix-4),l            |    ld (ix-4),l      ; HL was never loaded: it still
-    ld (ix-3),h            |    ld (ix-3),h      ; holds the result of __leu
-```
-
-- The pass's guard, `hl_relied_on_after()` in `src/dccpeep/dccpeep.c`, looks
-  for the text `hl` in the lines that follow. `ld (ix-4),l` and
-  `ld (ix-3),h` read H and L separately, so they are not seen.
-- Wrong for constants 200 and 255, in `?:` and in
-  `if (…) r = g8; else r = (uint16_t)(x + 200);`, with `x = x;` or `x += 0;`
-  before it.
-- Correct with `dccpeep`: constants 1, 256, 2000 and -56; a 16-bit
-  comparison in the condition (no helper call, so HL happens to be right);
-  without `x = x;`.
-- The sum can also be the operand of a helper call, not only a copy:
-  `while ((w++) < 1) sink = (l += 225) / 121;` with `int16_t l = 1` gives 0,
-  not 1, with `dccpeep`, because `ld l,(ix-2)` / `ld h,(ix-1)` before
-  `call __q2s` is removed (the same for `%`). Without the loop it is correct.
-- The pass dates from `bff0d144` (2026-07-26), before v3.6.0.
-
 ## BUG-033
 
 **A constant divided by a constant zero is rejected, even in code that never
@@ -1097,102 +1047,6 @@ if (never)
   (`SIZE / UNITS` in a branch guarded by `if (UNITS)`), and when it does the
   diagnostic points at the enclosing `if` rather than at the division.
 - Already present in v3.6.0 (`20290235`).
-
-## BUG-034
-
-**With `dccpeep`, `8 == v` can become a test of bit 3**, so 9, 12, 47 and
-every other value with that bit set compares equal to 8. Without `dccpeep`
-the program is correct.
-
-```c
-static uint8_t g8 = 47;
-static int16_t f(uint16_t x)
-{
-    if (8 == (uint16_t)g8) {     /* false; with dccpeep it is taken */
-        x = 100;
-    }
-    return x;
-}
-```
-
-`dccpeep` output for the test (`g8`, zero-extended, is in `ix-2`/`ix-1`):
-
-```
-    bit 3,(ix-2) ; peep: cp8_to_bit3
-    jr z,L3
-    ld a,(ix-1)
-    or a
-    jr nz,L3
-```
-
-- The rewrite is in `pass_and1_ix_to_bit()` in `src/dccpeep/dccpeep.c`:
-  `ld a,(ix+K) / cp 8 / jp nz,L` becomes `bit 3,(ix+K) / jp z,L`. Its
-  comment says "Valid for depth values 0-8: bit3 is set only at depth=8",
-  but nothing checks that the value is in that range.
-- Wrong for `8 == (uint16_t)g8` and `8 != (uint16_t)g8` in an `if` with no
-  `else`, for the values 9, 12 and 47.
-- Correct with `dccpeep`: the values 7, 8 and 16; a comparison with 16;
-  `c == 8` on a `char` parameter or local in an `if`, a loop, a `switch` or
-  as a value (the simple forms do not produce the three-instruction pattern,
-  so `if (c == '\b')` is safe as far as these probes go).
-- Also wrong when the 16-bit operand is a signed bit-field read through a
-  cast (seed 7161): `8 == (int16_t)s.m` with a 5-bit `m` of 9, 12 or 15,
-  and `uint32_t l = (8 == (int16_t)s.m) ? 0 : 1;`. A plain `int16_t` global
-  and `8 == s.m` without the cast are right.
-- The rewrite has been in the file since at least `3dd3b434` (2026-06-14).
-
-## BUG-035
-
-**With `dccpeep`, a test of a 16-bit local as the right operand, after a
-struct member that is already on the stack, compares the local with itself.**
-Without `dccpeep` the program is correct.
-
-```c
-struct S1 { int16_t m0; uint16_t m1; uint8_t m2; };
-static struct S1 s1 = { 0, 292, 255 };     /* x1 = s1 */
-static int32_t a3[4] = { 32766, 32768, 147, -1682854718 };
-
-static uint8_t f(struct S1 x1)
-{
-    uint16_t l2 = 0;
-    uint32_t i8;
-    l2 = (uint32_t)1550294082;             /* 0x9c42 */
-    for (i8 = 3; i8 > 1; i8 -= 1) {
-        if (((uint16_t)x1.m0 > l2) || (l2 < (uint16_t)1))
-            a3[1] = 1;                     /* 0 > 0x9c42 and 0x9c42 < 1 are false: want 32768, dccpeep 1 */
-        switch ((uint32_t)1) { case 100: break; default: break; case 10: break; }
-    }
-    l2 = (uint16_t)1;
-    return 1;
-}
-```
-
-What `dccpeep` makes of the first test (`pop hl` / `pop de` read the same word):
-
-```
-    push hl                ; x1.m0
-    ld l,(ix-2)
-    ld h,(ix-1)
-    push hl ; peep: preserve_ix_word_signed_range   (inserted)
-    push hl                ; the original push of l2
-    pop de
-    pop hl                 ; was x1.m0, is now l2
-    ex de,hl
-    or a
-    sbc hl,de              ; l2 - l2
-```
-
-- `pass_preserve_ix_word_across_signed_range()` in `src/dccpeep/dccpeep.c`
-  is written for `x < low || x > high`, where the word is the left operand of
-  the `sbc hl,de`. It scans from the `ld l,(ix-N)` / `ld h,(ix-M)` pair to
-  the next `sbc hl,de` / `jp c` and accepts a `push hl` / `pop de` /
-  `pop hl` shuffle in between, so it also fires when the word is the right
-  operand.
-- Wrong for the loop with a `switch` on a constant or on the counter, and
-  with a `uint8_t` or `uint32_t` counter. Correct: the same function without
-  the `switch`, without the assignment after the loop, or with one test
-  instead of two.
-- Reproduces with `5f733050`, `32d3e46d` and `5bcac74e`.
 
 ## BUG-036
 
@@ -1676,7 +1530,185 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
 
-## BUG-053
+## Fixed in cluster K
+
+The maintainer approved four independent peephole fixes together in
+`fix/cluster-k-peephole`, including the single-source closed-program contract
+needed to preserve the existing `ttt` schedule. The following diagnoses
+describe the pre-fix behavior; all four reproducers now pass in peep and nopeep.
+Their stdout baselines were promoted unchanged, and only four new measured
+performance rows were added. The remaining 47 parked reproducers still fail.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-032](#bug-032) | #252 | [tpeepsum](tests/tpeepsum.c) |
+| [BUG-034](#bug-034) | #254 | [tpeeq8](tests/tpeeq8.c) |
+| [BUG-035](#bug-035) | #255 | [tpeerng](tests/tpeerng.c) |
+| [BUG-053](#bug-053) | #273 | [tpeesc](tests/tpeesc.c) |
+
+### BUG-032
+
+**Fixed:** `hl_relied_on_after()` now tracks H/L reads and overwrites
+separately and protects pending register-ABI call inputs. Regression:
+[tpeepsum.c](tests/tpeepsum.c), [stdout](tests/baselines/tpeepsum.txt).
+
+**With `dccpeep`, a 16-bit local plus a constant from 2 to 255, copied to
+another slot, loses the sum.** The copy stores whatever HL held before the
+add. Without `dccpeep` the program is correct.
+
+```c
+static uint32_t g6 = 256;
+static uint8_t g8 = 69;
+static uint16_t f(int16_t x)
+{
+    x = x;
+    return (g6 <= 1) ? g8 : (uint16_t)(x + 200);   /* f(1): want 201, with dccpeep 0 */
+}
+```
+
+dcc's output for the false arm, and what `dccpeep` makes of it:
+
+```
+    ld l,(ix-2)            |    ld a,(ix-2) ; peep: small_const_incr_carry_skip
+    ld h,(ix-1)            |    add a,200
+    ld de,200              |    ld (ix-2),a
+    add hl,de              |    jr nc,LI0
+    ld (ix-2),l            |    inc (ix-1)
+    ld (ix-1),h            | LI0:
+    ld l,(ix-2)            |
+    ld h,(ix-1)            |
+    ld (ix-4),l            |    ld (ix-4),l      ; HL was never loaded: it still
+    ld (ix-3),h            |    ld (ix-3),h      ; holds the result of __leu
+```
+
+- The pass's guard, `hl_relied_on_after()` in `src/dccpeep/dccpeep.c`, looks
+  for the text `hl` in the lines that follow. `ld (ix-4),l` and
+  `ld (ix-3),h` read H and L separately, so they are not seen.
+- Wrong for constants 200 and 255, in `?:` and in
+  `if (…) r = g8; else r = (uint16_t)(x + 200);`, with `x = x;` or `x += 0;`
+  before it.
+- Correct with `dccpeep`: constants 1, 256, 2000 and -56; a 16-bit
+  comparison in the condition (no helper call, so HL happens to be right);
+  without `x = x;`.
+- The sum can also be the operand of a helper call, not only a copy:
+  `while ((w++) < 1) sink = (l += 225) / 121;` with `int16_t l = 1` gives 0,
+  not 1, with `dccpeep`, because `ld l,(ix-2)` / `ld h,(ix-1)` before
+  `call __q2s` is removed (the same for `%`). Without the loop it is correct.
+- The pass dates from `bff0d144` (2026-07-26), before v3.6.0.
+
+### BUG-034
+
+**Fixed:** the bit-3 rewrite requires a local 0..8 proof or an immutable
+recursive-byte proof under the explicit `-closed-program` contract. The latter
+checks all root arguments, +1 recursive edges, and the terminal CFG path,
+without matching application or function names. Regression:
+[tpeeq8.c](tests/tpeeq8.c), [stdout](tests/baselines/tpeeq8.txt).
+
+**With `dccpeep`, `8 == v` can become a test of bit 3**, so 9, 12, 47 and
+every other value with that bit set compares equal to 8. Without `dccpeep`
+the program is correct.
+
+```c
+static uint8_t g8 = 47;
+static int16_t f(uint16_t x)
+{
+    if (8 == (uint16_t)g8) {     /* false; with dccpeep it is taken */
+        x = 100;
+    }
+    return x;
+}
+```
+
+`dccpeep` output for the test (`g8`, zero-extended, is in `ix-2`/`ix-1`):
+
+```
+    bit 3,(ix-2) ; peep: cp8_to_bit3
+    jr z,L3
+    ld a,(ix-1)
+    or a
+    jr nz,L3
+```
+
+- The rewrite is in `pass_and1_ix_to_bit()` in `src/dccpeep/dccpeep.c`:
+  `ld a,(ix+K) / cp 8 / jp nz,L` becomes `bit 3,(ix+K) / jp z,L`. Its
+  comment says "Valid for depth values 0-8: bit3 is set only at depth=8",
+  but nothing checks that the value is in that range.
+- Wrong for `8 == (uint16_t)g8` and `8 != (uint16_t)g8` in an `if` with no
+  `else`, for the values 9, 12 and 47.
+- Correct with `dccpeep`: the values 7, 8 and 16; a comparison with 16;
+  `c == 8` on a `char` parameter or local in an `if`, a loop, a `switch` or
+  as a value (the simple forms do not produce the three-instruction pattern,
+  so `if (c == '\b')` is safe as far as these probes go).
+- Also wrong when the 16-bit operand is a signed bit-field read through a
+  cast (seed 7161): `8 == (int16_t)s.m` with a 5-bit `m` of 9, 12 or 15,
+  and `uint32_t l = (8 == (int16_t)s.m) ? 0 : 1;`. A plain `int16_t` global
+  and `8 == s.m` without the cast are right.
+- The rewrite has been in the file since at least `3dd3b434` (2026-06-14).
+
+### BUG-035
+
+**Fixed:** the range-preservation prefix rejects stack effects and unrelated
+control flow before inserting a saved operand; stack-neutral `ex de,hl`
+remains eligible. Regression:
+[tpeerng.c](tests/tpeerng.c), [stdout](tests/baselines/tpeerng.txt).
+
+**With `dccpeep`, a test of a 16-bit local as the right operand, after a
+struct member that is already on the stack, compares the local with itself.**
+Without `dccpeep` the program is correct.
+
+```c
+struct S1 { int16_t m0; uint16_t m1; uint8_t m2; };
+static struct S1 s1 = { 0, 292, 255 };     /* x1 = s1 */
+static int32_t a3[4] = { 32766, 32768, 147, -1682854718 };
+
+static uint8_t f(struct S1 x1)
+{
+    uint16_t l2 = 0;
+    uint32_t i8;
+    l2 = (uint32_t)1550294082;             /* 0x9c42 */
+    for (i8 = 3; i8 > 1; i8 -= 1) {
+        if (((uint16_t)x1.m0 > l2) || (l2 < (uint16_t)1))
+            a3[1] = 1;                     /* 0 > 0x9c42 and 0x9c42 < 1 are false: want 32768, dccpeep 1 */
+        switch ((uint32_t)1) { case 100: break; default: break; case 10: break; }
+    }
+    l2 = (uint16_t)1;
+    return 1;
+}
+```
+
+What `dccpeep` makes of the first test (`pop hl` / `pop de` read the same word):
+
+```
+    push hl                ; x1.m0
+    ld l,(ix-2)
+    ld h,(ix-1)
+    push hl ; peep: preserve_ix_word_signed_range   (inserted)
+    push hl                ; the original push of l2
+    pop de
+    pop hl                 ; was x1.m0, is now l2
+    ex de,hl
+    or a
+    sbc hl,de              ; l2 - l2
+```
+
+- `pass_preserve_ix_word_across_signed_range()` in `src/dccpeep/dccpeep.c`
+  is written for `x < low || x > high`, where the word is the left operand of
+  the `sbc hl,de`. It scans from the `ld l,(ix-N)` / `ld h,(ix-M)` pair to
+  the next `sbc hl,de` / `jp c` and accepts a `push hl` / `pop de` /
+  `pop hl` shuffle in between, so it also fires when the word is the right
+  operand.
+- Wrong for the loop with a `switch` on a constant or on the counter, and
+  with a `uint8_t` or `uint32_t` counter. Correct: the same function without
+  the `switch`, without the assignment after the loop, or with one test
+  instead of two.
+- Reproduces with `5f733050`, `32d3e46d` and `5bcac74e`.
+
+### BUG-053
+
+**Fixed:** dead-store elimination keeps escaped-frame state across every
+compiler/optimizer `L...` label and across returns, resetting it only at
+genuine segment boundaries. Regression:
+[tpeesc.c](tests/tpeesc.c), [stdout](tests/baselines/tpeesc.txt).
 
 **With `dccpeep`, a 32-bit parameter whose address is held in a pointer,
 assigned after an empty counted loop and then read through the pointer,

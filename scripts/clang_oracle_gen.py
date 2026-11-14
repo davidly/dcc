@@ -1449,7 +1449,6 @@ KNOWN_BUGS = {
     'armfordecl': 'BUG-030',
     'blockwidecopy': 'BUG-031',
     'constdivzero': 'BUG-033',
-    'peepsum': 'BUG-032',
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',
     'loopcallarg': 'BUG-036',
