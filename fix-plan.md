@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has twenty-two open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twenty-one open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -321,16 +321,62 @@ baseline was refreshed; no dating checks or `prepush.ps1` run were made.
 | --- | --- | --- |
 | BUG-019 | #239 | Unreachable nested block or for-init declaration after an exiting statement |
 
-Traced independently, not fixed here: `mir_lower_stmt()` lowers every child
-of `AST_COMPOUND`, including a dead declaration placeholder. The metadata
-walk in `ast_process_stmt_metadata()` skips a dead nested compound/for, so
-`mir_begin_declaration()` / `mir_end_declaration()` never replay that
-placeholder. The resulting MIR retains `decl`, a load of unresolved `b`,
-and a scope restore after the return; no generated candidate accepts it.
-Function-scope declarations take a different replay path. This is a
-lowering/metadata reachability mismatch, not BUG-014's wide-store reload.
-Preserve labels/re-entry, declaration diagnostics, scope/VLA accounting and
-debug metadata when investigating separately. No B2b code was changed.
+**Confirmed root cause:** MIR lowers every child of `AST_COMPOUND`, but the
+metadata walk skips children after a guaranteed exit unless they contain a
+re-entry label. A skipped nested declaration retains an unreplayed MIR
+placeholder and unresolved object; no generated candidate accepts it. Support
+probes also retain speculative scalar/VLA initialization instructions until
+real declaration replay repairs them.
+
+The chosen fix replays each dead child's metadata under the existing
+assembly-suppression guard. It resolves declarations, neutralizes speculative
+initializer instructions from support probes, and keeps scope/flow/VLA/debug
+replay positions aligned with the unchanged MIR. The support walk also
+neutralizes instructions from provably dead child probes while preserving
+symbol/frame diagnostics: a VLA probe's renamed object can differ from real
+replay, so name-based cleanup alone does not remove its bound side effects.
+Labels and reachable code retain their existing paths; no lowering, emitter
+or schedule changes remain.
+
+Two lowering experiments were rejected. Removing every dead child changed
+three `tsjdeep` functions because its exact `longjmp` schedule retains a dead
+constant return. Preserving those returns made both censuses identical, but
+skipping declarations left support-probe initializers at function entry:
+`return 1; { int b = ++out; }` incremented `out`. Suppressed metadata replay
+plus dead-probe neutralization fixes these defects without touching reachable
+MIR or special-casing returns.
+Both final censuses contain 3,489 existing functions with zero changes.
+Strict full+extended stack/no-stack and Python regression gates pass; all
+517 existing performance rows are unchanged. `tdeadblk` adds one measured row
+and covers continue/constant exits, scalar/VLA side effects, nested/for
+re-entry labels and declarations before later labels. Integer seeds 1-300:
+220 ok, 79 INVALID, one target-limit-only; float seeds 1-300: 281 ok,
+19 INVALID; zero FAIL in all production configurations.
+
+The fixed return uses the same live instructions as its correct control.
+Unreachable MIR remains: a repaired scalar add has three extra dead bytes
+versus a literal-increment control, but no return-path cycle cost. CMake's
+six sanitized MIR tests, focused debug/MIR tests, full-debug and release-
+identical `-gline` pipelines, require-emit and 73 peep fixtures pass.
+Debugger tests pass with one isolated retry of the MI endpoint-cleanup
+assertion under load (9/10 initially, the remaining MI test passed alone).
+The full regular Python run completed 319 tests with four failures, five
+errors and two existing skips: two failures are approved #277; the other
+failures/errors are mutation-fixture timeout/cleanup harness failures under
+load. No expectations were fixed/skipped/refreshed. A Makefiles isolated retry
+reproduced fixture timeouts and was stopped. The unchanged Ninja retry ran
+all 14 mutation-harness tests: 13 passed, while
+`test_default_serial_and_parallel_are_equal_and_bounded` timed out in its
+first mock serial campaign. That one test timed out again when run alone
+with Ninja; its serial/parallel mock-scheduler equality remains unverified.
+These fixtures build synthetic CMake repositories, not the production
+compiler. No harness, timeout, skip or expectation was changed.
+
+Outside-cluster observation: BUG-022's parked program also passes because
+its BUG-008 and BUG-019 emission-failure triggers are now both gone. This is
+not a fix for its diagnostic masking: a scratch BUG-020 program preceded by
+the same reused nested labels still exits zero with empty function bodies.
+BUG-022/#242 remains open, steered and unpromoted.
 
 ### B3. Same-value binary operands read an unallocated slot
 
@@ -1285,7 +1331,7 @@ so it matters more than its size suggests. Both are one-offs.
 2. **A1** — merged (#281). **A2a** — fixed and verified.
    **A2b** is deferred until after E.
 3. **B1** (BUG-030 memory corruption), **B3** (BUG-026, maintainer's first
-   priority), then remaining **B2b**, **B4**; **B2a** is verified separately.
+   priority), then remaining **B4**; **B2a** and **B2b** are verified separately.
 4. **D** — BUG-044 and BUG-003.
 5. **E**, then **A2b**, then **C** — E and C are in the emitter's
    typing/merge paths; A2b waits for E's BUG-004 facet; C is the least
@@ -1304,7 +1350,7 @@ so it matters more than its size suggests. Both are one-offs.
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
 | B2a | [#292](https://github.com/davidly/dcc/pull/292) | PR open | BUG-014 promoted as twincg; 300 integer seeds clean; 3,426 census functions and 507 perf rows unchanged; approved #277 failures only (#280 passes) |
-| B2b | | open | BUG-019 unreachable nested-scope metadata skips declaration replay; untouched |
+| B2b | [#303](https://github.com/davidly/dcc/pull/303) (`fix/cluster-b2b-dead-decl`) | PR open | BUG-019 promoted as tdeadblk; 300 integer/float seeds clean; 3,489 existing functions and 517 perf rows unchanged; BUG-022 reproducer-only flip, diagnostic mask remains open; 13/14 isolated Ninja harness tests pass; one mock serial-scheduler timeout remains unverified |
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | [#293](https://github.com/davidly/dcc/pull/293) | PR open | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
 | C | | open | |

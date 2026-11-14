@@ -1437,7 +1437,6 @@ KNOWN_BUGS = {
     'widehelperparam': 'BUG-020',
     'postincvalue': 'BUG-024',
     'duplabel': 'BUG-022',
-    'constjump': 'BUG-019',
     'nestedifelse': 'BUG-027',
     'bytesarcount': 'BUG-028',
     'bytearm': 'BUG-029',

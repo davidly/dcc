@@ -1291,6 +1291,7 @@ int ast_stmt_supported(const struct AstNode *n)
         int i;
         int ok;
         int has_decl;
+        int dead = 0;
 
         has_decl = 0;
         for (i = 0; i < n->list_len; ++i) {
@@ -1300,9 +1301,15 @@ int ast_stmt_supported(const struct AstNode *n)
             }
         }
         if (!has_decl) {
-            for (i = 0; i < n->list_len; ++i)
+            for (i = 0; i < n->list_len; ++i) {
+                int checkpoint = mir_instruction_checkpoint();
                 if (!ast_stmt_supported(n->list[i]))
                     return 0;
+                if (dead && !ast_stmt_has_reentry_label(n->list[i]))
+                    mir_neutralize_probe_since(checkpoint);
+                else
+                    dead = ast_stmt_exits(n->list[i]);
+            }
             return 1;
         }
 
@@ -1321,9 +1328,9 @@ int ast_stmt_supported(const struct AstNode *n)
             ok = 1;
             for (i = 0; i < n->list_len; ++i) {
                 struct AstNode *c = n->list[i];
+                int checkpoint = mir_instruction_checkpoint();
                 if (c->kind == AST_DECL) {
                     if (mir_is_active()) {
-                        int checkpoint = mir_instruction_checkpoint();
                         ast_replay_decl_span(c);
                         mir_neutralize_since(checkpoint);
                     } else
@@ -1332,6 +1339,13 @@ int ast_stmt_supported(const struct AstNode *n)
                     ok = 0;
                     break;
                 }
+                /* A dead declaration's probe must not evaluate scalar or
+                 * VLA-bound side effects at function entry. Keep its symbol
+                 * and frame accounting for diagnostics and later replay. */
+                if (dead && !ast_stmt_has_reentry_label(c))
+                    mir_neutralize_probe_since(checkpoint);
+                else
+                    dead = ast_stmt_exits(c);
             }
             leave_scope();
             scan_mode = s_scan_mode;

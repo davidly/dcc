@@ -4916,6 +4916,17 @@ int mir_instruction_checkpoint(void)
     return mir.active ? mir.count : 0;
 }
 
+void mir_neutralize_probe_since(int checkpoint)
+{
+    int instruction;
+
+    if (!mir.active || checkpoint < 0 || checkpoint > mir.count)
+        return;
+    for (instruction = checkpoint; instruction < mir.count; ++instruction)
+        mir.insns[instruction].opcode = MIR_NOP;
+    mir_invalidate_use_cache();
+}
+
 void mir_neutralize_since(int checkpoint)
 {
     int instruction;

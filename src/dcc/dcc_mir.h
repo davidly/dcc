@@ -31,6 +31,8 @@ void mir_begin_declaration(const struct AstNode *node);
 void mir_end_declaration(void);
 int mir_instruction_checkpoint(void);
 void mir_neutralize_since(int checkpoint);
+/* Discard all instructions from a proven unreachable support probe. */
+void mir_neutralize_probe_since(int checkpoint);
 void mir_set_initializer_target(struct Sym *symbol);
 void mir_set_vla_target(struct Sym *symbol);
 void mir_capture_initializer(const struct AstNode *expr);
