@@ -11,7 +11,9 @@ The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), K (#278)
 and L (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
-B was likewise disproved and split into B1–B4. The remaining clusters are still hypotheses.
+B was likewise disproved and split into B1–B4. I also failed its first
+root-cause experiment; return admission and cast signedness must be separated.
+The remaining clusters are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
 explicitly approved K as a four-rule exception.
@@ -345,7 +347,7 @@ parameter, both fatal with no candidate able to emit, and both pass with the
 operands swapped or the expression hoisted into a temporary. Look at how the
 comparison selector accepts a non-leaf right operand.
 
-### I. Float ↔ integer conversion
+### I. Disproved: float ↔ integer conversion
 
 | Bug | Issue | Shape |
 | --- | --- | --- |
@@ -353,9 +355,55 @@ comparison selector accepts a non-leaf right operand.
 | BUG-048 | #268 | `(uint32_t)x` to float, `x` signed 32-bit: signed conversion |
 | BUG-050 | #270 | `(int32_t)(uint32_t)x` to float, `x` signed 8/16-bit: unsigned conversion |
 
-048 and 050 are mirror images: the conversion picks `__ltof`/`__ultof` from
-the inner operand's type instead of the cast's. 046 is the missing implicit
-conversion at `return`. Independent of A–E.
+**Stopped on `fix/cluster-i`: the first root-cause fix clears only
+BUG-046.** The compiler experiment was reverted; all three issues remain
+open. Split future work into I1 (BUG-046 return admission) and a separate,
+still-unconfirmed I2 hypothesis (BUG-048/050 cast signedness). Independent
+of A–E.
+
+- BUG-046 is rejected before MIR lowering by
+  `ast_return_stmt_supported()` in `src/dcc/dcc_ast_stmt_classify.c`.
+  The float-return arm admits float and plain-int expressions but omits
+  long expressions; the long-return arm symmetrically omits float
+  expressions. By contrast, argument admission already permits both.
+  `mir_lower_stmt()` already calls `mir_lower_conversion()` for scalar
+  returns, so this is not a missing MIR conversion implementation.
+- The first experiment added the missing `ast_value_is_long_word()` and
+  `ast_value_is_float_word()` alternatives to those two admission arms,
+  without changing lowering, selection, allocation, or emission. After a
+  canonical rebuild, `python3 scripts/run-known-bugs.py bug046 bug048
+  bug050` reported **1 FIXED, 2 fails**: BUG-046 passed peep and nopeep;
+  BUG-048 retained 5/6 wrong output lines and BUG-050 retained 3/4.
+  This triggers the mandatory stop rule, not permission for another fix.
+- Before the experiment, compiling BUG-046 with `dccmake` failed with six
+  `DCC-E1002: unsupported return expression` diagnostics in both modes.
+  An otherwise identical control program with explicit return casts built
+  correctly. After the experiment, the complete BUG-046 `.MAC` output was
+  byte-identical to that control in both peep and nopeep; the control's
+  own output was byte-identical before/after. For example, both forms of
+  `float a(int32_t x)` load the four parameter bytes into HL/DE and call
+  `__flf`; `int32_t d(float x)` similarly calls `__ffl`. No fallback or
+  larger schedule was needed.
+- BUG-048/050 are signedness defects in already-admitted conversions,
+  separate from return admission. Their generated assembly uses
+  `__flf` (signed long to float) and `__fulf` (unsigned long to float):
+  BUG-048's failing signed-to-unsigned cast selects `__flf`, whereas its
+  stored-unsigned control selects `__fulf`; BUG-050's failing outer signed
+  cast selects `__fulf`, whereas its signed controls select `__flf`.
+  Whether those two defects share one underlying cast-type loss remains
+  unproven; no second compiler fix was attempted.
+- Validation after reverting the experiment and rebuilding: all 42 parked
+  reproducers report `fails`, zero `FIXED`; no out-of-cluster flips were
+  observed. Zero existing `tests/perf_baselines.csv` rows changed (the
+  file is untouched). No generators, reproducers, or bug-log entries were
+  edited and no issue was closed.
+- Fuzz tally: **0 programs**, not run because the mandatory stop preceded
+  acceptance. Full strict stack/no-stack regressions, debug gates, and
+  the Python unit gate were likewise not run: this branch retains only
+  these findings, no compiler change. Known main Python failures
+  `test_mir_campaign_baselines` and `test_mir_exact_controls` (#277), and
+  the nondeterministic exit-139 mutation fixture (#280), remain outside
+  this work and were not altered, skipped, or refreshed.
 
 ### J. Float arithmetic
 
@@ -460,7 +508,7 @@ so it matters more than its size suggests. Both are one-offs.
 | F | | open | |
 | G | | open | |
 | H | | open | |
-| I | | open | |
+| I | `fix/cluster-i` (draft PR) | stopped; split proposed | First root fix cleared only 046; 048/050 unchanged; compiler experiment reverted; I1 return admission vs unconfirmed I2 cast signedness; 42 fails after restore; zero existing baseline changes |
 | J | | open | |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
