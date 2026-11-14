@@ -54,7 +54,11 @@ test:
 `tests/tflcnot.c`, `tests/tflcini.c`, `tests/tconstdz.c`, `tests/tdeadblk.c`,
 `tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c`, `tests/tflncmp.c`,
 `tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tflidx.c`,
-`tests/tmerge16.c`, `tests/tearly16.c` and `tests/twphicpy.c` were promoted this way.
+`tests/tmerge16.c`, `tests/tearly16.c`, `tests/tphiarm.c` and `tests/twphicpy.c` were promoted this way.
+
+`tests/tlogblk.c` separately covers BUG-004's host-proven word and block-long
+facets cleared by E1/A2b-1. BUG-004 stays open with its newly reduced byte-local
+logical SSA facet; that partial issue's reproducer is not promoted.
 
 ## Adding one
 
