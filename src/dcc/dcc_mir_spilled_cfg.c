@@ -5596,10 +5596,12 @@ static int mir_wide_helper_rhs_pair_consumer(
         !mir_wide_helper_handoff_supported(consumer))
         return 0;
     left = mir_definition(consumer->src1);
-    /* The pair expects the left operand pushed where it is defined; a
-     * parameter or constant is materialized where it is used instead
-     * (`x < n / x` with long n, `x < 65536L / x`). */
-    if (left == NULL || left->opcode == MIR_PARAM || left->opcode == MIR_CONST)
+    /* The pair needs a definition-time push. Direct named homes and
+     * rematerialized constants, including unary float literals, are only
+     * loaded at their use and never arm that stack handoff. */
+    if (left == NULL || left->opcode == MIR_PARAM || left->opcode == MIR_CONST ||
+        mir_value_has_direct_named_home(consumer->src1) ||
+        mir_wide_constant_is_rematerializable(consumer->src1))
         return 0;
     left_instruction = (int)(left - mir.insns);
     if (!mir_wide_helper_lhs_consumer(
@@ -6169,11 +6171,29 @@ static int mir_phi_uses_scalar_object_home(int value)
         object->offset < -effective_local_bytes ||
         object->offset + size - 1 >= 0)
         return 0;
-    /* Preserve the established byte-phi path exactly.  Word homes need the
-     * stronger proof that both incoming values were really materialized in
-     * the local; promoted word objects may retain only analysis-only stores. */
-    if (size == 1)
+    /* A byte PHI may reload its object only until a materialized store
+     * overwrites the old SSA value. Analysis-only dead stores do not touch
+     * that home; CFG liveness includes backedges and PHI edge uses. */
+    if (size == 1) {
+        int instruction;
+
+        if (mir.live_out == NULL ||
+            mir_object_address_taken(definition->object))
+            return 0;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *insn = &mir.insns[instruction];
+
+            if (insn->opcode == MIR_STORE &&
+                insn->object == definition->object &&
+                insn->src1 != value &&
+                mir_value_live_out_of_instruction(value, instruction) &&
+                !mir_store_is_dead(instruction))
+                return 0;
+        }
         return 1;
+    }
+    /* Word homes also require both incoming values to be materialized;
+     * promoted word objects may retain only analysis-only stores. */
     definition_index = (int)(definition - mir.insns);
     if (mir_cfg_block_count() < 100 ||
         mir_object_is_fully_promoted(definition->object))

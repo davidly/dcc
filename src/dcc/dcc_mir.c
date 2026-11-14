@@ -1741,6 +1741,20 @@ static void mir_type_untyped_widened_value(int value, int target_type)
         definition->type = TYPE_INT;
 }
 
+static int mir_promoted_operand_type(const struct MirInsn *source)
+{
+    int type = source != NULL ? source->type : 0;
+
+    /* Keep the load's declared signedness for extraction. Only its arithmetic
+     * consumer sees the bit-field's range-based integer promotion; casts have
+     * their own unary value and deliberately do not inherit the field width. */
+    if (source != NULL && source->opcode == MIR_LOAD_INDIRECT &&
+        source->bit_width > 0 && type != 0 && type_ptr_depth(type) == 0 &&
+        (!(type & TYPE_UNSIGNED) || source->bit_width <= 15))
+        return TYPE_INT;
+    return promote_int_type(type);
+}
+
 static int mir_lower_conversion(int value, int target_type)
 {
     struct MirInsn *definition;
@@ -2519,11 +2533,19 @@ static int mir_lower_compound_value(int left, int right, int operation,
             right = scaled;
         }
     } else if (operation == TOK_SHL || operation == TOK_SHR) {
-        /* A byte's shift is done in int and narrowed back. When the
-         * assignment's value is used it must be the narrowed one
-         * (`(unsigned char)(c <<= 5)`); a discarded one keeps its form. */
-        if (result_used && type_size(target_type) == 1 &&
-            type_ptr_depth(target_type) == 0) {
+        /* Signed word counts already establish the promoted computation
+         * during repair. Byte counts do not widen it, and unsigned word
+         * counts would give it the wrong signedness: materialize promotion
+         * and narrowing for those discarded shifts as for used results. */
+        right_definition = mir_mutable_definition(right);
+        if (type_size(target_type) == 1 &&
+            type_ptr_depth(target_type) == 0 &&
+            (result_used ||
+             (right_definition != NULL &&
+              type_ptr_depth(right_definition->type) == 0 &&
+              (type_size(right_definition->type) == 1 ||
+               (type_size(right_definition->type) == 2 &&
+                (right_definition->type & TYPE_UNSIGNED) != 0))))) {
             computation_type = promote_int_type(target_type);
             left = mir_lower_conversion(left, computation_type);
         }
@@ -8120,6 +8142,39 @@ static int mir_block_name_has_multiple_declared_types(const char *name)
     return 0;
 }
 
+/* Promotion may expose an initializer's raw bits. Preserve the declared
+ * interpretation when a load's consumers can observe its signedness. */
+static int mir_value_has_signedness_use(int value, int type, int depth)
+{
+    int instruction;
+
+    if (depth >= 16)
+        return 1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *use = &mir.insns[instruction];
+
+        if (use->opcode == MIR_UNARY && use->immediate == 0 &&
+            use->src1 == value) {
+            if (type_is_float(use->type) || type_size(use->type) > type_size(type))
+                return 1;
+            if (use->type == type &&
+                mir_value_has_signedness_use(use->dst, type, depth + 1))
+                return 1;
+        } else if (use->opcode == MIR_BINARY &&
+                   (use->immediate == '/' || use->immediate == '%') &&
+                   type_size(use->secondary_offset) == 4 &&
+                   type_size(type) == 4 &&
+                   (use->src1 == value || use->src2 == value)) {
+            return 1;
+        } else if (use->opcode == MIR_PHI && use->type == type &&
+                   (use->src1 == value || use->src2 == value) &&
+                   mir_value_has_signedness_use(use->dst, type, depth + 1)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int mir_unary_is_representation_identity(
     const struct MirInsn *insn, const struct MirInsn *source)
 {
@@ -8652,7 +8707,7 @@ void mir_resolve_deferred_metadata(void)
                     if (source == NULL || type_ptr_depth(source->type) != 0 ||
                         type_is_float(source->type))
                         continue;
-                    repaired_type = promote_int_type(source->type);
+                    repaired_type = mir_promoted_operand_type(source);
                     if (insn->type != repaired_type) {
                         insn->type = repaired_type;
                         changed = 1;
@@ -8691,10 +8746,10 @@ void mir_resolve_deferred_metadata(void)
                         left->type = TYPE_INT;
                     if (right->opcode == MIR_PHI && right->type == 0)
                         right->type = TYPE_INT;
-                    left_type = promote_int_type(
-                        left->type != 0 ? left->type : TYPE_INT);
-                    right_type = promote_int_type(
-                        right->type != 0 ? right->type : TYPE_INT);
+                    left_type = left->type != 0
+                        ? mir_promoted_operand_type(left) : TYPE_INT;
+                    right_type = right->type != 0
+                        ? mir_promoted_operand_type(right) : TYPE_INT;
                     operand_type =
                         insn->immediate == TOK_SHL || insn->immediate == TOK_SHR
                             ? left_type
@@ -8772,10 +8827,10 @@ void mir_resolve_deferred_metadata(void)
                     if (right_source->opcode == MIR_PHI && right_source->type == 0)
                         right_source->type = TYPE_INT;
                     repaired_type = common_arith_type(
-                        promote_int_type(left_source->type != 0
-                                             ? left_source->type : TYPE_INT),
-                        promote_int_type(right_source->type != 0
-                                             ? right_source->type : TYPE_INT));
+                        left_source->type != 0
+                            ? mir_promoted_operand_type(left_source) : TYPE_INT,
+                        right_source->type != 0
+                            ? mir_promoted_operand_type(right_source) : TYPE_INT);
                     if (insn->type != repaired_type) {
                         insn->type = repaired_type;
                         left->type = repaired_type;
@@ -10934,7 +10989,36 @@ static int mir_promote_objects(void)
                         mir_block_start_for_instruction(i));
             if (reaching < 0)
                 continue;
-            aliases[insn->dst] = mir_resolve_alias(aliases, reaching);
+            reaching = mir_resolve_alias(aliases, reaching);
+            {
+                const struct MirInsn *source = mir_definition(reaching);
+                int size = type_size(insn->type);
+                unsigned long sign_bit = size == 2
+                    ? 0x8000UL : 0x80000000UL;
+
+                if (source != NULL && source->type != insn->type &&
+                    (size == 2 || size == 4) &&
+                    type_size(source->type) == size &&
+                    type_ptr_depth(source->type) == 0 &&
+                    type_ptr_depth(insn->type) == 0 &&
+                    !type_is_float(source->type) &&
+                    !type_is_float(insn->type) &&
+                    !(source->opcode == MIR_CONST &&
+                      ((unsigned long)source->immediate & sign_bit) == 0) &&
+                    mir_value_has_signedness_use(insn->dst, insn->type, 0)) {
+                    /* Reusing bits is not reusing their interpretation. Keep
+                     * the declared type at a signedness-observing SSA read. */
+                    insn->opcode = MIR_UNARY;
+                    insn->src1 = reaching;
+                    insn->immediate = 0;
+                    insn->object = -1;
+                    insn->memory_size = 0;
+                    mir_invalidate_use_cache();
+                    ++promoted;
+                    continue;
+                }
+            }
+            aliases[insn->dst] = reaching;
             insn->opcode = MIR_NOP;
             insn->dst = -1;
             mir_invalidate_use_cache();

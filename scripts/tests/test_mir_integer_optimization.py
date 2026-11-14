@@ -178,6 +178,25 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                     if options == ("-gline",):
                         self.assertEqual(actual, release)
 
+    def test_byte_compound_shifts_match_promoted_assignment(self):
+        cases = (
+            ("unsigned char initial, count;", "unsigned char",
+             "unsigned char x = initial;", "<<"),
+            ("signed char x; unsigned int count;", "int", "", ">>"),
+        )
+        for declarations, result_type, initializer, operator in cases:
+            template = (declarations + " " + result_type + " probe(void) { " +
+                        initializer + " %s; return x; }\n")
+            compound = template % ("x " + operator + "= count")
+            expanded = template % ("x = x " + operator + " count")
+            release = self.code(self.compile(compound))
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(operator=operator, options=options):
+                    actual = self.code(self.compile(compound, options))
+                    self.assertEqual(actual, self.code(self.compile(expanded, options)))
+                    if options == ("-gline",):
+                        self.assertEqual(actual, release)
+
     def test_float_conversion_retains_cast_signedness(self):
         cases = (
             ("long x", "(unsigned long)x", "__fulf"),
@@ -349,6 +368,53 @@ class MirIntegerOptimizationTests(unittest.TestCase):
         return "\n".join(line.split(";", 1)[0].strip()
                          for line in assembly.splitlines()
                          if line.split(";", 1)[0].strip())
+
+    def test_bitfield_promotions_match_explicit_signed_operands(self):
+        prefix = ("struct S { unsigned int small:11; unsigned int full:16; "
+                  "int signed_field:11; unsigned int ordinary; } s; int sel; ")
+        cases = (
+            ("-s.small", "-(int)s.small"),
+            ("~s.small", "~(int)s.small"),
+            ("+(s.small + 1) - 1000", "+((int)s.small + 1) - 1000"),
+            ("(s.small / 2) - 1000", "((int)s.small / 2) - 1000"),
+            ("(s.small >> 1) - 1000", "((int)s.small >> 1) - 1000"),
+            ("1 - (sel ? s.small : 1)", "1 - (sel ? (int)s.small : 1)"),
+            ("(sel ? -1000 : s.small) > 1", "(sel ? -1000 : (int)s.small) > 1"),
+            ("-s.full", "-(unsigned int)s.full"),
+            ("-s.ordinary", "-(unsigned int)s.ordinary"),
+            ("-s.signed_field", "-(int)s.signed_field"),
+        )
+        for actual, control in cases:
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(expression=actual, options=options):
+                    def compile_expression(expression):
+                        return self.code(self.compile(
+                            prefix + "long probe(void) { return " + expression + "; }",
+                            options))
+                    self.assertEqual(compile_expression(actual),
+                                     compile_expression(control))
+
+    def test_bitfield_promotions_survive_scoped_type_repair(self):
+        prefix = ("struct S { unsigned int a:1; unsigned int b:6; } s; "
+                  "int sign; long out; ")
+        cases = (
+            ("-s.b", "-(int)s.b"),
+            ("~s.b", "~(int)s.b"),
+            ("(s.b + 1) - 1000", "((int)s.b + 1) - 1000"),
+            ("-3 > sign * (b + s.a)", "-3 > sign * (b + (int)s.a)"),
+            ("(b ? s.b : b) - 1000", "(b ? (int)s.b : b) - 1000"),
+            ("(b ? (unsigned int)s.b : b) > -1",
+             "(b ? (unsigned int)(int)s.b : b) > -1"),
+        )
+        for actual, control in cases:
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(expression=actual, options=options):
+                    def compile_expression(expression):
+                        return self.code(self.compile(
+                            prefix + "void probe(void) { { unsigned char b = 0; "
+                            "out = " + expression + "; } }", options))
+                    self.assertEqual(compile_expression(actual),
+                                     compile_expression(control))
 
     def test_constant_trees_match_literal_returns(self):
         cases = (

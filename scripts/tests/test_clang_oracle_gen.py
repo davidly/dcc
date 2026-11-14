@@ -1,4 +1,4 @@
-"""Keep parked byte shapes separate from restored self-operands and postfix words."""
+"""Steer parked byte and fused-wide shapes while preserving restored value forms."""
 
 from pathlib import Path
 import sys
@@ -13,6 +13,41 @@ finally:
 
 
 class IntegerKnownShapeTests(unittest.TestCase):
+    def test_fused_wide_increment_add_steer_is_narrow(self):
+        cases = ((gen.I32, 'local', '++', True, False, True),
+                 (gen.U32, 'param', '++', True, False, True),
+                 (gen.I32, 'local', '+=', True, False, True),
+                 (gen.I16, 'local', '++', True, False, False),
+                 (gen.I32, 'global', '++', True, False, False),
+                 (gen.I32, 'local', '--', True, False, False),
+                 (gen.I32, 'local', '++', False, False, False),
+                 (gen.I32, 'local', '++', True, True, False))
+        for typ, storage, operator, prefix, literal, blocked in cases:
+            for reverse in (False, True):
+                with self.subTest(typ=typ, storage=storage, operator=operator,
+                                  prefix=prefix, literal=literal, reverse=reverse):
+                    local = gen.E('var', a=gen.Decl('x', typ, storage))
+                    if operator == '+=':
+                        update = gen.E('asg', [local, gen.E('const', a=1, t=gen.I16)], '+=')
+                    else:
+                        update = gen.E('incdec', [local], (operator, prefix))
+                    other = (gen.E('const', a=7, t=gen.I32) if literal else
+                             gen.E('var', a=gen.Decl('y', gen.I32, 'global')))
+                    operands = [other, update] if reverse else [update, other]
+                    enabled = gen.Gen(0).mk('bin', operands, '+')
+                    steered = gen.Gen(0, off={'wideincadd'}).mk('bin', operands, '+')
+                    self.assertEqual(enabled.a, '+')
+                    self.assertEqual(steered.a, '-' if blocked else '+')
+                    self.assertIs(steered.k[1 if reverse else 0], update)
+                    program = gen.Program(0, off={'wideincadd'})
+                    function = gen.Func('probe', gen.I16, [], 'helper')
+                    function.body.stmts.append(gen.S('expr', e=[enabled]))
+                    program.funcs.append(function)
+                    self.assertEqual(gen.known_shapes(program),
+                                     {'wideincadd'} if blocked else set())
+                    function.body.stmts[0].e[0] = steered
+                    self.assertEqual(gen.known_shapes(program), set())
+
     def test_byte_self_steer_preserves_word_and_logical_operators(self):
         for typ in (gen.I8, gen.U8, gen.I16, gen.U16, gen.I32):
             for kind, operator in (("bin", "-"), ("bin", "&"),
@@ -53,7 +88,7 @@ class IntegerKnownShapeTests(unittest.TestCase):
         self.assertEqual(stored.k[1].op, "const")
         self.assertFalse(gen.peep_byte_self(stored.a, stored.k))
 
-    def test_postfix_steer_restores_words_and_wides_but_preserves_byte_guard(self):
+    def test_postfix_steer_restores_all_widths(self):
         for typ in (gen.I8, gen.U8, gen.I16, gen.U16, gen.I32, gen.U32):
             with self.subTest(typ=typ):
                 generator = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS))
@@ -65,7 +100,7 @@ class IntegerKnownShapeTests(unittest.TestCase):
                      mock.patch.object(generator.rng, "random", side_effect=(1, 0, 1)):
                     expression = generator.gen_expr(context, 1)
                 self.assertEqual(expression.op, "incdec")
-                self.assertEqual(expression.a[1], typ.bits == 8)
+                self.assertFalse(expression.a[1])
                 expression.a = ("++", False)
                 program = gen.Program(0, off={"postincvalue"})
                 function.body.stmts.append(gen.S("expr", e=[

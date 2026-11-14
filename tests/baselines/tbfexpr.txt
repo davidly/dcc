@@ -11,3 +11,5 @@ binary 8 -308
 conditional 0 -345
 conditional 1 -654
 conditional 2 9
+scoped -444 -653 0
+scoped conditional -345

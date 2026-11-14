@@ -1,8 +1,5 @@
-/* BUG-013: an unsigned bit-field narrower than int must promote to int
- * (C89 3.2.1.1, C99 6.3.1.1), and dcc does so for `bf - 1000` written
- * directly. But once the bit-field is the operand of unary - or ~, of any
- * other binary operator, or an arm of ?:, the result is typed unsigned int:
- * it is zero-extended when widened to long and compared as unsigned. */
+/* Narrow unsigned bit-field promotion through unary/binary/conditional
+ * expressions, widening and comparisons, including scoped type repair. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -44,6 +41,25 @@ static int32_t conditional(int16_t which)
     return 9;
 }
 
+static void scoped(void)
+{
+    {
+        uint8_t b = (uint8_t)sel;
+        out[0] = -s.m0;
+        out[1] = (s.m2 + 1) - 1000;
+        out[2] = (-3 > sel * (b + s.m0));
+
+    }
+}
+
+static int32_t scoped_conditional(void)
+{
+    {
+        uint8_t b = (uint8_t)sel;
+        return 1 - (b ? s.m2 : b);
+    }
+}
+
 int main(void)
 {
     int16_t i;
@@ -53,5 +69,8 @@ int main(void)
         printf("binary %d %ld\n", i, (long)binary(i));
     for (i = 0; i < 3; i++)
         printf("conditional %d %ld\n", i, (long)conditional(i));
+    scoped();
+    printf("scoped %ld %ld %ld\n", (long)out[0], (long)out[1], (long)out[2]);
+    printf("scoped conditional %ld\n", (long)scoped_conditional());
     return 0;
 }
