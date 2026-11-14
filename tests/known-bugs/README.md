@@ -75,7 +75,7 @@ regular test:
 `tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c`, `tests/tflncmp.c`,
 `tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tflidx.c`, `tests/tndwide.c`,
 `tests/tlbreuse.c`, `tests/twincadd.c`, `tests/tmerge16.c`, `tests/tearly16.c`,
-`tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c` and `tests/tbfcomp.c` were promoted this way.
+`tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c`, `tests/tbfcomp.c` and `tests/tfdivr.c` were promoted this way.
 
 
 `tests/tlogblk.c` separately covers BUG-004's host-proven word and block-long

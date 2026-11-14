@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has seven open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has eight open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -20,8 +20,9 @@ If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
 explicitly approved K as a four-rule exception, J2 as two independent
 fixes with narrowly specified existing-baseline exceptions, and M as two
-independent single-bug commits. J2's numeric
-stdout refreshes still require independent host-clang proof.
+independent single-bug commits. J2 did not refresh BUG-039's numeric
+stdout; R1 subsequently received explicit numeric/test-source/performance
+baseline approval, documented in its scoped exceptions below.
 
 ## Rules
 
@@ -2635,6 +2636,280 @@ only its tiny fake-tool scheduler fixture is rebuilt, not an older dcc.
 No failing test is fixed, skipped or refreshed; the full Python gate
 remains red. No prepush or compiler regression-dating check is run.
 
+
+### R1. Normalize the restoring-division quotient before rounding
+
+**Maintainer-approved runtime fix and numeric/performance expectation updates**
+([PR #325](https://github.com/davidly/dcc/pull/325)). The maintainer ruled that:
+1. Census invariance applies to compiler output for **unchanged sources**.
+   Updating only the five embedded expected constants in `tstrb11.c` and
+   `ttrg6sp.c` is an approved test-source edit; any changed existing function
+   must belong to those two edited files.
+2. Category-(b) monotonic mathematical accuracy is **not required**. Acceptance
+   is correctly rounded IEEE division bits plus a per-line explanation of how
+   the corrected quotient feeds the existing approximate libm, decimal parser,
+   or `%f` formatter. Those independent implementations and their known limits
+   are unchanged; the formatter defect is tracked as BUG-060 #322.
+
+Correctness remains paramount; negative cycle/size impact must be minimal.
+The bounded alternatives below retain the smallest shared-loop correction.
+
+`fix/cluster-r1-fdiv`, based on `15db8e69`, changes only the shared division
+runtime: the old 24-bit quotient was rounded before normalizing significand ratios below
+one. One 25th restoring iteration, reusing `FDLUP`, normalizes before rounding.
+The original hot loop is unchanged, and the post-round normalizer is removed.
+The final shadow carry branches directly into rounding, removing its redundant
+materialization in C. IY and both `__fdf` and stack `__fdiv` ABIs are preserved.
+The helper's `__fdf`-to-`FSUB` span is **431 -> 420 bytes (-11)**.
+
+Bounded tightening:
+- Replacing the initially retained underflow `jp z` with in-range `jr z`
+  saves one byte and three cycles on every below-one significand ratio.
+- An alternate `ld a,d; or a; jp m` sign test costs one more byte. Peep
+  probes, current bit-test -> alternate sign-test cycles: `tfdivr`
+  10450289 -> 10450057; `tc89fmat` 99564 -> 99566; `mm`
+  125251253 -> 125251353; `tmathf` 2955303 -> 2955288;
+  `pihex` 689144124 -> 689145087. Retain the smaller bit-test, which is
+  faster for the division-heavy mm/pihex workloads. These comparative probes
+  are not substitutes for normal PowerShell checked-baseline measurements.
+- Up-front 24-bit operand comparison/pre-normalization duplicates the existing
+  restoring comparison and adds code; unconditional 25-bit division would
+  require a wider quotient plus a separate rounding path for ratios above one.
+  Neither improves on this bounded, shared-loop correction. Extra work for a
+  below-one inexact significand ratio is necessary to recover the missing rounding bit;
+  eliminating it reproduces BUG-039. No additional register saves were added.
+
+#### Bit and ABI proof
+
+The original known-bug program reports **FIXED in both modes**, 404/404 results.
+A linked probe calls both entry points explicitly, setting/checking IY around
+each call: **4404 pairs / 8808 ABI bit patterns per mode, zero differences**.
+This includes the historical 4+20x20 table, another 4000 directed/random pairs,
+minimum-normal-adjacent operands, just-below/above-one ratios, powers of two
+for exponents 1..254, both signs and huge/tiny normal exponents. Normal-range
+cases only: the existing target flush-to-zero policy is intentionally unchanged.
+Host clang O0/O2 and combined ASan/UBSan agree. `tfdivr` persists the 404-pair
+matrix through both ABIs with IY checks; its 809-line baseline is host-proven.
+Both runtime audits pass, including all 174 mapped APIs and 24 formatted labels.
+Raw reproducer peep/nopeep compiler assembly is unchanged by the runtime edit.
+
+#### Approved numeric expectation changes
+
+The maintainer approved all runtime-caused numeric updates below, in both
+modes. Only **nine lines** change across `tfdedge.txt`, `trig.txt` and
+`ttrig.txt`. `tstrb11.txt` and `ttrg6sp.txt` retain their original two-line PASS
+outputs after the five embedded expected constants are updated; their baseline
+files remain byte-identical. No other baseline or test source changes.
+Category (a) is host-proven same-source arithmetic; category (b) explains the
+corrected quotient feeding existing target libm/parsing/formatting. Mathematical
+error figures are retained as context, **not acceptance gates**.
+
+| App / line or check | Old -> corrected runtime | Class / corrected-quotient explanation |
+| --- | --- | --- |
+| tfdedge:5 | 14.285716 -> 14.285715 | (b) quotient bits match clang; clang `%f` prints 14.285714. Decimal error against 100/7 decreases, but formatter remains independently wrong (BUG-060). |
+| tfdedge:6 | -5.666667 -> -5.666666 | (b) quotient bits match clang; clang prints -5.666667. Raw quotient error is halved; **decimal error increases** due to the existing formatter (BUG-060); this is explicitly accepted, not a divider-bit error. |
+| tfdedge:7 | -5.666667 -> -5.666666 | (b) negative-divisor variant of line 6, same existing formatter behavior (BUG-060). |
+| trig:11 | tanf 1.000000: 1.557449 -> 1.557448 | (b) true tan(1)=1.557407724654902; printed absolute error decreases from 0.0000412753 to 0.0000402753. |
+| trig:15 | tanf 1.500000: 14.101420 -> 14.101419 | (b) true tan(1.5)=14.10141994717172; printed error **increases** from 0.0000000528283 to 0.000000947172; clang tanf prints the new value, explaining the changed runtime quotient feeding the unchanged approximate tan/formatter; monotonicity is not required. |
+| trig:23 | tanf -1.000000: -1.557449 -> -1.557448 | (b) symmetric line 11; same improvement. |
+| trig:27 | tanf -1.500000: -14.101420 -> -14.101419 | (b) symmetric line 15; same existing tan/formatter behavior. |
+| ttrig:15 | tan 1.500000: 14.101410 -> 14.101412 | (a) identical float algorithm/printf line matches clang O0/O2 after renaming conflicting local math function names only; no arithmetic changed in the host source. |
+| ttrig:27 | tan -1.500000: -14.101410 -> -14.101412 | (a) same proof, negative case. |
+| tstrb11:finite low boundary | 00d9c7dc -> 00d9c7dd | (b) decimal parser. New value is the nearest float to 2e-38; absolute error decreases from 1.29908719234e-45 to 1.02211271922e-46. |
+| tstrb11:integer cancellation | 3f7ffffc -> 3f800002 | (b) target decimal parser. Exact decimal is 1; both values have equal absolute error 2^-22, but opposite signs. |
+| tstrb11:atof integer cancellation | 3f7ffffc -> 3f800002 | (b) identical parser proof. |
+| ttrg6sp:tanf(+halfpi) bits | CBAE8A4A -> CBAE8A4B | (b) true tan(1.5707963705062866)=-22877332.42885646; error **0.42885646 -> 1.57114354**, from unchanged range reduction/approximation; the final division itself is correctly rounded. |
+| ttrg6sp:tanf(-halfpi) bits | 4BAE8A4A -> 4BAE8A4B | (b) symmetric half-pi proof, same increased mathematical error. |
+
+The half-pi library calculation's rounded range-reduction residual is
+`b33bbd2e` (-4.371138828673793e-8). Its exact reciprocal is
+-22877333.3265052307191; the corrected -22877334 is **closer to that actual
+arithmetic operation** than the old -22877332 (0.673495 vs 1.326505).
+This does not imply that the approximate library function is closer to true
+tangent. The maintainer explicitly accepts that distinction and the independent
+`%f` decimal-rounding defect without changing libm or formatting in this cluster.
+The expected-constant source diff is minimal: `00d9c7dc -> 00d9c7dd` and two
+`3f7ffffc -> 3f800002` occurrences in `tstrb11.c`; `cbae8a4a -> cbae8a4b` and
+`4bae8a4a -> 4bae8a4b` in `ttrg6sp.c`. Both programs now print their original
+PASS summaries and exit zero; no assertion is removed or weakened.
+
+#### Gates and tracking
+
+Before the runtime edit: strict stack full+extended passes 550 apps, 24 skips;
+diagnostics/peephole/extended pass. Before the maintainer ruling, the correct
+runtime necessarily exposed five obsolete numeric outputs/expectations and 22
+checked cycle regressions. Those are now explicitly approved and updated.
+The focused five-app numeric run passes in both modes. Only the **100 affected
+apps** (95 previously reported changed passing-app rows plus the five numeric
+apps) were remeasured using the ordinary stack-check PowerShell path; all 100
+pass. No unmeasured row is refreshed.
+
+Both final strict full+extended gates pass **551 apps / 0 failures / 24 skips**,
+with **zero stdout failures** in peep and nopeep. Stack-check performance has
+zero regressions after the approved 100-row refresh. Diagnostics, peephole
+fixtures and the extended suite pass in both stack modes (50.47s / 50.69s).
+Python rerun: **333 tests**, 2 skips, only the two pre-approved #277 failures
+(`test_mir_campaign_baselines`, `test_mir_exact_controls`) and one serial/parallel
+mutation-fixture timeout under load. That remaining timing case **passes in
+isolation** (225.923s for the serial+parallel test). The other four previously
+load-sensitive cases pass in full discovery. No Python harness is fixed, skipped
+or refreshed; no additional unresolved failures remain after the retry.
+
+Restored float production seeds 1-300 remain **283 ok, 17 INVALID, zero FAIL**;
+neither the runtime nor generators changed after that clean batch.
+
+The original censuses contain **3613 existing functions**: **3611 remain
+byte-identical**, and only `tstrb11:main` and `ttrg6sp:main` change due to the
+approved expected-constant edits. The new `tfdivr:main` and `tfdivr:show` are
+additions, not changed original functions. Their unchanged committed source
+was independently recompiled in both stack modes and matches the current
+censuses exactly, so this ruling introduces no changes in the promoted test. The extended census preserves all
+**548 rows** byte-identically. No selector, instruction count, block count or
+schedule changes in the two edited existing functions; only expected immediate
+values change. `tstrb11:main` emitted assembly text becomes eight characters
+shorter because two `65532` low-word immediates become `2`; linked sizes do not
+change. Debug statement/scope/register contracts are unaffected.
+
+| Edited existing function | Stack hash old -> new | No-stack hash old -> new | Emitted-text bytes stack / no-stack |
+| --- | --- | --- | --- |
+| tstrb11:main | ff45189e -> 52365e2b | 9525f3c1 -> d043ba88 | 6415 -> 6407 / 6386 -> 6378 |
+| ttrg6sp:main | 7f168cee -> dc4e2204 | 2bf17b89 -> 0282bd1b | unchanged |
+
+New bugs logged and filed, not fixed: **BUG-060 #322** (decimal formatting of
+explicit float bits, independent of division) and **BUG-061 #323** (`sizeof`
+32768 sign-extension/signed constant division). Neither occurs in the float
+fuzzer's bit-only observation or small-array shape, so no unrelated steer is
+needed. Before promotion: **12 reproducers: 2 FIXED, 10 fails** (039 and the
+pre-existing 022 flip). After promotion plus the two newly parked findings:
+**13 reproducers: 1 FIXED, 12 fails**. BUG-022's incidental FIXED result is
+left to cluster M.
+
+
+#### Approved normal stack-check performance updates
+
+**Exactly 100 existing rows change** below, measured only for affected apps
+with `pwsh ./scripts/runall.ps1 -Apps <affected> -Mode full -UpdatePerfBaseline`
+on the normal stack-check path. Every other existing row remains byte-identical.
+The new `tfdivr` row from the initial R1 implementation remains unchanged:
+20868763/20913550 cycles, 6016/6016 bytes (peep/nopeep).
+
+Minimum-cost rationale keys, applying per row below:
+- **C**: a below-one significand ratio requires its missing restoring step for correct
+  rounding. The existing hot loop is reused without additional saves. The
+  one-byte-larger alternate sign test is slower in mm/pihex; the retained
+  `bit`/`jr` and short underflow branch are the bounded smallest choice.
+- **R**: removing the post-round normalizer and redundant carry materialization
+  reduces the ordinary rounding/dispatch path, improving these cycle counts.
+- **F**: corrected quotients change downstream numeric/formatting data paths;
+  their existing algorithms are unchanged. The five expected constants only
+  correct assertions, retaining the test workload and PASS exits.
+- **S**: the helper is 11 static bytes smaller, crossing 128-byte CP/M COM
+  padding boundaries for these linked sizes. No compiler policy changes.
+
+| App | Peep cycles old -> new | Nopeep cycles old -> new | Peep bytes old -> new | Nopeep bytes old -> new | Minimum-cost rationale |
+| --- | ---: | ---: | ---: | ---: | --- |
+| fcall1 | 115678 | 115799 | 5504 -> 5376 | 5504 | S |
+| mm | 125169395 -> 125251357 | 126594011 -> 126675973 | 7936 | 7936 | C |
+| pihex | 686738129 -> 689144476 | 689111117 -> 691517464 | 11136 | 11520 -> 11392 | C, S |
+| primes | 3747236 | 3747247 | 6272 | 6400 -> 6272 | S |
+| sieve | 16863183 -> 16857093 | 17306944 -> 17302294 | 5120 | 5120 | R |
+| taggordr | 24165 | 24824 | 5504 | 5760 -> 5632 | S |
+| tap | 167704902 -> 167807559 | 168241166 -> 168343823 | 7296 | 7296 | C |
+| tarray | 2903240 | 2937554 | 8448 -> 8320 | 8448 | S |
+| tasm | 9976 | 10008 | 5248 | 5376 -> 5248 | S |
+| tatan2sp | 172284 -> 172192 | 172304 -> 172212 | 8704 | 8704 | R |
+| tatof | 1773607 -> 1771348 | 1774477 -> 1772154 | 9216 | 9216 | R |
+| tbig | 1237099265 | 1428808639 | 13568 | 13952 -> 13824 | S |
+| tbitfld | 317747 | 320382 | 6912 -> 6784 | 7040 | S |
+| tbits | 2129662 | 2134072 | 7552 -> 7424 | 7552 | S |
+| tblkabi | 37257 | 37519 | 5760 -> 5632 | 5760 | S |
+| tblkret | 138005 | 138310 | 5760 -> 5632 | 5760 | S |
+| tboolbr | 29728 | 30388 | 5888 -> 5760 | 5888 | S |
+| tc89bit | 35672 | 35996 | 5504 | 5632 -> 5504 | S |
+| tc89decl | 37388 | 37803 | 5760 | 5888 -> 5760 | S |
+| tc89fcmp | 24009 | 25084 | 6144 | 6272 -> 6144 | S |
+| tc89fdiv | 40465 -> 40440 | 40482 -> 40457 | 6016 | 6016 | R |
+| tc89fmat | 98829 -> 99626 | 98846 -> 99643 | 6656 | 6656 | C |
+| tc89pp | 31262 | 31379 | 5376 -> 5248 | 5376 | S |
+| tcanest | 23181 | 23395 | 5376 -> 5248 | 5376 | S |
+| tcastasg | 72694 | 73097 | 5760 -> 5632 | 5760 | S |
+| tclit | 50382 | 52016 | 7680 | 7808 -> 7680 | S |
+| tcmfloat | 94411 -> 94388 | 94632 -> 94609 | 6016 | 6016 | R |
+| tcmprhs | 184876 | 185304 | 8448 | 8576 -> 8448 | S |
+| tconstun | 94472 | 94949 | 5504 | 5760 -> 5632 | S |
+| tctxflt | 365602 -> 365556 | 372005 -> 371959 | 17792 | 17920 | R |
+| tctxops | 102112 | 103173 | 10496 | 10624 -> 10496 | S |
+| tdblnot | 105647 | 135090 | 6400 | 6784 -> 6656 | S |
+| tdivzero | 70757 | 72044 | 9728 | 9856 -> 9728 | S |
+| tdrive | 165292 | 165371 | 9344 | 9472 -> 9344 | S |
+| terrno | 595114 | 598860 | 12288 | 12544 -> 12416 | S |
+| texscan | 69716 | 69763 | 7936 | 8064 -> 7936 | S |
+| tfdedge | 537327 -> 537355 | 537374 -> 537402 | 5376 | 5376 | C, F |
+| tfdf | 91513 -> 89782 | 91533 -> 89802 | 6912 | 6912 | R |
+| tflncmp | 123253 -> 123336 | 123991 -> 124074 | 7936 | 7936 | C |
+| tfloat4 | 901241 -> 883480 | 906707 -> 888946 | 18944 -> 18816 | 19200 | R, S |
+| tfmodfsp | 418762 | 419397 | 9984 | 10112 -> 9984 | S |
+| tforfrm | 20245 | 20284 | 5248 -> 5120 | 5248 | S |
+| tfpshad | 13502 | 13557 | 5120 | 5248 -> 5120 | S |
+| tfpspec | 221338 -> 221292 | 222361 -> 222315 | 12672 | 12800 | R |
+| tfseekr | 50079 | 50295 | 9984 | 10112 -> 9984 | S |
+| tginaddr | 25609 | 25949 | 5504 | 5632 -> 5504 | S |
+| tginoffs | 25475 | 25794 | 5504 -> 5376 | 5504 | S |
+| thyp10 | 319455 -> 319409 | 320067 -> 320021 | 7936 | 8064 | R |
+| tindopt | 39064 | 39430 | 5376 -> 5248 | 5376 | S |
+| tindres | 40069 | 40349 | 5376 -> 5248 | 5376 | S |
+| tinitfc | 25930 | 25950 | 5632 -> 5504 | 5632 -> 5504 | S |
+| tinitreg | 40088 | 41626 | 6912 | 7040 -> 6912 | S |
+| tinline | 237625 | 242787 | 6784 -> 6656 | 7040 | S |
+| tkandr | 26010 | 26734 | 5760 -> 5632 | 5760 | S |
+| tlimits | 119256 | 119273 | 5376 -> 5248 | 5376 -> 5248 | S |
+| tlmul | 328896 | 330071 | 6912 | 7040 -> 6912 | S |
+| tlog | 1009071 -> 1009961 | 1009128 -> 1010018 | 7936 | 8064 -> 7936 | C, S |
+| tlogfsp | 155826 -> 155980 | 155846 -> 156000 | 7552 | 7552 | C |
+| tmatha | 747800 -> 747754 | 748102 -> 748056 | 9984 | 9984 | R |
+| tmathf | 2954551 -> 2955551 | 2956181 -> 2957181 | 17024 | 17024 | C |
+| tmemaddr | 24423 | 24671 | 5504 -> 5376 | 5504 | S |
+| tnarrow | 61833 | 61870 | 5376 -> 5248 | 5376 | S |
+| tnddecay | 34622 | 35343 | 6144 | 6272 -> 6144 | S |
+| tnegidx | 339578 | 342160 | 6784 -> 6656 | 6912 | S |
+| tpeepsum | 148118 | 148193 | 6784 | 7168 -> 7040 | S |
+| tpeeq8 | 306217 | 309981 | 5632 | 5760 -> 5632 | S |
+| tpeesc | 117548 | 118773 | 6272 | 6400 -> 6272 | S |
+| tpfbuf | 1480566 | 1706969 | 12288 -> 12160 | 12544 | S |
+| tpflio | 540231 | 540858 | 8448 | 8576 -> 8448 | S |
+| tphi | 1056643 -> 1058546 | 1056670 -> 1058573 | 5376 | 5376 | C |
+| tpostidx | 18341 | 18358 | 5120 -> 4992 | 5120 -> 4992 | S |
+| tpostinc | 234271 | 235053 | 6144 | 6272 -> 6144 | S |
+| tppreg | 19462 | 19740 | 5504 -> 5376 | 5504 | S |
+| tpromo | 161552 | 164544 | 9344 -> 9216 | 9344 | S |
+| tptrdiff | 24153 | 24249 | 5504 -> 5376 | 5504 | S |
+| tregnarw | 34709 | 34863 | 5248 -> 5120 | 5248 | S |
+| trenwild | 229451 | 229624 | 8448 -> 8320 | 8448 | S |
+| trig | 12837215 -> 12793704 | 12837574 -> 12794063 | 11648 | 11648 | R, F |
+| trnb5 | 77177 | 77671 | 8704 -> 8576 | 8704 | S |
+| trowptr | 22977 | 23944 | 5248 | 5376 -> 5248 | S |
+| trtl2 | 57987 | 58424 | 9984 -> 9856 | 9984 | S |
+| trw2 | 2038688342 | 2663408453 | 10496 | 10880 -> 10752 | S |
+| trwold | 92122182 | 92139657 | 9216 | 9344 -> 9216 | S |
+| ts | 768987 | 769014 | 6400 -> 6272 | 6400 -> 6272 | S |
+| tsprintf | 207253 | 207875 | 7040 -> 6912 | 7040 -> 6912 | S |
+| tsqrtsp | 208382 -> 209653 | 208402 -> 209673 | 7040 | 7040 | C |
+| tsretmem | 58324 | 59278 | 5632 | 5760 -> 5632 | S |
+| tstdlib | 124673 | 126616 | 9600 -> 9472 | 9600 | S |
+| tstfield | 34146 | 34214 | 6272 -> 6144 | 6272 | S |
+| tstr | 1343090011 -> 1343091356 | 1368263354 -> 1368265056 | 11136 | 11520 | C |
+| tstraddr | 22963 | 23005 | 5248 -> 5120 | 5248 | S |
+| tstrb11 | 2930351 -> 2931938 | 3036882 -> 3038469 | 9728 | 9984 | C, F |
+| tszswap | 99488064 -> 99486414 | 133736936 -> 133734086 | 6144 | 6528 | R |
+| ttrg6sp | 178917 -> 179533 | 179399 -> 180015 | 10368 | 10368 | C, F |
+| ttrig | 40149112 -> 40303224 | 40199825 -> 40353951 | 15104 | 15232 | C, F |
+| tunmsg2 | 40856 | 41229 | 5248 | 5376 -> 5248 | S |
+| tvlax | 7721009 | 8564982 | 7040 | 7296 -> 7168 | S |
+| tvplain | 74161 | 74578 | 7808 -> 7680 | 7808 | S |
+| twhcomma | 228262 | 232963 | 8448 -> 8320 | 8448 | S |
+| wumpus | 271445 | 293836 | 14592 | 15232 -> 15104 | S |
+
+
 ### K. dccpeep
 
 | Bug | Issue | Shape |
@@ -2975,8 +3250,9 @@ addresses require the normal full/line debug pipeline checks.
 | H | [#308](https://github.com/davidly/dcc/pull/308) (`fix/cluster-h-float-cmp`) | PR open; verified compiler gates | 020/045 promoted as tcmprhs/tflncmp; int 252/48 and float 283/17, zero FAIL; 3,514 original functions in both modes and 523 perf rows unchanged; BUG-057/#304 parked, not fixed; #277 and isolated mutation timing exceptions documented |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |
-| J | [#290](https://github.com/davidly/dcc/pull/290) | merged; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; existing output unchanged; 049 fixed in J2, 039 still blocked by host-output proof |
+| J | [#290](https://github.com/davidly/dcc/pull/290) | merged; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; existing output unchanged; 049 fixed in J2, 039 subsequently fixed in R1 |
 | J2 | [#291](https://github.com/davidly/dcc/pull/291) | PR open; partial fix | 049 promoted as tflnot; 300 float seeds 269 ok/31 INVALID/zero FAIL; only three one-instruction census changes and two approved perf rows; 039 reverted because all five complete numeric baselines fail host-clang proof |
+| R1 | [#325](https://github.com/davidly/dcc/pull/325) | PR open; verified approved numeric/perf updates | 039 dual ABI/IY 4404 pairs exact in both modes, helper -11 bytes; restored float seeds 283 ok/17 INVALID/zero FAIL; maintainer approved 9 stdout lines, 5 test constants and 100 existing perf rows; only tstrb11:main/ttrg6sp:main move in existing censuses; both strict full+extended gates pass 551 apps, zero failures; Python #277 only after successful timing retry; new BUG-060 #322 / BUG-061 #323 logged |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | K2 | [#298](https://github.com/davidly/dcc/pull/298) | PR open | BUG-054 promoted as tpephl; 228 ok/72 INVALID/zero FAIL; all 3,047 MAC files per stack mode and 514 existing perf rows unchanged (except clock literal); #277 and isolated harness retries documented |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |

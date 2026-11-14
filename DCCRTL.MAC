@@ -16858,21 +16858,21 @@ FDSHR:
         ex      af,af'          ; save carry-out as next iteration's RHI
         djnz    FDLUP
 
-        ; Materialize the final carry once for the rounding test below.
-        ex      af,af'
-        ld      a,0
-        adc     a,a
-        ld      c,a
+        ; A/B is in [0.5,2). Ratios below one need a 25th quotient bit
+        ; before rounding, not a left shift of an already rounded quotient.
+        bit     7,d
+        jr      nz,FDROUND
+        ld      a,(AEXP)
+        dec     a
+        jr      z,FDZRO
+        ld      (AEXP),a
+        inc     b               ; DJNZ left B=0: one more restoring step
+        jr      FDLUP
 
-        ; The final shift left leaves 2*remainder in the arithmetic
-        ; bank and the quotient in the control bank.  Round directly from
-        ; those registers instead of spilling remainder and quotient to
-        ; FP*/FQ* and immediately loading them again.
-        ;
-        ; control bank here: C=RHI, D:H:L=quotient
-        ld      a,c
-        or      a
-        jr      nz,FDRREGUP     ; 25th remainder bit => definitely round
+FDROUND:
+        ; The last shift holds 2*remainder; shadow carry is its 25th bit.
+        ex      af,af'
+        jr      c,FDRREGUP
 
         ; RHI is zero. Compare B:C:E remainder against H:L:D divisor in
         ; the arithmetic bank. Round when remainder >= divisor.
@@ -16914,26 +16914,6 @@ FDRREGUP:
 FDRREGNOA:
         exx                     ; no round; back to control bank
 FDRREGSTORE:
-        ; Normalize the 24-bit quotient directly in D:H:L before storing it.
-        ; The old path stored it to AM0..AM2, then repeatedly called FSLA,
-        ; which loaded and stored the same bytes for every leading zero bit.
-        ; This is the identical one-bit left normalization in registers.
-
-        bit     7,d
-        jr      nz,FDRSTORE
-        ; Keep the exponent in A across all normalization shifts.  The old
-        ; loop reloaded and rewrote AEXP for every leading zero bit.
-        ld      a,(AEXP)
-FDNORL:
-        add     hl,hl
-        rl      d
-        dec     a
-        jp      z,FDZRO
-        bit     7,d
-        jr      z,FDNORL
-        ld      (AEXP),a
-
-FDRSTORE:
         ld      (AM0),hl
         ld      a,d
         ld      (AM2),a
