@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has fourteen open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twelve open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -500,11 +500,97 @@ no dating checks or prepush.ps1 were run.
 BUG-023 was filed here but is confirmed fixed in D2a: its postfix update
 uses the same false named-home binding as BUG-021.
 
-The first three are a value merged from two arms that is never stored before
-the update. BUG-037 and BUG-052 are a value read at the wrong point of the
-loop. Both smell of the homed emitter's liveness/merge at join blocks
-and of a temporary being homed in the variable it was computed from. Begin
-with BUG-038, the smallest.
+**C1: BUG-027 and BUG-038 share one confirmed cause and are fixed** in
+[#313](https://github.com/davidly/dcc/pull/313). A word
+PHI correctly merges the assigned value, but a fused self-store reads the
+named object's slot while PHI copies only leave the value in HL (or a backend
+slot). `mir_phi_uses_scalar_object_home()` now materializes incoming edges in
+the actual local/parameter home when the PHI's sole consumer is a store-only
+fused adjustment. The result's sole-use guard prevents recursively following
+loop-carried PHIs. No matcher, selector, cost policy, fallback or runtime
+helper is changed. Unlike D2a, the PHI really identifies this object: what was
+missing was materialization, not type/name metadata. D2c's byte-home liveness
+proof is unchanged; B4's call-argument-cache PHI guard and B2a's narrow reload
+handling are different roots.
+
+First-root verification flips **027/038 only**; 029/037/052 remain wrong in
+both production modes. BUG-057 also remains wrong and is not folded in. The
+stop rule applies: no second independent fix is included. Before promotion,
+known bugs are **3 FIXED / 15 fails** (the third FIXED is the pre-existing
+BUG-022 fixture, whose diagnostic defect remains open).
+
+Both original **3,558-function** MIR censuses are byte-identical, with zero
+changed apps/functions in stack and no-stack mode. All **528 existing perf
+rows** remain unchanged. The neighboring `no_update`, `no_outer_if` and
+`no_else` function bodies are byte-identical in peep and nopeep. Corrected
+PHI edges add just the missing word stores and retain the existing in-place
+carry/borrow schedule (peep uses immediate IX stores). Strict Python
+full+extended acceptance passes; CMake, compiler ASan/UBSan, required MIR
+emission, both extended censuses, 31 focused optimizer/line-debug tests and
+all 10 debugger-host tests pass. Full `-g` fixed fixtures run correctly in both
+pipelines; `-gline` COM files are release-identical in both pipelines.
+
+C1 is promoted as `tmerge16` and `tearly16`; only their new perf rows are
+appended, preserving all 528 original rows and their order. tearly16 adds
+nested-assignment/carry, decrement and no-early-return coverage. Both host
+validations and strict focused stack/no-stack full runs pass. The restored
+integer `nestedifelse`/`wordarm` seeds 1–300 are **293 ok / 7 INVALID / zero
+FAIL** in all four production configurations. Float steering is unchanged.
+After promotion: **16 parked reproducers, 1 FIXED / 15 fails**, with only the
+known BUG-022 fixture exception. The bug log has **16 open / 39 fixed**.
+
+Final censuses add 16 new test functions but change none of the original
+3,558 in either mode. Strict Python full+extended after promotion passes
+545 runnable apps, 24 existing skips, zero failures, including diagnostics,
+extended, dccpeep and perf checks. Both strict PowerShell full+extended release gates also pass after promotion:
+545 runnable apps and 24 existing skips in each stack/no-stack mode.
+
+The regular Python gate runs **327 tests**, with the approved two #277
+failures (`test_mir_campaign_baselines`, `test_mir_exact_controls`) and one
+180-second synthetic mutation-harness timeout
+(`test_default_serial_and_parallel_are_equal_and_bounded`). Its isolated
+retry passes the serial phase but times out in the parallel phase after 180
+seconds (359.704 seconds total); that single harness method remains
+unverified under shared load. No expectations, skips or harness timing are
+changed.
+No historical compiler checks or prepush run is made.
+
+A consumer-side PHI reload experiment was rejected: fusion intentionally
+allocates no slot for this source, so it reads an unwritten virtual location.
+Materializing the incoming edges is the correct producer/consumer contract.
+A broad home proof recursed through loop PHIs; the store-only result guard
+keeps that proof bounded without perturbing existing loop schedules.
+
+**C2 remains open, traced rather than guessed:**
+
+- **BUG-029:** `dcc_mir.c:mir_compute_liveness_bytes()` and
+  `mir_compute_liveness_words()` stop their PHI-edge-input scan at the first
+  non-PHI/non-NOP instruction. In `minus`, the byte PHI is instruction 19,
+  its widening unary is 20, and the `x` PHI is 21. The latter's parameter
+  operand is therefore not live on the incoming else edge: HL is overwritten
+  by 100, then `dcc_mir_emit_common.c:mir_emit_homed_phi_copies()` copies that
+  HL to DE as `x`. Without the cast the PHIs are contiguous and the control
+  is correct. Forced homed reproduces it; forced spilled-all is correct.
+- **BUG-037:** `dcc_mir_spilled_cfg.c:mir_binary_is_wide_phi_update()` checks
+  only textually later uses of the old counter PHI. Its additional edge use
+  in the earlier loop-header `l` PHI is missed. The in-place increment aliases
+  the old/new counter slots; the backedge copy for `l` then reads the updated
+  counter. A do/while or straight-line copy retains the original value.
+  This is **not BUG-057**: it mutates a PHI backend slot before an edge copy,
+  not a fused named-home result read by `mir_direct_wide_location()` in a
+  direct wide addition. No direct-add consumer is present in the minimal
+  BUG-037 functions.
+- **BUG-052:** `dcc_mir_spilled_cfg.c:mir_prepare_backend_slots()` coalesces a
+  conditional PHI with a solitary parameter source merely because it has one
+  syntactic use, despite its live interval spanning the loop backedge. In
+  production `f1`, parameter v0 (first 1, last 34), conditional PHI v15 and
+  subtraction v17 share slot 0. Reusing that PHI slot for v17 also truncates
+  its slot end to 28, allowing the counter's v20 to overwrite its low word.
+  The next iteration therefore subtracts from the last result, not the
+  original parameter. A local copy, a post-loop read, or no parameter store
+  retains a separate/stable source and is correct. Forced homed is correct;
+  spilled-all still fails `f2`. This is independent of C1's word self-store
+  materialization and B4's call-argument cache.
 
 ### D. Post-increment and post-decrement
 
@@ -1894,7 +1980,8 @@ addresses require the normal full/line debug pipeline checks.
 | B2c | | open | BUG-057/#304: fused wide increment result read through stale direct-add slot; `mir_direct_wide_location()` owns the missing home proof; not fixed in H |
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | [#293](https://github.com/davidly/dcc/pull/293) | PR open | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
-| C | | open | |
+| C1 | [#313](https://github.com/davidly/dcc/pull/313) (`fix/cluster-c-local-merge`) | PR open; compiler gates verified; accepted Python harness exceptions | BUG-027/#247 and BUG-038/#258: materialize word PHI edges for store-only fused adjustments; original 3,558 functions/mode and 528 perf rows unchanged |
+| C2 | | open; traced | BUG-029/#249: interleaved PHI edge liveness; BUG-037/#257: old wide PHI edge use missed before in-place update; BUG-052/#272: loop-live solitary PHI source coalescing/slot lifetime truncation; distinct from BUG-057/#304 |
 | D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/023/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
 | D2 | | split into D2a / D2b / D2c / D2d | Assignment-value lifetime, AST admission, byte-PHI lifetime and float consumer typing are independent |

@@ -6154,6 +6154,18 @@ static int mir_phi_edge_stores_object_value(
     return found;
 }
 
+/* Only store-only adjustments can require a PHI's named home without
+ * following another PHI proof recursively through a loop backedge. */
+static int mir_phi_is_word_selfstore_source(int value)
+{
+    int use = mir_next_use(value, -1);
+
+    return mir_value_use_count(value) == 1 && use >= 0 &&
+           mir.insns[use].opcode == MIR_BINARY &&
+           mir_value_use_count(mir.insns[use].dst) == 1 &&
+           mir_value_is_selfstore_incdec_source(value);
+}
+
 static int mir_phi_uses_scalar_object_home(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -6176,6 +6188,15 @@ static int mir_phi_uses_scalar_object_home(int value)
         return 0;
     object = &mir.objects[definition->object];
     effective_local_bytes = mir_effective_local_bytes();
+    /* A fused word self-store consumes the object, not the PHI's allocated
+     * register/slot. Materialize both incoming edges in that same home. */
+    if (size == 2 && type_size(object->type) == size &&
+        ((object->storage == SC_PARAM && object->offset >= 4) ||
+         (object->storage == SC_LOCAL &&
+          object->offset >= -effective_local_bytes &&
+          object->offset + size - 1 < 0)) &&
+        mir_phi_is_word_selfstore_source(value))
+        return 1;
     if (object->storage != SC_LOCAL ||
         type_size(object->type) != size ||
         object->offset < -effective_local_bytes ||
@@ -16423,7 +16444,7 @@ static void mir_emit_virtual_store(MirStream *out, int value)
 
         if (!mir_direct_named_home_location(
                 definition, &home_storage, &home_offset) ||
-            home_storage != SC_LOCAL)
+            (home_storage != SC_LOCAL && home_storage != SC_PARAM))
             fatal("missing MIR scalar-phi object home");
         if (home_offset >= -128 &&
             home_offset + value_size - 1 <= 127) {

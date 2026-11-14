@@ -53,8 +53,8 @@ test:
 `tests/tpephl.c`, `tests/tpost16.c`, `tests/tpostbr.c`, `tests/tpost32.c`,
 `tests/tflcnot.c`, `tests/tflcini.c`, `tests/tconstdz.c`, `tests/tdeadblk.c`,
 `tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c`, `tests/tflncmp.c`,
-`tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c` and `tests/tflidx.c`
-were promoted this way.
+`tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tflidx.c`,
+`tests/tmerge16.c` and `tests/tearly16.c` were promoted this way.
 
 ## Adding one
 

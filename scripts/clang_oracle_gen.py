@@ -1458,12 +1458,10 @@ KNOWN_BUGS = {
     'blockptr': 'BUG-015',
     'wideincadd': 'BUG-057',
     'duplabel': 'BUG-022',
-    'nestedifelse': 'BUG-027',
     'bytearm': 'BUG-029',
     'blockcast': 'BUG-015',
     'blockdec': 'BUG-015',
     'loopcopy': 'BUG-037',
-    'wordarm': 'BUG-038',
 }
 
 
