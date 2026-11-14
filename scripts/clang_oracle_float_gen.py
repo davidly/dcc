@@ -66,7 +66,6 @@ KNOWN_BUGS = {
     'finittype': 'BUG-016',
     'fconstjump': 'BUG-019',
     'fconstcond': 'BUG-052',
-    'floopcallarg': 'BUG-036',
 }
 
 

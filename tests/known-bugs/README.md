@@ -43,8 +43,8 @@ test:
 `tests/twcasgm.c`, `tests/tblkdiv.c`, `tests/tcastasg.c`, `tests/tblkabi.c`,
 `tests/tblkret.c`, `tests/tblkcopy.c`, `tests/tblkneg.c`, `tests/tforhome.c`,
 `tests/tfltret.c`, `tests/tflucast.c`, `tests/tflscast.c`,
-`tests/tandself.c`, `tests/tselfop.c`, `tests/tflmadd.c`, `tests/tflnot.c` and
-`tests/twincg.c` were promoted
+`tests/tandself.c`, `tests/tselfop.c`, `tests/tflmadd.c`, `tests/tflnot.c`,
+`tests/twincg.c` and `tests/tlpcall.c` were promoted
 this way.
 
 ## Adding one
