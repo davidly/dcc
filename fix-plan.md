@@ -403,8 +403,12 @@ conversion selects signed/unsigned long conversion from an inner operand's
 type rather than the cast result. Generated assembly calls signed `__flf`
 for BUG-048's failing unsigned cast and unsigned `__fulf` for BUG-050's
 failing signed cast. Their stored/correctly typed controls choose the
-opposite, correct helper. Whether one cast-type-loss fix clears both remains
-to be proven; the stop rule applies again if only one reproducer passes.
+opposite, correct helper. Confirmed independently in
+[#287](https://github.com/davidly/dcc/pull/287): identity-cast elimination
+preserved casts before widening but not same-width float conversion.
+Retaining the signedness cast clears both bugs, with 267 ok, 33 INVALID and
+zero FAIL on the corrected 300-seed float batch. I2's fix is not included
+on this I1 branch.
 
 Work independently on `fix/cluster-i2-float-conv` from current `origin/main`,
 not on I1's branch. Both subclusters remain independent of A–E.
@@ -513,7 +517,7 @@ so it matters more than its size suggests. Both are one-offs.
 | G | | open | |
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) (`fix/cluster-i`) | PR open | BUG-046 promoted as tfltret; 300 float seeds clean (265 ok, 35 INVALID); existing assembly/perf rows unchanged; approved I1/I2 split |
-| I2 | `fix/cluster-i2-float-conv` | pending; after I1 | Approved BUG-048/050 mirror pair; independent origin/main worktree; shared cast-type-loss cause unconfirmed |
+| I2 | [#287](https://github.com/davidly/dcc/pull/287) (`fix/cluster-i2-float-conv`) | PR open | Independent approved mirror pair confirmed; 048/050 promoted; corrected float batch 267 ok, 33 INVALID; existing assembly/perf unchanged |
 | J | | open | |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
