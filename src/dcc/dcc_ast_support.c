@@ -971,7 +971,7 @@ static int ast_other_supported_uncached(const struct AstNode *n)
             int pointer_type;
             int no_deref;
 
-            return ast_postfix_plain_int(n) ||
+            return ast_postfix_plain_int(n) || ast_value_is_long_word(n) ||
                    (ast_pointer_expr_type(n, &pointer_type, &no_deref) &&
                     !no_deref);
         }

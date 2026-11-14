@@ -1,7 +1,6 @@
-/* BUG-010: narrowing the value of a 32-bit post-increment or post-decrement
- * is rejected with DCC-E1002, whether the narrowing is a cast, a return, or
- * an argument conversion. A pre-increment, a 16-bit variable, and the
- * unconverted value all compile. */
+/* Casts, argument conversions and narrowing returns consume the old value
+ * of signed/unsigned 32-bit postfix increments and decrements while the
+ * full-width update is retained. */
 #include <stdint.h>
 #include <stdio.h>
 

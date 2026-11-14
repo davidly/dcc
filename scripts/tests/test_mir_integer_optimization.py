@@ -89,6 +89,19 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                             self.assertEqual(self.code(self.compile(source, options)),
                                              self.code(self.compile(control, options)))
 
+    def test_narrowed_long_postfix_matches_direct_assignment(self):
+        for value_type in ("long", "unsigned long"):
+            for update in ("++", "--"):
+                body = value_type + " value; int probe(void) { "
+                control = body + "int old; old = value" + update + "; return old; }\n"
+                for result in ("(int)(value" + update + ")", "value" + update):
+                    source = body + "return " + result + "; }\n"
+                    for options in ((), ("-fstack-check",), ("-gline",)):
+                        with self.subTest(value_type=value_type, result=result,
+                                          options=options):
+                            self.assertEqual(self.code(self.compile(source, options)),
+                                             self.code(self.compile(control, options)))
+
     def test_deferred_float_incdec_uses_float_unit(self):
         for operation, compound, helper in (("p[0]++", "+=", "__faf"),
                                              ("--p[0]", "-=", "__fsf")):
