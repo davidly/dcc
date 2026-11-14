@@ -319,7 +319,7 @@ MIR selection, schedules, or allocation.
 
 ## Task
 
-Fix cluster **A** in `fix-plan.md`. Read the cluster's table, then every
+Fix cluster **K** in `fix-plan.md`. Read the cluster's table, then every
 `## BUG-NNN` entry it lists in `compiler-bugs.md`, including the bullets
 describing which neighbouring shapes are already correct — those are your
 strongest clue to the root cause and to what the fixed code should emit.
