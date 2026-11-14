@@ -29,7 +29,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-004](#bug-004) | #225 | wrong result | Nested-block 32-bit local assigned from `&&`/`\|\|` leaves a garbage high word |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
-| [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
@@ -42,14 +41,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 
-Fifteen are open: twelve are wrong-code findings (eleven shipped with no
-diagnostic, including runtime BUG-039; one latent finding blocked by
-BUG-041 admission), one hangs, one stops the compile,
+Fourteen are open: ten give wrong results with no diagnostic
+(BUG-039 is in the runtime), one latent wrong-code finding is blocked by
+BUG-041 admission, one hangs, one stops the compile,
 and one (BUG-022) turns a compile error into
-a broken program. The highest-priority ordinary-code defect remaining is
-BUG-013.
+a broken program. BUG-013's unsigned bit-field promotion is fixed below.
 
-Forty reported bugs are fixed: [one in cluster N](#fixed-in-cluster-n),
+Forty-one reported bugs are fixed: [one in cluster N](#fixed-in-cluster-n),
+[one in cluster E2-bitfield](#fixed-in-cluster-e2-bitfield),
 [two in cluster E2-shift](#fixed-in-cluster-e2-shift),
 [two in cluster H](#fixed-in-cluster-h),
 [one in cluster E1](#fixed-in-cluster-e1),
@@ -169,26 +168,6 @@ instead of 6, which shows the comparison is the part that is wrong.
   with `++d` in the body or in the condition.
 - Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
   `d != n`; `n` set from a constant; a 16-bit `d`.
-
-## BUG-013
-
-**An unsigned bit-field narrower than `int` is not promoted to `int` once it
-is an operand.** dcc promotes it for `bf - 1000` written directly (which is
-what `tests/tbfprom.c` checks). But the result of unary `-` or `~`, of any
-other binary operator, or of `?:` with a bit-field arm, is typed
-`unsigned int`: it is zero-extended when widened and compared as unsigned.
-
-```c
-struct S { uint16_t m0 : 9; uint16_t m2 : 11; } s = { 444, 346 };
-long r;
-r = -s.m0;                       /* want -444, dcc 65092 */
-r = (s.m2 + 1) - 1000;           /* want -653, dcc 64883 */
-r = 1 - (sel ? s.m2 : 1);        /* want -345, dcc 65191 */
-if ((sel ? -21931 : s.m1) > 1)   /* false; dcc takes the branch */
-```
-
-- Wrong for `- ~ | ^ & + * / % >> <<` and `?:`.
-- Correct: `s.m2 - 1000`; `sel ? s.m2 : -1` assigned directly.
 
 ## BUG-015
 
@@ -617,6 +596,67 @@ in-range float-to-`int32_t` conversion and retains the failing context.
   now removed; the explicit feature opt-out remains available.
 
 ---
+
+## Fixed in cluster E2-bitfield
+
+BUG-013 passes in peep/nopeep and stack/no-stack modes. AST result typing
+recomputed nested binaries from raw unsigned field declarations, and unary
+and conditional typing skipped field-range promotion. The scoped MIR repair
+pass repeated that mistake; restored integer seed 23 exposed a block-byte
+plus one-bit unsigned field being retyped as unsigned. Arithmetic consumers
+now promote fields by range while extraction keeps its declared type and
+explicit casts keep their separate value view. Pointer/array decay is unchanged.
+
+Before promotion: **2 FIXED, 17 fails**, with only BUG-013 newly flipped;
+BUG-022 is the already-known reproducer-only pass, not a closed defect.
+Both censuses preserve **3,545 existing functions byte-identically** and all
+**526 existing performance rows** are unchanged. Strict Python and PowerShell
+full+extended stack/no-stack gates pass. The new `tbfexpr` row alone is measured
+on the normal PowerShell stack-check path; its original 13 host-baseline lines
+are retained with two additional scoped-repair lines.
+
+Restored `bfpromo`, production seeds 1-300: **297 ok, 1 INVALID,
+2 target-limit-only** (82/178, TPA too small), zero FAIL. Focused MIR/debug
+metadata tests, six MIR host tests, ten debugger-host tests, require-emit,
+full-debug and release-identical `-gline` pipelines pass. The regular Python
+gate's approved #277 and loaded synthetic-harness exceptions, including
+isolated retries, are documented in fix-plan.md; no expectations were changed.
+The final standalone Ninja gate runs 328 tests with only the two approved
+#277 failures and two existing skips; all earlier harness failures pass.
+BUG-006 is independent and remains open: its correct extraction repair changes
+an existing `tcmwide` function and was discarded under the per-bug output-
+preservation rule. The full trace and host-proven alternate input are recorded
+in fix-plan.md.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-013](#bug-013) | #233 | [tbfexpr](tests/tbfexpr.c) |
+
+### BUG-013
+
+**Fixed:** field-range promotion is preserved through AST expression typing and
+scoped MIR metadata repair. Regression: [tbfexpr.c](tests/tbfexpr.c),
+[stdout](tests/baselines/tbfexpr.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**An unsigned bit-field narrower than `int` is not promoted to `int` once it
+is an operand.** dcc promotes it for `bf - 1000` written directly (which is
+what `tests/tbfprom.c` checks). But the result of unary `-` or `~`, of any
+other binary operator, or of `?:` with a bit-field arm, is typed
+`unsigned int`: it is zero-extended when widened and compared as unsigned.
+
+```c
+struct S { uint16_t m0 : 9; uint16_t m2 : 11; } s = { 444, 346 };
+long r;
+r = -s.m0;                       /* want -444, dcc 65092 */
+r = (s.m2 + 1) - 1000;           /* want -653, dcc 64883 */
+r = 1 - (sel ? s.m2 : 1);        /* want -345, dcc 65191 */
+if ((sel ? -21931 : s.m1) > 1)   /* false; dcc takes the branch */
+```
+
+- Wrong for `- ~ | ^ & + * / % >> <<` and `?:`.
+- Correct: `s.m2 - 1000`; `sel ? s.m2 : -1` assigned directly.
 
 ## Fixed in cluster E2-shift
 
