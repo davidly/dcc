@@ -69,18 +69,18 @@ and their historical diagnoses are retained separately below.
 | [BUG-048](#bug-048) | #268 | wrong result | `(uint32_t)x` converted to float, with `x` a signed 32-bit expression, converts the signed value (`-72` → `-72.0f`, not `4294967224.0f`) |
 | [BUG-049](#bug-049) | #269 | wrong result | `!f` is 0 when `f` is negative zero; `if (f)`, `f ? :` and `f == 0.0f` treat `-0.0f` as zero correctly |
 | [BUG-050](#bug-050) | #270 | wrong result | `(int32_t)(uint32_t)x` converted to float, with `x` a signed 8- or 16-bit value, converts the unsigned value (`-121` → `4294967175.0f`) |
-| [BUG-051](#bug-051) | #271 | compile error | A macro parameter named like a constant's suffix (`f`, `u`, `L`) is substituted inside the constant: `#define T(f) g = 9.0f; f(1)` gives `g = 9.0a1` |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 
-Forty-seven are open: twenty-eight give wrong results with no diagnostic
-(BUG-030 can also hang; BUG-039 is in the runtime), one hangs, seventeen stop the compile (BUG-007
+Forty-six are open: twenty-eight give wrong results with no diagnostic
+(BUG-030 can also hang; BUG-039 is in the runtime), one hangs, sixteen stop the compile (BUG-007
 can instead compile and crash), and one (BUG-022) turns a compile error into
 a broken program. BUG-026 is the
 one most likely to be hit by ordinary code, then BUG-044 (every float `++`
 is wrong), BUG-047 (`f + n * g` is `f`), BUG-030 (it corrupts memory in C99-style code), BUG-003,
 BUG-013, BUG-016 and BUG-025.
 
-Four reported bugs are [fixed in cluster K](#fixed-in-cluster-k). Two more
+Five reported bugs are fixed: [four in cluster K](#fixed-in-cluster-k) and
+[one in cluster L](#fixed-in-cluster-l). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
 
@@ -1470,29 +1470,6 @@ fg = (int32_t)((uint32_t)g4 + 1);    /* want c2f00000, dcc 4f800000 */
   `g2 = (float)(int32_t)gu;` then stores -1 in the `int32_t`. Found by
   fuzzing (float generator, seed 3792).
 
-## BUG-051
-
-**A function-like macro parameter whose name is the suffix of a numeric
-constant in the replacement list is substituted inside that constant.** The
-suffix letters are lexed as an identifier separate from the number, so
-`f`, `u`, `l`, `L`, `U`, `F` and their combinations (`ul`) are all open to
-substitution.
-
-```c
-#define T(f) g = 9.0f; f(1)
-#define U(u) n = 10u; u
-T(a1);        /* expands to `g = 9.0a1; a1(1);`: error DCC-E1003 malformed statement near 'g' */
-U(n += 2;)    /* expands to `n = 10n += 2;; n += 2;` */
-```
-
-- A suffix that is not a parameter name is fine, and so are `1e5` with a
-  parameter `e` and `0x10` with a parameter `x`: only the trailing
-  integer/float suffix letters are detached.
-- The result is normally a compile error; a replacement that happens to
-  stay valid would silently change meaning.
-- Found while writing a probe for the float fuzzer's seed 2247 (a `T(f)`
-  test macro with `9.0f` in its body).
-
 ## BUG-052
 
 **In a loop, an expression with a folded `?:` on a 32-bit parameter is
@@ -1531,6 +1508,52 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   loop, `x + 0.0f` as the arm, `x` in the else arm (`c ? 1.0f : x`), no
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
+
+## Fixed in cluster L
+
+BUG-051 now passes in peep and nopeep. Its reproducer and unchanged host
+baseline were promoted, and only its new measured performance row was added.
+All 46 remaining parked reproducers still fail.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-051](#bug-051) | #271 | [tppsuf](tests/tppsuf.c) |
+
+### BUG-051
+
+**Fixed:** both function-macro replacement and macro-argument/rescan walkers
+copy complete preprocessing numbers before considering identifier expansion.
+Suffixes, leading dots, exponent signs and identifier characters within a
+pp-number are therefore never substituted as separate identifiers. Regression:
+[tppsuf.c](tests/tppsuf.c), [stdout](tests/baselines/tppsuf.txt); focused script
+tests also cover argument, object-macro and pasted-token rescans.
+
+There was no BUG-051 feature in either generator's `KNOWN_BUGS`: it was found
+while writing a probe, not in generated macro code. Both unchanged generators
+passed 300-seed production batches with `--off known`.
+
+The following diagnosis describes the pre-fix behavior.
+
+**A function-like macro parameter whose name is the suffix of a numeric
+constant in the replacement list is substituted inside that constant.** The
+suffix letters are lexed as an identifier separate from the number, so
+`f`, `u`, `l`, `L`, `U`, `F` and their combinations (`ul`) were all open to
+substitution.
+
+```c
+#define T(f) g = 9.0f; f(1)
+#define U(u) n = 10u; u
+T(a1);        /* expands to `g = 9.0a1; a1(1);`: error DCC-E1003 malformed statement near 'g' */
+U(n += 2;)    /* expands to `n = 10n += 2;; n += 2;` */
+```
+
+- A suffix that is not a parameter name is fine, and so are `1e5` with a
+  parameter `e` and `0x10` with a parameter `x`: only the trailing
+  integer/float suffix letters are detached.
+- The result is normally a compile error; a replacement that happens to
+  stay valid would silently change meaning.
+- Found while writing a probe for the float fuzzer's seed 2247 (a `T(f)`
+  test macro with `9.0f` in its body).
 
 ## Fixed in cluster K
 

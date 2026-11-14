@@ -1551,6 +1551,36 @@ static int append_macro_quoted_token(const char **pp, char *out, int *oip,
     return 1;
 }
 
+/* A pp-number is one token even when it is not a valid C numeric literal. */
+static int append_macro_number_token(const char **pp, char *out, int *oip,
+                                     int outsz)
+{
+    const char *p;
+    int oi;
+    int prev;
+
+    p = *pp;
+    if (!isdigit((unsigned char)*p) &&
+        !(p[0] == '.' && isdigit((unsigned char)p[1])))
+        return 0;
+
+    oi = *oip;
+    prev = 0;
+    while (*p && oi < outsz - 1) {
+        int c;
+        c = (unsigned char)*p;
+        if (!is_ident_char(c) && c != '.' &&
+            !((c == '+' || c == '-') &&
+              (prev == 'e' || prev == 'E' || prev == 'p' || prev == 'P')))
+            break;
+        out[oi++] = *p++;
+        prev = c;
+    }
+    *pp = p;
+    *oip = oi;
+    return 1;
+}
+
 void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
 {
     int oi;
@@ -1568,6 +1598,8 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
     p = in;
     while (*p && oi < outsz - 1) {
         if (append_macro_quoted_token(&p, out, &oi, outsz))
+            continue;
+        if (append_macro_number_token(&p, out, &oi, outsz))
             continue;
 
         if (is_ident_start((unsigned char)*p)) {
@@ -1739,6 +1771,8 @@ void expand_function_macro(int di, char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN],
 
     while (*v && oi < outsz - 1) {
         if (append_macro_quoted_token(&v, out, &oi, outsz))
+            continue;
+        if (append_macro_number_token(&v, out, &oi, outsz))
             continue;
 
         /*

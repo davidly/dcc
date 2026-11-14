@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has forty-seven open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has forty-six open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -9,7 +9,8 @@ fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
 neighbouring shapes that pass in each entry. They have not been confirmed in
-the source, except K, whose four independent rules have now been fixed.
+the source, except K, whose four independent rules have now been fixed, and
+L, whose preprocessing-token boundary defect is confirmed and fixed.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
 explicitly approved K as a four-rule exception.
@@ -252,6 +253,16 @@ pre-existing Python-gate failures should be fixed separately.
 The number lexer stops before the suffix letters. One fix in
 `src/dcc/dcc_preproc.c`. Isolated.
 
+Fixed on `fix/cluster-l-pp-numbers`: both macro text walkers now copy complete
+pp-numbers before identifier substitution. Regression `tppsuf` has the
+unchanged host baseline and one new measured performance row; all 495 existing
+rows and compared corpus assembly are unchanged (apart from `tstdc`'s
+`__TIME__`). The other 46 reproducers still fail. There was no BUG-051 steering
+entry to remove; both unchanged generators passed 300-seed production batches.
+Strict full+extended stack-check and no-stack-check runs and debug metadata
+checks passed. The two regular Python-test failures match clean rebuilt
+`main` at `637500a7` exactly (#277); expectations were not changed.
+
 ### M. Singletons
 
 | Bug | Issue | Shape |
@@ -289,7 +300,7 @@ so it matters more than its size suggests. Both are one-offs.
 | I | | open | |
 | J | | open | |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
-| L | | open | |
+| L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
 | M | | open | |
 
 Update this table as clusters are taken, and move bugs between clusters when

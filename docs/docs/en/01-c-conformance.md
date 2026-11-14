@@ -59,6 +59,11 @@ portability surprises when code is moved from a hosted desktop compiler.
 | String literals and adjacent string literal concatenation | Supported |
 | Global and automatic initializers | Supported |
 
+Macro substitution matches whole preprocessing tokens, not letters inside a
+numeric token. For example, `#define VALUE(u) (10u + (u))` expands `VALUE(2)`
+to `(10u + (2))`: the unsigned suffix is not a parameter. Numeric tokens also
+remain intact when macro arguments and pasted tokens are rescanned.
+
 ### The `register` storage class
 
 `register` is an optimization hint for automatic objects and function
