@@ -61,7 +61,6 @@ KNOWN_BUGS = {
     'icasgf': 'BUG-043',
     'fblockneg': 'BUG-015',
     'fnegcmp': 'BUG-045',
-    'fintprodadd': 'BUG-047',
     'fnegzero_not': 'BUG-049',
     'fparamcmp': 'BUG-020',
     'fblockint': 'BUG-015',

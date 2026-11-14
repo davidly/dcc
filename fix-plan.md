@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has thirty-seven open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has thirty-six open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -520,6 +520,31 @@ harness. BUG-047 is the maintainer's third priority. BUG-039 is a runtime
 change: keep it small, follow the existing `DCCRTL.MAC` idioms, and run
 `scripts/rtl-iy-safety.py` and `scripts/audit-runtime-coverage.py`.
 
+Cluster J investigation (`fix/cluster-j-float-arith`):
+
+- BUG-047: the wide register-forwarding proof targets a multiply whose
+  emission is suppressed by multiply-add fusion. The fused add loads its
+  addend before its factors, clobbering the forwarded factor; its reload
+  then reads a slot that was never allocated or written. Declining only
+  that invalid handoff fixes the reproducer, retaining fusion. Both MIR
+  censuses preserve all **3,394 existing functions** byte-for-byte.
+- BUG-049 is **parked under the unchanged-output rule**. Using the same
+  sign-masked float zero test as the branch emitter fixes the reproducer,
+  but necessarily changes `tctxflt:truth_not`, `tctxflt:truth_not_memb` and
+  `tnestfor:nz_float` in both censuses (one extra `and 127`). That experiment
+  was reverted; no value-origin or function-name exception was added.
+- BUG-039 is **parked under the unchanged-output rule**. The runtime rounds
+  its 24-bit quotient before normalizing ratios below one, losing a bit
+  before rounding. An extra restoring-division step before rounding fixes
+  all 404 parked results and reduces the helper's static code, but changes
+  existing stdout in `tfdedge`, `trig`, `tstrb11`, `ttrg6sp` and `ttrig`
+  (both modes), as well as division-user cycles. The runtime experiment
+  was reverted; no output/performance baseline was refreshed. Both runtime
+  audits passed after the edit and its reversal. A linked probe through
+  `__fdf` and the stack ABI `__fdiv` matched 804 host bit patterns in each
+  mode. This needs explicit approval to update existing numeric
+  expectations, not a narrower value-specific runtime patch.
+
 ### K. dccpeep
 
 | Bug | Issue | Shape |
@@ -614,7 +639,7 @@ so it matters more than its size suggests. Both are one-offs.
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | | open | BUG-014/019 bookkeeping fatals; unconfirmed shared cause |
-| B3 | [#289](https://github.com/davidly/dcc/pull/289) | PR open | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
+| B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | | open | BUG-036; check overlap with C/D first |
 | C | | open | |
 | D | | open | |
@@ -624,7 +649,7 @@ so it matters more than its size suggests. Both are one-offs.
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |
-| J | | open | |
+| J | [#290](https://github.com/davidly/dcc/pull/290) | PR open; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; 3,394 existing census functions and 504 perf rows unchanged; 049/039 parked under the output rule |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | K2 | | open | BUG-054/#288 independently found during B3; live HL lost by deferred global reload |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |

@@ -57,26 +57,26 @@ and their historical diagnoses are retained separately below.
 | [BUG-043](#bug-043) | #263 | compile error | Compound assignment to an integer lvalue with a float right operand is rejected (`l *= f`, `n += 1.5f`) |
 | [BUG-044](#bug-044) | #264 | wrong result | `++`/`--` on a float is a no-op on a scalar and a 16-bit integer increment on an array element |
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
-| [BUG-047](#bug-047) | #267 | wrong result | `f + (x * y)` drops the product when `x` is an integer, or when `y` is a local/parameter and `x` is a global, array element, member or sub-expression |
 | [BUG-049](#bug-049) | #269 | wrong result | `!f` is 0 when `f` is negative zero; `if (f)`, `f ? :` and `f == 0.0f` treat `-0.0f` as zero correctly |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 
-Thirty-seven are open: twenty-two give wrong results with no diagnostic
+Thirty-six are open: twenty-one give wrong results with no diagnostic
 (BUG-039 is in the runtime), one hangs, thirteen stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
-BUG-044 (every float `++` is wrong), BUG-047 (`f + n * g` is `f`), BUG-003,
+BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Fifteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Sixteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [two in cluster B3](#fixed-in-cluster-b3),
 [four in cluster K](#fixed-in-cluster-k),
 [one in cluster L](#fixed-in-cluster-l),
-[one in cluster I1](#fixed-in-cluster-i1) and
-[two in cluster I2](#fixed-in-cluster-i2). Two more
+[one in cluster I1](#fixed-in-cluster-i1),
+[two in cluster I2](#fixed-in-cluster-i2) and
+[one in cluster J](#fixed-in-cluster-j). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
 
@@ -1079,41 +1079,6 @@ r = (x < -1.0f - n);          /* fatal */
   `1.0f < -fg2` are accepted. Found by fuzzing (float generator, seeds 477
   and 1347).
 
-## BUG-047
-
-**`f + (x * y)` drops the product.** When the right operand of a float `+`
-is a product, the result is just the left operand (whatever `f` is: global,
-local, constant or parameter) in two families of factor kinds:
-
-- the left factor `x` is an integer (a constant, `int`, `int32_t`,
-  `uint16_t`, or `(float)128`), with any float right factor; or
-- the right factor `y` is a local or parameter and `x` is a global, array
-  element, struct member or sub-expression (`fv * l1`, `fa[1] * l1`,
-  `s.m * p`, `fv * l1 * l1`). A few forms give other garbage instead of
-  `f` (`(fv + 0.0f) * l1` is `-inf` in one context; the sum in `t()` of the
-  reproducer is `5.0028`).
-
-```c
-fg + (2 * 3.0f)            /* want 7.0f, dcc 1.0f (fg) */
-fg + (i * 3.0f)            /* 1.0f */
-1.0f + (128 * 1.0f)        /* want 129.0f, dcc 1.0f */
-r = fg; r += 2 * 3.0f;     /* 1.0f */
-fg + (fv * l1)             /* l1 a local: want 10.0f, dcc 1.0f */
-fg + (fv * p)              /* p a parameter: 1.0f */
-```
-
-- Right: `fg - (x * y)`, `fg * (x * y)`, `(x * y) + fg` (product on the
-  left), `fg + (l1 * fv)` and `fg + (p * fv)` (local/parameter left
-  factor), `fg + (fv * fv)`, `fg + (2.0f * fv)`, `fg + (float)i * 3.0f`,
-  `fg + (x * y) * 1.0f`, `fg + (x + y)`, `fg + (x - y)`, `fg + (x / y)`.
-- It is a per-function matter: the same expressions all compute correctly
-  inside one 256-statement function, so the operands' register or stack
-  placement decides it.
-- With and without `dcc-peep`.
-- Also at tag 3.8.0 (`5f733050`) and `32d3e46d`; v3.6.0 (`20290235`) cannot
-  compile the reproducer at all (`MIR emission is required`).
-- Found by fuzzing (float generator, seeds 7, 27, 31, 42 and 49).
-
 ## BUG-049
 
 **`!f` is 0 when `f` is negative zero.** `!` on a float tests the raw bits,
@@ -1349,6 +1314,75 @@ dcc emits, for `sq`:
   `((int32_t)1) + (l * l)` and `l * l` alone are right, as is `l = 56519.0f`
   (the same value as a float constant) or dropping the dead `float l1`
   declaration next to `l`. Found by fuzzing (float generator, seed 3223).
+
+## Fixed in cluster J
+
+BUG-047 now passes with and without dccpeep. The wide register-forwarding
+proof now declines a multiply suppressed by multiply-add fusion: the fused
+add loads its addend before its factors, so the factor must retain a real
+home rather than an invalid immediately-next-instruction handoff. Fusion
+and its existing `__fmaf` schedule are retained. The neighboring correct
+local-left-factor and product-left-addend controls are byte-identical in
+both modes.
+
+Before promotion, only BUG-047 flipped: **1 FIXED, 37 fails**. Both MIR
+censuses retain all **3,394 existing functions** byte-for-byte, and strict
+full+extended stack/no-stack regressions pass with all **504 existing
+performance rows unchanged**. Only the new `tflmadd` row is measured and
+added. Restoring `fintprodadd` to the float generator gives **269 ok,
+31 INVALID, zero FAIL** on production seeds 1-300 with `--off known`.
+
+BUG-049 and BUG-039 remain open: their correct fixes alter existing
+function assembly and existing numeric stdout, respectively. Their
+experiments were reverted under cluster J's acceptance rule; see
+[the investigation notes](fix-plan.md#j-float-arithmetic).
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-047](#bug-047) | #267 | [tflmadd](tests/tflmadd.c) |
+
+### BUG-047
+
+**Fixed:** fused multiply-add factors retain a valid home until the fused
+add actually loads them. Regression: [tflmadd.c](tests/tflmadd.c),
+[stdout](tests/baselines/tflmadd.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**`f + (x * y)` drops the product.** When the right operand of a float `+`
+is a product, the result is just the left operand (whatever `f` is: global,
+local, constant or parameter) in two families of factor kinds:
+
+- the left factor `x` is an integer (a constant, `int`, `int32_t`,
+  `uint16_t`, or `(float)128`), with any float right factor; or
+- the right factor `y` is a local or parameter and `x` is a global, array
+  element, struct member or sub-expression (`fv * l1`, `fa[1] * l1`,
+  `s.m * p`, `fv * l1 * l1`). A few forms give other garbage instead of
+  `f` (`(fv + 0.0f) * l1` is `-inf` in one context; the sum in `t()` of the
+  reproducer is `5.0028`).
+
+```c
+fg + (2 * 3.0f)            /* want 7.0f, dcc 1.0f (fg) */
+fg + (i * 3.0f)            /* 1.0f */
+1.0f + (128 * 1.0f)        /* want 129.0f, dcc 1.0f */
+r = fg; r += 2 * 3.0f;     /* 1.0f */
+fg + (fv * l1)             /* l1 a local: want 10.0f, dcc 1.0f */
+fg + (fv * p)              /* p a parameter: 1.0f */
+```
+
+- Right: `fg - (x * y)`, `fg * (x * y)`, `(x * y) + fg` (product on the
+  left), `fg + (l1 * fv)` and `fg + (p * fv)` (local/parameter left
+  factor), `fg + (fv * fv)`, `fg + (2.0f * fv)`, `fg + (float)i * 3.0f`,
+  `fg + (x * y) * 1.0f`, `fg + (x + y)`, `fg + (x - y)`, `fg + (x / y)`.
+- It is a per-function matter: the same expressions all compute correctly
+  inside one 256-statement function, so the operands' register or stack
+  placement decides it.
+- With and without `dcc-peep`.
+- Also at tag 3.8.0 (`5f733050`) and `32d3e46d`; v3.6.0 (`20290235`) cannot
+  compile the reproducer at all (`MIR emission is required`).
+- Found by fuzzing (float generator, seeds 7, 27, 31, 42 and 49).
+
+---
 
 ## Fixed in cluster I1
 

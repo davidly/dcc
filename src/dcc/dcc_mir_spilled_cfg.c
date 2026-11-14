@@ -1222,6 +1222,10 @@ static int mir_can_forward_hl_de_to_next(int value)
             !mir_instruction_is_transparent_dead_store(instruction))
             return 0;
     next = &mir.insns[next_instruction];
+    /* Fusion consumes the factors at the following add, after loading its
+     * addend, not at this multiply's ordinary register handoff. */
+    if (mir_float_multiply_is_fused(next_instruction))
+        return 0;
     if (skipped_label && next->opcode != MIR_RETURN)
         return 0;
     if (next->opcode == MIR_RETURN) {
