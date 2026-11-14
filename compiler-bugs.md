@@ -7,7 +7,7 @@ wrong-code findings from withdrawn BUG-041 admission experiments; their parked
 sources remain rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `15db8e69` plus the cluster E2c bit-field compound extraction repair (2026-11-15).
+- **Compiler under test:** `8db72cbd` plus the cluster A2b-3 byte logical PHI type repair (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -26,7 +26,6 @@ and their historical diagnoses are retained separately below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-004](#bug-004) | #225 | wrong result | Byte local initialized from `&&`/`\|\|`, forwarded into 32-bit consumers loses its source type |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
@@ -36,12 +35,13 @@ and their historical diagnoses are retained separately below.
 | [BUG-060](#bug-060) | #322 | wrong result | `%f` rounds exact IEEE float bits to an incorrect last decimal digit |
 | [BUG-061](#bug-061) | #323 | wrong result | `sizeof` at or above 32768 is sign-extended or divided as a signed 16-bit value |
 
-Eight are open: five give wrong results with no diagnostic,
+Seven are open: four give wrong results with no diagnostic,
 two latent wrong-code findings are blocked by
 BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
 promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Fifty-one reported bugs are fixed: [one in cluster R1](#fixed-in-cluster-r1),
+Fifty-two reported bugs are fixed: [one in cluster A2b-3](#fixed-in-cluster-a2b-3),
+[one in cluster R1](#fixed-in-cluster-r1),
 [two in cluster M-a](#fixed-in-cluster-m-a),
 [one in cluster C2a](#fixed-in-cluster-c2a),
 [two in cluster C1](#fixed-in-cluster-c1),
@@ -120,66 +120,6 @@ should print `32768`, and `(unsigned long)(sizeof(large) / 8)` should print
 - Regression is parked as [bug061.c](tests/known-bugs/bug061.c); host O0/O2,
   ASan and UBSan agree. No compiler code is changed in cluster R1.
 
-
-## BUG-004
-
-**Partially corrected by E1 and A2b-1:** all five original reproducer lines
-now pass, including the nested-block long assignment. E1 retains a word
-local's interpretation during SSA forwarding; A2b-1 reapplies
-`mir_type_untyped_widened_value()` when the canonical block assignment's
-conversion target becomes known. Those cleared facets and additional false,
-true and nested logical paths are covered by the new host/sanitizer-proven
-[tests/tlogblk.c](tests/tlogblk.c).
-
-**Still open: byte-local logical SSA forwarding.** Restored integer fuzzing
-(seeds 133, 143, 153, 286) reduces to signed or unsigned 8-bit locals initialized
-from `&&`/`||`, then used in a long store, initializer or comparison:
-
-```c
-int8_t b = 1 && (uint16_t)1;
-a4[3] = b;                  /* uint32_t array: stale high word */
-uint8_t b = -191 && (uint32_t)0;
-int32_t c = b;
-g = c++;                    /* stale high word of the zero value */
-uint8_t b = (uint16_t)1 || (uint32_t)1;
-s.m1 = b;                   /* uint32_t member: stale high word */
-int32_t returns_minus_one_long(void);
-int8_t byte_compare = (uint16_t)1 && 29464;
-g = returns_minus_one_long() >= byte_compare;  /* wrong: true instead of false */
-```
-
-`mir_promote_objects()` forwards the typed byte load to its untyped boolean
-PHI after metadata repair. The E1 typed-view guard only covers same-width
-2/4-byte representations; the existing long conversion then sees an untyped
-source and omits the extension. This is independent of A2b-1's repaired
-canonical assignment target; the stop rule forbids a second compiler fix.
-The exact reduced seed-133 case is now the parked reproducer: host and
-ASan/UBSan agree, both dcc modes give one wrong checksum line out of two.
-The broad `logicinit` feature is restored; only the new `logicbyteinit`
-(non-global byte logical stores/initializers) remains steered. #225 stays
-open; no partial reproducer is promoted and no additional issue is filed.
-
-The following original diagnosis describes the now-correct word and block
-long cases.
-
-**An unsigned 16-bit local initialised from `&&` or `||`, then stored to a
-32-bit lvalue, leaves garbage in the high word.**
-
-```c
-uint16_t l = one || zero;
-s.m1 = l;            /* uint32_t m1: want 00000001, dcc xxxx0001 (e.g. 09f90001) */
-```
-
-- Wrong with variable or constant operands, `&&` or `||`, and a 32-bit
-  member, array element or global as the destination.
-- The same garbage high word appears when `&&` or `||` is assigned straight
-  to a 32-bit local declared in a nested block:
-  `{ int32_t b = 0; b = ((--x) || 1); g = b; }` gives `00010001`. That is
-  correct with the local at function scope, as an initialiser
-  (`int32_t b = (--x) || 1;`), and for `!` or a comparison.
-- Correct: `l = 1`; `l = one`; `s.m1 = one || zero` stored directly.
-- Commit `f00e062e` ("Widen && and || results converted to long or float")
-  fixed a neighbouring shape.
 
 ## BUG-006
 
@@ -418,6 +358,77 @@ if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
   steering: the restored admission trial clears this fixture and BUG-056,
   then exposes latent BUG-059/#316 (missing implicit float operand conversion).
 
+
+## Fixed in cluster A2b-3
+
+BUG-004 passes with and without dccpeep. Before promotion the inventory was
+**1 FIXED, 7 fails**; afterward the seven remaining parked reproducers still
+fail identically. No unrelated bug flips and no new bug is found.
+
+`mir_promote_objects()` replaced a typed byte load with an untyped logical
+PHI after deferred conversion repair. The existing long cast then saw type
+zero and emitted no extension, retaining stale DE bits. The E1 typed-view
+rule excludes the byte/word representation mismatch. A2b-3 types the
+forwarded PHI as the byte local only when a bounded proof establishes 0/1
+constant/PHI inputs and an existing long/float conversion observes the
+source. Narrow consumers and the existing 2/4-byte interpretation rule are
+unchanged; no consumer-specific patch, selector or fallback is added.
+
+Both canonical-build censuses preserve **3,672 existing functions**
+byte-for-byte; final censuses add only `tlogbyte`'s sixteen functions. Strict
+full+extended stack and no-stack gates pass, and all **544 existing perf
+rows** retain their exact values and order. The only CSV addition is the
+normal-stack `tlogbyte` row: peep/nopeep **272957/292634 cycles**, **7040/7424
+bytes**. The original failing function adds the existing normalized
+word-to-long extension, five Z80 bytes / twenty T-states in each pipeline,
+with no new helper or frame growth. The constant-byte control and `tlogblk`
+remain unchanged.
+
+Restored `logicbyteinit` under `--off known`, integer production seeds
+**1–300: 283 ok, 14 INVALID, 3 target-limit-only, zero FAIL**. All four
+production configurations run. The remaining known steers pass a 3,000-seed
+proof. The optional explicitly disabled feature remains available; only its
+open-bug mapping is removed.
+
+The regular Python gate remains non-green: the two pre-answered #277
+expectations and four mutation/process-harness checks remain unverified after
+isolated retries. Nine other transient checks pass in isolation. No harness
+code, expectations or skips are changed; detailed method names and the full
+339-test result are recorded in fix-plan.md's A2b-3 acceptance notes. All
+55 focused compiler/debug-metadata/steering checks and ten debugger-host tests
+pass. No historical compiler checks or `prepush.ps1` are run.
+
+### BUG-004
+
+The two-line reduced seed-133 checksum reproducer is promoted as
+[tests/tlogbyte.c](tests/tlogbyte.c), preserving both original output lines
+and adding the unsigned false long initializer/postincrement, unsigned OR
+member store, signed long comparison, variable and nested short-circuit
+paths, byte assignment, side effects and a constant-byte control. Host
+O0/O2, ASan and UBSan agree. All byte facets recorded from seeds
+133/143/153/286 now pass. Earlier word and block-long facets remain covered
+by [tests/tlogblk.c](tests/tlogblk.c), repaired separately by E1 and A2b-1.
+
+The following historical diagnosis describes those earlier facets.
+
+**An unsigned 16-bit local initialised from `&&` or `||`, then stored to a
+32-bit lvalue, leaves garbage in the high word.**
+
+```c
+uint16_t l = one || zero;
+s.m1 = l;            /* uint32_t m1: want 00000001, dcc xxxx0001 (e.g. 09f90001) */
+```
+
+- Wrong with variable or constant operands, `&&` or `||`, and a 32-bit
+  member, array element or global as the destination.
+- The same garbage high word appears when `&&` or `||` is assigned straight
+  to a 32-bit local declared in a nested block:
+  `{ int32_t b = 0; b = ((--x) || 1); g = b; }` gives `00010001`. That is
+  correct with the local at function scope, as an initialiser
+  (`int32_t b = (--x) || 1;`), and for `!` or a comparison.
+- Correct: `l = 1`; `l = one`; `s.m1 = one || zero` stored directly.
+- Commit `f00e062e` ("Widen && and || results converted to long or float")
+  fixed a neighbouring shape.
 
 ## Fixed in cluster C2c
 
