@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has nineteen open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has eighteen open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -1303,10 +1303,51 @@ checks or `prepush.ps1` run were performed.
 | BUG-020 | #240 | After `switch`/`if`+loop, `v REL param * / % k`, or `7.0f != (x0 + 28)`: `MIR emission is required` |
 | BUG-045 | #265 | `x REL (-C OP y)` with a negative float constant: `MIR emission is required` |
 
-Both are comparisons whose right side is an arithmetic expression over a
-parameter, both fatal with no candidate able to emit, and both pass with the
-operands swapped or the expression hoisted into a temporary. Look at how the
-comparison selector accepts a non-leaf right operand.
+**Confirmed shared cause; both fixed.** MIR lowering is complete in both
+cases. `mir_wide_helper_rhs_pair_consumer()` assumes the arithmetic left
+operand was pushed at definition time. A parameter reload after a CFG join
+is a direct named-home `MIR_LOAD`, not a `MIR_PARAM`; a negative float literal
+is a rematerialized `MIR_UNARY`, not a `MIR_CONST`. Both definitions skip the
+push, but the pair proof used to accept them, making the pending-stack
+preflight invalid. Extend that single proof to reject direct named homes
+and rematerialized wide constants. No AST admission, selection/cost policy,
+new helper or fallback is needed, and no H1/H2 split is required.
+
+BUG-020 is promoted as `tcmprhs`, including the float loop-bearing `if/else`,
+braced early return and mixed-integer-constant facets. BUG-045 is promoted as
+`tflncmp`, including unary spelling, signed-zero, positive-constant-left and
+relation controls.
+Before promotion, only 020/045 flip; all 20 original unrelated reproducers
+still fail. The newly parked BUG-057 also fails; all 21 remaining parked
+reproducers fail after promotion.
+
+Both original **3,514-function** censuses are byte-identical in stack and
+no-stack mode, and all **523 existing perf rows** are unchanged. Only the
+new tcmprhs/tflncmp rows are added, measured through normal stack-check
+PowerShell and host/sanitizer validated. Strict Python full+extended and
+both strict PowerShell stack/no-stack release gates pass. CMake, compiler
+ASan/UBSan, required-MIR-emission, debugger-host and line metadata checks
+pass; `-gline` stays release-identical through peep/nopeep.
+
+Fuzz: restored float seeds 1-300 are **283 ok / 17 INVALID / zero FAIL**.
+The first restored integer batch is **251 ok / 48 INVALID / one FAIL**:
+seed 52 exposes independent BUG-057 [#304](https://github.com/davidly/dcc/issues/304).
+It is reduced, parked and narrowly steered, not fixed here. The full integer
+rerun is **252 ok / 48 INVALID / zero FAIL**, and 3,000 steering seeds are clean.
+No out-of-cluster parked reproducer flips.
+
+**Out-of-cluster cause (B2c):** `mir_direct_wide_location()` cannot resolve a
+fused wide-increment `MIR_BINARY` through `mir_direct_named_home_location()`;
+`mir_emit_direct_wide_add()` then reads its unwritten/reused backend slot
+instead of the incremented named home. No comparison helper-pair is involved.
+
+**Python exceptions:** #277 (`test_mir_campaign_baselines`,
+`test_mir_exact_controls`) is unchanged. Five synthetic mutation-harness
+methods also hit timing/process-start failures; default isolation and Ninja
+isolation were retried without any harness fix, skip or expectation refresh.
+The two 180-second fixture timeouts and three child-start/cleanup checks
+remain unverified under the shared machine load; exact results are in the PR.
+No historical compiler checks or prepush run was made.
 
 ### I1. Long ↔ float return admission
 
@@ -1643,6 +1684,7 @@ so it matters more than its size suggests. Both are one-offs.
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
 | B2a | [#292](https://github.com/davidly/dcc/pull/292) | PR open | BUG-014 promoted as twincg; 300 integer seeds clean; 3,426 census functions and 507 perf rows unchanged; approved #277 failures only (#280 passes) |
 | B2b | [#303](https://github.com/davidly/dcc/pull/303) (`fix/cluster-b2b-dead-decl`) | PR open | BUG-019 promoted as tdeadblk; 300 integer/float seeds clean; 3,489 existing functions and 517 perf rows unchanged; BUG-022 reproducer-only flip, diagnostic mask remains open; 13/14 isolated Ninja harness tests pass; one mock serial-scheduler timeout remains unverified |
+| B2c | | open | BUG-057/#304: fused wide increment result read through stale direct-add slot; `mir_direct_wide_location()` owns the missing home proof; not fixed in H |
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | [#293](https://github.com/davidly/dcc/pull/293) | PR open | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
 | C | | open | |
@@ -1660,7 +1702,7 @@ so it matters more than its size suggests. Both are one-offs.
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1/G2 fixed | G1 clears 012; approved G2 fixes 033/040/042 independently |
 | G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |
 | G2 | `fix/cluster-g2-const-fold-rest` | fixed; three independent commits | 033/040/042 promoted as tconstdz/tflcini/tflcnot; 900 programs: 806 ok/94 INVALID/zero FAIL; 511 original perf rows and both 3,465-function censuses unchanged |
-| H | | open | |
+| H | [#308](https://github.com/davidly/dcc/pull/308) (`fix/cluster-h-float-cmp`) | PR open; verified compiler gates | 020/045 promoted as tcmprhs/tflncmp; int 252/48 and float 283/17, zero FAIL; 3,514 original functions in both modes and 523 perf rows unchanged; BUG-057/#304 parked, not fixed; #277 and isolated mutation timing exceptions documented |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |
 | J | [#290](https://github.com/davidly/dcc/pull/290) | merged; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; existing output unchanged; 049 fixed in J2, 039 still blocked by host-output proof |
