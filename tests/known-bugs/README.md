@@ -82,9 +82,10 @@ regular test:
 `tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c`, `tests/tbfcomp.c`, `tests/tfdivr.c` and `tests/tfpround.c` were promoted this way.
 
 
-`tests/tlogblk.c` separately covers BUG-004's host-proven word and block-long
-facets cleared by E1/A2b-1. BUG-004 stays open with its newly reduced byte-local
-logical SSA facet; that partial issue's reproducer is not promoted.
+`tests/tlogblk.c` covers BUG-004's host-proven word and block-long facets
+cleared by E1/A2b-1. A2b-3 closes the remaining byte-local logical SSA facet:
+`tests/tlogbyte.c` promotes the exact checksum reproducer and adds the other
+long consumers, nested/variable paths and short-circuit side effects.
 
 ## Adding one
 
