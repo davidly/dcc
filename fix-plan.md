@@ -561,7 +561,7 @@ Materializing the incoming edges is the correct producer/consumer contract.
 A broad home proof recursed through loop PHIs; the store-only result guard
 keeps that proof bounded without perturbing existing loop schedules.
 
-**C2 remains open, traced rather than guessed:**
+**C2 was traced rather than guessed (037 fixed in C2b; 029/052 remain open):**
 
 - **BUG-029:** `dcc_mir.c:mir_compute_liveness_bytes()` and
   `mir_compute_liveness_words()` stop their PHI-edge-input scan at the first
@@ -591,6 +591,82 @@ keeps that proof bounded without perturbing existing loop schedules.
   retains a separate/stable source and is correct. Forced homed is correct;
   spilled-all still fails `f2`. This is independent of C1's word self-store
   materialization and B4's call-argument cache.
+
+### C2b. Wide-counter PHI edge use
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-037 | #257 | A for/while body copies the old 32-bit counter before its update |
+
+`mir_binary_is_wide_phi_update()` previously checked only textual uses after
+an update. The loop-header `l` PHI is earlier in the stream, but consumes the
+old counter on the backedge after the increment; sharing old/new slots makes
+that edge copy read the updated value. This is separate from BUG-057's fused
+named-home direct-add read and BUG-029/052's liveness/slot-coalescing defects.
+
+The wide matcher now shares cluster N's exact earlier-used-PHI/CFG-live-out
+proof with the narrow matcher in `mir_value_has_pending_earlier_phi_copy()`.
+It guards both unit and non-unit wide updates. Unused PHI destinations emit
+no copy and do not inhibit coalescing. No selector, profitability threshold,
+`mir_direct_wide_location()`, MIR liveness, or solitary-PHI slot path changes.
+
+- Both original census TSVs are byte-identical across **3,603 functions per
+  mode**; all **534 existing perf rows** are unchanged.
+- BUG-037 flips in both production modes. With the new BUG-058 parked,
+  pre-promotion tally is **13 reproducers: 2 FIXED, 11 fails**; the only other
+  FIXED is BUG-022's historical fixture-only pass. BUG-029/052/057 still fail.
+  Post-promotion tally: **12 reproducers: 1 FIXED, 11 fails**.
+- Promoted as `twphicpy`, retaining all six original lines plus stride,
+  negative-counter, word-carry and zero-iteration cases. Only a new measured
+  normal-stack-check perf row is added.
+- The three original correct controls retain the same instructions in peep
+  and nopeep, modulo label numbering. The selected spilled candidate remains
+  unchanged; broken loops use native wide arithmetic and parallel edge
+  copies, without a fallback/helper. Exact linked `for_loop` body size is
+  **162→236 peep / 185→259 nopeep** (+74 bytes in the new failing shape only).
+- Restored integer 1-300: **287 ok, 11 INVALID, 1 limit-only, 1 FAIL** (seed 43).
+  Reduced in 86 tests to a loop-free cross-signed word initializer widened
+  into a 32-bit array. Hand controls show scalar stores, function-scope
+  locals, same-type initializers and separate assignments are right; both
+  signedness directions and explicit casts fail in the array store.
+  Filed independently as **BUG-058/#315**, parked and steered by
+  `blockwordinit`; sibling compiler paths/BUG-015 steering remain untouched.
+  `loopcopy` is restored; the remaining-known-shape proof passes 3,000 seeds.
+  Repeating restored integer 1-300 after the new steer: **280 ok, 19 INVALID,
+  1 limit-only, zero FAIL** across all four production configurations.
+- Strict Python full+extended and both strict PowerShell stack/no-stack gates
+  pass. Require-emit checks, both 274/274 extended censuses, two sanitized MIR
+  verifier/bitset proofs, ten debugger-host tests and 40 focused Python
+  compiler/generator/line-debug tests pass. The new steer's seven generator
+  tests pass separately. ASan/UBSan compilation checks the original and
+  extended fixtures with independent liveness/cache verification.
+- Debug review: source boundaries/scopes/types are unchanged; corrected
+  backend temporaries and instruction addresses use the normal metadata
+  pipeline. All twelve expanded-fixture release/line/full-debug combinations
+  pass; line-debug COMs are release-identical and full-debug retains named
+  frame-variable metadata.
+
+The full regular Python suite runs **330 tests: seven failures, three errors,
+two pre-existing skips**. Two failures are the approved #277 campaign-golden
+and exact-control gates; their expectations are not refreshed. The other
+five failing methods and two timed-out synthetic mutation-fixture methods
+are retried sequentially in isolation (seven methods, 398.253 seconds): all
+five timing/process-cleanup failures pass. The serial/default scheduler
+fixture and survivors/error-recording fixture still exceed their unchanged
+180-second limits; the latter also reports a cleanup-directory race. Those
+two harness methods remain unverified under shared load. No new compiler/MI
+failure remains, and no harness expectations, timeouts or skips are changed.
+
+The isolated retry methods are
+`test_child_timeout_and_environment_isolation`,
+`test_exited_worker_cleans_nested_process_scopes`,
+`test_worker_watchdog_records_invalid_and_stops_descendants`,
+`test_overall_deadline_and_explicit_stop_clean_live_processes`, and
+`test_post_exit_grace_preempts_long_overall_deadline` (all pass);
+`test_default_serial_and_parallel_are_equal_and_bounded` and
+`test_survivors_invalid_exits_builds_and_worker_errors_are_recorded`
+(remain timed out). No old-compiler/regression-dating checks or
+`prepush.ps1` are run.
 
 ### D. Post-increment and post-decrement
 
@@ -1981,7 +2057,8 @@ addresses require the normal full/line debug pipeline checks.
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | [#293](https://github.com/davidly/dcc/pull/293) | PR open | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
 | C1 | [#313](https://github.com/davidly/dcc/pull/313) (`fix/cluster-c-local-merge`) | PR open; compiler gates verified; accepted Python harness exceptions | BUG-027/#247 and BUG-038/#258: materialize word PHI edges for store-only fused adjustments; original 3,558 functions/mode and 528 perf rows unchanged |
-| C2 | | open; traced | BUG-029/#249: interleaved PHI edge liveness; BUG-037/#257: old wide PHI edge use missed before in-place update; BUG-052/#272: loop-live solitary PHI source coalescing/slot lifetime truncation; distinct from BUG-057/#304 |
+| C2 | | open; traced | BUG-029/#249: interleaved PHI edge liveness; BUG-052/#272: loop-live solitary PHI source coalescing/slot lifetime truncation; distinct from BUG-057/#304 |
+| C2b | `fix/cluster-c2b-wide-phi-edge` | verified; PR pending | BUG-037/#257 promoted as twphicpy; shared earlier-PHI edge-use proof; 3,603 existing functions/mode and 534 perf rows unchanged; new BUG-058/#315 parked/steered |
 | D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/023/024/010/041); traces above |
 | D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
 | D2 | | split into D2a / D2b / D2c / D2d | Assignment-value lifetime, AST admission, byte-PHI lifetime and float consumer typing are independent |

@@ -2639,6 +2639,23 @@ static int mir_wide_constant_is_signed_relational_immediate(int value)
     return uses == 1;
 }
 
+static int mir_value_has_pending_earlier_phi_copy(int value, int index)
+{
+    int instruction;
+
+    /* Earlier PHIs consume their sources on predecessor edges, not at
+     * their textual instruction. Unused destinations emit no edge copy. */
+    if (!mir_value_live_out_of_instruction(value, index))
+        return 0;
+    for (instruction = mir_next_use(value, -1);
+         instruction >= 0 && instruction < index;
+         instruction = mir_next_use(value, instruction))
+        if (mir.insns[instruction].opcode == MIR_PHI &&
+            mir_value_has_use(mir.insns[instruction].dst))
+            return 1;
+    return 0;
+}
+
 static int mir_binary_is_wide_phi_update(
     int index, int *phi_value, int *store_index)
 {
@@ -2686,6 +2703,8 @@ static int mir_binary_is_wide_phi_update(
          instruction < found_store; ++instruction)
         if (mir.insns[instruction].opcode != MIR_NOP)
             return 0;
+    if (mir_value_has_pending_earlier_phi_copy(phi->dst, index))
+        return 0;
     if (right != NULL && right->opcode == MIR_CONST &&
         right->immediate == 1) {
         for (instruction = index + 1;
@@ -2799,16 +2818,8 @@ static int mir_binary_is_narrow_phi_adjust(
             mir.insns[instruction].src2 == phi->dst ||
             mir_call_uses_value(&mir.insns[instruction], phi->dst))
             return 0;
-    /* Earlier PHIs consume their sources on predecessor edges, not at
-     * their textual instruction. Do not overwrite a pending emitted copy;
-     * unused PHI destinations have no physical edge use. */
-    if (mir_value_live_out_of_instruction(phi->dst, index))
-        for (instruction = mir_next_use(phi->dst, -1);
-             instruction >= 0 && instruction < index;
-             instruction = mir_next_use(phi->dst, instruction))
-            if (mir.insns[instruction].opcode == MIR_PHI &&
-                mir_value_has_use(mir.insns[instruction].dst))
-                return 0;
+    if (mir_value_has_pending_earlier_phi_copy(phi->dst, index))
+        return 0;
     if (phi_value != NULL)
         *phi_value = phi->dst;
     if (store_index != NULL)

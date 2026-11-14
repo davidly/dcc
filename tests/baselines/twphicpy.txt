@@ -1,0 +1,11 @@
+for 2
+for postinc 12
+while 2
+narrow 2
+do 2
+straight 2
+stride constant 1
+stride variable 1
+stride negative 2
+carry 65537
+zero iterations 9

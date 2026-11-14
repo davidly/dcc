@@ -7,7 +7,7 @@ wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
 source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `db4524d2` plus the cluster C1 word-PHI home proof (2026-11-15).
+- **Compiler under test:** `6e5a05ea` plus the cluster C2b wide-PHI edge-use proof (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -32,12 +32,12 @@ and their historical diagnoses are retained separately below.
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
-| [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
+| [BUG-058](#bug-058) | #315 | wrong result | A nested-block word initialized across signedness is widened with the initializer type when stored to a 32-bit array |
 
 Twelve are open: eight give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
@@ -45,7 +45,8 @@ BUG-041 admission, one hangs, one stops the compile,
 and one (BUG-022) turns a compile error into
 a broken program. BUG-013's unsigned bit-field promotion is fixed below.
 
-Forty-three reported bugs are fixed: [two in cluster C1](#fixed-in-cluster-c1),
+Forty-four reported bugs are fixed: [one in cluster C2b](#fixed-in-cluster-c2b),
+[two in cluster C1](#fixed-in-cluster-c1),
 [one in cluster N](#fixed-in-cluster-n),
 [one in cluster E2-bitfield](#fixed-in-cluster-e2-bitfield),
 [two in cluster E2-shift](#fixed-in-cluster-e2-shift),
@@ -326,38 +327,6 @@ L4:
 - The selected emitter is `homed-scalar-cfg` (`DCC_MIR_COST_REPORT=1`).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
 
-## BUG-037
-
-**In a `for` or `while` loop whose counter is 32 bits wide, a copy of the
-counter taken in the body is stored after the increment.** The copy holds the
-next value, so it is one step ahead. A `do … while`, a 16-bit counter and
-straight-line code are correct.
-
-```c
-int32_t l = 0, i;
-for (i = 2; i < 3; i += 1)
-    l = i;
-return l;                    /* want 2, dcc 3 */
-```
-
-dcc emits the increment first and then the copy, which reads the new `i`:
-
-```
-    inc (ix-6)         ; i += 1, in place
-    ...
-    ld l,(ix-6)        ; l = i
-    ld h,(ix-5)
-    ld e,(ix-8)
-    ld d,(ix-7)
-    ld (ix-2),l
-```
-
-- Wrong for `i += 1` and `i++` in a `for`, and for `i += 1` at the end of a
-  `while` body (`while (i < 3) { l = i; i += 1; }`).
-- Correct for `int16_t` locals, `do … while`, `i = i + 1` and `i += 2` in a
-  `do … while`, and a copy outside a loop.
-- Found by fuzzing at `83dc7a91` (seed 7581), with and without `dcc-peep`.
-
 ## BUG-039
 
 **Float division is off by one unit in the last place in about a fifth of
@@ -446,6 +415,115 @@ static void f4(long x) { int i; for (i = 0; i < 3; ++i) la[1] = (0 ? 2L : x) - 1
   loop, `x + 0.0f` as the arm, `x` in the else arm (`c ? 1.0f : x`), no
   `?:`, reading `x` after the loop, a local copy, or no loop. Found by
   fuzzing (float generator, seed 4294).
+
+---
+
+## BUG-058
+
+**A nested-block 16-bit local initialized from the opposite signedness is
+widened using its initializer's signedness when stored into a 32-bit array.**
+The same local is widened correctly into a scalar global. This finding is
+independent of BUG-037's wide-counter PHI update; the reduced function has
+no loop, PHI update or increment.
+
+```c
+int32_t g, a[2];
+void probe(uint16_t x) {
+    { int16_t b = x; g = b; a[1] = b; }
+}                         /* x = 0x8000: g = -32768, a[1] = +32768 */
+```
+
+- Wrong in peep/nopeep with or without stack checking. A nested-block
+  `int16_t b = (int16_t)x`, a copy through another block word, and
+  `int16_t b = x + 0` also store +32768 instead of -32768.
+- The mirror case is wrong too: `{ uint16_t b = x; g=b; a[1]=b; }` with a
+  signed `int16_t x` of -32768 stores -32768 into the array, not 32768.
+- Correct: a function-scope local, initialization from a same-signed word,
+  a signed constant, a separate `int16_t b; b=x;` assignment, and the scalar
+  global store beside each failing array store.
+- Related to the block-type surfaces in BUG-015, but newly logged as this
+  distinct initializer/indexed-widening contract; its compiler cause is not
+  investigated or fixed by C2b. BUG-015's source paths and steering are untouched.
+- Found in restored integer seeds 1-300, seed 43. The reducer preserves the
+  mismatch in 66 lines/86 tests; hand probes remove all loops and helper calls.
+- Compiler under test: main `6e5a05ea` plus the C2b PHI-edge guard, which
+  does not match this loop-free reproducer.
+- Parked as `tests/known-bugs/bug058.c`; steer: `blockwordinit`.
+
+## Fixed in cluster C2b
+
+BUG-037 is fixed by sharing cluster N's pending predecessor-edge PHI-copy
+proof between narrow and wide in-place update matchers. The old wide counter
+is still live through the increment when a used earlier PHI consumes it on
+the backedge, so the update must retain a distinct backend slot. Unused PHI
+destinations do not inhibit the existing in-place schedules.
+
+Promoted as [twphicpy](tests/twphicpy.c), preserving all six original output
+lines and adding constant/variable strides, negative counters, word carry and
+zero-iteration coverage. The selected spilled candidate is unchanged; previously
+incorrect loop bodies now use native wide addition and parallel PHI copies,
+not a fallback or runtime addition helper. The original `for_loop` grows
+from **162 to 236 linked bytes peep / 185 to 259 nopeep** (+74 each).
+All three original correct controls retain identical instructions in both
+modes (only local/synthetic label numbering moves).
+
+Both original census TSVs are byte-identical across **3,603 existing
+functions/mode**; all **534 existing performance rows** remain unchanged.
+Only the promoted fixture receives a new measured stack-check row. Its
+release/line/full-debug outputs pass in all twelve stack/peep combinations;
+line-debug COMs are release-identical, and full-debug retains frame-variable
+metadata. Source scopes/types/statement boundaries are unchanged.
+
+The restored integer batch found a separate loop-free initializer/indexed
+widening defect: **287 ok, 11 INVALID, 1 target-limit-only, 1 FAIL** (seed 43).
+It is parked and filed as [BUG-058/#315](https://github.com/davidly/dcc/issues/315),
+not fixed here; `blockwordinit` steers it while `loopcopy` remains restored.
+Repeating restored integer 1-300 after the new steer gives **280 ok,
+19 INVALID, 1 target-limit-only, zero FAIL** across all four production
+configurations. The remaining-known-shape steering proof passes 3,000 seeds.
+Approved harness-retry results are recorded in [C2b](fix-plan.md#c2b-wide-counter-phi-edge-use).
+Before promotion with BUG-058 parked: **13 reproducers, 2 FIXED, 11 fails**;
+only BUG-037 newly flips. BUG-022's historical fixture pass is pre-existing,
+while its diagnostic defect and BUG-029/052/057 remain untouched.
+Post-promotion tally: **12 reproducers, 1 FIXED, 11 fails**.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-037](#bug-037) | #257 | [twphicpy](tests/twphicpy.c) |
+
+Historical diagnosis and original reproducer:
+
+### BUG-037
+
+**In a `for` or `while` loop whose counter is 32 bits wide, a copy of the
+counter taken in the body is stored after the increment.** The copy holds the
+next value, so it is one step ahead. A `do … while`, a 16-bit counter and
+straight-line code are correct.
+
+```c
+int32_t l = 0, i;
+for (i = 2; i < 3; i += 1)
+    l = i;
+return l;                    /* want 2, dcc 3 */
+```
+
+dcc emits the increment first and then the copy, which reads the new `i`:
+
+```
+    inc (ix-6)         ; i += 1, in place
+    ...
+    ld l,(ix-6)        ; l = i
+    ld h,(ix-5)
+    ld e,(ix-8)
+    ld d,(ix-7)
+    ld (ix-2),l
+```
+
+- Wrong for `i += 1` and `i++` in a `for`, and for `i += 1` at the end of a
+  `while` body (`while (i < 3) { l = i; i += 1; }`).
+- Correct for `int16_t` locals, `do … while`, `i = i + 1` and `i += 2` in a
+  `do … while`, and a copy outside a loop.
+- Found by fuzzing at `83dc7a91` (seed 7581), with and without `dcc-peep`.
 
 ---
 
