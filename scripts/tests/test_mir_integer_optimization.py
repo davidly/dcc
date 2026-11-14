@@ -46,6 +46,34 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                     self.assertIn("ld de,0", assembly)
                     self.assertRegex(assembly, r"ld hl,1000")
 
+    def test_static_float_arithmetic_matches_literal_data(self):
+        cases = (
+            ("(2.5f)", "2.5f"),
+            ("-(2.5f)", "-2.5f"),
+            ("1.0f + 2.0f * 3.0f", "7.0f"),
+            ("(1.0f + 2.0f) * 3.0f", "9.0f"),
+            ("3 * (0.5f + 0.25f) / 2 - 0.125f", "1.0f"),
+            ("(16777216.0f + 1.0f) - 16777216.0f", "0.0f"),
+            ("(1 / 2) + 0.25f", "0.25f"),
+            ("((float)(3 + 2)) * 0.5f", "2.5f"),
+            ("((int)2.75f)", "2.0f"),
+            ("(float)((int)(1.25f + 2.0f)) + 0.5f", "3.5f"),
+            ("((int)1.75f + (int)2.5f) * 0.5f", "1.5f"),
+            ("(float)((_Bool)0.25f)", "1.0f"),
+            ("(float)sizeof(\"ab\")", "3.0f"),
+            ("0.0f ? 1.0f : 2.5f", "2.5f"),
+            ("(float)(uint16_t)65535.75f", "65535.0f"),
+            ("(float)(int16_t)-32768.75f", "-32768.0f"),
+            ("(float)(uint32_t)4000000000.0f", "4000000000.0f"),
+            ("(float)(int8_t)-128.75f", "-128.0f"),
+        )
+        for expression, literal in cases:
+            source = "#include <stdint.h>\nfloat probe = " + expression + ";\n"
+            neighbor = "#include <stdint.h>\nfloat probe = " + literal + ";\n"
+            with self.subTest(expression=expression):
+                self.assertEqual(self.code(self.compile(source)),
+                                 self.code(self.compile(neighbor)))
+
     def test_float_conversion_retains_cast_signedness(self):
         cases = (
             ("long x", "(unsigned long)x", "__fulf"),

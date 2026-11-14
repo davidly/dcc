@@ -47,7 +47,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 | [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
-| [BUG-040](#bug-040) | #260 | compile error | A static-storage float initializer must be a bare constant: `(2.5f)`, `-(2.5f)` and `1.0f + 2.0f` are rejected |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-042](#bug-042) | #262 | compile error | A float constant that must be folded or tested for truth is rejected: `-(-2.5f)`, `!2.5f`, `2.5f && n`, `if (2.3f)` |
 | [BUG-043](#bug-043) | #263 | compile error | Compound assignment to an integer lvalue with a float right operand is rejected (`l *= f`, `n += 1.5f`) |
@@ -56,14 +55,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 
-Thirty-one are open: nineteen give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, ten stop the compile,
+Thirty are open: nineteen give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, nine stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Twenty-one reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Twenty-two reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [one in cluster B2a](#fixed-in-cluster-b2a),
@@ -74,7 +73,7 @@ Twenty-one reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster I1](#fixed-in-cluster-i1),
 [two in cluster I2](#fixed-in-cluster-i2),
 [one in cluster G1](#fixed-in-cluster-g1),
-[one in cluster G2](#fixed-in-cluster-g2) and
+[two in cluster G2](#fixed-in-cluster-g2) and
 [two in cluster J](#fixed-in-cluster-j). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -819,30 +818,6 @@ va = 1.0f; vb = 1.85f;  /* want 3f0a60dd, dcc 3f0a60de */
 - Also at v3.6.0 (`20290235`) with today's runtime.
 - Found by hand probing (the float generator excludes `/` as `fdivround`).
 
-## BUG-040
-
-**The initializer of a float with static storage must be a bare floating
-constant, optionally negated, or `(float)` of an integer constant.** A
-parenthesised constant, a negated parenthesised constant or a constant
-expression is rejected: `DCC-E1102 expected ';'` at file scope, `DCC-E0912
-float initializer must be constant` for an element of a static array.
-
-```c
-static float a = (2.5f);              /* rejected */
-static float b = -(2.5f);             /* rejected */
-static float c = 1.0f + 2.0f;         /* rejected */
-static float arr[2] = { (0.5f), 1.0f - 0.75f };   /* rejected */
-static int ok = (-2) + 1 * 3;         /* accepted */
-```
-
-- Accepted: `-2.5f`, `(float)3`, every form as an automatic initializer
-  (`float la = (2.5f);`) and as an assignment.
-- The conformance table lists global initializers as supported without a
-  float exception.
-- Also at v3.6.0 (`20290235`).
-- Found by fuzzing (float generator, seeds 1, 2, 4, 5, …): it rendered
-  negative constants in parentheses.
-
 ## BUG-041
 
 **The value of a float `++` or `--` expression is rejected.** `DCC-E1002`
@@ -1088,6 +1063,42 @@ if (never)
   diagnostic points at the enclosing `if` rather than at the division.
 - Already present in v3.6.0 (`20290235`).
 
+G2b fixes BUG-040 (#260): a static-only fallback reuses the expression AST
+and bounded typed float evaluation after the old compact initializer parser
+declines. Parentheses and float constant arithmetic are evaluated with host
+single-precision semantics; automatic initializer paths and every existing
+compact static initializer are preserved. Both complete reproducer MAC files
+are byte-identical to their accepted literal neighbors. Promoted as `tflcini`,
+including precedence, mixed integer arithmetic, casts and exact float-bit
+rounding controls proven by clang and ASan/UBSan. Parenthesized/computed
+float-to-integer casts, Boolean casts and constant selections use the private
+typed evaluator, with target-width range checks before conversion. The
+function-body gates remain unchanged until G2c.
+
+## BUG-040
+
+**The initializer of a float with static storage must be a bare floating
+constant, optionally negated, or `(float)` of an integer constant.** A
+parenthesised constant, a negated parenthesised constant or a constant
+expression is rejected: `DCC-E1102 expected ';'` at file scope, `DCC-E0912
+float initializer must be constant` for an element of a static array.
+
+```c
+static float a = (2.5f);              /* rejected */
+static float b = -(2.5f);             /* rejected */
+static float c = 1.0f + 2.0f;         /* rejected */
+static float arr[2] = { (0.5f), 1.0f - 0.75f };   /* rejected */
+static int ok = (-2) + 1 * 3;         /* accepted */
+```
+
+- Accepted: `-2.5f`, `(float)3`, every form as an automatic initializer
+  (`float la = (2.5f);`) and as an assignment.
+- The conformance table lists global initializers as supported without a
+  float exception.
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seeds 1, 2, 4, 5, …): it rendered
+  negative constants in parentheses.
+
 ## Fixed in cluster G1
 
 BUG-012's constant logical and nested-binary unary forms now pass in both
@@ -1101,7 +1112,7 @@ pipelines, with no added instructions or frame cost.
 
 The first fix flips only BUG-012 (**1 FIXED, 33 fails** before promotion).
 Per the approved stop rule, cluster G is split into G1 (BUG-012 fixed) and
-G2 (BUG-040/042 still parked; BUG-033 is fixed above). G2 needs separate zero-divisor admission,
+G2 (BUG-042 still parked; BUG-033/040 are fixed above). G2 needs separate zero-divisor admission,
 static float token parsing, and floating-constant truth/folding work; its
 traces are in [fix-plan.md](fix-plan.md#g-constant-expressions-in-the-front-end).
 In particular, BUG-033 must retain the unevaluated division, not fabricate a
