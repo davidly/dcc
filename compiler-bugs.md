@@ -7,7 +7,7 @@ wrong-code finding from a withdrawn BUG-041 admission experiment; its parked
 source remains rejected by the shipped admission gate. Fixed entries
 and their historical diagnoses are retained separately below.
 
-- **Compiler under test:** `db4524d2` plus the cluster C1 word-PHI home proof (2026-11-15).
+- **Compiler under test:** `15db8e69` plus the cluster E2c bit-field compound extraction repair (2026-11-15).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -27,7 +27,6 @@ and their historical diagnoses are retained separately below.
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
 | [BUG-004](#bug-004) | #225 | wrong result | Byte local initialized from `&&`/`\|\|`, forwarded into 32-bit consumers loses its source type |
-| [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
@@ -39,13 +38,13 @@ and their historical diagnoses are retained separately below.
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 
-Twelve are open: eight give wrong results with no diagnostic
+Eleven are open: seven give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
 BUG-041 admission, one hangs, one stops the compile,
 and one (BUG-022) turns a compile error into
 a broken program. BUG-013's unsigned bit-field promotion is fixed below.
 
-Forty-three reported bugs are fixed: [two in cluster C1](#fixed-in-cluster-c1),
+Forty-four reported bugs are fixed: [one in cluster E2c](#fixed-in-cluster-e2c), [two in cluster C1](#fixed-in-cluster-c1),
 [one in cluster N](#fixed-in-cluster-n),
 [one in cluster E2-bitfield](#fixed-in-cluster-e2-bitfield),
 [two in cluster E2-shift](#fixed-in-cluster-e2-shift),
@@ -151,32 +150,6 @@ s.m1 = l;            /* uint32_t m1: want 00000001, dcc xxxx0001 (e.g. 09f90001)
 - Correct: `l = 1`; `l = one`; `s.m1 = one || zero` stored directly.
 - Commit `f00e062e` ("Widen && and || results converted to long or float")
   fixed a neighbouring shape.
-
-## BUG-006
-
-**`/=`, `%=` and `>>=` on an unsigned bit-field store the wrong value when
-the field's top bit is set.** The field is sign-extended from its own width,
-as if it were a signed bit-field, before the operation.
-
-```c
-struct S { uint16_t m2 : 11; uint16_t m5 : 5; } s = { 1148, 18 };
-s.m5 %= 7;         /* want 4,    dcc 2    */
-s.m5 /= 21930;     /* want 0,    dcc 2    */
-s.m2 %= 21930;     /* want 1148, dcc 296  */
-s.m5 >>= 1;        /* want 9,    dcc 25   */
-s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
-```
-
-- Every wrong value is what sign extension gives. 18 in 5 bits is `10010`,
-  which sign-extends to `0xfff2` (65522): 65522 % 7 is 2, 65522 / 21930 is 2,
-  and `0xfff2 >> 1` done arithmetically is `0xfff9`, 25 in 5 bits.
-- Wrong for a field of any width, including all 16 bits
-  (`uint16_t a : 16` holding `0x8421`: `a >>= 3` gives `0xf084`), in a
-  global or local struct and through a pointer (`p->a >>= 3`), and when the
-  result is used (`r = (s.a >>= 3)`).
-- Correct: the same statements when the field's top bit is clear;
-  `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
-  (their low bits do not depend on the extension); a signed bit-field.
 
 ## BUG-009
 
@@ -547,6 +520,69 @@ in-range float-to-`int32_t` conversion and retains the failing context.
 
 ---
 
+## Fixed in cluster E2c
+
+Unsigned bit-field compound `/=`, `%=` and `>>=` now load with the declared
+field type, then compute with its field-range-promoted type. The old member
+compound load used unresolved AST type zero, so extraction sign-extended an
+unsigned field. Narrow unsigned fields promote to signed int; full-width
+unsigned fields remain unsigned, including right shifts and live results.
+
+The refined repair preserves add/subtract/multiply, bitwise and left-shift
+shapes: their stored low bits are invariant under sign versus zero extension.
+The full repair was rejected because it changed `tbfinit`/`tbitfld` exact
+schedules into spilled schedules. Only existing `tcmwide.array_member`,
+`bit_field_through_pointer` and `main` change in either census; the first is
+label-only, the second saves 24 instructions, and the last adds coverage.
+
+The maintainer explicitly approved this existing-output change: the incumbent
+pointer test happened to reach 147 before division, hiding the defect. With
+`h.u = 200` it reaches 463 and formerly printed 297 instead of clang's 92.
+The extended `tcmwide` checks both inputs and high-bit remainder/right shift;
+clang O0/O2/ASan/UBSan all prove its revised baseline. Only its existing perf
+row changes; the new `tbfcomp` row is separately measured. Restored `bfdivasg`, 300 integer seeds: **293 ok, 7 INVALID, zero FAIL**.
+Before promotion: 12 reproducers, 2 FIXED (006 and the historical fixture-only
+022), 10 fails. Afterwards: 11 parked, 1 historical FIXED, 10 fails. All
+3,610 other existing functions in each census and all 534 other performance
+rows are unchanged. Strict PowerShell stack/no-stack and Python full+extended gates
+pass; host, debug and #277/isolated-harness outcomes are in fix-plan.md.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-006](#bug-006) | #226 | [tbfcomp](tests/tbfcomp.c), extended [tcmwide](tests/tcmwide.c) |
+
+### BUG-006
+
+**Fixed:** declared extraction signedness and field-range arithmetic promotion
+are kept separate for high-bit-sensitive compound operators. Regression:
+[tbfcomp.c](tests/tbfcomp.c), [stdout](tests/baselines/tbfcomp.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**`/=`, `%=` and `>>=` on an unsigned bit-field store the wrong value when
+the field's top bit is set.** The field is sign-extended from its own width,
+as if it were a signed bit-field, before the operation.
+
+```c
+struct S { uint16_t m2 : 11; uint16_t m5 : 5; } s = { 1148, 18 };
+s.m5 %= 7;         /* want 4,    dcc 2    */
+s.m5 /= 21930;     /* want 0,    dcc 2    */
+s.m2 %= 21930;     /* want 1148, dcc 296  */
+s.m5 >>= 1;        /* want 9,    dcc 25   */
+s.m2 >>= n;        /* n = 3: want 143, dcc 1935 */
+```
+
+- Every wrong value is what sign extension gives. 18 in 5 bits is `10010`,
+  which sign-extends to `0xfff2` (65522): 65522 % 7 is 2, 65522 / 21930 is 2,
+  and `0xfff2 >> 1` done arithmetically is `0xfff9`, 25 in 5 bits.
+- Wrong for a field of any width, including all 16 bits
+  (`uint16_t a : 16` holding `0x8421`: `a >>= 3` gives `0xf084`), in a
+  global or local struct and through a pointer (`p->a >>= 3`), and when the
+  result is used (`r = (s.a >>= 3)`).
+- Correct: the same statements when the field's top bit is clear;
+  `s.m5 = s.m5 % 7` and `s.m5 = s.m5 >> 1`; `+=`, `-=`, `*=`, `^=`, `<<=`
+  (their low bits do not depend on the extension); a signed bit-field.
+
 ## Fixed in cluster E2-bitfield
 
 BUG-013 passes in peep/nopeep and stack/no-stack modes. AST result typing
@@ -573,10 +609,9 @@ gate's approved #277 and loaded synthetic-harness exceptions, including
 isolated retries, are documented in fix-plan.md; no expectations were changed.
 The final standalone Ninja gate runs 328 tests with only the two approved
 #277 failures and two existing skips; all earlier harness failures pass.
-BUG-006 is independent and remains open: its correct extraction repair changes
-an existing `tcmwide` function and was discarded under the per-bug output-
-preservation rule. The full trace and host-proven alternate input are recorded
-in fix-plan.md.
+BUG-006 was independently stopped under the original output-preservation
+rule. It is now fixed in E2c below, with the maintainer-approved `tcmwide`
+exception; the original trace remains in fix-plan.md.
 
 | ID | Issue | Regression |
 | --- | --- | --- |

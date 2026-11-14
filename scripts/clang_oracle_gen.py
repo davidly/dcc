@@ -1456,7 +1456,6 @@ FEATURES = frozenset((
 KNOWN_BUGS = {
     'logicbyteinit': 'BUG-004',
     'bytevarshl': 'BUG-002',
-    'bfdivasg': 'BUG-006',
     'nestedwideless': 'BUG-009',
     'blockptr': 'BUG-015',
     'wideincadd': 'BUG-057',
