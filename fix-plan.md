@@ -1217,7 +1217,7 @@ so it matters more than its size suggests. Both are one-offs.
 | D2 | | split into D2a / D2b / D2c | Assignment-value lifetime, AST admission and byte-PHI lifetime are independent |
 | D2a | [#300](https://github.com/davidly/dcc/pull/300) (`fix/cluster-d2a-postinc-home`) | PR open; verified partial fix | 021/023 promoted as tpost16/tpostbr; 023 moved from C, same root; 024 remains independent; 26 parked reproducers all fail; 3,487 pre-follow-up functions and 517 perf rows unchanged |
 | D2b | | open; separate worktree | BUG-010/041 AST value admission; not changed by D2a |
-| D2c | `fix/cluster-d2c-byte-phi-home` | verified; preparing PR | 024 promoted as tpost8; 266 ok/34 INVALID/zero FAIL; 3,503 existing functions and 519 perf rows unchanged; 24 parked reproducers all fail; approved #277 and four isolated harness failures documented |
+| D2c | [#305](https://github.com/davidly/dcc/pull/305) (`fix/cluster-d2c-byte-phi-home`) | PR open; verified compiler gates | 024 promoted as tpost8; 266 ok/34 INVALID/zero FAIL; 3,503 existing functions and 519 perf rows unchanged; 24 parked reproducers all fail; approved #277 and four isolated harness failures documented |
 | E | | open | |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |
