@@ -1792,7 +1792,7 @@ addresses require the normal full/line debug pipeline checks.
 
 | Cluster | Branch / PR | Status | Notes |
 | --- | --- | --- | --- |
-| N | `fix/cluster-n-float-array-else` | fixed; release gates verified | BUG-055 promoted as tflidx; restored float 283 ok/17 INVALID/zero FAIL; both 3,574-function censuses and all 530 existing perf rows unchanged; #277 plus isolated harness retries documented |
+| N | [#312](https://github.com/davidly/dcc/pull/312) (`fix/cluster-n-float-array-else`) | PR open; release gates verified | BUG-055 promoted as tflidx; restored float 283 ok/17 INVALID/zero FAIL; both 3,574-function censuses and all 530 existing perf rows unchanged; #277 plus isolated harness retries documented |
 | A1 | [#281](https://github.com/davidly/dcc/pull/281) | merged | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
 | A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
