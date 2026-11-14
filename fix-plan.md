@@ -8,7 +8,7 @@ one fix, made in the right place, closes several issues, and so that the
 fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
-neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), B1,
+neighbouring shapes that pass in each entry. A1 (#281), A2a (#283), B1 (#286),
 K (#278) and L (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
 B was likewise disproved and split into B1–B4. The remaining clusters are still hypotheses.
@@ -486,7 +486,7 @@ so it matters more than its size suggests. Both are one-offs.
 | A2a | [#283](https://github.com/davidly/dcc/pull/283) | PR open | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
 | A2b | | open; after E | BUG-004/015; unconfirmed shared cause |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
-| B1 | `fix/cluster-b1-probe-offset` | fixed | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
+| B1 | [#286](https://github.com/davidly/dcc/pull/286) | PR open | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | | open | BUG-014/019 bookkeeping fatals; unconfirmed shared cause |
 | B3 | | open | BUG-026 same-value operands |
 | B4 | | open | BUG-036; check overlap with C/D first |
