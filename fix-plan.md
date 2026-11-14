@@ -1016,13 +1016,65 @@ two existing skips. Two failures are the approved #277 campaign baseline/exact
 control failures. Nine unique synthetic-harness tests failed under load:
 mutation scheduler equality, exited-worker cleanup, survivor/invalid-result
 classification (plus its cleanup error), clobber lifecycle, watchdog cleanup,
-and four process-supervision deadline/pipe/cleanup checks. Isolated retries pass six of the nine tests (clobber lifecycle, watchdog and
-all four supervision checks). Three mutation-harness checks remain unverified:
+and four process-supervision deadline/pipe/cleanup checks. Isolated retries
+pass six of the nine tests (clobber lifecycle, watchdog and all four supervision
+checks). Three mutation-harness checks were not verified by those isolated
+retries:
 scheduler equality and survivor/invalid classification each time out at the
 unchanged 180-second fixture deadline (the latter also races cleanup), and
 exited-worker cleanup still cannot find its expected watchdog-child file.
 These are documented harness exceptions, not compiler failures; no fixture,
 assertion, timeout, expected result or skip was changed.
+
+The final standalone regular gate uses the existing Ninja build option and
+runs **328 tests with only the two approved #277 failures and two existing
+skips**; every earlier timing/cleanup failure, including all three checks above,
+passes. No harness check remains unverified. The refined new test passes host
+validation and all six release/full-debug/line-debug pipelines; normal-stack
+cycles are 348370/356017 with peep/nopeep sizes 6784/7296. Both final incumbent
+censuses still show zero changes across all 3,545 functions, and all 526 original
+performance rows remain byte-identical. The final promoted corpus has six new
+functions, not an incumbent output change.
+
+**BUG-006 stopped under the per-bug output-preservation rule.** The member
+compound path starts its bit-field `MIR_LOAD_INDIRECT` with AST member type 0,
+so extraction sign-extends an unsigned field. Setting the load's declared
+field type and separately promoting the arithmetic type clears BUG-006 and
+corrects negative divisors, pointer/local fields, full-width right shifts and
+live results. However, a full repair changes six existing functions across
+`tbfinit`, `tbitfld` and `tcmwide`, including two exact-to-spilled regressions,
+and is rejected.
+
+A refinement preserves the existing low-bit-invariant shapes for add,
+subtract, multiply, bitwise operations and left shift, repairing only division,
+remainder and right shift. It keeps `tbfinit`/`tbitfld` byte-identical but still
+changes `tcmwide.bit_field_through_pointer` from 434 to 410 instructions
+(same generated candidate), with label-only changes in `array_member` and
+`main`, in both censuses. This is an improvement, but any existing output
+change is forbidden here, so it too is discarded. No selector, exact schedule,
+performance baseline, known-bug steering or BUG-002/028 code is changed.
+
+The incumbent `tcmwide` passes because `h.u = 444; h.u -= 5; h.u *= 5`
+truncates to 147 before its wide division/remainder, leaving the sign bit clear.
+The same function with initial `h.u = 200` reaches 463 before division and
+prints 297 instead of host clang's 92; the narrowed repair prints 92 in peep
+and nopeep. Clang O0/O2 and ASan/UBSan agree on that probe. Thus preserving
+this function's original bytes would preserve the very same BUG-006 defect
+for ordinary other inputs. A policy exception for that existing function's
+output, rather than an application-name/value-specific workaround, is needed
+to close BUG-006. Its original reproducer, baseline and `bfdivasg` steering
+remain untouched; the final tree retains only the independently accepted
+BUG-013 fix.
+
+
+An out-of-cluster debug cleanup observation was also isolated: interleaving
+`printf` inside the new scoped helper leaves two redundant `exx; exx` pairs
+in nopeep `-gline` output, because metadata separates them during cleanup.
+The unchanged branch-base compiler exhibits the same difference. No cleanup
+rule is changed here; printing after the scoped helpers retains every checked
+expression and all 15 host-baseline lines, and makes the delivered test's
+`-gline` binaries release-identical in both pipelines. Only that new test's
+normal-stack row is measured again; all 526 incumbent rows remain byte-identical.
 
 ### F. Compound assignment to complex lvalues
 
@@ -1571,7 +1623,7 @@ so it matters more than its size suggests. Both are one-offs.
 | E | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | split into E1 / E2 | Single SSA forwarding fix clears 016; 004 function facet and 015 word-widening facet improve, complete issues still open |
 | E1 | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | PR open; verified compiler gates; documented harness exceptions | 016 promoted as tinittyp; int 297/2/1 limit, float 281/19, zero FAIL; 3,509 functions and 520 perf rows unchanged; #277 and three isolated synthetic-fixture timing failures |
 | E2 | | split | 013/006 in E2-bitfield; 002/028 separate byte-shift workstream; 004 repaired boolean conversion remains in A2b |
-| E2-bitfield | `fix/cluster-e2-bitfield` | BUG-013 accepted; BUG-006 next | 013 promoted as tbfexpr; AST/scoped MIR promotion; 300 integer seeds clean; 3,545 existing functions and 526 performance rows unchanged |
+| E2-bitfield | [#310](https://github.com/davidly/dcc/pull/310) (`fix/cluster-e2-bitfield`) | PR open; partial: 013 accepted; 006 stopped | 013 promoted as tbfexpr; 300 integer seeds clean; 3,545 existing functions and 526 performance rows unchanged; 006 correct repair changes incumbent tcmwide output and is discarded under the per-bug stop rule |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1/G2 fixed | G1 clears 012; approved G2 fixes 033/040/042 independently |
 | G1 | [#295](https://github.com/davidly/dcc/pull/295) | PR open | 012 promoted as tconstun; 216 ok/82 INVALID/2 limit-only; 509 perf rows and both censuses unchanged; approved #277 failures; unchanged mock fixture passes Ninja retry; no MIR/emitter changes |

@@ -714,7 +714,12 @@ metadata tests, six MIR host tests, ten debugger-host tests, require-emit,
 full-debug and release-identical `-gline` pipelines pass. The regular Python
 gate's approved #277 and loaded synthetic-harness exceptions, including
 isolated retries, are documented in fix-plan.md; no expectations were changed.
-BUG-006 is independent and remains open pending its own acceptance.
+The final standalone Ninja gate runs 328 tests with only the two approved
+#277 failures and two existing skips; all earlier harness failures pass.
+BUG-006 is independent and remains open: its correct extraction repair changes
+an existing `tcmwide` function and was discarded under the per-bug output-
+preservation rule. The full trace and host-proven alternate input are recorded
+in fix-plan.md.
 
 | ID | Issue | Regression |
 | --- | --- | --- |
