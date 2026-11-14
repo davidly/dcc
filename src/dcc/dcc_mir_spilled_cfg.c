@@ -34791,9 +34791,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                           "\tld a,d\n\tcpl\n\tld d,a\n", out);
             } else if (insn->immediate == '!') {
                 end_label = new_label();
-                if (mir_value_is_wide(insn->src1))
-                    mir_stream_puts("\tld a,d\n\tor e\n\tor h\n\tor l\n\tld hl,0\n", out);
-                else
+                if (mir_value_is_wide(insn->src1)) {
+                    const struct MirInsn *source = mir_definition(insn->src1);
+                    if (source != NULL && type_is_float(source->type))
+                        mir_stream_puts("\tld a,d\n\tand 127\n\tor e\n\tor h\n\tor l\n"
+                              "\tld hl,0\n", out);
+                    else
+                        mir_stream_puts("\tld a,d\n\tor e\n\tor h\n\tor l\n\tld hl,0\n", out);
+                } else
                     mir_stream_puts("\tld a,h\n\tor l\n\tld hl,0\n", out);
                 mir_stream_printf(out, "\tjr nz,L%d\n\tinc l\nL%d:\n",
                         end_label, end_label);

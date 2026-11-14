@@ -56,18 +56,17 @@ and their historical diagnoses are retained separately below.
 | [BUG-043](#bug-043) | #263 | compile error | Compound assignment to an integer lvalue with a float right operand is rejected (`l *= f`, `n += 1.5f`) |
 | [BUG-044](#bug-044) | #264 | wrong result | `++`/`--` on a float is a no-op on a scalar and a 16-bit integer increment on an array element |
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
-| [BUG-049](#bug-049) | #269 | wrong result | `!f` is 0 when `f` is negative zero; `if (f)`, `f ? :` and `f == 0.0f` treat `-0.0f` as zero correctly |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 
-Thirty-five are open: twenty-one give wrong results with no diagnostic
+Thirty-four are open: twenty give wrong results with no diagnostic
 (BUG-039 is in the runtime), one hangs, twelve stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Seventeen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Eighteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [one in cluster B2a](#fixed-in-cluster-b2a),
@@ -76,7 +75,7 @@ Seventeen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster L](#fixed-in-cluster-l),
 [one in cluster I1](#fixed-in-cluster-i1),
 [two in cluster I2](#fixed-in-cluster-i2) and
-[one in cluster J](#fixed-in-cluster-j). Two more
+[two in cluster J](#fixed-in-cluster-j). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
 
@@ -1059,25 +1058,6 @@ r = (x < -1.0f - n);          /* fatal */
   `1.0f < -fg2` are accepted. Found by fuzzing (float generator, seeds 477
   and 1347).
 
-## BUG-049
-
-**`!f` is 0 when `f` is negative zero.** `!` on a float tests the raw bits,
-so `-0.0f` (`80000000`) counts as true. The other truth tests are right:
-`if (f)`, `f ? 1 : 0`, `f && 1`, `f || 0` and `f == 0.0f` all treat
-`-0.0f` as zero.
-
-```c
-m0 = -((float)g5);         /* g5 == 0, so m0 is -0.0f */
-n = !m0;                   /* want 1, dcc 0 */
-if (!m0) puts("yes");      /* want yes, dcc no */
-```
-
-- `-0.0f` arises from negating a zero and from `0.0f * -1.0f`, so a
-  `!` guard after a multiplication or negation can misfire.
-- With and without `dcc-peep`.
-- Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
-- Found by fuzzing (float generator, seed 45).
-
 ## BUG-052
 
 **In a loop, an expression with a folded `?:` on a 32-bit parameter is
@@ -1380,14 +1360,27 @@ performance rows unchanged**. Only the new `tflmadd` row is measured and
 added. Restoring `fintprodadd` to the float generator gives **269 ok,
 31 INVALID, zero FAIL** on production seeds 1-300 with `--off known`.
 
-BUG-049 and BUG-039 remain open: their correct fixes alter existing
-function assembly and existing numeric stdout, respectively. Their
-experiments were reverted under cluster J's acceptance rule; see
+BUG-049 is also fixed in [cluster J2 (#291)](https://github.com/davidly/dcc/pull/291)
+under the maintainer's approved
+existing-output exception. Logical negation now masks a float's sign byte,
+matching the existing branch and bool-cast test. Before promotion, only
+BUG-049 flipped: **1 FIXED, 35 fails**. Both censuses retain **3,426 existing
+functions**, with exactly three one-instruction changes (`and 127`) in
+`truth_not`, `truth_not_memb` and `nz_float`. Only the approved `tctxflt`
+and `tnestfor` performance rows move; every existing stdout baseline stays
+unchanged. Restored `fnegzero_not` production seeds 1-300 give **269 ok,
+31 INVALID, zero FAIL**. Regression: [tflnot](tests/tflnot.c).
+
+BUG-039 remains open. Its restoring-step experiment fixes all 404 bit
+patterns and passes both linked division ABIs, but none of the five
+changed full stdout baselines satisfies the newly required host-clang
+proof. The runtime edit was reverted; see
 [the investigation notes](fix-plan.md#j-float-arithmetic).
 
 | ID | Issue | Regression |
 | --- | --- | --- |
 | [BUG-047](#bug-047) | #267 | [tflmadd](tests/tflmadd.c) |
+| [BUG-049](#bug-049) | #269 | [tflnot](tests/tflnot.c) |
 
 ### BUG-047
 
@@ -1429,6 +1422,31 @@ fg + (fv * p)              /* p a parameter: 1.0f */
 - Also at tag 3.8.0 (`5f733050`) and `32d3e46d`; v3.6.0 (`20290235`) cannot
   compile the reproducer at all (`MIR emission is required`).
 - Found by fuzzing (float generator, seeds 7, 27, 31, 42 and 49).
+
+### BUG-049
+
+**Fixed:** float logical negation masks the sign bit before reducing the
+remaining bits, just like branches and bool casts. Regression:
+[tflnot.c](tests/tflnot.c), [stdout](tests/baselines/tflnot.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**`!f` is 0 when `f` is negative zero.** `!` on a float tests the raw bits,
+so `-0.0f` (`80000000`) counts as true. The other truth tests are right:
+`if (f)`, `f ? 1 : 0`, `f && 1`, `f || 0` and `f == 0.0f` all treat
+`-0.0f` as zero.
+
+```c
+m0 = -((float)g5);         /* g5 == 0, so m0 is -0.0f */
+n = !m0;                   /* want 1, dcc 0 */
+if (!m0) puts("yes");      /* want yes, dcc no */
+```
+
+- `-0.0f` arises from negating a zero and from `0.0f * -1.0f`, so a
+  `!` guard after a multiplication or negation can misfire.
+- With and without `dcc-peep`.
+- Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
+- Found by fuzzing (float generator, seed 45).
 
 ---
 
