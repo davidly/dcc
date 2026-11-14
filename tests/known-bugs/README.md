@@ -41,8 +41,8 @@ test:
    form again.
 
 `tests/twcasgm.c`, `tests/tblkdiv.c`, `tests/tcastasg.c`, `tests/tblkabi.c`,
-`tests/tblkret.c`, `tests/tblkcopy.c`, `tests/tblkneg.c`,
-`tests/tflucast.c` and `tests/tflscast.c` were promoted
+`tests/tblkret.c`, `tests/tblkcopy.c`, `tests/tblkneg.c`, `tests/tforhome.c`,
+`tests/tfltret.c`, `tests/tflucast.c` and `tests/tflscast.c` were promoted
 this way.
 
 ## Adding one

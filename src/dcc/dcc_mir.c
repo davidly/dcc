@@ -4623,12 +4623,56 @@ int mir_is_active(void)
 }
 
 
+/* Support probes can intern a scalar before preceding sibling scopes have
+ * reserved their frame bytes. Keep harmless historical homes, but never let
+ * such a stale home overlap an object still in lexical scope at real replay. */
+static void mir_repair_overlapping_probe_home(const struct Sym *symbol)
+{
+    int object;
+    int local;
+    int offset;
+    int size;
+
+    if (scan_mode || !mir.declaration_active ||
+        g_func_pass.for_decl_seq < 0 || symbol->storage != SC_LOCAL)
+        return;
+    object = mir_find_object(symbol->name);
+    if (object < 0 || mir.objects[object].offset == symbol->offset)
+        return;
+    offset = mir.objects[object].offset;
+    size = type_size(mir.objects[object].type);
+    for (local = 0; local < g_frame.nlocals; ++local) {
+        const struct Sym *other = &locals[local];
+        const char *suffix = strchr(other->name, '#');
+
+        if (other == symbol || other->storage != SC_LOCAL ||
+            other->is_const_value || other->size <= 0)
+            continue;
+        /* For-init slots remain in locals[] after their rename is popped.
+         * Unlike enclosing block objects, those slots are no longer live. */
+        if (suffix != NULL && suffix != other->name) {
+            int rename;
+            for (rename = 0; rename < g_func_pass.forren_n; ++rename)
+                if (strcmp(g_forren_to[rename], other->name) == 0)
+                    break;
+            if (rename == g_func_pass.forren_n)
+                continue;
+        }
+        if (offset < other->offset + other->size &&
+            other->offset < offset + size) {
+            mir.objects[object].offset = symbol->offset;
+            return;
+        }
+    }
+}
+
 void mir_note_declared_symbol(struct Sym *symbol)
 {
     int i;
     int is_new;
     if (!mir.active || symbol == NULL)
         return;
+    mir_repair_overlapping_probe_home(symbol);
     for (i = 0; i < mir.declared_count; ++i)
         if (strcmp(mir.declared_names[i], symbol->name) == 0)
             break;
