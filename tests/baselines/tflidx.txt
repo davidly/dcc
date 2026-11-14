@@ -1,3 +1,6 @@
 variable index 16777216
 constant index 16777216
 without extra conditional 16777216
+then arm 16777216
+int array 16777216
+decrement index 16777216

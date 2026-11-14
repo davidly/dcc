@@ -1,9 +1,6 @@
-/* BUG-027: a 16-bit local that is assigned in an if-else nested inside
- * another `if`, and then updated, loses the assignment when a loop (or a
- * conditional expression) follows: the value merged from the two arms is
- * never stored, and the update is applied to the old value. It is correct
- * without the outer `if`, when the inner `if` has no `else`, and when no
- * loop follows. */
+/* Word PHI assignments must reach the local or parameter home before a
+ * fused update, including nested joins followed by loops or conditionals.
+ * Plain if/else and no-else controls retain the same values. */
 #include <stdint.h>
 #include <stdio.h>
 

@@ -1,8 +1,6 @@
-/* BUG-045: a comparison whose right operand is a negative float constant
- * combined with a second operand (`x < -1.0f - n`, `x == -1.0f * n`) stops
- * the compile with `dcc: fatal: MIR emission is required`. The same
- * expression assigned to a float first, or written with the constant on the
- * right (`x < n - 1.0f`), or with a positive constant, compiles. */
+/* Float comparisons against negative and signed-zero constants combined
+ * with integer/float operands, all relations, assignment/loop/conditional
+ * forms, unary spelling variants and accepted neighboring expressions. */
 #include <stdio.h>
 #include <stdint.h>
 
@@ -24,12 +22,28 @@ static int f(float x)
     return r;
 }
 
+static int negforms(float x, int16_t y) {
+    return (x <= -(1.0f) - y) | ((x > (-1.0f) + y) << 1)
+         | ((x >= -1.0f * y) << 2) | ((x != -0.0f - y) << 3);
+}
+
+static int constant_left(float x)
+{
+    return (1.0f <= (3.0f * fg)) | ((2 < (3.0f * fg)) << 1)
+         | ((x < (1174.3f + 1)) << 2);
+}
+
 int main(void)
 {
     float t;
+    int c;
     printf("%d\n", f(fg));
     /* accepted forms */
     t = -1.0f - n;
     printf("%d %d %d\n", fg < t, fg < n - 1.0f, fg < 1.0f - n);
+    printf("negative %d %d\n", negforms(-5.0f, 3), negforms(5.0f, 3));
+    c = constant_left(-5.0f);
+    fg = 5.0f;
+    printf("constant left %d %d\n", c, constant_left(2000.0f));
     return 0;
 }
