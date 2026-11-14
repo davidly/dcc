@@ -27,15 +27,12 @@ and their historical diagnoses are retained separately below.
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
 | [BUG-002](#bug-002) | #223 | wrong result | `unsigned char` local `<<=` an `unsigned char` variable is not truncated on return |
-| [BUG-004](#bug-004) | #225 | wrong result | 16-bit local set from `&&`/`\|\|`, stored to a 32-bit lvalue, leaves a garbage high word |
+| [BUG-004](#bug-004) | #225 | wrong result | Nested-block 32-bit local assigned from `&&`/`\|\|` leaves a garbage high word |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
-| [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
-| [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
-| [BUG-024](#bug-024) | #244 | wrong result | `if (x++)` in a loop tests the incremented value (8-bit local, later `do … while`) |
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
@@ -48,14 +45,17 @@ and their historical diagnoses are retained separately below.
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-057](#bug-057) | #304 | wrong result | A fused 32-bit local increment used as an addition operand reads a stale backend slot |
 
-Twenty-one are open: sixteen give wrong results with no diagnostic
+Eighteen are open: fifteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one latent wrong-code finding is blocked by
-BUG-041 admission, one hangs, two stop the compile,
+BUG-041 admission, one hangs, one stops the compile,
 and one (BUG-022) turns a compile error into
-a broken program. The most likely ordinary-code defects remaining are
-BUG-013 and BUG-016.
+a broken program. The highest-priority ordinary-code defect remaining is
+BUG-013.
 
-Thirty-four reported bugs are fixed: [two in cluster H](#fixed-in-cluster-h),
+Thirty-seven reported bugs are fixed: [two in cluster H](#fixed-in-cluster-h),
+[one in cluster E1](#fixed-in-cluster-e1),
+[one in cluster D2c](#fixed-in-cluster-d2c),
+[one in cluster B2b](#fixed-in-cluster-b2b),
 [one in cluster D2b](#fixed-in-cluster-d2b),
 [two in cluster D2a](#fixed-in-cluster-d2a),
 [one in cluster K2](#fixed-in-cluster-k2),
@@ -114,6 +114,13 @@ static uint8_t f(void) { uint8_t x = a1[0]; x <<= count; return x; }
 - Selected emitter for `f`: `spilled-scalar-cfg`.
 
 ## BUG-004
+
+**Partially corrected by E1:** the four function-scope word-local cases now
+pass, because SSA forwarding preserves the local's declared interpretation
+before widening an untyped logical result. The nested-block 32-bit assignment
+still fails: its canonical conversion is repaired to long without typing its
+source boolean PHI. The complete issue and `logicinit` steering remain open.
+The following original diagnosis includes the now-correct function-scope cases.
 
 **An unsigned 16-bit local initialised from `&&` or `||`, then stored to a
 32-bit lvalue, leaves garbage in the high word.**
@@ -282,84 +289,11 @@ signed char l2 = -66;
   (`fg ? b5 : fg`), a constant (`fg ? b5 : 3.0f`) or `b5 + 0.0f`. Found by
   fuzzing (float generator, seed 4750).
 
-## BUG-016
-
-**A local keeps the signedness of its initialiser instead of its declared
-type.** It shows when the local is later widened to 32 bits or used in a
-32-bit division.
-
-```c
-uint16_t l = gs;         /* int16_t gs = -31256 */
-long r = l;              /* want 34280, dcc -31256 */
-
-int16_t l = gu;          /* uint16_t gu = 50000 */
-long r = l;              /* want -15536, dcc 50000 */
-
-int32_t l = 1u | a3[1];  /* a3[1] = -3, so l = -3 */
-r = x / l;               /* uint16_t x = 50000: want -16666, dcc 0 */
-```
-
-- Wrong when the initialiser is a global, a struct member, a parameter, a
-  function result, or a negative constant (`unsigned short l = -100;` then
-  `long r = l;` gives -100, not 65436).
-- A cast to the declared type in the initialiser does not help when it only
-  changes signedness: `unsigned short l = (uint16_t)p;` with `int16_t p`, or
-  `int32_t l = (int32_t)u;` with `uint32_t u`, are still wrong.
-- Correct when the value is assigned in a separate statement
-  (`uint16_t l; l = gs;`), when the initialiser's cast also changes width
-  (`(uint16_t)(int32_t)p`), for 8-bit locals, and when the local is only used
-  at its own width (`l > 5`, `l / 2`).
-- A separate assignment does not help in a nested block when the value is an
-  unsigned constant: `{ short b = 0; b = (uint16_t)0xb840; out = (b % three); }`
-  with a 32-bit `three` of 3 gives 2 (`47168 % 3`), not -2. Correct with `b`
-  at function scope or a signed constant.
-- With floats: `{ uint32_t b = (int32_t)1 - 78; fg = b; }` converts the
-  signed value (`c29a0000` instead of `4f800000`), as does `float c = b;`
-  in the block; and `{ uint16_t b = h(); fg = (float)b; }` with `h()`
-  returning `int16_t -180` gives `-180.0f` instead of `65356.0f` (also in
-  `8.1f > (float)b`). Found by fuzzing (float generator, seeds 456, 863,
-  1203 and 1215).
-- An `int32_t` local initialised from a `uint32_t` converts to float as
-  unsigned even after it has been read correctly as an integer:
-  `{ int32_t t = (int32_t)gu; fg = (float)t; }` with `gu = 0xffffffbd`
-  gives `4f800000`, not `c2860000` (`-67.0f`); the same with `int32_t t =
-  gu;` and `fg = t;`, and after `printf("%ld", (long)t)` has shown -67.
-  Right: `int32_t t; t = (int32_t)gu;` or `(float)(t + 0)`. Found by
-  fuzzing (float generator, seed 3792).
-
-## BUG-019
-
-**A declaration in a nested scope that is unreachable because a `return`,
-`break` or `goto` precedes it in the same block stops the compile.**
-`dcc: fatal: MIR emission is required`. The declaration can be a block-local
-or a `for` initialiser.
-
-```c
-if (sel) {
-    return 1;
-    { int16_t b = 1; low += b; }             /* unreachable block with a declaration */
-}
-if (sel) {
-    return 2;
-    for (uint8_t k = 3; k < 5; ++k) low++;   /* unreachable for-init declaration */
-}
-```
-
-- Fails after `return`, `break` and `goto`, inside `if`, `else`, `for`,
-  `while` and `switch` bodies.
-- It also fails when the jump is conditional on a constant that is true,
-  which leaves the same code unreachable: `if (7) break;`, `if (1) return 5;`,
-  `if ((0 + 7) >= (-128)) continue;`, `if (0) { } else { break; }`.
-- Accepted: the same dead code at function scope (not inside a nested
-  block); dead code with no declaration (`return 1; { low += 1; }`); a
-  `for` loop whose counter is declared at function scope; a conditional jump
-  on a variable (`if (sel) continue;`, `if (1 || sel) break;`).
-- The constant may be a folded cast: `if ((int16_t)(-1.0f)) { return 1; }`
-  or `if ((int16_t)((int32_t)1000)) { return 1.0f; }` followed by `{ float
-  b = 1.0f; }` in the same block is fatal. Found by fuzzing (float
-  generator, seed 1957).
-- Dead code like this is rare in hand-written programs, so this is low
-  priority; it is still valid C.
+E1 also corrects the `wrapped_decrement` facet: SSA forwarding now retains
+the unsigned word interpretation of its untyped decrement result before
+widening. The parked program improves from 10 to 9 wrong lines out of 13;
+all remaining pointer, byte, and cast facets still fail. No independent
+BUG-015 implementation or steering change is included.
 
 ## BUG-022
 
@@ -385,28 +319,10 @@ the program fails at run time.
   `missing direct MIR named-home offset` (BUG-014) still stop the compile.
 - This only matters while some function cannot be emitted, but then it turns
   a compile error into a silently broken program.
-
-## BUG-024
-
-**`if (x++)` inside a loop tests the incremented value instead of the old
-one**, for an 8-bit local that a later `do … while` loop also modifies.
-
-```c
-int8_t l = 0, i;
-short d = 0;
-for (i = 0; i < 3; i++) {
-    if (l++)                /* l is 0, 1, 2: true twice; dcc: three times */
-        hits++;
-}
-do { l--; } while (++d < 2);
-```
-
-- Wrong for `signed char` and `unsigned char`; for `if (l++)` and
-  `if (l++ != 0)`; with the first loop a `for` or a `while`; with `l--`,
-  `l -= 1` or `l++` in the later loop.
-- Correct: a 16-bit local; no later `do … while` (a plain `l--;`, or a
-  `while` loop, after the first loop is fine); the `if` not in a loop.
-- BUG-021 is another case where a post-increment yields the new value.
+- Its historical parked program now passes after BUG-008/019 were fixed.
+  This does not close BUG-022: the same reused-label prefix before a BUG-020
+  failing function still exits zero with empty function bodies. Steering and
+  the historical reproducer are retained for the separate diagnostic fix.
 
 ## BUG-027
 
@@ -896,6 +812,177 @@ r = (x < -1.0f - n);          /* fatal */
   `1.0f < -fg2` are accepted. Found by fuzzing (float generator, seeds 477
   and 1347).
 
+## Fixed in cluster E1
+
+BUG-016 now passes in peep and nopeep. Equal-width initializer casts were
+removed as representation identities; local-load promotion then forwarded the
+initializer's differently typed SSA value, losing the declaration's
+interpretation. `mir_promote_objects` now keeps a typed identity view at a
+promoted read whose consumers observe signedness, without changing selectors
+or adding a fallback. Unobservable uses and sign-bit-clear constants retain
+the original forwarding path.
+
+Before promotion: **1 FIXED, 24 fails**. BUG-004's four function-scope cases
+and BUG-015's wrapped word decrement also improve, but neither full issue
+flips; the independent remaining causes are recorded in fix-plan.md's E2
+section. No second independent fix is included.
+
+Both MIR censuses are byte-identical across **3,509 existing functions**.
+Strict Python full+extended acceptance passes with zero performance
+regressions; all **520 existing performance rows** remain unchanged. New
+`tinittyp` coverage preserves the original nine host-baseline lines and adds
+ten documented integer/float facets and separate-assignment controls, proven
+against optimized and ASan/UBSan host clang. Its new row alone is measured on
+the normal PowerShell stack-check path.
+
+Restored `inittype` and `finittype`, seeds 1-300 in all production modes:
+**integer 297 ok, 2 INVALID, 1 target-limit-only (seed 178, TPA too small)**;
+**float 281 ok, 19 INVALID**; zero FAIL in either batch. All five remaining
+E2 issues keep their `KNOWN_BUGS` steering.
+The regular Python gate retains the approved #277 failures and three
+synthetic mutation-runner timing failures after isolated retries (one fourth
+watchdog failure passes its retry). Those harness exceptions are recorded in
+fix-plan.md; no expectation, timeout or skip was changed.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-016](#bug-016) | #236 | [tinittyp](tests/tinittyp.c) |
+
+### BUG-016
+
+**Fixed:** local SSA reads retain their declared integer interpretation.
+Regression: [tinittyp.c](tests/tinittyp.c),
+[stdout](tests/baselines/tinittyp.txt).
+
+The following diagnosis describes the pre-fix behavior.
+
+**A local keeps the signedness of its initialiser instead of its declared
+type.** It shows when the local is later widened to 32 bits or used in a
+32-bit division.
+
+```c
+uint16_t l = gs;         /* int16_t gs = -31256 */
+long r = l;              /* want 34280, dcc -31256 */
+
+int16_t l = gu;          /* uint16_t gu = 50000 */
+long r = l;              /* want -15536, dcc 50000 */
+
+int32_t l = 1u | a3[1];  /* a3[1] = -3, so l = -3 */
+r = x / l;               /* uint16_t x = 50000: want -16666, dcc 0 */
+```
+
+- Wrong when the initialiser is a global, a struct member, a parameter, a
+  function result, or a negative constant (`unsigned short l = -100;` then
+  `long r = l;` gives -100, not 65436).
+- A cast to the declared type in the initialiser does not help when it only
+  changes signedness: `unsigned short l = (uint16_t)p;` with `int16_t p`, or
+  `int32_t l = (int32_t)u;` with `uint32_t u`, are still wrong.
+- Correct when the value is assigned in a separate statement
+  (`uint16_t l; l = gs;`), when the initialiser's cast also changes width
+  (`(uint16_t)(int32_t)p`), for 8-bit locals, and when the local is only used
+  at its own width (`l > 5`, `l / 2`).
+- A separate assignment does not help in a nested block when the value is an
+  unsigned constant: `{ short b = 0; b = (uint16_t)0xb840; out = (b % three); }`
+  with a 32-bit `three` of 3 gives 2 (`47168 % 3`), not -2. Correct with `b`
+  at function scope or a signed constant.
+- With floats: `{ uint32_t b = (int32_t)1 - 78; fg = b; }` converts the
+  signed value (`c29a0000` instead of `4f800000`), as does `float c = b;`
+  in the block; and `{ uint16_t b = h(); fg = (float)b; }` with `h()`
+  returning `int16_t -180` gives `-180.0f` instead of `65356.0f` (also in
+  `8.1f > (float)b`). Found by fuzzing (float generator, seeds 456, 863,
+  1203 and 1215).
+- An `int32_t` local initialised from a `uint32_t` converts to float as
+  unsigned even after it has been read correctly as an integer:
+  `{ int32_t t = (int32_t)gu; fg = (float)t; }` with `gu = 0xffffffbd`
+  gives `4f800000`, not `c2860000` (`-67.0f`); the same with `int32_t t =
+  gu;` and `fg = t;`, and after `printf("%ld", (long)t)` has shown -67.
+  Right: `int32_t t; t = (int32_t)gu;` or `(float)(t + 0)`. Found by
+  fuzzing (float generator, seed 3792).
+
+## Fixed in cluster B2b
+
+BUG-019 passes in peep/nopeep and stack/no-stack modes. MIR retained dead
+nested declarations while metadata skipped their replay. Replay dead-child
+metadata under assembly suppression, and neutralize instructions from
+provably dead support probes, including VLA-bound side effects whose probe
+and replay names differ. Lowering and emitters remain unchanged; labels,
+declaration diagnostics, frame/VLA accounting and debug replay stay intact.
+
+Integer production seeds 1-300 give **220 ok, 79 INVALID, one target-limit-only,
+zero FAIL**; float production seeds 1-300 give **281 ok, 19 INVALID, zero FAIL**.
+`constjump` and `fconstjump` are restored. The reproducer is promoted as
+`tdeadblk`, with additional constant/continue exits, scalar/VLA-bound side
+effects, nested/for label re-entry and declarations before later labels. Its
+new baseline agrees with host clang at O0/O2 and under ASan/UBSan.
+
+Both censuses preserve all **3,489 existing functions byte-identically**.
+Strict full+extended stack/no-stack gates pass. All **517 existing performance
+rows are unchanged**; only `tdeadblk` adds a normal-stack measured row.
+Its live return path matches the accepted no-dead-tail control in both modes;
+unreachable MIR instructions remain in generated output (the dead scalar
+add is three bytes larger than a literal-increment control). This costs no
+existing program and no cycles on that return path.
+
+Focused debug/MIR Python tests, full-debug and release-identical `-gline`
+reproducer pipelines, require-emit, 73 peephole fixtures, six sanitized MIR
+host tests and debugger-host checks pass. The loaded debugger MI test's
+terminal-endpoint cleanup assertion passes when retried alone. The regular
+Python gate completed 319 tests with four failures, five errors and two
+existing skips: two failures are approved #277; the others are loaded
+mutation-harness timeout/cleanup failures. Unchanged fixtures pass 13/14
+when retried alone with Ninja; the mock serial/parallel scheduler equality
+test still times out, including a final single-test retry. That harness
+check remains unverified; no expectation, timeout or skip was changed.
+
+Before promotion: 27 reproducers, 2 `FIXED`, 25 `fails`. BUG-022's historical
+program also passes because both its BUG-008/019 failing-function triggers
+are gone, **not because diagnostic masking was fixed**: the same label prefix
+still hides a BUG-020 emission failure. BUG-022/#242 remains open, steered
+and unpromoted; after this promotion 26 parked reproducers remain (25 `fails`,
+one reproducer-only `FIXED`).
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-019](#bug-019) | #239 | [tdeadblk](tests/tdeadblk.c) |
+
+### BUG-019
+
+**Fixed:** suppressed dead-child metadata replay and dead support-probe
+neutralization. Regression: [tdeadblk.c](tests/tdeadblk.c),
+[baseline](tests/baselines/tdeadblk.txt).
+
+**A declaration in a nested scope that is unreachable because a `return`,
+`break` or `goto` precedes it in the same block stops the compile.**
+`dcc: fatal: MIR emission is required`. The declaration can be a block-local
+or a `for` initialiser.
+
+```c
+if (sel) {
+    return 1;
+    { int16_t b = 1; low += b; }             /* unreachable block with a declaration */
+}
+if (sel) {
+    return 2;
+    for (uint8_t k = 3; k < 5; ++k) low++;   /* unreachable for-init declaration */
+}
+```
+
+- Fails after `return`, `break` and `goto`, inside `if`, `else`, `for`,
+  `while` and `switch` bodies.
+- It also fails when the jump is conditional on a constant that is true,
+  which leaves the same code unreachable: `if (7) break;`, `if (1) return 5;`,
+  `if ((0 + 7) >= (-128)) continue;`, `if (0) { } else { break; }`.
+- Accepted: the same dead code at function scope (not inside a nested
+  block); dead code with no declaration (`return 1; { low += 1; }`); a
+  `for` loop whose counter is declared at function scope; a conditional jump
+  on a variable (`if (sel) continue;`, `if (1 || sel) break;`).
+- The constant may be a folded cast: `if ((int16_t)(-1.0f)) { return 1; }`
+  or `if ((int16_t)((int32_t)1000)) { return 1.0f; }` followed by `{ float
+  b = 1.0f; }` in the same block is fatal. Found by fuzzing (float
+  generator, seed 1957).
+- Dead code like this is rare in hand-written programs, so this is low
+  priority; it is still valid C.
+
 ## Fixed in cluster K2
 
 BUG-054 now passes in peep/nopeep, with and without stack checking. The
@@ -982,6 +1069,49 @@ uint32_t sub(int8_t p)
 - Steered by `peepbyteself`: non-logical byte binary self-operands
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
+
+## Fixed in cluster D2c
+
+BUG-024 is promoted as `tests/tpost8.c` with the unchanged, host-proven four-line
+baseline. The byte-PHI direct-home gate unconditionally reused the mutable
+local object for an immutable SSA value. A real postfix update store overwrote
+that home before the branch consumed the old PHI. Require CFG liveness to
+exclude materialized stores of other values while the PHI remains live;
+analysis-only dead stores do not clobber the home and retain their schedules.
+Address-taken objects and missing liveness decline conservatively. No word
+admission, selector, cost policy or fallback changes.
+
+Before promotion: **25 reproducers: 1 FIXED (024), 24 fails**; after promotion:
+**24 reproducers, 24 fails, zero FIXED**. No out-of-cluster reproducer flips.
+Both final censuses preserve all **3,503 existing function rows byte-identically**;
+tpost8 alone adds five functions. All **519 existing performance rows** remain
+unchanged; tpost8 alone adds a measured normal-stack row. Restored integer
+production seeds 1-300: **266 ok, 34 INVALID, zero FAIL**. `postincvalue` is
+removed from `KNOWN_BUGS`; the five generator tests and remaining-known-shape
+proof over 3,000 seeds pass. Final promotion/release checks are recorded in
+fix-plan.md.
+
+### BUG-024
+
+**`if (x++)` inside a loop tests the incremented value instead of the old
+one**, for an 8-bit local that a later `do … while` loop also modifies.
+
+```c
+int8_t l = 0, i;
+short d = 0;
+for (i = 0; i < 3; i++) {
+    if (l++)                /* l is 0, 1, 2: true twice; dcc: three times */
+        hits++;
+}
+do { l--; } while (++d < 2);
+```
+
+- Wrong for `signed char` and `unsigned char`; for `if (l++)` and
+  `if (l++ != 0)`; with the first loop a `for` or a `while`; with `l--`,
+  `l -= 1` or `l++` in the later loop.
+- Correct: a 16-bit local; no later `do … while` (a plain `l--;`, or a
+  `while` loop, after the first loop is fine); the `if` not in a loop.
+- BUG-021 is another case where a post-increment yields the new value.
 
 ## Fixed in cluster G2
 

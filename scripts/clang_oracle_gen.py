@@ -1458,11 +1458,8 @@ KNOWN_BUGS = {
     'nestedwideless': 'BUG-009',
     'bfpromo': 'BUG-013',
     'blockptr': 'BUG-015',
-    'inittype': 'BUG-016',
-    'postincvalue': 'BUG-024',
     'wideincadd': 'BUG-057',
     'duplabel': 'BUG-022',
-    'constjump': 'BUG-019',
     'nestedifelse': 'BUG-027',
     'bytesarcount': 'BUG-028',
     'bytearm': 'BUG-029',
@@ -1791,8 +1788,8 @@ class Gen:
         x = r.random()
         if x < 0.45:
             # with `widepostinc` off a 32-bit victim is only pre-incremented:
-            # its old value could reach a narrower type. `postincvalue` now
-            # steers only byte updates (BUG-024); word values are restored.
+            # its old value could reach a narrower type. Narrow postfix
+            # values are restored; explicit `postincvalue` still steers bytes.
             prefix = r.random() < 0.5 or (d.t.bits == 8 and not self.on('postincvalue')) \
                 or (d.t.bits == 32 and not self.on('widepostinc'))
             op = r.choice(('++', '--'))

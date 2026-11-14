@@ -1,10 +1,7 @@
-/* BUG-016: a local keeps the signedness of its initialiser instead of its
- * declared type. An unsigned 16-bit local initialised from a signed 16-bit
- * value is sign-extended when widened to 32 bits (and the reverse), and a
- * signed 32-bit local initialised from an unsigned expression divides as
- * unsigned. A constant initialiser and a same-width cast to the declared
- * type behave the same way. The code is correct when the value is assigned
- * in a separate statement. */
+/* Declared signedness at promoted integer-local reads: mixed-signedness
+ * initializers, same-width casts, widening, division/remainder and comparisons.
+ * Nested-block float conversions retain the declaration's signedness, with
+ * separate-assignment controls and a signed read before conversion. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -69,6 +66,69 @@ static int32_t same_width_cast_long(uint32_t p)
     return l % s.m0;
 }
 
+
+static uint32_t gu32 = 0xffffffbdUL;
+static int32_t three = 3;
+static float fg;
+
+static unsigned long bits(float f)
+{
+    union { float f; uint32_t u; } v;
+    v.f = f;
+    return v.u;
+}
+
+static int16_t h(void) { return -180; }
+
+static void facets(void)
+{
+    {
+        int16_t b = 0;
+        b = (uint16_t)0xb840;
+        printf("block remainder %ld\n", (long)(b % three));
+    }
+    {
+        uint32_t b = (int32_t)1 - 78;
+        fg = b;
+        printf("block unsigned float %08lx\n", bits(fg));
+    }
+    {
+        uint32_t b = (int32_t)1 - 78;
+        float c = b;
+        printf("block float local %08lx\n", bits(c));
+    }
+    {
+        uint16_t b = h();
+        fg = (float)b;
+        printf("word float %08lx\n", bits(fg));
+    }
+    {
+        uint16_t b = h();
+        printf("word float compare %d\n", 8.1f > (float)b);
+    }
+    {
+        int32_t t = (int32_t)gu32;
+        fg = (float)t;
+        printf("long cast float %08lx\n", bits(fg));
+    }
+    {
+        int32_t t = gu32;
+        printf("long signed read %ld\n", (long)t);
+        fg = t;
+        printf("long signed float %08lx\n", bits(fg));
+    }
+    {
+        uint16_t b;
+        b = gs;
+        printf("separate unsigned %ld\n", (long)b);
+    }
+    {
+        int16_t b;
+        b = gu;
+        printf("separate signed %ld\n", (long)b);
+    }
+}
+
 int main(void)
 {
     printf("unsigned from signed %ld\n", (long)unsigned_from_signed());
@@ -80,5 +140,6 @@ int main(void)
     printf("from constant %ld\n", (long)from_constant());
     printf("same-width cast %ld\n", (long)same_width_cast(-31256));
     printf("same-width cast long %ld\n", (long)same_width_cast_long(0xfffffffd));
+    facets();
     return 0;
 }
