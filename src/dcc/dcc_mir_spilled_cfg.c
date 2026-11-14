@@ -31834,7 +31834,8 @@ static int mir_spilled_structure_valid(int *invalid_instruction)
             }
             calls[insn->secondary_offset] = instruction;
         }
-        if (insn->object >= 0 && insn->object < mir.object_count &&
+        if (insn->opcode != MIR_CONST &&
+            insn->object >= 0 && insn->object < mir.object_count &&
             (insn->immediate < INT_MIN || insn->immediate > INT_MAX ||
              (int64_t)mir.objects[insn->object].offset +
                      (int64_t)insn->immediate < INT_MIN ||

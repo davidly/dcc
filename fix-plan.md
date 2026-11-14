@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has forty-three open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has forty-two open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -8,7 +8,7 @@ one fix, made in the right place, closes several issues, and so that the
 fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
-neighbouring shapes that pass in each entry. A1 (#281), K (#278) and L
+neighbouring shapes that pass in each entry. A1 (#281), A2a, K (#278) and L
 (#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
 root-cause experiment and has been split into A2a and A2b below; the
 remaining clusters are still hypotheses.
@@ -134,11 +134,31 @@ offset and the function is rejected. The function-scope control has the same
 payload but no object index and passes; positive constants and an
 uninitialized block-local control also pass.
 
-The fix is a one-line exclusion of `MIR_CONST` from that displacement check.
-Confirm it against the controls' peep and nopeep assembly before committing;
-the fix must not change the emitted code for any control. Full acceptance,
-promotion and generator changes are still required: this is an isolated
-preflight-validation defect, not an expression typing defect.
+Fixed on `fix/cluster-a2a-constant-payload` from main `11d4454b`: exclude
+`MIR_CONST` alone from that displacement check. No lowering or emission
+schedule changed; this is a preflight-validation defect, not an expression
+typing defect.
+
+- Before promotion: one `FIXED`, 42 `fails`, with no outside-cluster flips.
+  BUG-004 and BUG-015 still fail and remain in A2b.
+- The fixed signed and unsigned functions exactly match their existing
+  function-scope controls' peep and nopeep assembly. Positive, uninitialized
+  and 16-bit controls are byte-identical before and after; explicit casts
+  and high-bit constants also pass.
+- Both censuses are byte-identical across 3,363 existing functions. Strict
+  full+extended stack-check and no-stack-check runs pass; all 499 existing
+  performance rows are unchanged.
+- Restored `blockwideneg`: integer seeds 1-300 in all production
+  configurations finish with 215 ok, 84 INVALID, one target-limit-only,
+  zero FAIL.
+- Promoted as `tblkneg` with the unchanged host baseline and one new measured
+  PowerShell stack-check performance row. CMake MIR verifier, debugger,
+  require-emit, full-debug and release-identical `-gline` checks pass.
+- The final regular Python gate has two failures and two skips across
+  307 tests. Both failures match clean rebuilt main `11d4454b` exactly
+  (#277); no expectations were changed. An initial overlapping run's
+  mutation-fixture timeout and cleanup error do not recur in the final
+  standalone full run.
 
 ### A2b. Remaining block-local expression typing (unconfirmed; after E)
 
@@ -346,7 +366,7 @@ so it matters more than its size suggests. Both are one-offs.
 
 1. **K, L** — isolated, cheap, four and one issues; good warm-up for the
    acceptance loop.
-2. **A1** — merged (#281). **A2a** — one confirmed, isolated fix.
+2. **A1** — merged (#281). **A2a** — fixed and verified.
    **A2b** is deferred until after E.
 3. **B** — BUG-030 corrupts memory; BUG-026 is the maintainer's first
    priority.
@@ -362,7 +382,7 @@ so it matters more than its size suggests. Both are one-offs.
 | --- | --- | --- | --- |
 | A1 | [#281](https://github.com/davidly/dcc/pull/281) | merged | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
 | A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |
-| A2a | | open | BUG-008: `MIR_CONST` payload wrongly checked as object displacement in `mir_spilled_structure_valid` |
+| A2a | `fix/cluster-a2a-constant-payload` | fixed; awaiting merge | BUG-008 promoted as `tblkneg`; 300 seeds clean; existing output/baselines unchanged; Python failures match clean main (#277) |
 | A2b | | open; after E | BUG-004/015; unconfirmed shared cause |
 | B | | open | |
 | C | | open | |
