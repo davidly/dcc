@@ -35,7 +35,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
 | [BUG-022](#bug-022) | #242 | silent bad code | A reused label name in a nested block hides `MIR emission is required` for later functions |
-| [BUG-023](#bug-023) | #243 | wrong result | `if (x++ > K) x = v;` leaves `x` as 1 when not taken (local assigned from another type) |
 | [BUG-024](#bug-024) | #244 | wrong result | `if (x++)` in a loop tests the incremented value (8-bit local, later `do … while`) |
 | [BUG-027](#bug-027) | #247 | wrong result | Local assigned in an `if … else` nested in an `if`, then updated: the assignment is lost when a loop follows |
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
@@ -52,13 +51,13 @@ and their historical diagnoses are retained separately below.
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 
-Twenty-seven are open: seventeen give wrong results with no diagnostic
+Twenty-six are open: sixteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one hangs, eight stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-013 and BUG-016.
 
-Twenty-six reported bugs are fixed: [one in cluster D2a](#fixed-in-cluster-d2a),
+Twenty-seven reported bugs are fixed: [two in cluster D2a](#fixed-in-cluster-d2a),
 [two in cluster D1](#fixed-in-cluster-d1),
 [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
@@ -456,49 +455,6 @@ the program fails at run time.
   `missing direct MIR named-home offset` (BUG-014) still stop the compile.
 - This only matters while some function cannot be emitted, but then it turns
   a compile error into a silently broken program.
-
-## BUG-023
-
-**D2a observation:** the single BUG-021 matcher fix also makes this parked
-reproducer pass in peep/nopeep. It remains open and unpromoted pending its
-owning cluster's acceptance; no separate compiler fix is included here.
-
-**A 16-bit local that was assigned a value of a different type and is then
-updated loses the assigned value when a branch or loop follows.** The update
-is applied to 0 or to a stale value instead.
-
-```c
-static uint16_t f(int16_t n)
-{
-    uint16_t l;
-    l = n;                  /* 300 */
-    if (l++ > 400)          /* false */
-        l = 0;
-    return l;               /* want 301, dcc 1 */
-}
-
-short l = 0;
-l = big;                    /* uint16_t big = 0xbeef, so l = -16657 */
-l++;
-for (i = 5; i > 0; i--) {
-    if (zero) continue;
-    l++;
-}
-g = l;                      /* want -16651, dcc 6 (or another unrelated value) */
-```
-
-- First shape: wrong when the local is `uint16_t` assigned from an `int16_t`
-  parameter or global, from `(uint8_t)n` or from `n + 0`, and when it is
-  `int16_t` assigned from a `uint16_t`; for `++` and `--`; for `>`, `>=`, `<`
-  and `==`. Correct with `++l`, an `else` branch, a `while` instead of `if`,
-  `l++;` as a separate statement, or the branch taken.
-- Second shape: wrong for `l++`, `++l`, `l += 1`, `l = l + 1` and `l--`
-  before the loop, with any update of `l` inside it. Correct without the
-  update before the loop, or without the conditional `continue`.
-- Both are correct when the local was assigned a value of its own type
-  (`uint16_t` from `uint16_t`), and for 8-bit and 32-bit locals.
-- The dependence on the assigned value's type suggests the same root as
-  BUG-016.
 
 ## BUG-024
 
@@ -952,7 +908,9 @@ uint32_t sub(int8_t p)
 
 ## Fixed in cluster D2a
 
-BUG-021 is promoted as `tests/tpost16.c`. Assignment-conversion
+BUG-021/023 are promoted as `tests/tpost16.c` / `tests/tpostbr.c`.
+BUG-023 was filed under cluster C but shares BUG-021's selfstore-fusion
+root cause. Assignment-conversion
 `MIR_UNARY` instructions may carry the destination object's name, but their
 SSA result is not bound to the object's memory. The selfstore increment
 matcher incorrectly treated that metadata as an authoritative named home;
@@ -961,19 +919,20 @@ SSA value before its postfix consumer. Require an actual LOAD/PARAM/PHI
 binding instead. This repairs the existing spilled candidate without a
 fallback, selector change or independent byte-PHI fix.
 
-The first root fix clears 021, not BUG-024; the approved partial-fix stop
-rule leaves 024 unchanged. BUG-023 also incidentally reports FIXED and stays
-parked/open, as documented above. Before promotion: **28 reproducers,
-2 FIXED, 26 fails**. After promotion: **27 reproducers, 1 FIXED (023),
-26 fails**. All four tpost16 cases pass host proof and both target modes.
+The single root fix clears 021/023, not BUG-024; the approved partial-fix
+stop rule leaves 024 unchanged. Before promotion: **28 reproducers,
+2 FIXED, 26 fails**. After promoting both fixed bugs: **26 reproducers,
+26 fails, zero FIXED**. All four tpost16 and eight tpostbr output cases pass
+host proof and both target modes; no second compiler fix was added.
 
-Word postfix-value fuzz coverage is restored; `postincvalue` now only
-steers BUG-024's byte values, while BUG-010's wide-postfix and BUG-023's
-cross-type-assignment guards remain. Production seeds 1-300: **227 ok,
-73 INVALID, zero FAIL**. A 3,000-seed remaining-shape proof passes. Both
-original **3,482-function** censuses are byte-identical, and all **516
-existing performance rows** remain unchanged; only the new tpost16 row is
-added. Full acceptance details and exceptions are recorded in fix-plan.md.
+Word postfix-value and cross-type-assignment fuzz coverage are restored;
+`postincvalue` now only steers BUG-024's byte values, while BUG-010's
+wide-postfix guard remains. Initial word-restoration seeds 1-300 were
+**227 ok, 73 INVALID, zero FAIL**. Restored-cross-type follow-up:
+**300 programs: INVALID 34, ok 266**, zero FAIL. The final 3,000-seed proof and preservation checks
+are recorded in fix-plan.md.
+Both original **3,482-function** censuses and all **516 original performance
+rows** remain unchanged; only the two promoted apps add rows/functions.
 
 ### BUG-021
 
@@ -1003,6 +962,50 @@ static uint16_t f(void)
 - The trigger is narrow and involves three unrelated-looking locals, so the
   cause is probably shared state (a slot or register), not the increment
   itself.
+
+### BUG-023
+
+**Filed under cluster C; fixed in D2a.** This is the same false named-home
+binding in selfstore fusion as BUG-021, not an incidental flip. The existing
+single compiler fix clears every parked variant in peep/nopeep. Promoted as
+`tests/tpostbr.c` with its unchanged host-proven baseline.
+
+**A 16-bit local that was assigned a value of a different type and is then
+updated loses the assigned value when a branch or loop follows.** The update
+is applied to 0 or to a stale value instead.
+
+```c
+static uint16_t f(int16_t n)
+{
+    uint16_t l;
+    l = n;                  /* 300 */
+    if (l++ > 400)          /* false */
+        l = 0;
+    return l;               /* want 301, dcc 1 */
+}
+
+short l = 0;
+l = big;                    /* uint16_t big = 0xbeef, so l = -16657 */
+l++;
+for (i = 5; i > 0; i--) {
+    if (zero) continue;
+    l++;
+}
+g = l;                      /* want -16651, dcc 6 (or another unrelated value) */
+```
+
+- First shape: wrong when the local is `uint16_t` assigned from an `int16_t`
+  parameter or global, from `(uint8_t)n` or from `n + 0`, and when it is
+  `int16_t` assigned from a `uint16_t`; for `++` and `--`; for `>`, `>=`, `<`
+  and `==`. Correct with `++l`, an `else` branch, a `while` instead of `if`,
+  `l++;` as a separate statement, or the branch taken.
+- Second shape: wrong for `l++`, `++l`, `l += 1`, `l = l + 1` and `l--`
+  before the loop, with any update of `l` inside it. Correct without the
+  update before the loop, or without the conditional `continue`.
+- Both are correct when the local was assigned a value of its own type
+  (`uint16_t` from `uint16_t`), and for 8-bit and 32-bit locals.
+- Originally suspected BUG-016 from the type dependence; the fix confirms
+  BUG-021's false selfstore named-home binding instead.
 
 ## Fixed in cluster D1
 

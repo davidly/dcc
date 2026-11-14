@@ -72,3 +72,14 @@ class IntegerKnownShapeTests(unittest.TestCase):
                 program.funcs.append(function)
                 self.assertEqual(gen.known_shapes(program),
                                  {"postincvalue"} if typ.bits == 8 else set())
+
+    def test_known_steers_restore_cross_type_word_assignments(self):
+        for source_type, target_type in ((gen.I16, gen.U16), (gen.U16, gen.I16)):
+            with self.subTest(source_type=source_type, target_type=target_type):
+                rhs = gen.E("var", a=gen.Decl("source", source_type, "local"))
+                generator = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS))
+                self.assertIs(generator.stored(rhs, target_type, "local"), rhs)
+                disabled = gen.Gen(0, off={"crosstypeasg"})
+                steered = disabled.stored(rhs, target_type, "local")
+                self.assertEqual(steered.op, "cast")
+                self.assertEqual(steered.k[0].t, gen.I32)
