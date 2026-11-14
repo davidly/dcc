@@ -8,17 +8,17 @@ one fix, made in the right place, closes several issues, and so that the
 fuzzer can confirm it did.
 
 The clusters are hypotheses drawn from the shapes that fail and the
-neighbouring shapes that pass in each entry. A1's conversion-loss defect is
-confirmed, but its experimental fix is not accepted. K's four independent
-rules and L's preprocessing-token boundary defect are confirmed and fixed;
-the remaining clusters, including A2, are still hypotheses.
+neighbouring shapes that pass in each entry. A1 (#281), K (#278) and L
+(#279) are confirmed and fixed. The A2 hypothesis was disproved by its first
+root-cause experiment and has been split into A2a and A2b below; the
+remaining clusters are still hypotheses.
 If the first fix in another cluster does not clear its siblings, stop and
 report; do not force unrelated defects into one change. The maintainer
 explicitly approved K as a four-rule exception.
 
 ## Rules
 
-- One cluster per branch and pull request. Clusters A1, A2 and B–D all touch MIR
+- One cluster per branch and pull request. The A subclusters and B–D all touch MIR
   lowering and the homed/spilled emitters and will conflict; work them one
   at a time. I, K and L are isolated and can proceed in parallel.
 - Do not change a generator's `KNOWN_BUGS` or a reproducer until the fix is
@@ -110,24 +110,50 @@ and selection-time conversion materialization are preserved.
   on clean main, with nondeterministic mutant IDs (#280). The maintainer
   approved documenting it separately without fixing or skipping the test.
 
-### A2. Remaining nested-block expression typing defects (unconfirmed)
+### A2. Disproved: split into A2a and A2b
+
+The A2 group (BUG-004, BUG-008, BUG-015) was attempted on
+`fix/cluster-a2-block-typing` from main `48f4f3de`. Its first confirmed
+root-cause fix cleared **only BUG-008**; BUG-004 and BUG-015 still failed and
+no other reproducer flipped. Per the stop rule the agent stopped and the
+maintainer approved the split below. The worktree experiment was not
+committed; A2a re-derives it cleanly.
+
+### A2a. Constant payload mistaken for an object displacement
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-008 | #228 | Negative/high-bit constant assigned to an initialized block 32-bit local: fatal |
+
+**Confirmed root cause:** `mir_spilled_structure_valid` in
+`src/dcc/dcc_mir_spilled_cfg.c` treats every object-associated instruction's
+`immediate` as an address displacement. Declaration repair can fold a named
+block assignment into `MIR_CONST` while retaining its object metadata, so for
+`b = -3` the valid unsigned 32-bit payload `4294967293` is checked as an
+offset and the function is rejected. The function-scope control has the same
+payload but no object index and passes; positive constants and an
+uninitialized block-local control also pass.
+
+The fix is a one-line exclusion of `MIR_CONST` from that displacement check.
+Confirm it against the controls' peep and nopeep assembly before committing;
+the fix must not change the emitted code for any control. Full acceptance,
+promotion and generator changes are still required: this is an isolated
+preflight-validation defect, not an expression typing defect.
+
+### A2b. Remaining block-local expression typing (unconfirmed; after E)
 
 | Bug | Issue | Shape |
 | --- | --- | --- |
 | BUG-015 | #235 | Block pointer to 32-bit object: `*q *= k` in 16 bits, `c <= *q` signed; block `unsigned char` compared as `unsigned int`; `?:` of two block floats |
-| BUG-008 | #228 | Negative constant assigned to a block 32-bit local: fatal |
 | BUG-004 | #225 | `&&`/`||` assigned to a block 32-bit local leaves garbage high word (facet; the function-scope half is in E) |
 
-These three remain after the A1 conversion-loss experiment. Every shape is
-right when the same local is declared at function scope, but a shared root
-cause among these bugs is **not confirmed**. Trace expression typing,
-conversion insertion and deferred metadata repair in `src/dcc/dcc_mir.c`
-against the neighbouring correct shapes before changing anything.
-
-Keep A2 on a separate branch and PR from A1. The original stop rule still
-applies: if its first root-cause fix does not clear its siblings, stop and
-split again rather than add independent fixes. BUG-004 remains shared with
-E; its issue cannot close until both facets pass.
+Neither is fixed by A1 or A2a. Their shared nested-block condition is not
+proof of a shared root cause, and BUG-015 itself has many facets. Work A2b
+**after E**: if E clears the BUG-004 facet, BUG-015 is traced on its own.
+Trace expression typing, conversion insertion and deferred metadata repair in
+`src/dcc/dcc_mir.c` against the neighbouring correct shapes before changing
+anything. The stop rule applies: if a first fix clears one facet of BUG-015
+but not the others, report rather than stack independent fixes.
 
 ### B. Stack slot and home allocation
 
@@ -320,21 +346,24 @@ so it matters more than its size suggests. Both are one-offs.
 
 1. **K, L** — isolated, cheap, four and one issues; good warm-up for the
    acceptance loop.
-2. **A1**, then **A2** — three confirmed conversion-loss bugs first;
-   three remaining typing bugs are a separate, unconfirmed hypothesis.
+2. **A1** — merged (#281). **A2a** — one confirmed, isolated fix.
+   **A2b** is deferred until after E.
 3. **B** — BUG-030 corrupts memory; BUG-026 is the maintainer's first
    priority.
 4. **D** — BUG-044 and BUG-003.
-5. **E**, then **C** — both in the emitter's typing/merge paths; C is the
-   least certain cluster.
+5. **E**, then **A2b**, then **C** — E and C are in the emitter's
+   typing/merge paths; A2b waits for E's BUG-004 facet; C is the least
+   certain cluster.
 6. **I, J, H, G, F, M** in any order.
 
 ## Tracking
 
 | Cluster | Branch / PR | Status | Notes |
 | --- | --- | --- | --- |
-| A1 | [#281](https://github.com/davidly/dcc/pull/281) (`fix/cluster-a1-deferred-conversions`) | PR open | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
-| A2 | | open: hypothesis unconfirmed | 004/008/015 still fail after A1 experiment; separate branch/PR; stop and split again if necessary |
+| A1 | [#281](https://github.com/davidly/dcc/pull/281) | merged | 007/025/031 promoted; 300 seeds clean; existing output/baselines unchanged; approved pre-existing Python failures #277/#280 |
+| A2 | `fix/cluster-a2-block-typing` (no PR) | stopped; split | First root fix cleared only 008; 004/015 still failed; experiment discarded |
+| A2a | | open | BUG-008: `MIR_CONST` payload wrongly checked as object displacement in `mir_spilled_structure_valid` |
+| A2b | | open; after E | BUG-004/015; unconfirmed shared cause |
 | B | | open | |
 | C | | open | |
 | D | | open | |
@@ -364,7 +393,7 @@ MIR selection, schedules, or allocation.
 
 ## Task
 
-Fix cluster **A1** in `fix-plan.md`. Read the cluster's table, then every
+Fix cluster **A2a** in `fix-plan.md`. Read the cluster's table, then every
 `## BUG-NNN` entry it lists in `compiler-bugs.md`, including the bullets
 describing which neighbouring shapes are already correct — those are your
 strongest clue to the root cause and to what the fixed code should emit.
