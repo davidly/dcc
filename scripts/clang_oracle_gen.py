@@ -1429,7 +1429,6 @@ FEATURES = frozenset((
 # table when its bug is fixed.
 KNOWN_BUGS = {
     'bytevarshl': 'BUG-002',
-    'wideidxincdec': 'BUG-003',
     'logicinit': 'BUG-004',
     'bfdivasg': 'BUG-006',
     'nestedwideless': 'BUG-009',

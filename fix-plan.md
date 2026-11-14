@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has thirty open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has twenty-eight open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -464,11 +464,79 @@ with BUG-038, the smallest.
 | BUG-010 | #230 | Cast or narrowing return of a 32-bit post-increment: rejected |
 | BUG-041 | #261 | Value of a float `++`/`--` rejected |
 
-Two sub-problems: the operation is done at the wrong width for 32-bit and
-float lvalues (003, 044), and the *value* of the expression is wrong or
-unsupported (021, 024, 010, 041). Fixing the lowering of `++`/`--` into
-"load, copy old value, widen, add, store" once for all widths should cover
-both. BUG-044 is the maintainer's second priority.
+**Confirmed split: D1 (003/044) and D2 (021/024/010/041).** The first
+root-cause change fixes D1 only; do not extend it with independent D2 fixes.
+BUG-044 is the maintainer's second priority.
+
+- **D1 — typed update arithmetic:** `mir_lower_incdec` leaves array operands
+  untyped when their result is discarded. Memory repair widens the load/store
+  but not the arithmetic or its unit constant, so a long/float index still
+  updates a word. Even a known float scalar gets the integer bit pattern 1
+  instead of float 1.0. Normalize the operation and private unit constant to
+  the stored type, including after deferred pointer/block-lvalue repair.
+  Existing byte/word/pointer schedules are untouched; new wide updates use
+  the same carry/borrow or float helper sequence as `+= 1` / `+= 1.0f`.
+- **D2 / BUG-021:** MIR returns the old value (`v15`) correctly, but the
+  spilled schedule updates `l3` in place and then reloads that overwritten
+  named slot for the return. This is a stored-home/value-lifetime defect,
+  not an arithmetic-width defect; the narrowing conversion gives the old
+  value a named local home.
+- **D2 / BUG-024:** MIR branches on the old header PHI (`v5`) correctly.
+  `mir_phi_uses_scalar_object_home` admits a byte PHI unconditionally; the
+  spilled schedule stores the new value into the same byte local and then
+  reloads it to test the old PHI. The later do-while prevents full promotion.
+- **D2 / BUG-010:** the AST admission gate for postfix values recognizes
+  plain integers/pointers, not long values. `ast_value_is_long_word` has a
+  special long-postfix path, explaining why direct assignment works, but
+  casts/narrowing returns first require `ast_expr_supported` and reject it.
+- **D2 / BUG-041:** AST increment/decrement and float-value classifiers do
+  not admit float update values. Repairing statement arithmetic cannot make
+  those rejected expressions reach MIR. This needs separate admission work.
+
+D1 acceptance is recorded below and in Tracking; D2 remains open with
+unchanged reproducers. No out-of-cluster reproducer flipped.
+
+#### D1 acceptance
+
+- Before: 33 parked reproducers fail. After the single root fix: only
+  003/044 report FIXED in peep/nopeep, with 31 still failing. After promoting
+  `tinc32a` / `tflinc`: **31 reproducers, 31 fails**. Both promoted apps pass
+  normal-stack full-mode measurements and host baseline validation.
+- Canonical build and strict Python full+extended acceptance pass (525 apps
+  before promotion). Final strict PowerShell full+extended stack/no-stack
+  gates each pass **527 apps**, extended, diagnostics and dccpeep fixtures;
+  normal-stack performance passes. No prepush or old-compiler checks.
+- Both original **3,461-function** census TSVs compare equal before
+  promotion. Final canonical-build censuses preserve every existing row
+  byte-for-byte and add only seven functions from the two new apps. All
+  **510 existing performance rows** are unchanged in both directions; only
+  the two new measured rows are added.
+- Restored `wideidxincdec` / `fincdec`: 300 integer seeds **223 ok, 77 INVALID**;
+  final 300 float seeds **286 ok, 14 INVALID**; zero FAIL. Both final
+  3,000-seed disabled-shape proofs pass. Float seed 219 initially exposed a
+  missed existing BUG-042 guard (`-((0.0625f < 602000.0f) + 1.5f)`); reduction
+  has no increment/decrement. Only that guard was refined. Its accepted
+  standalone comparison and explicitly cast negation remain unsteered, and
+  a fresh full float batch is clean. No second compiler fix was added.
+- Independent CMake compiler build, MIR host checks **6/6**, debugger-host
+  checks **10/10**, strict require-emit and focused compiler/line-debug tests
+  **23/23** pass. Full-debug builds of the promoted sources retain `.DBG`
+  metadata and correct output; line-debug `.COM` files match release in
+  both pipelines. Statement/scope boundaries are unchanged.
+- **Python exceptions, not hidden:** the initial full suite (314 tests),
+  concurrent with heavy validation, had the approved #277 golden failures
+  plus five scheduler/cleanup errors across three mutation-runner cases.
+  Retrying the final full suite in isolation (315 tests) removes those
+  errors, but reports #277's `test_mir_campaign_baselines` and
+  `test_mir_exact_controls`, plus
+  `test_default_serial_and_parallel_are_equal_and_bounded`: its tiny fake
+  host verifier exits 139 for `global-field-vn-call-barrier` in the parallel
+  run. Retrying that single case alone still fails: fixture builds exit 139
+  for `call-arity` / `indirect-callee`. The production CMake compiler and
+  actual MIR host tests pass. This process-harness case remains unverified;
+  no runner, expectation or skip was changed. The two built-in Python skips
+  are unchanged. No main-checkout/dating runs were made for the maintainer's
+  pre-approved #277 exceptions.
 
 ### E. Signedness and integer promotion
 
@@ -917,7 +985,9 @@ so it matters more than its size suggests. Both are one-offs.
 | B3 | [#289](https://github.com/davidly/dcc/pull/289) | merged | BUG-026/017 same root; tselfop/tandself promoted; int 213 ok/85 INVALID/2 limit-only, float 267 ok/33 INVALID; zero FAIL; 504 existing perf rows and 3,394 census functions unchanged; new BUG-054/#288 parked separately |
 | B4 | [#293](https://github.com/davidly/dcc/pull/293) | PR open | BUG-036 promoted as tlpcall; C/D independent; both 300-seed batches clean; 3,436 existing functions and 509 perf rows unchanged |
 | C | | open | |
-| D | | open | |
+| D | | split after first root fix | D1 fixes typed update arithmetic (003/044); D2 contains independent value-lifetime/admission defects (021/024/010/041); traces above |
+| D1 | [#297](https://github.com/davidly/dcc/pull/297) (`fix/cluster-d-postinc`) | PR open; verified compiler gates | 003/044 promoted as tinc32a/tflinc; int 223 ok/77 INVALID, float 286 ok/14 INVALID, zero FAIL; 3,461 existing functions byte-identical in both censuses and 510 existing perf rows unchanged; only BUG-042 steering refined outside cluster; strict release gates pass; approved #277 plus one isolated mutation-harness process failure documented |
+| D2 | | open | BUG-021/024 stored-home lifetime; BUG-010/041 AST value admission; no independent compiler fixes added |
 | E | | open | |
 | F | [#296](https://github.com/davidly/dcc/pull/296) | PR open | 011/018/043 promoted; single AST admission fix; 3,436 existing functions and 509 perf rows unchanged; int 213/85/2 limits, float 256/44, zero FAIL; independent BUG-055/#294 parked and steered |
 | G | [#295](https://github.com/davidly/dcc/pull/295) | split; G1 fixed | First root fix clears 012 only; G2 033/040/042 separately traced, untouched |

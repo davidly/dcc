@@ -25,7 +25,6 @@ and their historical diagnoses are retained separately below.
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
 | [BUG-002](#bug-002) | #223 | wrong result | `unsigned char` local `<<=` an `unsigned char` variable is not truncated on return |
-| [BUG-003](#bug-003) | #224 | wrong result | `++`/`--` on a 32-bit array element is done in 16 bits |
 | [BUG-004](#bug-004) | #225 | wrong result | 16-bit local set from `&&`/`\|\|`, stored to a 32-bit lvalue, leaves a garbage high word |
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
@@ -49,20 +48,19 @@ and their historical diagnoses are retained separately below.
 | [BUG-040](#bug-040) | #260 | compile error | A static-storage float initializer must be a bare constant: `(2.5f)`, `-(2.5f)` and `1.0f + 2.0f` are rejected |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-042](#bug-042) | #262 | compile error | A float constant that must be folded or tested for truth is rejected: `-(-2.5f)`, `!2.5f`, `2.5f && n`, `if (2.3f)` |
-| [BUG-044](#bug-044) | #264 | wrong result | `++`/`--` on a float is a no-op on a scalar and a 16-bit integer increment on an array element |
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 
-Thirty are open: twenty give wrong results with no diagnostic
+Twenty-eight are open: eighteen give wrong results with no diagnostic
 (BUG-039 is in the runtime), one hangs, eight stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
-BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Twenty-three reported bugs are fixed: [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
+Twenty-five reported bugs are fixed: [two in cluster D1](#fixed-in-cluster-d1),
+[three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [one in cluster B2a](#fixed-in-cluster-b2a),
@@ -113,24 +111,6 @@ static uint8_t f(void) { uint8_t x = a1[0]; x <<= count; return x; }
 - Correct with a constant count, an `int16_t` count, `count & 7`,
   `x = x << count`, a `signed char x`, or a `uint16_t` return type.
 - Selected emitter for `f`: `spilled-scalar-cfg`.
-
-## BUG-003
-
-**`++` and `--` on a 32-bit array element are carried out in 16 bits and the
-result is sign-extended.** Values that stay inside −32768…32767 are
-unaffected, which is why small counters work.
-
-```c
-static int32_t a[4] = { 0x80000000, 65535, 32767, 70000 };
-++a[0];      /* want 80000001, dcc 00000001 */
-a[1]++;      /* want 00010000, dcc 00000000 */
-a[1]--;      /* (from 65535) want 0000fffe, dcc fffffffe */
-```
-
-- Wrong for `int32_t` and `uint32_t`, prefix and postfix, constant and
-  variable index, and through a pointer (`++p[1]`).
-- Correct: `a[1] += 1`, a 32-bit global scalar, a 32-bit struct member,
-  `++*p`.
 
 ## BUG-004
 
@@ -868,33 +848,16 @@ while (1.0f) { break; }    /* rejected */
   comparison alone (`if (1.0f > 2.0f)`), a non-constant operand
   (`(1.0f > 2.0f) && n`), and the all-integer form (`(1 > 2) && (0 == 0)`)
   are accepted. Found by fuzzing (float generator, seed 30).
+- A constant float comparison inside a negated float sum also needs that
+  missing fold: `g = -((0.0625f < 602000.0f) + 1.5f)` is rejected, while the
+  sum without unary minus is accepted. Restoring float statement increments
+  in D1 exposed this existing BUG-042 facet at float seed 219; the reduced
+  program has no increment/decrement. Its generator guard now recognizes
+  constant comparisons inside float expressions without excluding an
+  accepted standalone float comparison. No compiler change for BUG-042.
 - Also at v3.6.0 (`20290235`).
 - Found by fuzzing (float generator, seeds 3, 13, 16).
 
-## BUG-044
-
-**`++` and `--` on a float do the wrong thing with no diagnostic.** On a
-scalar (a local, a global, a struct member, `*p`) the statement is a no-op.
-On an array element (`fa[1]++`, `fa[i]--`, `p[3]++`, a local array too) the
-element is treated as a 16-bit integer: the low word is incremented or
-decremented and the result sign-extended over the high word.
-
-```c
-float l = 1.0f;
-l++;            /* want 2.0f (40000000), dcc 1.0f (unchanged) */
-fg++;           /* static float fg = 1.0f: unchanged */
-s.m++;          /* unchanged */
-(*p)++;         /* unchanged */
-fa[1]++;        /* 2.0f: want 40400000, dcc 00000001 */
-fa[2]--;        /* 3.0f: want 40000000, dcc ffffffff (a NaN) */
-```
-
-- Correct: `l += 1.0f`, `l = l + 1`.
-- The value of a float `++` (`g = f++`) is rejected (BUG-041), so only the
-  statement form reaches code generation, and it is always wrong.
-- With and without `dcc-peep`.
-- Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
-- Found by fuzzing (float generator, seed 14: `la3[3]++; fg1 = la3[3];`).
 
 ## BUG-045
 
@@ -1011,6 +974,99 @@ uint32_t sub(int8_t p)
 - Steered by `peepbyteself`: non-logical byte binary self-operands
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
+
+## Fixed in cluster D1
+
+Fix and verification: [PR #297](https://github.com/davidly/dcc/pull/297).
+
+BUG-003 (#224) and BUG-044 (#264) share incorrectly typed update arithmetic.
+`mir_lower_incdec` used an untyped array operand for the operation even when
+memory repair later recovered a long/float load and store; its unit constant
+also used integer bits 1 for a float. The operation and private constant now
+follow the stored type, immediately when known and after deferred lvalue
+repair otherwise. Existing byte/word/pointer matcher shapes are preserved.
+New long updates use the same byte carry/borrow chain as `+= 1`; float updates
+use exactly the existing `+= 1.0f` helper sequence in peep and nopeep.
+
+Only these two reproducers flipped: **31 other parked bugs still fail**.
+The approved D1/D2 split and each remaining bug's trace are in fix-plan.md.
+`tinc32a` and `tflinc` preserve the original host-proven reproducers, and
+focused compiler tests check prefix/postfix updates against their correctly
+typed compound-assignment controls, including pointer and deferred arrays.
+
+`wideidxincdec` and `fincdec` are restored; `widepostinc`, `postincvalue` and
+`fincdecval` remain steered for open bugs. Production seeds 1-300 with
+`--off known`: integers **223 ok, 77 INVALID, zero FAIL**; floats **286 ok,
+14 INVALID, zero FAIL** after refining the existing BUG-042 guard. The first
+float batch found only that unrelated constant-fold facet (286 ok, 13 INVALID,
+1 FAIL); no second compiler fix was added. Both 3,000-seed disabled-shape
+proofs pass. All **3,461 existing census functions** are byte-identical in
+both stack modes and all **510 existing performance rows** are unchanged.
+Only the two new regressions' normal-stack measurements are added.
+
+Line-debug binaries are release-identical in both pipelines; full-debug
+builds retain metadata and run both new regressions correctly. The independent
+compiler build, MIR host checks (6/6), debugger-host checks (10/10), strict
+MIR require-emit checks and focused debug/compiler tests pass. Release-suite
+and Python harness acceptance details are recorded under D1 in fix-plan.md.
+No old-compiler dating checks or prepush.ps1 were run.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-003](#bug-003) | #224 | [tinc32a](tests/tinc32a.c) |
+| [BUG-044](#bug-044) | #264 | [tflinc](tests/tflinc.c) |
+
+### BUG-003
+
+**Fixed:** normalize the operation and its unit constant to the stored type,
+including deferred pointer/block lvalues. Regression: [tinc32a.c](tests/tinc32a.c),
+[baseline](tests/baselines/tinc32a.txt).
+
+**`++` and `--` on a 32-bit array element are carried out in 16 bits and the
+result is sign-extended.** Values that stay inside −32768…32767 are
+unaffected, which is why small counters work.
+
+```c
+static int32_t a[4] = { 0x80000000, 65535, 32767, 70000 };
+++a[0];      /* want 80000001, dcc 00000001 */
+a[1]++;      /* want 00010000, dcc 00000000 */
+a[1]--;      /* (from 65535) want 0000fffe, dcc fffffffe */
+```
+
+- Wrong for `int32_t` and `uint32_t`, prefix and postfix, constant and
+  variable index, and through a pointer (`++p[1]`).
+- Correct: `a[1] += 1`, a 32-bit global scalar, a 32-bit struct member,
+  `++*p`.
+
+
+### BUG-044
+
+**Fixed:** normalize the operation and its unit constant to the stored type,
+including deferred pointer/block lvalues. Regression: [tflinc.c](tests/tflinc.c),
+[baseline](tests/baselines/tflinc.txt).
+
+**`++` and `--` on a float do the wrong thing with no diagnostic.** On a
+scalar (a local, a global, a struct member, `*p`) the statement is a no-op.
+On an array element (`fa[1]++`, `fa[i]--`, `p[3]++`, a local array too) the
+element is treated as a 16-bit integer: the low word is incremented or
+decremented and the result sign-extended over the high word.
+
+```c
+float l = 1.0f;
+l++;            /* want 2.0f (40000000), dcc 1.0f (unchanged) */
+fg++;           /* static float fg = 1.0f: unchanged */
+s.m++;          /* unchanged */
+(*p)++;         /* unchanged */
+fa[1]++;        /* 2.0f: want 40400000, dcc 00000001 */
+fa[2]--;        /* 3.0f: want 40000000, dcc ffffffff (a NaN) */
+```
+
+- Correct: `l += 1.0f`, `l = l + 1`.
+- The value of a float `++` (`g = f++`) is rejected (BUG-041), so only the
+  statement form reaches code generation, and it is always wrong.
+- With and without `dcc-peep`.
+- Also at v3.6.0 (`20290235`), tag 3.8.0 and `32d3e46d`.
+- Found by fuzzing (float generator, seed 14: `la3[3]++; fg1 = la3[3];`).
 
 ## BUG-055
 
