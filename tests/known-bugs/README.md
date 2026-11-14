@@ -19,6 +19,12 @@ rejects in every debug mode; only a copy with the old M-b guards masks it.
 The historical runnable program was already fixed by BUG-008/019 and is kept
 as `tests/tlbreuse.c` alongside that negative regression.
 
+BUG-059 records the independent missing implicit float conversion exposed by
+the stopped D2e admission trial. Like BUG-056, it remains latent behind
+BUG-041 admission; neither parked fixture is promoted by D2e-1.
+`tests/tupdprov.c` separately covers the already-admitted wide update
+provenance repaired by that safe subset.
+
 ## Checking them
 
 ```sh

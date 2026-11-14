@@ -55,7 +55,7 @@ FEATURES = frozenset((
 # that each one would otherwise keep rediscovering.
 KNOWN_BUGS = {
     'fdivround': 'BUG-039',
-    'fincdecval': 'BUG-041, BUG-056',
+    'fincdecval': 'BUG-041, BUG-056, BUG-059',
     'fblockneg': 'BUG-015',
     'fblockint': 'BUG-015',
 }
