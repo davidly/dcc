@@ -30,12 +30,10 @@ and their historical diagnoses are retained separately below.
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-010](#bug-010) | #230 | rejects valid C | Cast or narrowing return of a 32-bit post-increment or post-decrement |
-| [BUG-011](#bug-011) | #231 | rejects valid C | Compound assignment to an element of a byte array inside a struct |
 | [BUG-012](#bug-012) | #232 | rejects valid C | Unary `-` or `~` applied to `!`, `&&` or `\|\|` of constants |
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
-| [BUG-018](#bug-018) | #238 | rejects valid C | 32-bit value compound-assigned to a bit-field or to an element of a 16-bit array member |
 | [BUG-019](#bug-019) | #239 | rejects valid C | Unreachable nested-scope declaration after `return`, `break`, `goto` or `if (1) break;` |
 | [BUG-020](#bug-020) | #240 | rejects valid C | After a `switch`, a variable compared with `param % k` (32-bit parameter) |
 | [BUG-021](#bug-021) | #241 | wrong result | `x++`/`x--` yields the new value for a 16-bit local assigned from a local array element |
@@ -53,20 +51,20 @@ and their historical diagnoses are retained separately below.
 | [BUG-040](#bug-040) | #260 | compile error | A static-storage float initializer must be a bare constant: `(2.5f)`, `-(2.5f)` and `1.0f + 2.0f` are rejected |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-042](#bug-042) | #262 | compile error | A float constant that must be folded or tested for truth is rejected: `-(-2.5f)`, `!2.5f`, `2.5f && n`, `if (2.3f)` |
-| [BUG-043](#bug-043) | #263 | compile error | Compound assignment to an integer lvalue with a float right operand is rejected (`l *= f`, `n += 1.5f`) |
 | [BUG-044](#bug-044) | #264 | wrong result | `++`/`--` on a float is a no-op on a scalar and a 16-bit integer increment on an array element |
 | [BUG-045](#bug-045) | #265 | compile error | A comparison against a negative float constant combined with another operand (`x < -1.0f - n`) stops the compile with `MIR emission is required` |
 | [BUG-052](#bug-052) | #272 | wrong result | In a loop, `a[1] = (0 ? K : x) - 1.0f` with a 32-bit parameter `x` assigned after the loop subtracts 1 from `x` on every iteration |
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
+| [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 
-Thirty-four are open: twenty give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, twelve stop the compile,
+Thirty-two are open: twenty-one give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, nine stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Eighteen reported bugs are fixed: [three in cluster A1](#fixed-in-cluster-a1),
+Twenty-one reported bugs are fixed: [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [one in cluster B2a](#fixed-in-cluster-b2a),
@@ -220,24 +218,6 @@ uint8_t f(void) { int32_t l3 = 300; return l3++; }
   `(int16_t)(l1++)` on a 16-bit variable.
 - Upstream commit `34e35b3a` fixed the neighbouring "cast of an assignment"
   rejection, which this entry originally included.
-
-## BUG-011
-
-**Compound assignment to an element of a `char`, `signed char` or
-`unsigned char` array that is a struct member is rejected.** `DCC-E1002`.
-
-```c
-struct B { uint8_t b[4]; char name[4]; } s, *p;
-s.b[2] ^= 1;
-s.b[i] |= 0x20;
-p->name[i] |= 0x80;
-```
-
-- Rejected for every operator tried (`^= += -= |= &= <<= *=`), constant and
-  variable indexes, a struct variable, a pointer to struct, and an element of
-  an array of structs.
-- Accepted: `s.b[2] = s.b[2] ^ 1`; `s.b[2]++`; a byte array that is not a
-  struct member; a 16-bit array member.
 
 ## BUG-012
 
@@ -404,32 +384,6 @@ r = x / l;               /* uint16_t x = 50000: want -16666, dcc 0 */
   gu;` and `fg = t;`, and after `printf("%ld", (long)t)` has shown -67.
   Right: `int32_t t; t = (int32_t)gu;` or `(float)(t + 0)`. Found by
   fuzzing (float generator, seed 3792).
-
-## BUG-018
-
-**Compound assignment of a 32-bit value to a bit-field, or to an element of
-a 16-bit array that is a struct member, is rejected.** `DCC-E1002`. Upstream
-commit `34e35b3a` made the same statements compile for plain members, array
-elements and pointer targets; these two kinds of target are what remains.
-
-```c
-struct S { uint16_t u : 9; int16_t s : 7; int16_t w[2]; } g, *p;
-static uint32_t r = 5;
-static int32_t big = 70003;
-g.u |= r;            /* bit-field */
-p->u -= r;
-g.s >>= (r & 15);    /* 32-bit shift count */
-g.w[1] += big;       /* element of an array member */
-```
-
-- Rejected for unsigned and signed bit-fields, directly, through a pointer
-  and in an element of an array of structs; for `|= += -= ^= &= *= /= %= <<=
-  >>=`; and for elements of `int16_t` and `uint16_t` array members with a
-  constant or variable index.
-- Accepted: a 16-bit right operand (`g.u |= r16`, `g.w[1] += r16`); a plain
-  16-bit member (`g.plain += big`); a 32-bit array member (`g.l[1] += big`);
-  `g.u = g.u | r`.
-- Byte array members are rejected whatever the operand: see BUG-011.
 
 ## BUG-019
 
@@ -975,28 +929,6 @@ while (1.0f) { break; }    /* rejected */
 - Also at v3.6.0 (`20290235`).
 - Found by fuzzing (float generator, seeds 3, 13, 16).
 
-## BUG-043
-
-**A compound assignment to an integer lvalue whose right operand is a float
-is rejected.** `DCC-E1002 unsupported expression statement`, for every
-integer width (8, 16 and 32 bits, signed and unsigned), every operator tried
-(`+= -= *= /=`), a global or a local lvalue, and a variable or constant
-right operand.
-
-```c
-int32_t l = 5; float f = 2.5f;
-l *= f;                    /* rejected; want 12 */
-n += f;                    /* int n */
-u -= f;                    /* uint32_t u */
-c8 += f;                   /* int8_t c8 */
-l -= 1.5f;
-```
-
-- Accepted: the expanded form `l = l * f`; a float lvalue with an integer
-  right operand (`f *= l`); `l %= 2`.
-- Also at v3.6.0 (`20290235`).
-- Found by fuzzing (float generator, seeds 7, 10, 25).
-
 ## BUG-044
 
 **`++` and `--` on a float do the wrong thing with no diagnostic.** On a
@@ -1137,6 +1069,150 @@ uint32_t sub(int8_t p)
 - Steered by `peepbyteself`: non-logical byte binary self-operands
   (including compound spellings), leaving word/long/float self-operands
   enabled for B3 coverage.
+
+## BUG-055
+
+**A variable-index store into a local float array inside an `else` arm can
+be lost between nested loops and a later `while` with conditional float
+expressions.** The array's original value is read back, in all four production
+configurations. This is an independent finding from cluster F's restored
+float seeds 1-300, seed 241; the reduced program contains no integer compound
+assignment and does not invoke F's new admission rule.
+
+The parked reproducer expects `16777216` from all three functions. dcc prints
+`0` for the variable-index case and the correct `16777216` for both controls.
+The full differential reducer produced a 115-line, sanitizer-proven case;
+the parked hand reduction replaces bit-pattern printing with an explicit,
+in-range float-to-`int32_t` conversion and retains the failing context.
+
+- Correct if `la3[l4 & 3] = 16777216.0f` uses the constant index `0`.
+- Correct if the earlier nested loop, the surrounding `if`/`else`, the later
+  `while`, or the intervening unused conditional-float expression is removed.
+- A simple 16-bit counter copy followed by the indexed local-array store is
+  correct; this is not sufficient evidence to merge the finding into BUG-037.
+- No compiler fix is attempted here. Float steering `farrloopindex` replaces
+  variable indexes only for local float-array writes inside a root-level branch
+  preceded by a nested loop and followed by a `while`; scalar, global, member,
+  constant-index and other indexed stores remain enabled.
+
+---
+
+## Fixed in cluster F
+
+BUG-011, BUG-018 and BUG-043 share one frontend admission defect: stale AST
+assignment gates still restrict numeric compound updates by lvalue spelling
+and right-operand width/type. The existing MIR load/convert/compute/narrow/store
+contract already implements all three, including masked bit-field stores.
+A shared integer-compound admission rule uses the existing address/type proofs,
+retains pointer and `_Bool` policies, and accepts floating right operands only
+for `+=`, `-=`, `*=` and `/=`. No lowering, allocation, selector, emitter,
+runtime or peephole code is changed, and no fallback is introduced.
+
+Before promotion, the 35 parked reproducers give **three FIXED, 32 fails**.
+The extra reproducer is independent BUG-055/#294, found by restored float
+seed 241 and parked without a compiler fix; its program contains no integer
+compound assignment. Its constant-index and simplified-context controls pass.
+After narrow `farrloopindex` steering, float production seeds 1-300 finish
+**256 ok, 44 INVALID, zero FAIL**; the preceding discovery batch gave 255 ok,
+44 INVALID and that one mismatch. Integer seeds 1-300 give **213 ok,
+85 INVALID, two target-limit-only, zero FAIL**. A 3,000-seed float steering
+proof passes. `structbytecasg`, `widecasgbf` and `icasgf` are restored.
+
+Both MIR census TSVs are byte-identical for all **3,436 existing functions**,
+including selected hashes; all **509 existing performance rows** remain
+byte-preserved. Byte-member and integer/float compound code matches its
+already-supported expanded assignment in both pipelines. Exact-equivalence
+unit tests cover release, stack checks, `-gline` and full debug; native
+admission tests cover wide bit-field operands and reject float operands for
+integer-only operators. Strict full+extended stack/no-stack release gates,
+the Python regression runner, native MIR (6/6), debugger/metadata (10/10) and
+require-emit checks pass. Only the three new PowerShell-measured rows are added.
+
+The reproducers are promoted as `tcmbyte`, `tcmwide` and `tcmfloat`.
+`tcmbyte` adds host-proven used-value narrowing, a single-evaluated index, and
+a byte-member/float-operand cross-product case. The final regular Python gate runs 314 tests with the two approved #277
+failures and two existing skips. It also hits the unchanged mock mutation
+fixture's 180-second deadline in
+`test_default_serial_and_parallel_are_equal_and_bounded`, then a directory-
+not-empty cleanup error (two errors). The same fixture timed out in two earlier
+runs; its scripts and manifest are byte-unchanged and it builds a synthetic
+mock compiler, not the modified dcc sources. The #280 fixture's final assertion
+is therefore unverified on this host. No compiler/harness fix, skip, expectation
+refresh, historical compiler check or prepush run was made for these failures.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-011](#bug-011) | #231 | [tcmbyte](tests/tcmbyte.c) |
+| [BUG-018](#bug-018) | #238 | [tcmwide](tests/tcmwide.c) |
+| [BUG-043](#bug-043) | #263 | [tcmfloat](tests/tcmfloat.c) |
+
+### BUG-011
+
+**Compound assignment to an element of a `char`, `signed char` or
+`unsigned char` array that is a struct member is rejected.** `DCC-E1002`.
+
+```c
+struct B { uint8_t b[4]; char name[4]; } s, *p;
+s.b[2] ^= 1;
+s.b[i] |= 0x20;
+p->name[i] |= 0x80;
+```
+
+- Rejected for every operator tried (`^= += -= |= &= <<= *=`), constant and
+  variable indexes, a struct variable, a pointer to struct, and an element of
+  an array of structs.
+- Accepted: `s.b[2] = s.b[2] ^ 1`; `s.b[2]++`; a byte array that is not a
+  struct member; a 16-bit array member.
+
+### BUG-018
+
+**Compound assignment of a 32-bit value to a bit-field, or to an element of
+a 16-bit array that is a struct member, is rejected.** `DCC-E1002`. Upstream
+commit `34e35b3a` made the same statements compile for plain members, array
+elements and pointer targets; these two kinds of target are what remains.
+
+```c
+struct S { uint16_t u : 9; int16_t s : 7; int16_t w[2]; } g, *p;
+static uint32_t r = 5;
+static int32_t big = 70003;
+g.u |= r;            /* bit-field */
+p->u -= r;
+g.s >>= (r & 15);    /* 32-bit shift count */
+g.w[1] += big;       /* element of an array member */
+```
+
+- Rejected for unsigned and signed bit-fields, directly, through a pointer
+  and in an element of an array of structs; for `|= += -= ^= &= *= /= %= <<=
+  >>=`; and for elements of `int16_t` and `uint16_t` array members with a
+  constant or variable index.
+- Accepted: a 16-bit right operand (`g.u |= r16`, `g.w[1] += r16`); a plain
+  16-bit member (`g.plain += big`); a 32-bit array member (`g.l[1] += big`);
+  `g.u = g.u | r`.
+- Byte array members are rejected whatever the operand: see BUG-011.
+
+### BUG-043
+
+**A compound assignment to an integer lvalue whose right operand is a float
+is rejected.** `DCC-E1002 unsupported expression statement`, for every
+integer width (8, 16 and 32 bits, signed and unsigned), every operator tried
+(`+= -= *= /=`), a global or a local lvalue, and a variable or constant
+right operand.
+
+```c
+int32_t l = 5; float f = 2.5f;
+l *= f;                    /* rejected; want 12 */
+n += f;                    /* int n */
+u -= f;                    /* uint32_t u */
+c8 += f;                   /* int8_t c8 */
+l -= 1.5f;
+```
+
+- Accepted: the expanded form `l = l * f`; a float lvalue with an integer
+  right operand (`f *= l`); `l %= 2`.
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seeds 7, 10, 25).
+
+---
 
 ## Fixed in cluster B2a
 

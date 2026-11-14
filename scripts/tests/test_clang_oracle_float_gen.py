@@ -30,3 +30,31 @@ class FloatKnownShapeTests(unittest.TestCase):
                     program.off = disabled
                     expected = {feature} if feature in disabled else set()
                     self.assertEqual(gen.known_shapes(program), expected)
+
+    def test_local_float_array_loop_context_is_narrowly_steered(self):
+        generator = gen.Gen(0, off=frozenset({"farrloopindex"}))
+        fn = gen.Func("probe", gen.F32, [], "test")
+        generator.prog.funcs.append(fn)
+        array = gen.Decl("a", gen.F32, "local", dims=(4,))
+        index = gen.Decl("i", gen.I16, "local")
+        lv = gen.E("idx", [gen.E("var", a=index)], a=array)
+        branch = gen.Block()
+        branch.stmts.append(gen.S("expr", [gen.E("asg", [
+            lv, gen.E("const", a=1.0, t=gen.F32)], a="=")]))
+        nested = gen.Block()
+        nested.stmts.append(gen.S("while", [gen.E("var", a=index)], [gen.Block()]))
+        fn.body.stmts.extend([
+            gen.S("while", [gen.E("var", a=index)], [nested]),
+            gen.S("if", [gen.E("var", a=index)], [branch]),
+            gen.S("while", [gen.E("var", a=index)], [gen.Block()]),
+        ])
+        self.assertEqual(gen.known_shapes(generator.prog), {"farrloopindex"})
+        array.storage = "global"
+        self.assertEqual(gen.known_shapes(generator.prog), set())
+        array.storage = "local"
+        later = fn.body.stmts.pop()
+        self.assertEqual(gen.known_shapes(generator.prog), set())
+        fn.body.stmts.append(later)
+        generator.steer()
+        self.assertEqual(gen.known_shapes(generator.prog), set())
+        self.assertEqual(lv.k[0].op, "const")
