@@ -1,9 +1,6 @@
-/* BUG-021: the value of a post-increment or post-decrement is the new value
- * instead of the old one. It happens for a signed 16-bit local that was
- * assigned from an element of a local unsigned 16-bit array, in a function
- * that also has a signed char local initialised from a narrowing cast.
- * The value is correct when that char local is absent or is a constant, when
- * the array is static, or when the incremented local is unsigned. */
+/* Preserve the old value of 16-bit local post-increment/decrement after
+ * assignment from a local array element, including assignment conversion,
+ * pointer access and an unrelated narrowing byte-local initializer. */
 #include <stdint.h>
 #include <stdio.h>
 

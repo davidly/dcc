@@ -1,4 +1,4 @@
-"""Target-width constant folding and demanded-bit shift regression tests."""
+"""Target-width arithmetic, typed updates and demanded-bit shift regressions."""
 
 import os
 from pathlib import Path
@@ -101,6 +101,23 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                     neighbor = "int probe(void) { " + control + " }\n"
                     self.assertEqual(self.code(self.compile(source, options)),
                                      self.code(self.compile(neighbor, options)))
+    def test_integer_compound_lvalues_match_expanded_assignment(self):
+        cases = (
+            ("struct S { unsigned char b[4]; } s;", "s.b[2]", "^", "1"),
+            ("long value; float rhs;", "value", "*", "rhs"),
+        )
+        for declarations, target, operator, rhs in cases:
+            compound = (declarations + " void probe(void) { " + target + " " +
+                        operator + "= " + rhs + "; }\n")
+            expanded = (declarations + " void probe(void) { " + target + " = " +
+                        target + " " + operator + " " + rhs + "; }\n")
+            release = self.code(self.compile(compound))
+            for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
+                with self.subTest(target=target, operator=operator, options=options):
+                    actual = self.code(self.compile(compound, options))
+                    self.assertEqual(actual, self.code(self.compile(expanded, options)))
+                    if options == ("-gline",):
+                        self.assertEqual(actual, release)
 
     def test_float_conversion_retains_cast_signedness(self):
         cases = (
@@ -123,6 +140,48 @@ class MirIntegerOptimizationTests(unittest.TestCase):
         control = "long probe(long x) { return x; }\n"
         self.assertEqual(self.code(self.compile(cast)),
                          self.code(self.compile(control)))
+
+    def test_wide_incdec_matches_typed_compound_update(self):
+        for value_type in ("long", "unsigned long", "float"):
+            unit = "1.0f" if value_type == "float" else "1"
+            for update, compound in (("++", "+="), ("--", "-=")):
+                for prefix in (False, True):
+                    operation = update + "p[1]" if prefix else "p[1]" + update
+                    source = "void probe(" + value_type + " *p) { "
+                    control = source + "p[1] " + compound + " " + unit + "; }\n"
+                    source += operation + "; }\n"
+                    for options in ((), ("-fstack-check",), ("-gline",)):
+                        with self.subTest(value_type=value_type, update=update,
+                                          prefix=prefix, options=options):
+                            self.assertEqual(self.code(self.compile(source, options)),
+                                             self.code(self.compile(control, options)))
+
+    def test_narrowed_long_postfix_matches_direct_assignment(self):
+        for value_type in ("long", "unsigned long"):
+            for update in ("++", "--"):
+                body = value_type + " value; int probe(void) { "
+                control = body + "int old; old = value" + update + "; return old; }\n"
+                for result in ("(int)(value" + update + ")", "value" + update):
+                    source = body + "return " + result + "; }\n"
+                    for options in ((), ("-fstack-check",), ("-gline",)):
+                        with self.subTest(value_type=value_type, result=result,
+                                          options=options):
+                            self.assertEqual(self.code(self.compile(source, options)),
+                                             self.code(self.compile(control, options)))
+
+    def test_deferred_float_incdec_uses_float_unit(self):
+        for operation, compound, helper in (("p[0]++", "+=", "__faf"),
+                                             ("--p[0]", "-=", "__fsf")):
+            body = "void probe(void) { { float p[2] = {2.5f, 0.0f}; "
+            tail = " out = p[0]; } }\n"
+            source = "float out; " + body + operation + ";" + tail
+            control = "float out; " + body + "p[0] " + compound + " 1.0f;" + tail
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(operation=operation, options=options):
+                    assembly = self.compile(source, options)
+                    self.assertIn("call " + helper, assembly)
+                    self.assertEqual(self.code(assembly),
+                                     self.code(self.compile(control, options)))
 
     def test_little_endian_writers_combine(self):
         for value_type in ("unsigned int", "int"):

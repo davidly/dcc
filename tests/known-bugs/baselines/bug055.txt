@@ -1,0 +1,3 @@
+variable index 16777216
+constant index 16777216
+without extra conditional 16777216

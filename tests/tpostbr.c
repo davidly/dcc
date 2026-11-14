@@ -1,9 +1,6 @@
-/* BUG-023: a 16-bit local that was assigned a value of a different type and
- * is then updated loses the assigned value when a branch or loop follows:
- * the update is applied to 0 or to a stale value. `if (l++ > K) l = v;`
- * leaves 1 (or 65535) when the branch is not taken, and `l++` before a loop
- * that updates l again conditionally does not count from the assigned
- * value. It is correct when the local was assigned a value of its own type. */
+/* Preserve 16-bit local postfix update values across conditional branches
+ * and loop updates after cross-type assignments, including signedness
+ * conversions, comparisons, decrements and stored results. */
 #include <stdint.h>
 #include <stdio.h>
 

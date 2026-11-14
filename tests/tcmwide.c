@@ -1,8 +1,5 @@
-/* BUG-018: compound assignment of a 32-bit value to a bit-field, or to an
- * element of a 16-bit array that is a struct member, is rejected with
- * DCC-E1002. The same statements compile with a 16-bit right operand, with a
- * plain member or a 32-bit array member as the target, or written as
- * `x = x op y`. */
+/* Wide compound operands and shift counts for signed/unsigned bit-fields
+ * and word array members, directly, through pointers and struct arrays. */
 #include <stdint.h>
 #include <stdio.h>
 

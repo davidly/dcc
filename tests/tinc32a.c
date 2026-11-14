@@ -1,6 +1,5 @@
-/* BUG-003: ++ and -- on a 32-bit array element are carried out in 16 bits
- * and the result sign-extended, so any element whose value leaves the
- * 16-bit signed range is corrupted. `a[k] += 1` is correct. */
+/* Full-width prefix/postfix increment and decrement of signed and unsigned
+ * 32-bit array elements, with constant/variable indexes and pointer bases. */
 #include <stdint.h>
 #include <stdio.h>
 

@@ -12,6 +12,21 @@ finally:
 
 
 class FloatKnownShapeTests(unittest.TestCase):
+    def test_constant_float_comparison_inside_negated_float_sum(self):
+        comparison = gen.E("bin", a="<", k=[
+            gen.E("const", a=0.0625, t=gen.F32),
+            gen.E("const", a=602000.0, t=gen.F32)])
+        expression = gen.E("bin", a="+", k=[comparison,
+            gen.E("const", a=1.5, t=gen.F32)])
+        self.assertTrue(gen.needs_fconst_fold(gen.E("un", a="-", k=[expression])))
+        self.assertFalse(gen.is_fconst(comparison))
+        cast = gen.E("cast", t=gen.F32, k=[comparison])
+        self.assertFalse(gen.needs_fconst_fold(gen.E("un", a="-", k=[cast])))
+        variable = gen.E("var", a=gen.Decl("f", gen.F32, "global"))
+        comparison.k[1] = variable
+        self.assertFalse(gen.needs_fconst_fold(gen.E("un", a="-", k=[expression])))
+        self.assertFalse(gen.known_shapes(gen.generate(219, off=frozenset(gen.KNOWN_BUGS))))
+
     def test_only_disabled_shapes_block_oracle_execution(self):
         integer = gen.E("const", a=-72, t=gen.I32)
         expressions = {
@@ -30,3 +45,31 @@ class FloatKnownShapeTests(unittest.TestCase):
                     program.off = disabled
                     expected = {feature} if feature in disabled else set()
                     self.assertEqual(gen.known_shapes(program), expected)
+
+    def test_local_float_array_loop_context_is_narrowly_steered(self):
+        generator = gen.Gen(0, off=frozenset({"farrloopindex"}))
+        fn = gen.Func("probe", gen.F32, [], "test")
+        generator.prog.funcs.append(fn)
+        array = gen.Decl("a", gen.F32, "local", dims=(4,))
+        index = gen.Decl("i", gen.I16, "local")
+        lv = gen.E("idx", [gen.E("var", a=index)], a=array)
+        branch = gen.Block()
+        branch.stmts.append(gen.S("expr", [gen.E("asg", [
+            lv, gen.E("const", a=1.0, t=gen.F32)], a="=")]))
+        nested = gen.Block()
+        nested.stmts.append(gen.S("while", [gen.E("var", a=index)], [gen.Block()]))
+        fn.body.stmts.extend([
+            gen.S("while", [gen.E("var", a=index)], [nested]),
+            gen.S("if", [gen.E("var", a=index)], [branch]),
+            gen.S("while", [gen.E("var", a=index)], [gen.Block()]),
+        ])
+        self.assertEqual(gen.known_shapes(generator.prog), {"farrloopindex"})
+        array.storage = "global"
+        self.assertEqual(gen.known_shapes(generator.prog), set())
+        array.storage = "local"
+        later = fn.body.stmts.pop()
+        self.assertEqual(gen.known_shapes(generator.prog), set())
+        fn.body.stmts.append(later)
+        generator.steer()
+        self.assertEqual(gen.known_shapes(generator.prog), set())
+        self.assertEqual(lv.k[0].op, "const")

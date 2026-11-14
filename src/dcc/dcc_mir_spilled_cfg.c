@@ -30399,7 +30399,12 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
         right_definition->immediate != 1)
         return 0;
     left_definition = mir_definition(insn->src1);
+    /* Assignment conversions carry the destination's name as metadata, not
+     * an authoritative memory binding for their SSA result. */
     if (left_definition == NULL ||
+        (left_definition->opcode != MIR_LOAD &&
+         left_definition->opcode != MIR_PARAM &&
+         left_definition->opcode != MIR_PHI) ||
         !mir_scalar_memory_location(left_definition, &memory_type,
                                     &memory_storage, &memory_offset) ||
         (memory_storage != SC_LOCAL && memory_storage != SC_PARAM &&

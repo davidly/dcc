@@ -1494,6 +1494,13 @@ static void verify_ast_assignment_support(void)
          ast_assignment_probe(&assign, &lhs, &wide, TOK_ADDEQ) &&
          ast_assignment_probe(&assign, &lhs, &integer, TOK_SHLEQ);
 
+    for (item = 0;
+         item < (int)(sizeof(compound_ops) / sizeof(compound_ops[0]));
+         ++item)
+        ok = expect_ast_assignment_support(
+            "integer compound float operand", &assign, &lhs, &real,
+            compound_ops[item], item < 4) && ok;
+
     symbol = add_global(
         "verify_assignment_float", TYPE_FLOAT, SC_GLOBAL);
     lhs.type = TYPE_FLOAT;
@@ -1628,9 +1635,10 @@ static void verify_ast_assignment_support(void)
     index.a = &address;
     index.type = TYPE_INT;
     ok = ok && ast_assignment_probe(
-        &assign, &index, &integer, '=') &&
-         !ast_assignment_probe(
-             &assign, &index, &integer, TOK_ADDEQ);
+        &assign, &index, &integer, '=');
+    ok = expect_ast_assignment_support(
+        "address expression integer compound", &assign, &index, &integer,
+        TOK_ADDEQ, 1) && ok;
 
     symbol = add_global(
         "verify_assignment_pointer_expr_pointer",
@@ -1816,8 +1824,8 @@ static void verify_ast_assignment_support(void)
         bitfield->bit_mask = 0x1f;
         member.sval = bitfield->name;
         member.type = bitfield->type;
-        /* Bitfield stores accept numeric `=` conversion and plain-int
-         * compound updates through the masked store tail. */
+        /* Bitfield stores convert assignments and narrow wide compounds
+         * through the masked store tail. */
         ok = expect_ast_assignment_support(
             "bitfield float assignment", &assign, &member, &real,
             '=', 1) && ok;
@@ -1825,6 +1833,13 @@ static void verify_ast_assignment_support(void)
         ok = expect_ast_assignment_support(
             "bitfield shift assignment", &assign, &member, &integer,
             TOK_SHLEQ, 1) && ok;
+
+        for (item = 0;
+             item < (int)(sizeof(compound_ops) / sizeof(compound_ops[0]));
+             ++item)
+            ok = expect_ast_assignment_support(
+                "bitfield compound wide operand", &assign, &member, &wide,
+                compound_ops[item], 1) && ok;
 
         bool_field = &field_defs[nfield_defs++];
         memset(bool_field, 0, sizeof(*bool_field));
