@@ -329,6 +329,265 @@ reproducer flipped. The grouping was wrong, and the experiment itself was
 rejected because it changed six existing functions. The maintainer approved
 the split below.
 
+### A2c. Stopped: early block typing changes existing generated output
+
+| Bug | Issue | Outcome |
+| --- | --- | --- |
+| BUG-015 | #235 | Root experiment passes the parked integer program and all additional float/mixed probes, but violates existing-output and performance gates; withdrawn |
+| BUG-004 byte facet | #225 | Does not fall out of early block typing: the parked function-scope byte PHI still fails; no SSA forwarding patch attempted |
+
+Investigated on `fix/cluster-a2c-block-type-resolution` from `15db8e69`.
+**No compiler change is retained, no issue closes, no reproducer is promoted,
+and no steering is removed.** The log stays at **twelve open / forty-three
+fixed**. This is an architectural stop, not another subdivision into consumer
+patches. The successful trial results below are experiments, not accepted fixes.
+
+#### Why the declared type is missing at lowering
+
+1. **The sizing scans know types but discard lexical bindings.**
+   `dcc_func.c:3462-3518` runs `scan_function_body()` twice under
+   `asm_suppress_depth`, then resets `g_frame.nlocals` to the parameters and
+   reserved temporaries for production processing. In `dcc_symbols.c`,
+   `add_local_known()` stamps the declared type immediately (574-590), while
+   `leave_scope()` truncates the active local table and pops lexical renames
+   (428-449); `find_local()` only searches that active range (461-494).
+   Suppression is not the type-erasure operation: restoring/truncating the
+   parser's symbol state is. Sizing is not a retained semantic symbol table.
+2. **Nested declarations are token spans, not parsed declarations in the
+   expression-building walk.** `dcc_ast_build.c:1354-1400,1536-1567` captures
+   `AST_DECL` and skips the complete declaration tokens, without entering a
+   lexical scope or declaring their objects. `p_primary()` (652-658) records
+   `find_sym()` in `AST_IDENT.sym`; a newly introduced block local therefore
+   has a null binding and zero identifier type. `ast_expr_type_for_sizeof()`
+   (166-177) falls back to int, and `p_unary()/p_binary()/p_conditional()` bake
+   that assumption into result/operand types and deferred flags. The enclosing
+   function's declarations instead run through `dcc_stmt.c:process_compound()`
+   before subsequent statements are built, so their types are available.
+3. **The support probe creates the symbol only temporarily.**
+   `dcc_ast_stmt_classify.c:1171-1246,1282-1368` replays block/for-init
+   declarations in `scan_mode`, validates the dependent expressions with their
+   symbols visible, then restores the local/frame/rename state. It does not
+   bind/retype those previously built expression nodes. `dcc_decl.c:1590-1656`
+   assigns the real declared type and publishes `mir_note_declared_symbol()`
+   even during an active-MIR support probe; however that name-indexed table is
+   not an immutable, lexically bound `Sym` for each AST use. Probe frame offsets
+   and internal block names can also differ from real replay (B1).
+4. **MIR and metadata are separate ordered walks of each accepted subtree,
+   not one interleaved declaration/use walk.**
+   `dcc_ast_stmt_meta.c:514-515` calls `mir_capture_stmt(n)` for the entire
+   subtree **before** `ast_process_stmt_metadata(n)`. `dcc_mir.c:4330-4347`
+   lowers declarations to `MIR_DECL_PLACEHOLDER` and lowers their later uses
+   immediately. `mir_ident_symbol()` (1177-1190) consults active symbols or the
+   AST binding, not the probe's declared-type table; consequently named loads
+   can be untyped and operations/conversions have already been chosen.
+   `mir_lower_conversion()` (1758-1777) omits a conversion from an untyped
+   source. Only the subsequent metadata walk enters scopes and calls
+   `ast_replay_decl_span()` (`dcc_ast_metadata.c:132-140,293-326`), splices
+   initializer MIR into the placeholders, and records scope-qualified aliases.
+   `mir_end_function()` then invokes `mir_resolve_deferred_metadata()`
+   (`dcc_mir_select.c:4171`). That repairs names/types, but cannot generally
+   recreate conversions or the declared interpretation already discarded.
+
+Thus the unresolved-block condition discussed across A1/A2a/A2b/E1/B2b
+is real: the semantic declaration binding is unavailable to the original
+expression/MIR walk. This does not make every later SSA defect the same fix. It is **not** a declaration whose type parser has yet to decide its
+width, nor a Z80 emitter choosing a type despite a fully typed input.
+
+#### Root experiment and the hard-gate failure
+
+The small architectural trial reused the existing support replay while its
+lexical symbols were live: arena-copy each originally unbound scoped local
+`Sym`, and recompute dependent expression/operand/conditional types before
+MIR capture. It did not edit `dcc_mir.c`, selectors, emitters, exact schedules,
+runtime, SSA promotion or the D2e unresolved-update provenance helper. Both
+frame-sizing scans and real declaration replay stayed in place. The intent was
+to present typed local reads to the normal lowering rules rather than add any
+new `mir_resolve_deferred_metadata()` repair points. The trial patch and all
+logs/probes are under `build/a2c/`, uncommitted.
+
+- Both starting censuses cover **3,613 functions / 550 apps**. In **each**
+  stack mode the trial changes **259 functions across 63 apps**, with **40
+  selector changes**, **109 functions with changed selection/size/instruction
+  metrics**, and **150 additional hash-only changes**. Every changed function
+  has a different selected hash. Thirty-six exact `scheduled-machine-cfg`
+  selections become `spilled-scalar-cfg`, one becomes `hybrid-homed-scalar-cfg`;
+  three former spilled functions choose homed/hybrid paths. Coverage remains
+  3,613/3,613, so `--fail-on-regression` alone is insufficient: it checks MIR
+  coverage, not the required exact equality of every census field.
+- New known types materialize conversions **before** MIR numbering,
+  promotion and allocation. Existing correct bodies that used late
+  selection-time conversion now have different value lifetimes, spills and
+  frame sizes. This is substantive machine output, not merely debug records
+  or label renumbering. Selected `generated_bytes` measures **assembly text**,
+  not machine bytes; its aggregate increase is 147,906 without stack check
+  and 147,892 with it. Actual linked sizes/cycles below are the performance
+  evidence. Hash-only rows are not claimed to be all semantically different.
+- Four existing apps' stdout still passes both pipelines, but their checked
+  performance does not. No baseline was refreshed:
+
+  | Existing app | Peep cycles: baseline → trial | Nopeep cycles: baseline → trial | COM bytes: baseline → trial (peep / nopeep) |
+  | --- | --- | --- | --- |
+  | `tforhome` | 482,496 → 484,048 | 532,236 → 536,180 | unchanged |
+  | `tblktern` | 55,516 → 56,917 | 56,751 → 58,074 | 8,576 → 8,704 / 8,704 → 8,832 |
+  | `catalan` | 516,129,562 → 516,485,661 | 526,380,230 → 526,751,318 | 8,448 → 9,216 / 8,576 → 9,344 |
+  | `tblktype` | 29,911 → 29,901 | 30,988 → 30,951 | unchanged |
+
+  Even the `tblktype` improvement is prohibited by the existing-row rule.
+- Concrete unchanged-correct function comparisons explain why:
+  `tblktype.long_add` removes a two-byte temporary and performs its word-to-long
+  extension earlier; `tblktype.long_gt_var` changes a two-byte narrow temporary
+  into a four-byte wide temporary, extending before its store rather than
+  after its reload; `tblktern.sub_member` goes from register/stack argument
+  staging with no local spill frame to an eight-byte spill frame and extra
+  store/reload pairs; `tblktern.div_logical` grows its frame from eight to
+  twelve bytes. `tforhome.array_in_else` changes its byte decrement from
+  `or a; sbc hl,de` to the typed byte-unit-update sequence. `catalan.main`,
+  `tforsco.main`, and `tmodp2.main` lose exact schedules because the typed
+  instruction/conversion/object shape no longer matches the incumbent proof.
+  No application-name production gate or general-emitter fallback was added.
+
+A production root fix would need **immutable lexical declaration identities
+and typed expression construction before lowering**, independent of sizing
+and initializer capture. Retaining `locals[]` across scopes is not safe:
+shadowed names, siblings, for-init renames, arrays/VLAs and reused local slots
+require distinct bindings. Reordering the metadata walk ahead of capture is
+not safe either: initializer/scope replay matches already-created MIR
+placeholders and can retain scalar/VLA probe instructions. Simply copying
+probe `Sym`s must not make their provisional offsets authoritative (B1).
+Achieving identical existing output would additionally require a deliberate
+MIR conversion/lifetime canonicalization and exact-schedule migration that
+reproduces today's repaired representation. That is wider than a type-binding
+fix under these hard gates. **Stop rather than patch the five consumers or
+expand the SSA byte guard.** This does not prove every future root design is
+impossible; it proves the investigated early-typing path is not output-preserving.
+
+#### Facet probes and debug review
+
+- BUG-015's parked 13-line integer program passes peep and nopeep under the
+  trial. At this starting commit it has **eight**, not the historical A2b
+  table's nine, wrong lines. No acceptance claim is based on that older tally.
+- A separate **26-line** probe agrees between host clang O0/O2 and ASan/UBSan
+  and passes both trial pipelines. It covers float unary `-b`, `-(-b)`,
+  `-(b = value)`; signed word/long and unsigned-byte locals in float arithmetic;
+  global float compound add/multiply with a block integer; mixed float/integer
+  add/subtract/multiply and compound subtraction; assignment-value arithmetic;
+  both branches of `7 + (fg ? b : c)` with two block floats; a for-init integer
+  consumer; array/member/pointer float stores; and function-scope controls.
+  Along with the parked pointer multiplication/comparison, unsigned-word
+  shift/division, byte/bit-field and explicit signed-word-cast tests, every
+  A2b-2 table row is probed. This is not a restored-fuzz closure proof.
+- BUG-004 remains wrong in both trial pipelines (one checksum line out of
+  two). Its remaining parked byte initializer is **function-scope**, already
+  typed at lowering; `mir_promote_objects()` subsequently replaces the typed
+  byte load with an untyped logical PHI. Early block binding cannot repair
+  that independent post-lowering loss. No E1 guard or C2 liveness path is edited.
+- Full `-g` declaration/end records are identical before/under the trial:
+  **58** records in the mixed probe and **78** in `tforhome`, including each
+  block float's four-byte declared type/offset and balanced variable lifetime
+  records. Real metadata replay still owns them. This is necessary but not
+  sufficient: the observed release spill-frame changes mean debugger location
+  mapping must be revalidated against the selected machine layout in any
+  production redesign. The mixed probe's `-gline` COM is **not** release-identical
+  in either pipeline, both with the trial and with the restored, unchanged
+  compiler: three redundant `exx; exx` pairs remain around the inline reporting
+  calls after array/member/pointer loads. This matches the already documented
+  metadata-separated cleanup observation in E2-bitfield and D2d, rather than
+  a newly introduced type-binding defect. No cleanup is patched or new issue
+  manufactured. Runtime output agrees between release/line-debug within each
+  compiler state; release-identical line-debug and the full debugger-host
+  contract for the rejected new shapes remain unverified.
+
+#### Final retained state and validation
+
+The compiler trial is fully withdrawn and the canonical toolchain rebuilt.
+Both final census files are **byte-identical** to the starting files, all
+**535 existing performance rows** are byte-identical, and all bug-log and
+steering files remain untouched. Final `run-known-bugs.py` is **12 reproducers:
+1 FIXED (the pre-existing BUG-022 fixture), 11 fails**; BUG-004 remains one
+wrong line out of two and BUG-015 eight out of thirteen. BUG-022 belongs to M
+and is not changed. Final strict focused full-mode `tblktype,tblktern,tforhome,
+catalan` is **4 passed / zero failures**, with all checked performance passing.
+The extra mixed probe returns to its original **5/26 passing lines** in both
+pipelines, confirming that no experimental float fixes leak into the retained
+compiler. No old-compiler/regression-dating check or
+`prepush.ps1` was run. Restored 300-seed batches, promotions, full+extended
+release suites and full Python/MI gates are not run for this **documentation-only
+stopped PR**: no feature has been accepted/restored. The approved #277 campaign
+and exact-control unit failures remain outside scope; no harness expectation,
+timeout or skip is changed. No new campaign finding or issue is filed.
+
+Exact trial changed-function inventory follows. An asterisk means **hash-only**
+(same selector, assembly-text size, instruction and block counts); unmarked
+functions change at least one of those metrics. Both stack modes have the same
+259-function set. Hash-only rows are retained here because exact census
+identity, rather than only runtime behavior, is the requested gate.
+
+| Existing app | Changed functions |
+| --- | --- |
+| `adaint` | `var_or_const_decl` |
+| `bint` | `acc`, `add_patch`*, `assignment_name`*, `compile_line`*, `compile_prog`*, `dim_stmt`*, `expr`*, `factor`*, `find_line`*, `for_stmt`*, `goto_line_op`*, `if_stmt`*, `isvarname`*, `load_file`*, `main`*, `need`, `next`, `next_stmt`*, `print_stats`*, `print_stmt`*, `relation`*, `resolve_patches`*, `run`, `split_lines`, `statement`*, `sum`*, `sym_find`*, `term`* |
+| `calc` | `parse_unary`* |
+| `calcopt` | `parse_unary`* |
+| `catalan` | `main` |
+| `cint` | `global_decl_or_func`, `init_state`*, `load_file`*, `main`*, `preprocess`, `primary` |
+| `cobint` | `add_para`*, `add_stmt`*, `check_idx`*, `check_idx_get`*, `check_idx_set`*, `compile_add`*, `compile_compute`*, `compile_condition`*, `compile_display`*, `compile_divide`*, `compile_expr`*, `compile_factor`*, `compile_goto`*, `compile_if`*, `compile_move`*, `compile_multiply`*, `compile_perform`*, `compile_primary`*, `compile_rel_one`*, `compile_stmt_seq`*, `compile_store_after_value`*, `compile_subtract`*, `compile_term`*, `compile_var_load`*, `decode_stmts`*, `emit`*, `exec_range`, `get_occurs`*, `get_pic_esize`*, `load_file`*, `main`*, `parse_data_line`*, `parse_source`*, `print_stats`*, `run_bc`*, `tokenize_stmt` |
+| `fint` | `add_string`*, `compile_definition`*, `compile_word`*, `ctl_pop`*, `ctl_push`*, `exec_word`*, `init_state`*, `load_file`*, `main`*, `need_name`*, `next`, `prim`*, `print_stats`*, `run_at`, `top_level`* |
+| `forint` | `primary`* |
+| `ln2` | `main` |
+| `nqueens` | `isSafe`, `main`*, `match`, `solve`* |
+| `pint` | `calc_code_limit`, `init_run_storage`*, `load_file`, `main`, `print_stats`, `run`, `xcalloc` |
+| `tarray` | `ShowBinaryData`, `main`, `test_many` |
+| `tbdos` | `main` |
+| `tbios` | `main` |
+| `tblkdiv` | `by_three`, `member`, `member_of_element`, `remainder_of` |
+| `tblktern` | `div_logical`, `div_mul`*, `ge_unsigned`, `mod_sub`, `mul_narrow`*, `shift_loop`, `sub_member`, `tern_logical` |
+| `tblktype` | `long_add`, `long_gt_var` |
+| `tc99scpe` | `pointer_for_init_sizeof` |
+| `tchess` | `gen_pseudo` |
+| `tcmpabi` | `insertion_sort`, `main`* |
+| `tcmpval` | `elem_sub_block`, `member_mod_block` |
+| `tdeadblk` | `after_break`, `decl_before_label`, `for_init_after_return`, `label_reentry`, `vla_effect` |
+| `terrno` | `main` |
+| `texecdp` | `main`*, `recurse` |
+| `tfopenw` | `main` |
+| `tforblk` | `main` |
+| `tforhome` | `address_taken`, `array_in_else`, `no_earlier_declaration`, `pointer_walk`, `sibling_blocks`, `switch_case` |
+| `tforsco` | `main` |
+| `tfpraw` | `main` |
+| `tfreopen` | `main` |
+| `tgnarly` | `main` |
+| `tinittyp` | `facets` |
+| `tlngnarw` | `main` |
+| `tlongaud` | `main` |
+| `tm` | `main` |
+| `tm1mu` | `main` |
+| `tmirconv` | `check_block_scoped_arguments`*, `check_float_to_long_arguments`*, `check_narrow_index_wide_bound`*, `copy_with_long_count`*, `count_bound_on_left`, `count_down_to`*, `float_block_to_long`*, `float_in_loop`*, `float_loop_to_long`*, `float_to_byte_argument`*, `float_to_word_argument`*, `main`*, `narrow_long_argument`*, `narrow_long_in_loop`*, `narrow_long_to_byte`*, `splice_at_long_offset`*, `word_to_float_argument`*, `word_to_float_in_loop`*, `word_to_long_argument` |
+| `tmodp2` | `main` |
+| `tnestfor` | `main` |
+| `too` | `main`*, `make_piece`*, `test_aggregates`*, `test_gallery`*, `test_multidim`, `test_scope`, `test_size_inference`*, `test_size_inference2`* |
+| `tpeepi` | `count_open`, `highest_open` |
+| `tphi` | `main` |
+| `tpihexb` | `main`*, `parse_block_arg`, `visit_indices` |
+| `tppasgn` | `advance` |
+| `tprintf` | `main` |
+| `tpromo2` | `main` |
+| `tpromo32` | `main` |
+| `tptrarr` | `main`*, `step` |
+| `tqsort` | `t_qsort_struct` |
+| `tregwide` | `count_le` |
+| `tselfop` | `block_assigned` |
+| `tsibdecl` | `main` |
+| `tstchain` | `main` |
+| `tstr` | `main`, `test_wide` |
+| `tstring` | `main` |
+| `tsvbuf2` | `main` |
+| `tsyntax` | `main`*, `test_additive_subscripts` |
+| `ttrig` | `main` |
+| `tvla` | `fixed_cast_bounds`*, `fixed_sizeof_bounds`*, `main`*, `vla_3d`*, `vla_back_exit_inner`*, `vla_big_frame`*, `vla_call_bound`*, `vla_cond_sibling`*, `vla_dependent_bound`*, `vla_fixed_after`*, `vla_forinit_dep`, `vla_fwd_exit_all`, `vla_fwd_exit_inner`*, `vla_fwd_in_loop`*, `vla_fwd_same`*, `vla_goto_out`*, `vla_in_loop`, `vla_long_bound`*, `vla_long_rhs_store`*, `vla_longjmp`, `vla_memset_sizeof`*, `vla_nested`, `vla_pass2d`*, `vla_ptr10d_deref_chain`*, `vla_ptr2d_deref_chain`*, `vla_ptr2d_deref_chain_contexts`*, `vla_ptr2d_deref_chain_switch`*, `vla_ptr2d_deref_chain_while`*, `vla_ptr3d_deref_chain`*, `vla_ptr3d_deref_chain_do`*, `vla_ptr_diff`*, `vla_ptr_elem`*, `vla_return_nested`, `vla_side_bound`*, `vla_sizeof_if_body`*, `vla_sizeof_loop_changes`*, `vla_sizeof_op_cmp`*, `vla_sizeof_subscript`*, `vla_sizeof_ternary`*, `vla_subscript_bound`, `vla_sum2d`*, `vla_switch` |
+| `tvlaisle` | `count_islands` |
+| `tvlaparm` | `cgrid_sum`*, `grid_fill`*, `grid_sum`*, `main`*, `smooth` |
+| `tvlax` | `checksum_loop`*, `goto_stable`, `loop_stable`, `main`*, `nested_stable`, `rec_probe`* |
+
 ### B1. Stale probe offset for a `for`-init declaration
 
 | Bug | Issue | Shape |
@@ -2114,6 +2373,7 @@ addresses require the normal full/line debug pipeline checks.
 | A2b-1 | [#314](https://github.com/davidly/dcc/pull/314) (`fix/cluster-a2b-block-typing`) | PR open; verified compiler gates; partial issues | Canonical repaired assignment reuses boolean-source widening contract; all original 004 lines pass; new host-proven tlogblk covers cleared facets, no partial reproducer promoted |
 | A2b-2 | | open | BUG-015 pointer-repair ordering, bit-field promotion, discarded signed cast, unary float and missing operand conversions; no second fix |
 | A2b-3 | | open; newly traced | BUG-004 byte local forwarded to untyped logical PHI after metadata repair; same-width 2/4-byte SSA guard excludes bytes; narrow logicbyteinit steering retained |
+| A2c | `fix/cluster-a2c-block-type-resolution` | stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
