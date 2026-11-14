@@ -1312,7 +1312,8 @@ performance rows unchanged**. Only the new `tflmadd` row is measured and
 added. Restoring `fintprodadd` to the float generator gives **269 ok,
 31 INVALID, zero FAIL** on production seeds 1-300 with `--off known`.
 
-BUG-049 is also fixed in cluster J2 under the maintainer's approved
+BUG-049 is also fixed in [cluster J2 (#291)](https://github.com/davidly/dcc/pull/291)
+under the maintainer's approved
 existing-output exception. Logical negation now masks a float's sign byte,
 matching the existing branch and bool-cast test. Before promotion, only
 BUG-049 flipped: **1 FIXED, 35 fails**. Both censuses retain **3,426 existing

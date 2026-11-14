@@ -547,8 +547,9 @@ Cluster J investigation (`fix/cluster-j-float-arith`):
   mode. This needs explicit approval to update existing numeric
   expectations, not a narrower value-specific runtime patch.
 
-Cluster J2 investigation (`fix/cluster-j2-float-neg-zero-fdiv`, from
-`1a193976`; maintainer-approved independent fixes and baseline exception):
+Cluster J2 investigation ([PR #291](https://github.com/davidly/dcc/pull/291),
+`fix/cluster-j2-float-neg-zero-fdiv` from `1a193976`;
+maintainer-approved independent fixes and baseline exception):
 
 - BUG-049: logical negation in the spilled emitter reduced all four raw
   bytes, unlike float branches and bool casts, which mask the sign byte.
@@ -717,8 +718,8 @@ so it matters more than its size suggests. Both are one-offs.
 | H | | open | |
 | I1 | [#285](https://github.com/davidly/dcc/pull/285) | merged | BUG-046 promoted as tfltret; 300 float seeds clean; existing assembly/perf rows unchanged |
 | I2 | [#287](https://github.com/davidly/dcc/pull/287) | PR open | 048/050 promoted as tflucast/tflscast; 300 float seeds clean (267 ok, 33 INVALID); existing assembly/perf unchanged |
-| J | [#290](https://github.com/davidly/dcc/pull/290) | PR open; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; 3,394 existing census functions and 504 perf rows unchanged; 049/039 parked under the output rule |
-| J2 | `fix/cluster-j2-float-neg-zero-fdiv` | partial fix; PR pending | 049 promoted as tflnot; 300 float seeds 269 ok/31 INVALID/zero FAIL; only three one-instruction census changes and two approved perf rows; 039 reverted because all five complete numeric baselines fail host-clang proof |
+| J | [#290](https://github.com/davidly/dcc/pull/290) | merged; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; existing output unchanged; 049 fixed in J2, 039 still blocked by host-output proof |
+| J2 | [#291](https://github.com/davidly/dcc/pull/291) | PR open; partial fix | 049 promoted as tflnot; 300 float seeds 269 ok/31 INVALID/zero FAIL; only three one-instruction census changes and two approved perf rows; 039 reverted because all five complete numeric baselines fail host-clang proof |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | K2 | | open | BUG-054/#288 independently found during B3; live HL lost by deferred global reload |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |
