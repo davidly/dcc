@@ -30,7 +30,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-006](#bug-006) | #226 | wrong result | `/=`, `%=` and `>>=` on an unsigned bit-field whose top bit is set |
 | [BUG-009](#bug-009) | #229 | hang | Nested `do … while (d < n)` with a 32-bit `d` never exits |
 | [BUG-010](#bug-010) | #230 | rejects valid C | Cast or narrowing return of a 32-bit post-increment or post-decrement |
-| [BUG-012](#bug-012) | #232 | rejects valid C | Unary `-` or `~` applied to `!`, `&&` or `\|\|` of constants |
 | [BUG-013](#bug-013) | #233 | wrong result | Unsigned bit-field is not promoted to `int` once it is an operand |
 | [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-016](#bug-016) | #236 | wrong result | A local takes the signedness of its initialiser, not of its declaration |
@@ -44,7 +43,6 @@ and their historical diagnoses are retained separately below.
 | [BUG-028](#bug-028) | #248 | wrong result | `signed char` `>>=` an `unsigned int` count shifts logically (counts 9 to 15) |
 | [BUG-029](#bug-029) | #249 | wrong result | 8-bit local and another variable assigned in opposite arms of an `if … else`: `(int)c + x` loses `x` |
 | [BUG-033](#bug-033) | #253 | rejects valid C | A constant divided by a constant zero, in code that never runs |
-| [BUG-036](#bug-036) | #256 | wrong result | A 32-bit local assigned in a loop and passed directly to a call keeps its old value after the loop |
 | [BUG-037](#bug-037) | #257 | wrong result | In a `for` or `while` loop with a 32-bit counter, `l = i;` copies the counter after its increment |
 | [BUG-038](#bug-038) | #258 | wrong result | A 16-bit local assigned in one arm of an `if … else`, then updated, loses the assignment when an early-return `if` follows |
 | [BUG-039](#bug-039) | #259 | wrong result | Float division (`__fdiv`) is 1 ulp off in about a fifth of cases, in both directions |
@@ -57,22 +55,24 @@ and their historical diagnoses are retained separately below.
 | [BUG-054](#bug-054) | #288 | wrong result | With `dccpeep`, a byte local loaded from a global and used twice by a binary operator loses a live register |
 | [BUG-055](#bug-055) | #294 | wrong result | A variable-index local float-array store inside an else arm is lost amid nested loops and conditional float expressions |
 
-Thirty-two are open: twenty-one give wrong results with no diagnostic
-(BUG-039 is in the runtime), one hangs, nine stop the compile,
+Thirty are open: twenty give wrong results with no diagnostic
+(BUG-039 is in the runtime), one hangs, eight stop the compile,
 and one (BUG-022) turns a compile error into
 a broken program. The most likely ordinary-code defects remaining are
 BUG-044 (every float `++` is wrong), BUG-003,
 BUG-013 and BUG-016.
 
-Twenty-one reported bugs are fixed: [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
+Twenty-three reported bugs are fixed: [three in cluster F](#fixed-in-cluster-f), [three in cluster A1](#fixed-in-cluster-a1),
 [one in cluster A2a](#fixed-in-cluster-a2a),
 [one in cluster B1](#fixed-in-cluster-b1),
 [one in cluster B2a](#fixed-in-cluster-b2a),
 [two in cluster B3](#fixed-in-cluster-b3),
+[one in cluster B4](#fixed-in-cluster-b4),
 [four in cluster K](#fixed-in-cluster-k),
 [one in cluster L](#fixed-in-cluster-l),
 [one in cluster I1](#fixed-in-cluster-i1),
-[two in cluster I2](#fixed-in-cluster-i2) and
+[two in cluster I2](#fixed-in-cluster-i2),
+[one in cluster G1](#fixed-in-cluster-g1) and
 [two in cluster J](#fixed-in-cluster-j). Two more
 were found and then fixed upstream before they were reported; see
 [Fixed upstream](#fixed-upstream).
@@ -219,26 +219,6 @@ uint8_t f(void) { int32_t l3 = 300; return l3++; }
 - Upstream commit `34e35b3a` fixed the neighbouring "cast of an assignment"
   rejection, which this entry originally included.
 
-## BUG-012
-
-**Unary `-` or `~` applied to `!`, `&&` or `||` of constants is rejected.**
-`DCC-E1002`.
-
-```c
-r = -(!(-128));
-r = ~(!15);
-r = -(!0);
-r = ~(1 || 2);
-if (n > (~(1 && 2))) r = 1;
-```
-
-- Accepted: `-(!p)`, `~(!p)` and `~(p || 2)` with a variable;
-  `r = !(-128); r = -r;`; `~(3 > 2)`; `!(1 || 2)`; `(1 || 2) + 1`.
-- Two unary operators over a constant binary expression are rejected the
-  same way: `~(-(7 >> 13))`, `-(~(7 >> 13))`, `-(-(7 >> 13))`,
-  `~(+(7 >> 13))`, `~(-(8 - 8))`, `~(-(1 > 2))`. One unary operator
-  (`~(7 >> 13)`), two over a literal (`~(-5)`) and a variable inside
-  (`~(-(n >> 13))`) are accepted.
 
 ## BUG-013
 
@@ -725,44 +705,6 @@ if (never)
   diagnostic points at the enclosing `if` rather than at the division.
 - Already present in v3.6.0 (`20290235`).
 
-## BUG-036
-
-**A 32-bit local that is assigned inside a loop and passed directly to a call
-keeps its old value after the loop.** The call gets the constant, but the
-store to the local is dropped; the local is then reloaded from a stack slot
-that was never written.
-
-```c
-int32_t l = 0;
-uint16_t i;
-for (i = 5; i != 0; i--) {
-    l = 1;
-    take32(l);               /* static uint32_t take32(int32_t x) */
-}
-return l;                    /* want 1, dcc 0 */
-```
-
-- Wrong for `for`, `while` and counted loops, a constant or a variable
-  (`l = i;`), and with the call result stored or ignored; `l == 1` after the
-  loop is false.
-- Correct when the argument is an expression (`take32(l + 1)`), when the call
-  does not take `l`, or when it takes a 16-bit parameter (`take16((int16_t)l)`).
-- Wrong with `dcc-peep` on and off. Found by fuzzing at `83dc7a91` (seed
-  6826); the reduced program had a `for`-init declaration, but a counter
-  declared outside the loop fails the same.
-- The `float` form is worse than stale: after `for (...) id((l0 = fg2));`,
-  `{ l0 = fg2; id(l0); }`, `g = id((l0 = fg2));` or `l0 += fg2` inside the
-  argument, `l0` is byte-scrambled (`7f74f6c5` for `c57f7400`) or stale.
-  Right: no loop, a constant assigned (`l0 = 7.0f`), no initialiser on
-  `l0`, `id((l0 = fg2) + 0.0f)`, or a `long` local in the same shape. Found
-  by fuzzing (float generator, seed 3025).
-- A compound assignment leaves the local equal to the constant operand:
-  `while (n > 0) { l *= 2.0f; id(l); n = 0; }` with `l = 0.5f` returns
-  2.0f (`l += 1.0f` returns 1.0f), for `float` and `long` and in `for` and
-  `while` loops. Right when the call result is used (`fa[1] = id(l);`),
-  when the argument is an expression (`id(l + 0.0f)`), with no call, or
-  with no loop. Found by fuzzing (float generator, seed 3288).
-
 ## BUG-037
 
 **In a `for` or `while` loop whose counter is 32 bits wide, a copy of the
@@ -1213,6 +1155,72 @@ l -= 1.5f;
 - Found by fuzzing (float generator, seeds 7, 10, 25).
 
 ---
+## Fixed in cluster G1
+
+BUG-012's constant logical and nested-binary unary forms now pass in both
+peep and nopeep. The front-end support gate applied its existing scalar
+foldability proof only to `!`, then rejected other unary operators whose
+operands were structurally constant. Admit `-`, `+` and `~` with the same
+proof; MIR already lowers and folds them correctly, so neither the constant
+evaluator nor any MIR/emitter/runtime code changes. The original two
+functions emit byte-identically to their accepted literal neighbors in both
+pipelines, with no added instructions or frame cost.
+
+The first fix flips only BUG-012 (**1 FIXED, 33 fails** before promotion).
+Per the approved stop rule, cluster G is split into G1 (BUG-012 fixed) and
+G2 (BUG-033/040/042 still parked). G2 needs separate zero-divisor admission,
+static float token parsing, and floating-constant truth/folding work; its
+traces are in [fix-plan.md](fix-plan.md#g-constant-expressions-in-the-front-end).
+In particular, BUG-033 must retain the unevaluated division, not fabricate a
+constant result. No out-of-cluster reproducer flips.
+
+Integer `negnotconst` coverage is restored. Production seeds 1–300 give
+**216 ok, 82 INVALID, two target-limit-only, zero FAIL** across peep/nopeep
+and stack/no-stack; a 3,000-seed steering proof is also clean. `tconstun`
+promotes the original reproducer and adds constant `&&`/`||`, all six nested
+binary/unary facets, comparison, and variable/single-unary controls with
+host/sanitizer-proven stdout. Its new performance row is measured through
+normal-stack PowerShell runall: peep **94,472 cycles / 5,504 bytes**,
+nopeep **94,949 cycles / 5,760 bytes**.
+
+All **509 existing performance rows are unchanged**. Ordinary MIR census
+rows are byte-identical for all **3,436 existing functions in each mode**;
+the extended census also retains all **274 functions in each mode** (548
+rows), including hashes and metrics. Strict Python full+extended and both
+PowerShell stack/no-stack full+extended suites pass. The independent CMake
+compiler build, focused line-debug tests, new app host validation, and
+release-identical `-gline` bytes pass; full `-g` retains both named locals
+and their four-byte frame locations. Full Python/debugger results are
+recorded in the G1 acceptance notes in fix-plan.md.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-012](#bug-012) | #232 | [tconstun](tests/tconstun.c) |
+
+### BUG-012
+
+**Fixed:** admit integer unary expressions proved foldable by the existing
+scalar constant evaluator. Regression: [tconstun.c](tests/tconstun.c),
+[baseline](tests/baselines/tconstun.txt).
+
+**Unary `-` or `~` applied to `!`, `&&` or `||` of constants is rejected.**
+`DCC-E1002`.
+
+```c
+r = -(!(-128));
+r = ~(!15);
+r = -(!0);
+r = ~(1 || 2);
+if (n > (~(1 && 2))) r = 1;
+```
+
+- Accepted: `-(!p)`, `~(!p)` and `~(p || 2)` with a variable;
+  `r = !(-128); r = -r;`; `~(3 > 2)`; `!(1 || 2)`; `(1 || 2) + 1`.
+- Two unary operators over a constant binary expression are rejected the
+  same way: `~(-(7 >> 13))`, `-(~(7 >> 13))`, `-(-(7 >> 13))`,
+  `~(+(7 >> 13))`, `~(-(8 - 8))`, `~(-(1 > 2))`. One unary operator
+  (`~(7 >> 13)`), two over a literal (`~(-5)`) and a variable inside
+  (`~(-(n >> 13))`) are accepted.
 
 ## Fixed in cluster B2a
 
@@ -1281,6 +1289,89 @@ g = l;
 - Accepted: `--l`; `l += 2`; storing to an array element or a local; storing
   through a conversion (`g = (int32_t)u;` with a `uint32_t u`); a local with a
   single definition.
+
+## Fixed in cluster B4
+
+BUG-036 now passes in peep and nopeep. The call-cache eligibility scan started
+at the value definition and missed a loop-header PHI's earlier, backedge use.
+The local's named store was correctly eliminated after promotion, but the SSA
+spill was also omitted: the call consumed the staged argument and the PHI
+subsequently reloaded a home that was never initialised. Reusing the existing
+PHI-use proof prevents that cache-only plan and preserves the needed spill,
+without changing a selector, exact schedule or profitability gate.
+
+Compared with C/D before fixing; their failing kernels do not use this
+handoff, and all their reproducers remain unchanged. Only BUG-036 flipped:
+33 other parked reproducers still fail. `tlpcall` preserves the original
+neighbouring controls and adds variable/untaken loops, the logged float
+assignment-expression and split-statement forms, used/ignored call results,
+and long/float compound updates. Both ordinary and sanitised host outputs
+agree with dcc in both modes.
+
+`loopcallarg` and `floopcallarg` are restored. Production seeds 1-300 with
+`--off known`: integers **228 ok, 72 INVALID, zero FAIL**; floats **288 ok,
+12 INVALID, zero FAIL**. Both 3,000-seed disabled-shape proofs pass.
+All **3,436 existing census functions** are byte-identical in both stack
+modes and all **509 existing performance rows** are unchanged. Only the new
+regression's measured normal-stack row is added. The original expression/
+narrow-argument controls and callees are byte-identical in peep and nopeep.
+A direct argument also needed on a backedge pays four necessary spill stores
+plus four raw reloads (two survive peep), only in newly corrected code.
+
+Strict full+extended stack/no-stack, the Python full+extended runner and the
+new app's full-mode/host-validation checks pass. CMake MIR checks (6/6),
+host sanitizers, require-emit and 38 focused compiler/generator/debug tests
+pass. Line-debug binaries match release and full-debug runs retain local
+metadata and correct output through both pipelines. The full Python and
+Debug-build MI harness limitations are recorded under B4 in fix-plan.md;
+no expectations, skips or existing baselines were refreshed. No dating
+checks or prepush.ps1 were run.
+
+| ID | Issue | Regression |
+| --- | --- | --- |
+| [BUG-036](#bug-036) | #256 | [tlpcall](tests/tlpcall.c) |
+
+### BUG-036
+
+**Fixed:** exclude PHI-edge values from call-only cache planning/emission.
+Regression: [tlpcall.c](tests/tlpcall.c),
+[baseline](tests/baselines/tlpcall.txt).
+
+**A 32-bit local that is assigned inside a loop and passed directly to a call
+keeps its old value after the loop.** The call gets the constant, but the
+store to the local is dropped; the local is then reloaded from a stack slot
+that was never written.
+
+```c
+int32_t l = 0;
+uint16_t i;
+for (i = 5; i != 0; i--) {
+    l = 1;
+    take32(l);               /* static uint32_t take32(int32_t x) */
+}
+return l;                    /* want 1, dcc 0 */
+```
+
+- Wrong for `for`, `while` and counted loops, a constant or a variable
+  (`l = i;`), and with the call result stored or ignored; `l == 1` after the
+  loop is false.
+- Correct when the argument is an expression (`take32(l + 1)`), when the call
+  does not take `l`, or when it takes a 16-bit parameter (`take16((int16_t)l)`).
+- Wrong with `dcc-peep` on and off. Found by fuzzing at `83dc7a91` (seed
+  6826); the reduced program had a `for`-init declaration, but a counter
+  declared outside the loop fails the same.
+- The `float` form is worse than stale: after `for (...) id((l0 = fg2));`,
+  `{ l0 = fg2; id(l0); }`, `g = id((l0 = fg2));` or `l0 += fg2` inside the
+  argument, `l0` is byte-scrambled (`7f74f6c5` for `c57f7400`) or stale.
+  Right: no loop, a constant assigned (`l0 = 7.0f`), no initialiser on
+  `l0`, `id((l0 = fg2) + 0.0f)`, or a `long` local in the same shape. Found
+  by fuzzing (float generator, seed 3025).
+- A compound assignment leaves the local equal to the constant operand:
+  `while (n > 0) { l *= 2.0f; id(l); n = 0; }` with `l = 0.5f` returns
+  2.0f (`l += 1.0f` returns 1.0f), for `float` and `long` and in `for` and
+  `while` loops. Right when the call result is used (`fa[1] = id(l);`),
+  when the argument is an expression (`id(l + 0.0f)`), with no call, or
+  with no loop. Found by fuzzing (float generator, seed 3288).
 
 ## Fixed in cluster B3
 

@@ -156,10 +156,9 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
                 is_cmp_op(n->a->op) && ast_expr_supported(n->a) &&
                 (ast_value_is_float_word(n->a->a) || ast_value_is_float_word(n->a->b)))
                 return 1;
-            /* `!<constant-int-expr>` (including chains like `!!0`) folds to a
-             * single 0/1 value, so allow it even though
-             * the operand is itself a constant. */
-            if (n->op == '!') {
+            /* Admit foldable integer unary expressions regardless of the
+             * operand's shape, including logicals and nested binary folds. */
+            {
                 long cv;
                 if (ast_const_scalar_fold(n, &cv))
                     return 1;

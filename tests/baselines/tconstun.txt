@@ -1,0 +1,5 @@
+negated -1
+complemented -3
+logic -1 -2 0 -1
+binary -1 1 0 -1 -1 -1
+control -3 -1 1 -2
