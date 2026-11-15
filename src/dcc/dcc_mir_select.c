@@ -199,35 +199,111 @@ static int mir_regional_full_hl_reload(
             mir_regional_line_is(high, "\tld l,c\n"));
 }
 
-static MirStream *mir_compact_regional_candidate(MirStream *input)
+/*
+ * Debug metadata (";@dcc-line", ";@dcc-loc", ...) is interleaved with the
+ * instruction text, so the regional rewrites below match instruction lines
+ * only and replay the skipped comment lines ahead of whatever replaces the
+ * instructions they preceded. Release output has no body comments, so this
+ * keeps -gline output release-identical without changing release text.
+ */
+struct MirRegionalLines {
+    char **all;
+    int all_count;
+    int *position;
+    int next;
+};
+
+static int mir_regional_is_comment(const char *line)
+{
+    return line[0] == ';';
+}
+
+static void mir_regional_collect(
+    MirStream *input, struct MirRegionalLines *ctx,
+    char ***lines_out, int *count_out)
 {
     char **lines = NULL;
     int count = 0;
     int capacity = 0;
     char buffer[512];
-    MirStream *output;
-    int i;
 
+    ctx->all = NULL;
+    ctx->all_count = 0;
+    ctx->position = NULL;
+    ctx->next = 0;
     mir_stream_rewind(input);
     while (mir_stream_gets(buffer, sizeof(buffer), input) != NULL) {
         size_t length = strlen(buffer) + 1;
         char *copy;
 
-        if (count == capacity) {
+        if (ctx->all_count == capacity) {
             int next_capacity = capacity == 0 ? 256 : capacity * 2;
+            char **next_all = (char **)realloc(
+                ctx->all, (size_t)next_capacity * sizeof(*next_all));
             char **next_lines = (char **)realloc(
                 lines, (size_t)next_capacity * sizeof(*next_lines));
-            if (next_lines == NULL)
+            int *next_position = (int *)realloc(
+                ctx->position, (size_t)next_capacity * sizeof(int));
+            if (next_all == NULL || next_lines == NULL ||
+                next_position == NULL)
                 fatal("out of memory compacting regional MIR output");
+            ctx->all = next_all;
             lines = next_lines;
+            ctx->position = next_position;
             capacity = next_capacity;
         }
         copy = (char *)malloc(length);
         if (copy == NULL)
             fatal("out of memory compacting regional MIR output");
         memcpy(copy, buffer, length);
-        lines[count++] = copy;
+        ctx->all[ctx->all_count] = copy;
+        if (!mir_regional_is_comment(copy)) {
+            lines[count] = copy;
+            ctx->position[count] = ctx->all_count;
+            ++count;
+        }
+        ++ctx->all_count;
     }
+    *lines_out = lines;
+    *count_out = count;
+}
+
+/* Emit the comment lines that precede instructions [first, first + span). */
+static void mir_regional_flush_comments(
+    struct MirRegionalLines *ctx, int first, int span, MirStream *output)
+{
+    int stop = ctx->position[first + span - 1];
+    int index;
+
+    for (index = ctx->next; index < stop; ++index)
+        if (mir_regional_is_comment(ctx->all[index]))
+            mir_stream_puts(ctx->all[index], output);
+    ctx->next = stop + 1;
+}
+
+static void mir_regional_release(
+    struct MirRegionalLines *ctx, char **lines, MirStream *output)
+{
+    int index;
+
+    for (index = ctx->next; index < ctx->all_count; ++index)
+        mir_stream_puts(ctx->all[index], output);
+    for (index = 0; index < ctx->all_count; ++index)
+        free(ctx->all[index]);
+    free(ctx->all);
+    free(ctx->position);
+    free(lines);
+}
+
+static MirStream *mir_compact_regional_candidate(MirStream *input)
+{
+    struct MirRegionalLines ctx;
+    char **lines;
+    int count;
+    MirStream *output;
+    int i;
+
+    mir_regional_collect(input, &ctx, &lines, &count);
     output = mir_stream_open();
     if (output == NULL)
         fatal("cannot create compacted regional MIR stream");
@@ -246,6 +322,7 @@ static MirStream *mir_compact_regional_candidate(MirStream *input)
               mir_regional_line_is(lines[i + 1], "\tpop hl\n")) ||
              (mir_regional_line_is(lines[i], "\tpush iy\n") &&
               mir_regional_line_is(lines[i + 1], "\tpop iy\n")))) {
+            mir_regional_flush_comments(&ctx, i, 2, output);
             i += 2;
             continue;
         }
@@ -257,6 +334,7 @@ static MirStream *mir_compact_regional_candidate(MirStream *input)
             mir_regional_line_is(lines[i + 4], "\tld l,c\n") &&
             mir_regional_line_is(lines[i + 5], "\tex de,hl\n") &&
             mir_regional_line_is(lines[i + 6], "\tpop hl\n")) {
+            mir_regional_flush_comments(&ctx, i, 7, output);
             mir_stream_puts("\tpush de\n\tpop hl\n\tld d,b\n\tld e,c\n",
                   output);
             i += 7;
@@ -273,6 +351,7 @@ static MirStream *mir_compact_regional_candidate(MirStream *input)
               strncmp(lines[i + 4], "\tld h,(iy", 9) == 0)) &&
             mir_regional_line_is(lines[i + 5], "\tex de,hl\n") &&
             mir_regional_line_is(lines[i + 6], "\tpop hl\n")) {
+            mir_regional_flush_comments(&ctx, i, 7, output);
             char low[512];
             char high[512];
 
@@ -294,6 +373,7 @@ static MirStream *mir_compact_regional_candidate(MirStream *input)
             mir_regional_line_is(lines[i + 3], "\tpop hl\n") &&
             mir_regional_line_is(lines[i + 4], "\tpush hl\n") &&
             mir_regional_line_is(lines[i + 5], "\tpush de\n")) {
+            mir_regional_flush_comments(&ctx, i, 6, output);
             mir_stream_puts("\tpush hl\n\tld de,", output);
             mir_stream_puts(lines[i + 1] + 7, output);
             mir_stream_puts("\tpush de\n", output);
@@ -308,6 +388,7 @@ static MirStream *mir_compact_regional_candidate(MirStream *input)
             mir_regional_line_is(lines[i + 3], "\tpop hl\n") &&
             mir_regional_line_is(lines[i + 4], "\tex de,hl\n") &&
             mir_regional_line_is(lines[i + 5], "\tpop hl\n")) {
+            mir_regional_flush_comments(&ctx, i, 6, output);
             mir_stream_puts("\tpop hl\n", output);
             i += 6;
             continue;
@@ -318,6 +399,7 @@ static MirStream *mir_compact_regional_candidate(MirStream *input)
             mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
             mir_regional_line_is(lines[i + 2], "\tpush de\n") &&
             mir_regional_line_is(lines[i + 3], "\tpop hl\n")) {
+            mir_regional_flush_comments(&ctx, i, 4, output);
             mir_stream_puts("\tpush de\n\tpop hl\n", output);
             i += 4;
             continue;
@@ -328,49 +410,47 @@ static MirStream *mir_compact_regional_candidate(MirStream *input)
             mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
             mir_regional_full_hl_reload(
                 lines[i + 2], lines[i + 3])) {
+            mir_regional_flush_comments(&ctx, i, 4, output);
             mir_stream_puts(lines[i + 2], output);
             mir_stream_puts(lines[i + 3], output);
             i += 4;
             continue;
         }
+        mir_regional_flush_comments(&ctx, i, 1, output);
         mir_stream_puts(lines[i], output);
         ++i;
     }
-    for (i = 0; i < count; ++i)
-        free(lines[i]);
-    free(lines);
+    mir_regional_release(&ctx, lines, output);
     return output;
 }
 
 static MirStream *mir_compact_adjacent_exx(
     MirStream *input, int *elided_instructions)
 {
-    char previous[512];
-    char current[512];
-    int have_previous = 0;
+    struct MirRegionalLines ctx;
+    char **lines;
+    int count;
     MirStream *output = mir_stream_open();
+    int i;
 
     if (output == NULL)
         fatal("cannot create compacted MIR stream");
     *elided_instructions = 0;
-    mir_stream_rewind(input);
-    while (mir_stream_gets(current, sizeof(current), input) != NULL) {
-        if (!have_previous) {
-            strcpy(previous, current);
-            have_previous = 1;
-            continue;
-        }
-        if (mir_regional_line_is(previous, "\texx\n") &&
-            mir_regional_line_is(current, "\texx\n")) {
+    mir_regional_collect(input, &ctx, &lines, &count);
+    for (i = 0; i < count;) {
+        if (i + 1 < count &&
+            mir_regional_line_is(lines[i], "\texx\n") &&
+            mir_regional_line_is(lines[i + 1], "\texx\n")) {
             *elided_instructions += 2;
-            have_previous = 0;
+            mir_regional_flush_comments(&ctx, i, 2, output);
+            i += 2;
             continue;
         }
-        mir_stream_puts(previous, output);
-        strcpy(previous, current);
+        mir_regional_flush_comments(&ctx, i, 1, output);
+        mir_stream_puts(lines[i], output);
+        ++i;
     }
-    if (have_previous)
-        mir_stream_puts(previous, output);
+    mir_regional_release(&ctx, lines, output);
     return output;
 }
 

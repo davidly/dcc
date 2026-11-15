@@ -26,17 +26,15 @@ and their historical diagnoses are retained separately below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
-| [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
-| [BUG-059](#bug-059) | #316 | latent wrong result | Deferred float update arithmetic lacks an implicit integer-to-float conversion after type repair |
 | [BUG-062](#bug-062) | #327 | wrong result | Small and runtime `sizeof` results retain signed AST typing; full unsigned typing and exact-schedule recovery are deferred |
 
-Four are open: one gives wrong results with no diagnostic,
-two latent wrong-code findings are blocked by
-BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
-promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
+One is open: it gives wrong results with no diagnostic. BUG-013's unsigned
+bit-field promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed
+below.
 
-Fifty-eight reported bugs are fixed: [one in cluster T2](#fixed-in-cluster-t2),
+Sixty-one reported bugs are fixed:
+[three in cluster D2e-2](#fixed-in-cluster-d2e-2),
+[one in cluster T2](#fixed-in-cluster-t2),
 [one in cluster T1](#fixed-in-cluster-t1),
 [two in cluster A3](#fixed-in-cluster-a3),
 [one in cluster S1](#fixed-in-cluster-s1),
@@ -270,34 +268,6 @@ L4:
   arms assigning only `l`; a `switch` or `?:` in place of the `if … else`.
 - The selected emitter is `homed-scalar-cfg` (`DCC_MIR_COST_REPORT=1`).
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
-
-
-## BUG-041
-
-**The value of a float `++` or `--` expression is rejected.** `DCC-E1002`
-("unsupported expression statement", "unsupported if condition or branch",
-"unsupported while condition or body"), reported against the enclosing
-statement, wherever the value is used.
-
-```c
-g = f++;                      /* rejected; float f, g */
-g = ++f + 1.0f;
-if (f-- > 3.0f) g = 7.0f;
-if (--f) n = 1;
-n = f++ > 1.0f;
-g = (f-- > 10.0f) ? 1.0f : 2.0f;
-while (f-- > 0.0f) g += 1.0f;
-if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
-```
-
-- Accepted: `f++;` as a statement; the value of `f += 1.0f`; the value of
-  an integer `++`/`--` in every one of these positions.
-- The limitation is not documented.
-- Also at v3.6.0 (`20290235`).
-- Found by fuzzing (float generator, seed 3).
-- D2e-1 repairs unresolved update provenance but retains float admission
-  steering: the restored admission trial clears this fixture and BUG-056,
-  then exposes latent BUG-059/#316 (missing implicit float operand conversion).
 
 
 ## Fixed in cluster F1
@@ -572,6 +542,131 @@ va = 1.0f; vb = 1.85f;  /* want 3f0a60dd, dcc 3f0a60de */
   so every float quotient goes through the one routine.
 - Also at v3.6.0 (`20290235`) with today's runtime.
 - Found by hand probing (the float generator excludes `/` as `fdivround`).
+
+## Fixed in cluster D2e-2
+
+The AST admission layer never accepted the *value* of a float `++`/`--`
+(`ast_value_is_float_word()` reached `ast_expr_supported()` first, which
+rejected the update), so every consumer of such a value failed with
+DCC-E1002. The two earlier admission trials exposed latent typing defects
+downstream (BUG-056 integer negation of the update value; BUG-059 missing
+implicit integer-to-float operand conversion); those roots were repaired in
+D1 and D2e-1 (`mir_repair_deferred_float_types()`, #331). D2e-2 now admits
+the float update value through a new `ast_update_lvalue_float_type()` proof
+over scalar, array-element, member and dereference lvalues, in both the
+scalar-binary and other-expression classifiers. Existing release output is
+byte-identical across the suite; the admitted shapes are `-gline`
+release-identical after the regional compaction pass was made transparent to
+interleaved debug-marker lines (see T2/D2d notes in fix-plan.md).
+
+### BUG-041
+
+**Closed by D2e-2 (#337); promoted as `tests/tfincval.c`.**
+
+**The value of a float `++` or `--` expression is rejected.** `DCC-E1002`
+("unsupported expression statement", "unsupported if condition or branch",
+"unsupported while condition or body"), reported against the enclosing
+statement, wherever the value is used.
+
+```c
+g = f++;                      /* rejected; float f, g */
+g = ++f + 1.0f;
+if (f-- > 3.0f) g = 7.0f;
+if (--f) n = 1;
+n = f++ > 1.0f;
+g = (f-- > 10.0f) ? 1.0f : 2.0f;
+while (f-- > 0.0f) g += 1.0f;
+if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
+```
+
+- Accepted: `f++;` as a statement; the value of `f += 1.0f`; the value of
+  an integer `++`/`--` in every one of these positions.
+- The limitation is not documented.
+- Also at v3.6.0 (`20290235`).
+- Found by fuzzing (float generator, seed 3).
+- D2e-1 repairs unresolved update provenance but retains float admission
+  steering: the restored admission trial clears this fixture and BUG-056,
+  then exposes latent BUG-059/#316 (missing implicit float operand conversion).
+
+### BUG-056
+
+**Closed by D2e-2 (#337); promoted as `tests/tfnegupd.c`.**
+
+**Latent: negating a float member-array `++` / `--` value uses integer
+negation and narrowing instead of IEEE sign-bit negation.** Found by D2b's
+float seed 9 after a trial admission fix made BUG-041 compile. The trial is
+withdrawn: no admission producing this wrong code is shipped, and this
+reproducer currently fails with BUG-041's DCC-E1002. This is an additional
+typing defect, not a reason to broaden the D2b compiler fix.
+
+```c
+struct S { float pad, other; uint16_t word; float a[2]; } s[2];
+float out[2];
+/* s[1].a[1] starts at 3.14159f */
+{ float local = 1.0f; out[1] = -(s[1].a[1]++); }
+```
+
+- Trial expected `out[1]` bits **c0490fd0**, actual **fffff030**; the updated
+  member's bits **408487e8** are correct. Prefix `--` also yields fffff030
+  instead of c0490fd0 when the value is negated. Peep/nopeep and stack/no-stack
+  all fail. The 135-line reduction and the small parked baseline are
+  independently host-clang + ASan/UBSan proven.
+- Correct controls under the trial: negating an ordinary member read and
+  negating prefix/postfix updates of a float scalar. A local result instead
+  of the indexed global destination can also mask the defect. Retain the
+  block-local/indexed-destination context in the reproducer.
+- MIR has a correctly typed float load, float 1.0 constant, float add/subtract
+  and float store, followed by `MIR_UNARY type=2` (int) over the float value;
+  scalar controls use `type=5` (float). `mir_lower_simple_unary_chain` uses
+  the unary AST node's earlier type; D1's stored-update type repair does not
+  repair this consumer. Z80 complements/adds as an integer and then sign-
+  extends the narrowed low word. No MIR or AST typing fix was attempted.
+- The stopped batch also found float seed 81, independently reduced to
+  `float result; { float local = (uint16_t)0; result = -(--local); }`.
+  It is the same float update / integer unary consumer mismatch, now on a
+  block-local initialized from an integer. This facet is retained in the
+  parked reproducer and issue #299; no second compiler fix was added.
+- Parked as `tests/known-bugs/bug056.c`; the existing `fincdecval` steering
+  keeps the unsafe shape disabled together with BUG-041. It must stay
+  disabled until admission, this downstream typing defect and BUG-059
+  implicit operand conversion materialization are fixed.
+
+### BUG-059
+
+**Closed by D2e-2 (#337); promoted as `tests/tfupdcnv.c`.**
+
+**Latent: deferred float update arithmetic is typed as float but lacks an
+implicit integer-to-float operand conversion.** Found at restored float seed
+224 in the D2e BUG-041/056 admission trial. The trial fixes the AST update's
+unresolved-local provenance and the unary negation, but is withdrawn under
+the stop rule: the shipped admission gate still rejects this reproducer.
+
+```c
+float result;
+{ float local = 1.5f; result = -(local++) + (uint16_t)1; }
+/* expected bf000000 (-0.5f), trial bfc00000 (-1.5f) */
+```
+
+- Prefix `--`, reversed operand order and chained arithmetic also fail in
+  peep/nopeep. The parked cases are independently host-clang, ASan and UBSan
+  proven. A function-scope float parameter with the same arithmetic is right.
+- Unlike stopped D2d's `type=34` unsigned-word addition and BUG-056's
+  `type=2` unary negation, the D2e trial has `MIR_UNARY type=5` and
+  `MIR_BINARY type=5 off2=5`. Its right operand is still `MIR_CONST type=2 1`,
+  not float 1.0; it emits float addition over integer bits without `__fuf`.
+- `mir_lower_conversion()` emits no arithmetic conversion when the operand
+  already has the assumed common type (here the explicit `uint16_t` cast).
+  The later deferred-type repair can retag conversions that exist, but cannot
+  retag an absent conversion. The explicit cast must keep its own type;
+  representation-identity cleanup removes it, leaving an integer constant at
+  the float binary. Integer deferred-constant widening excludes float, so it
+  does not supply the missing conversion either. A future fix must preserve
+  and discharge the implicit operand conversion obligation after common-type
+  repair, rather than retagging an explicit cast or a constant's bits.
+- Parked as `tests/known-bugs/bug059.c`; `fincdecval` remains disabled for
+  BUG-041/056/058. No admission, unary repair or binary conversion fix ships
+  in D2e-1.
+
 
 ## Fixed in cluster T2
 
@@ -1517,83 +1612,6 @@ dcc sign-extends `g` to 16 bits and then shifts it with `srl h` / `rr l`
   `g = g >> n;`; a 16-bit or 32-bit left operand; `<<=`.
 - Not a regression: the v3.6.0 compiler (`20290235`) does the same.
 - Low priority: shifting an 8-bit value right by more than 8 is unusual.
-
-## BUG-056
-
-**Latent: negating a float member-array `++` / `--` value uses integer
-negation and narrowing instead of IEEE sign-bit negation.** Found by D2b's
-float seed 9 after a trial admission fix made BUG-041 compile. The trial is
-withdrawn: no admission producing this wrong code is shipped, and this
-reproducer currently fails with BUG-041's DCC-E1002. This is an additional
-typing defect, not a reason to broaden the D2b compiler fix.
-
-```c
-struct S { float pad, other; uint16_t word; float a[2]; } s[2];
-float out[2];
-/* s[1].a[1] starts at 3.14159f */
-{ float local = 1.0f; out[1] = -(s[1].a[1]++); }
-```
-
-- Trial expected `out[1]` bits **c0490fd0**, actual **fffff030**; the updated
-  member's bits **408487e8** are correct. Prefix `--` also yields fffff030
-  instead of c0490fd0 when the value is negated. Peep/nopeep and stack/no-stack
-  all fail. The 135-line reduction and the small parked baseline are
-  independently host-clang + ASan/UBSan proven.
-- Correct controls under the trial: negating an ordinary member read and
-  negating prefix/postfix updates of a float scalar. A local result instead
-  of the indexed global destination can also mask the defect. Retain the
-  block-local/indexed-destination context in the reproducer.
-- MIR has a correctly typed float load, float 1.0 constant, float add/subtract
-  and float store, followed by `MIR_UNARY type=2` (int) over the float value;
-  scalar controls use `type=5` (float). `mir_lower_simple_unary_chain` uses
-  the unary AST node's earlier type; D1's stored-update type repair does not
-  repair this consumer. Z80 complements/adds as an integer and then sign-
-  extends the narrowed low word. No MIR or AST typing fix was attempted.
-- The stopped batch also found float seed 81, independently reduced to
-  `float result; { float local = (uint16_t)0; result = -(--local); }`.
-  It is the same float update / integer unary consumer mismatch, now on a
-  block-local initialized from an integer. This facet is retained in the
-  parked reproducer and issue #299; no second compiler fix was added.
-- Parked as `tests/known-bugs/bug056.c`; the existing `fincdecval` steering
-  keeps the unsafe shape disabled together with BUG-041. It must stay
-  disabled until admission, this downstream typing defect and BUG-059
-  implicit operand conversion materialization are fixed.
-
-
-## BUG-059
-
-**Latent: deferred float update arithmetic is typed as float but lacks an
-implicit integer-to-float operand conversion.** Found at restored float seed
-224 in the D2e BUG-041/056 admission trial. The trial fixes the AST update's
-unresolved-local provenance and the unary negation, but is withdrawn under
-the stop rule: the shipped admission gate still rejects this reproducer.
-
-```c
-float result;
-{ float local = 1.5f; result = -(local++) + (uint16_t)1; }
-/* expected bf000000 (-0.5f), trial bfc00000 (-1.5f) */
-```
-
-- Prefix `--`, reversed operand order and chained arithmetic also fail in
-  peep/nopeep. The parked cases are independently host-clang, ASan and UBSan
-  proven. A function-scope float parameter with the same arithmetic is right.
-- Unlike stopped D2d's `type=34` unsigned-word addition and BUG-056's
-  `type=2` unary negation, the D2e trial has `MIR_UNARY type=5` and
-  `MIR_BINARY type=5 off2=5`. Its right operand is still `MIR_CONST type=2 1`,
-  not float 1.0; it emits float addition over integer bits without `__fuf`.
-- `mir_lower_conversion()` emits no arithmetic conversion when the operand
-  already has the assumed common type (here the explicit `uint16_t` cast).
-  The later deferred-type repair can retag conversions that exist, but cannot
-  retag an absent conversion. The explicit cast must keep its own type;
-  representation-identity cleanup removes it, leaving an integer constant at
-  the float binary. Integer deferred-constant widening excludes float, so it
-  does not supply the missing conversion either. A future fix must preserve
-  and discharge the implicit operand conversion obligation after common-type
-  repair, rather than retagging an explicit cast or a constant's bits.
-- Parked as `tests/known-bugs/bug059.c`; `fincdecval` remains disabled for
-  BUG-041/056/058. No admission, unary repair or binary conversion fix ships
-  in D2e-1.
-
 
 ## Fixed in cluster C1
 

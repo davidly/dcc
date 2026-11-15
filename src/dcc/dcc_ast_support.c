@@ -34,6 +34,7 @@ static struct AstSupportCacheEntry ast_support_cache[AST_SUPPORT_CACHE_SIZE];
 static unsigned ast_support_cache_stamp = 1;
 
 static int ast_expr_supported_uncached(const struct AstNode *n);
+static int ast_update_lvalue_float_type(const struct AstNode *n, int *out_type);
 static int ast_scalar_binary_supported_uncached(const struct AstNode *n);
 static int ast_assign_supported_uncached(const struct AstNode *n);
 static int ast_other_supported_uncached(const struct AstNode *n);
@@ -188,7 +189,8 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
             return ast_deref_plain_int_read(n) || ast_deref_pointer_word_read(n) ||
                    ast_deref_long_read(n) || ast_deref_float_read(n);
         if (n->op == TOK_INC || n->op == TOK_DEC)
-            return ast_preincdec_plain_int(n) || ast_preincdec_pointer_word(n);
+            return ast_preincdec_plain_int(n) || ast_preincdec_pointer_word(n) ||
+                   ast_update_lvalue_float_type(n->a, NULL);
         return 0;
     case AST_BINARY:
         if (!is_supported_binary_op(n->op) && !is_shift_op(n->op))
@@ -978,6 +980,7 @@ static int ast_other_supported_uncached(const struct AstNode *n)
             int no_deref;
 
             return ast_postfix_plain_int(n) || ast_value_is_long_word(n) ||
+                   ast_value_is_float_word(n) ||
                    (ast_pointer_expr_type(n, &pointer_type, &no_deref) &&
                     !no_deref);
         }
@@ -1149,6 +1152,45 @@ int ast_call_struct_arg_supported(int want_type, const struct AstNode *arg)
     if (arg->kind == AST_CALL)
         return ast_struct_return_call_assign_supported(want_type, arg);
     return 0;
+}
+
+static int ast_update_lvalue_float_type(const struct AstNode *n, int *out_type)
+{
+    struct Sym *s;
+    int val_type;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_INDEX) {
+        if (!ast_index_lvalue_elem_type(n, &val_type) || !type_is_float(val_type))
+            return 0;
+        if (out_type)
+            *out_type = val_type;
+        return 1;
+    }
+    if (n->kind == AST_MEMBER) {
+        if (!ast_member_lvalue_type(n, &val_type) || !type_is_float(val_type))
+            return 0;
+        if (out_type)
+            *out_type = val_type;
+        return 1;
+    }
+    if (n->kind == AST_UNARY && n->op == '*') {
+        if (!ast_deref_lvalue_type(n, &val_type) || !type_is_float(val_type))
+            return 0;
+        if (out_type)
+            *out_type = val_type;
+        return 1;
+    }
+    if (n->kind != AST_IDENT)
+        return 0;
+    s = find_sym(n->sval);
+    if (s == NULL || s->is_const_value || s->storage == SC_FUNC ||
+        s->is_array || !type_is_float(s->type))
+        return 0;
+    if (out_type)
+        *out_type = s->type;
+    return 1;
 }
 
 static int ast_update_lvalue_long_type(const struct AstNode *n, int *out_type)
@@ -1705,7 +1747,14 @@ int ast_value_is_float_word(const struct AstNode *arg)
 {
     struct Sym *s;
 
-    if (arg == NULL || !ast_expr_supported(arg))
+    if (arg == NULL)
+        return 0;
+    /* Prove the stored lvalue before expression admission, which itself asks
+     * whether a postfix expression yields float. */
+    if ((arg->kind == AST_UNARY || arg->kind == AST_POSTFIX) &&
+        (arg->op == TOK_INC || arg->op == TOK_DEC))
+        return ast_update_lvalue_float_type(arg->a, NULL);
+    if (!ast_expr_supported(arg))
         return 0;
     if (arg->kind == AST_FLOAT_LIT)
         return 1;
