@@ -84,6 +84,8 @@ void ast_process_expr_metadata(const struct AstNode *node)
     if (node->kind == AST_IDENT && node->sym != NULL &&
         node->sym->storage == SC_FUNC && node->sym->is_static)
         node->sym->deferred_body_needed = 1;
+    if (node->kind == AST_SIZEOF_EXPR && !scan_mode)
+        mir_resolve_deferred_sizeof(node);
     ast_process_expr_metadata(node->a);
     ast_process_expr_metadata(node->b);
     ast_process_expr_metadata(node->c);

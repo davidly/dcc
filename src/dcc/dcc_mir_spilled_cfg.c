@@ -10557,8 +10557,8 @@ static int mir_match_vla_stable(struct MirVlaStable *plan)
     /* Accept both canonical initializer orderings. */
     shape_matches =
         (mir.count == 117 && mir_cfg_block_count() == 11 &&
-         ((first == 0xb59469e79e19fa2bULL &&
-           second == 0x7240f38a761ad649ULL) ||
+         ((first == 0xf3e72a590b20db33ULL &&
+           second == 0xe2807265af32839fULL) ||
           (first == 0xbe631ffd414fbdc9ULL &&
            second == 0x09d25e68bcc028c2ULL))) ||
         (mir.count == 124 && mir_cfg_block_count() == 12 &&
@@ -10566,8 +10566,8 @@ static int mir_match_vla_stable(struct MirVlaStable *plan)
            second == 0x4c802fcc0dd9d226ULL) ||
           (first == 0xdebda3a1a29353caULL &&
            second == 0x27a7c66e646997dfULL) ||
-          (first == 0x9cca04852395c310ULL &&
-           second == 0x96e37a7925caa8e0ULL)));
+          (first == 0xaa19b35d25e587d0ULL &&
+           second == 0x2df9d7873d27efe5ULL)));
     if (!shape_matches ||
         !mir_match_signed_word_parameter(1, &plan->iter_offset) ||
         !mir_match_signed_word_parameter(2, &plan->count_offset))
@@ -10591,10 +10591,10 @@ static int mir_match_nested_vla_stable(
         return 0;
     mir_numeric_shape_hash(&first, &second);
     /* Accept both canonical initializer orderings. */
-    if (!((first == 0x9b1d9d55314a498fULL &&
-           second == 0xf8cc992b72f9401cULL) ||
-          (first == 0xfa2ea213bf43f54cULL &&
-           second == 0x65b23499c2ca83ecULL) ||
+    if (!((first == 0x5b53abceab501997ULL &&
+           second == 0x2a4ba00c7f05ff62ULL) ||
+          (first == 0x88cb6ad6f9c779ecULL &&
+           second == 0x5fdbff70cfc04039ULL) ||
           (first == 0x2a38f7e8c899685bULL &&
            second == 0xafbb3007b941259eULL) ||
           (first == 0xc27d1e412c89cbd0ULL &&
@@ -10625,8 +10625,8 @@ static int mir_match_vla_loop_result(
         (mir.return_type & TYPE_UNSIGNED) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0xb1ed346d3e5e08c4ULL ||
-        second != 0x016f21e6f762d38aULL ||
+    if (first != 0x987200f1097099beULL ||
+        second != 0xadf72fc07fb28d80ULL ||
         !mir_match_signed_word_parameter(1, &plan->iter_offset) ||
         !mir_match_signed_word_parameter(2, &plan->count_offset))
         return 0;

@@ -477,6 +477,45 @@ int ast_sizeof_expr_value(const struct AstNode *n)
     return type_size(t);
 }
 
+/* Re-derive the parse-time types of an operand whose identifiers were
+ * unreplayed nested-block locals when it was built: derived nodes (member,
+ * index, dereference, arithmetic) then carry a type computed from an unknown
+ * base and ast_promoted_operand_type() would trust it. The operand of a
+ * sizeof is never evaluated, so rewriting its subtree is harmless. */
+static void ast_sizeof_retype_operand(struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL || n->kind == AST_SIZEOF_EXPR || n->kind == AST_SIZEOF_TYPE)
+        return;
+    ast_sizeof_retype_operand(n->a);
+    ast_sizeof_retype_operand(n->b);
+    ast_sizeof_retype_operand(n->c);
+    ast_sizeof_retype_operand(n->d);
+    for (i = 0; i < n->list_len; ++i)
+        ast_sizeof_retype_operand(n->list[i]);
+    switch (n->kind) {
+    case AST_INDEX:
+    case AST_MEMBER:
+    case AST_UNARY:
+    case AST_POSTFIX:
+    case AST_BINARY:
+    case AST_ASSIGN:
+    case AST_COND:
+    case AST_COMMA:
+        n->type = ast_expr_type_for_sizeof(n);
+        break;
+    default:
+        break;
+    }
+}
+
+int ast_sizeof_expr_value_replayed(const struct AstNode *n)
+{
+    ast_sizeof_retype_operand((struct AstNode *)n);
+    return ast_sizeof_expr_value(n);
+}
+
 struct Sym *ast_sizeof_whole_vla_sym(const struct AstNode *n)
 {
     struct Sym *s;
