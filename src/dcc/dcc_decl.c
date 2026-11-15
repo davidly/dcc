@@ -528,7 +528,7 @@ void parse_auto_struct_scalar_initializer(struct Sym *s, int off, int type)
         capture_local_init_expr(s, off, type);
 }
 
-static int field_array_elems_from_level(struct FieldDef *fd, int level)
+int field_array_elems_from_level(struct FieldDef *fd, int level)
 {
     int i;
     int n;

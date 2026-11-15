@@ -464,11 +464,22 @@ int ast_sizeof_expr_value(const struct AstNode *n)
                 return type_size(s->type) * total;
             }
         }
+        if (root != NULL && root->kind == AST_MEMBER) {
+            fd = ast_member_field_for_sizeof(root);
+            /* A partially indexed array member is a row: its size is the
+             * element size times the product of the remaining dimensions. */
+            if (fd != NULL && fd->is_array && index_count < fd->dim_count) {
+                total = field_array_elems_from_level(fd, index_count);
+                if (total <= 0)
+                    total = 1;
+                return fd->elem_size * total;
+            }
+        }
         break;
     case AST_MEMBER:
         fd = ast_member_field_for_sizeof(n);
         if (fd != NULL && fd->is_array)
-            return fd->elem_size * fd->array_len;
+            return fd->size;
         break;
     default:
         break;

@@ -989,6 +989,7 @@ void parse_auto_struct_initializer_list(struct Sym *s);
 void parse_auto_struct_array_initializer_list(struct Sym *s);
 int sym_array_elems_from_level(struct Sym *s, int level);
 int sym_array_total_elems(struct Sym *s);
+int field_array_elems_from_level(struct FieldDef *fd, int level);
 void parse_auto_array_scalar_initializer(struct Sym *s, int elem_type, int *np);
 void parse_auto_array_initializer_level(struct Sym *s, int elem_type, int *np, int level);
 void parse_auto_array_initializer_list(struct Sym *s, int elem_type);
