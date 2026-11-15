@@ -119,7 +119,8 @@ python3 scripts/clang-oracle-fuzz.py --gen float --reduce 36 --config nopeep --o
   `compiler-bugs.md`, so a run reports new failures instead of the same ones
   again. `KNOWN_BUGS` in `clang_oracle_gen.py` (and in
   `clang_oracle_float_gen.py` for `--gen float`) maps each such form to its
-  entry; delete a line when its bug is fixed. The float generator also
+  entry; delete a line when its bug is fixed. Both tables are empty
+  while no bug is open, so `--off known` is then a harmless no-op. The float generator also
   rewrites a few logged shapes after generation (`Gen.steer`) when they are
   easier to see in the finished tree, for example by swapping the operands
   of a `+` whose right side is a product. `--off` also takes individual
