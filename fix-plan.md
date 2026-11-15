@@ -3136,6 +3136,198 @@ Minimum-cost rationale keys, applying per row below:
 | wumpus | 271445 | 293836 | 14592 | 15232 -> 15104 | S |
 
 
+### S1. High-bit constant `sizeof` result typing
+
+| Bug | Issue | Outcome |
+| --- | --- | --- |
+| BUG-061 | #323 | Fixed by the approved shared high-bit-only AST result-type rule; promoted as `tsizhigh` |
+| BUG-062 | #327 | Residual small/runtime-size unsigned typing deviation; deferred to the correct-typing and exact-schedule recovery track |
+
+Investigated on `fix/cluster-s1-sizeof-unsigned` from `8db72cbd`.
+The initial full unsigned-type trial stopped at the existing-output gate.
+**Maintainer ruling:** defer the full correction to a separately planned
+**correct typing + exact-schedule recovery** track (alongside BUG-015's root
+work), and ship only the representation-affecting constant-size range now.
+The shipped rule is a deliberate interim C deviation, tracked by BUG-062,
+not a claim that `sizeof` below `0x8000` has the correct standard type.
+The log is **eight open / fifty-two fixed**.
+
+#### Root cause and approved narrow repair
+
+`p_unary()` in `src/dcc/dcc_ast_build.c` originally gave both `AST_SIZEOF_TYPE`
+and `AST_SIZEOF_EXPR` the signed `TYPE_INT` result. The same module's
+`ast_expr_type_for_sizeof()` independently returned `TYPE_INT` for both kinds.
+The target's `size_t` is unsigned 16-bit. MIR lowering copies the AST type,
+so typed folding correctly followed the erroneous signed interpretation:
+bit 15 sign-extended on widening, division treated 32768 as -32768, and right
+shift was arithmetic. The independent declaration/global-initializer constant
+parser in `dcc_fold.c` already uses the correct unsigned type.
+
+One small shared helper, `ast_sizeof_result_type()`, now serves all three
+AST result-type sites. It returns `TYPE_INT | TYPE_UNSIGNED` only when the
+known constant operand size is at least `0x8000`. Smaller or not-yet-known
+sizes and whole-VLA runtime `sizeof` keep today's `TYPE_INT`. A comment points
+to BUG-062 and the deferred full recovery. No MIR, constant-folder, schedule
+or fallback-admission code changes.
+
+The original reproducer and its expanded probe set pass peep and nopeep.
+The 32760-byte neighbour remains unchanged. In **both modes**, the relevant
+assembly is:
+
+```asm
+; before                         ; approved narrow fix
+; (unsigned long)(sizeof(large) / 8)
+ld hl,61440                      ld hl,4096
+ld de,65535                      ld de,0
+; (unsigned long)(sizeof(small) / 8): unchanged
+ld hl,4095                       ld hl,4095
+ld de,0                          ld de,0
+; (unsigned long)sizeof(large)
+ld hl,32768                      ld hl,32768
+ld de,65535                      ld de,0
+```
+
+The push/call sequence is identical; fixing the reproducer adds no
+instructions. Promoted [tsizhigh.c](tests/tsizhigh.c) is host-proven by clang
+O0/O2 and combined ASan+UBSan and covers:
+
+- 32768- and 65535-byte objects **and type names**;
+- widening, unsigned division/right shift/comparison and negative signed
+  comparison operands in the representation-affecting range;
+- global constant initializers, typedef and local array bounds;
+- a 35232-byte array of eight-byte pairs: `sizeof(pairs)/sizeof(pairs[0])`
+  produces 4404 and the loop actually iterates 4404 times, not 61748;
+- the 32760-byte passing neighbour and existing runtime unsigned `size_t`
+  division, shift and comparison.
+
+`sizeof` is not a valid operator in a C preprocessor `#if`: clang rejects
+`#if sizeof(char[32768]) / 8 == 4096`, and `dcc_pp_expr.c` has no `sizeof`
+evaluation path. That invalid-C surface is not a runnable oracle test.
+
+#### Residual deviation and deferred full fix
+
+New host/sanitizer-proven [bug062.c](tests/known-bugs/bug062.c), filed as
+[#327](https://github.com/davidly/dcc/issues/327), fails in both modes:
+small object/type `sizeof` and runtime VLA `sizeof` compare -1 as signed, and
+a loop starting at -1 runs nine times for an eight-byte array instead of zero.
+Explicit unsigned casts, global initializers and the repaired high-bit sizes
+are passing controls. `scripts/clang_oracle_gen.py` has no `sizeof` nodes or
+emitted expressions; no `KNOWN_BUGS` steer or generator modification is added.
+
+The withdrawn full unsigned-type experiment changed selected hashes for the
+same **173 of 3672 existing functions across 42 apps in each stack/no-stack
+regular census**. Of these, 69 changed generated text-byte counts and 39
+changed selectors, including **36 exact-to-spilled moves**. For example,
+`tarray:test_many` moved from 5612 to 10045 text bytes and 566 to 980
+instructions. These changes were not accepted; the list below belongs to the
+**deferred full-typing recovery**, not the shipped S1 diff.
+
+| App | Affected functions in the withdrawn full-type trial |
+| --- | --- |
+| `attnc11` | `add_outer_product`, `backward_pass`, `build_embeddings`, `cache_projected_qkv`, `check_sequence`, `convert_weight_group`, `count_predictions`, `cross_entropy_loss`, `forward_attention`, `generate_sample`, `infer_sequence`, `initialize_weight_group`, `load_weights`, `main`, `make_targets`, `process_sequence`, `process_sequence_file`, `project_all_qkv`, `project_cached_qkv`, `project_logits`, `report_training`, `run_training_file`, `save_weights`, `test_random_samples`, `transfer_weight_file`, `transfer_weight_group`, `transposed_matrix_vector_multiply`, `transposed_multiply_16x10`, `transposed_multiply_8x16`, `update_weight_group` |
+| `bint` | `assignment_name`, `compile_line`, `compile_prog`, `dim_stmt`, `expr`, `factor`, `for_stmt`, `goto_line_op`, `if_stmt`, `isvarname`, `load_file`, `main`, `next_stmt`, `print_stats`, `print_stmt`, `relation`, `resolve_patches`, `run`, `split_lines`, `statement`, `sum`, `sym_find`, `term` |
+| `cpmenumd` | `enumerate` |
+| `forint` | `add_sym` |
+| `pint` | `add_sym`, `add_var_name`, `assign_or_call`, `block_stmt`, `calc_code_limit`, `call_builtin`, `call_proc`, `case_stmt`, `consts`, `factor`, `factor_call_or_var`, `find_proc`, `for_stmt`, `if_stmt`, `init_run_storage`, `is_section`, `load_file`, `main`, `parse_call_name`, `parse_const_value`, `parse_expr`, `parse_params`, `print_stats`, `program`, `repeat_stmt`, `run`, `simple`, `statement`, `subprog`, `term`, `type_size`, `types`, `vars`, `xcalloc` |
+| `t` | `ti16`, `ti32`, `ti8`, `tui16`, `tui32`, `tui8` |
+| `tarray` | `main`, `test_many` |
+| `tbool` | `branch_pair`, `check_branch_loops`, `check_branch_merges`, `check_branch_side_effects`, `check_branch_truth_table`, `check_deref_and_arrays`, `check_locals`, `check_operators`, `main` |
+| `tbsearch` | `main`, `t_bsearch_edges`, `t_bsearch_int`, `t_bsearch_struct`, `t_bsearch_wide_comparator` |
+| `tbufex` | `main` |
+| `tc89size` | `main` |
+| `tctrlz` | `main` |
+| `texfile` | `main` |
+| `texsort` | `main` |
+| `texstrct` | `main` |
+| `tfilero` | `main` |
+| `tfio` | `main` |
+| `tfopenw` | `main` |
+| `tfpcall` | `main` |
+| `tfreopen` | `main` |
+| `tinitreg` | `main`, `tauto` |
+| `tm1mu` | `main` |
+| `tmodp2` | `main` |
+| `tpadread` | `main` |
+| `tpfargs` | `main` |
+| `tptrinit` | `list_fold`, `list_free`, `list_prepend`, `list_reverse`, `main` |
+| `tqsort` | `main`, `t_qsort_bytes`, `t_qsort_desc`, `t_qsort_int_edges`, `t_qsort_r5`, `t_qsort_str`, `t_qsort_struct` |
+| `trw2` | `main` |
+| `trwold` | `main` |
+| `tsnprtf` | `main` |
+| `tsparse` | `main` |
+| `tstfield` | `add_word`, `find_word`, `main` |
+| `tstr` | `main`, `test_wide` |
+| `tstretst` | `main` |
+| `tstring` | `main` |
+| `tszlogic` | `main` |
+| `ttmp` | `main` |
+| `ttrig` | `main` |
+| `ttypesr` | `main` |
+| `tunbf` | `main` |
+| `tunion` | `main` |
+| `tvla` | `vla_sizeof_2d_rows`, `vla_sizeof_c99_type_counts`, `vla_sizeof_count`, `vla_sizeof_deep_nested`, `vla_sizeof_first_after_second`, `vla_sizeof_if_body`, `vla_sizeof_loop_changes`, `vla_sizeof_nested_block`, `vla_sizeof_op_add`, `vla_sizeof_op_and`, `vla_sizeof_op_mullhs`, `vla_sizeof_op_sub`, `vla_sizeof_saved_once`, `vla_sizeof_shadow_inner`, `vla_sizeof_shadow_outer_after`, `vla_sizeof_ternary` |
+
+That full trial also changed eight of 548 extended rows: `00038:main`,
+`00092:main`, `00093:main` and `00205:main` in both modes. The first three
+changed only MIR instruction/value counts; `00205:main` also changed selected
+assembly hashes and instruction/text counts. Their recovery remains deferred.
+
+#### Narrow-fix verification and promotion
+
+Both **3672-function regular censuses** (stack and no-stack) and the
+**548-row extended census** are byte-identical for all existing functions
+with the approved narrow rule. All **544 existing performance rows** and
+stdout baselines remain unchanged. The only added performance row is the
+normal stack-check measurement for `tsizhigh`: peep **1818029 cycles / 5888
+bytes**, nopeep **1965332 cycles / 6016 bytes**.
+
+The expanded BUG-061 reproducer was `FIXED` in both modes before promotion;
+BUG-062 fails four of seven lines in both modes, and every other parked
+reproducer still fails. `tsizhigh` passes the host promotion validator and
+both target modes against its new stdout/performance baseline.
+
+Final gates:
+
+- Canonical all-tool build and the independent CMake compiler build pass.
+- Both strict full+extended runs (stack and no-stack) pass **560 apps**, with
+  **24 existing configured skips**, plus all **196 runnable extended apps**,
+  diagnostics and dccpeep fixtures. The stack-check performance gate reports
+  zero regressions; no-stack correctly omits checked performance comparison.
+- The promoted test passes the host validator and normal checked peep/nopeep
+  path. Final promoted-tree censuses preserve all 3672 old regular rows in
+  both modes and all 548 extended rows; only two new `tsizhigh` function rows
+  are added to each regular census. Final known-bugs result: **8 reproducers:
+  8 fails**.
+- Production integer fuzz, seeds 1–300: **283 ok / 14 INVALID / 3 limit-only /
+  zero FAIL**. No generator changes or sizeof steering are needed.
+- All six release/`-gline`/full-`-g` builds of `tsizhigh` produce the host
+  baseline in both peep modes. `-gline` COM bytes are release-identical in
+  both modes; metadata has valid headers and balanced function records.
+  Debugger-host CMake/CTest passes **10/10 tests**, including metadata and MI.
+- Full Python discovery runs **338 tests**: the two pre-existing #277 failures,
+  seven timing/cleanup errors across six distinct cases, and two existing
+  skips. All six affected cases pass isolated retries: five with the default
+  tools; `test_default_serial_and_parallel_are_equal_and_bounded` still times
+  out with the default Make generator but passes an additional isolated
+  `CMAKE_GENERATOR=Ninja` run. The original Make-backed 180-second timing
+  bound remains unverified. Neither #277 nor any harness is fixed, skipped,
+  rebaselined or modified.
+
+The timing retries cover `MirClobberRunnerTests.test_runner_contracts` and
+`CompilerMutationTests.test_child_timeout_and_environment_isolation`,
+`test_default_serial_and_parallel_are_equal_and_bounded`,
+`test_exited_worker_cleans_nested_process_scopes`,
+`test_survivors_invalid_exits_builds_and_worker_errors_are_recorded`, and
+`test_worker_watchdog_records_invalid_and_stops_descendants`. The extra
+initial error was teardown cleanup of the survivors fixture, not a seventh
+independent compiler failure.
+
+No out-of-cluster compiler defect is fixed. `prepush.ps1` and old-compiler
+checks were not run, as instructed. The remaining gate caveats are #277's
+known expectations and the unverified default-Make synthetic timing bound;
+all compiler correctness, output/performance-invariance and debug gates pass.
+
+
 ### K. dccpeep
 
 | Bug | Issue | Shape |
@@ -4166,6 +4358,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | J | [#290](https://github.com/davidly/dcc/pull/290) | merged; partial fix | 047 promoted as tflmadd; 300 float seeds: 269 ok, 31 INVALID; existing output unchanged; 049 fixed in J2, 039 subsequently fixed in R1 |
 | J2 | [#291](https://github.com/davidly/dcc/pull/291) | PR open; partial fix | 049 promoted as tflnot; 300 float seeds 269 ok/31 INVALID/zero FAIL; only three one-instruction census changes and two approved perf rows; 039 reverted because all five complete numeric baselines fail host-clang proof |
 | R1 | [#325](https://github.com/davidly/dcc/pull/325) | PR open; verified approved numeric/perf updates | 039 dual ABI/IY 4404 pairs exact in both modes, helper -11 bytes; restored float seeds 283 ok/17 INVALID/zero FAIL; maintainer approved 9 stdout lines, 5 test constants and 100 existing perf rows; only tstrb11:main/ttrg6sp:main move in existing censuses; both strict full+extended gates pass 551 apps, zero failures; Python #277 only after successful timing retry; new BUG-060 #322 / BUG-061 #323 logged |
+| S1 | [#326](https://github.com/davidly/dcc/pull/326) (`fix/cluster-s1-sizeof-unsigned`) | compiler gates verified; Python exceptions documented; full typing deferred | BUG-061 promoted as tsizhigh; shared helper unsigned only for known sizes >= 0x8000; both 3672-function regular censuses and 548 extended rows unchanged; 544 perf rows unchanged plus one new row; residual BUG-062 #327 parked with no generator steer; full 173-function/36-exact recovery deferred |
 | K | [#278](https://github.com/davidly/dcc/pull/278) | merged | Four approved independent rules; promoted tests and new performance rows; existing baselines unchanged |
 | K2 | [#298](https://github.com/davidly/dcc/pull/298) | PR open | BUG-054 promoted as tpephl; 228 ok/72 INVALID/zero FAIL; all 3,047 MAC files per stack mode and 514 existing perf rows unchanged (except clock literal); #277 and isolated harness retries documented |
 | L | [#279](https://github.com/davidly/dcc/pull/279) | PR open | BUG-051 promoted as `tppsuf`; existing baselines and corpus assembly unchanged |

@@ -1,0 +1,4 @@
+block 65536
+block negative -65537
+block constant 65536
+function 65536

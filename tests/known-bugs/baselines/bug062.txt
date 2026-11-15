@@ -1,0 +1,7 @@
+object 0 0
+type 0 0
+loop 0
+unsigned 0 0
+large 0 0
+initializer 0
+vla 0 0

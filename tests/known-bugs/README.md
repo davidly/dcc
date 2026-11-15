@@ -29,6 +29,15 @@ BUG-060 was promoted as `tfpround`: exact-bit `%f` nearest-even rounding,
 decimal carries, signed zero and subnormal fractions. `%e`/`%g` remain
 unsupported; `scripts/printf-float-proof.py` checks their pre-existing behavior.
 
+BUG-061 was promoted as `tests/tsizhigh.c` after the maintainer approved
+unsigned typing only for compile-time `sizeof` values at or above `0x8000`.
+The full unsigned-type trial changed existing output and exact schedules and
+is deferred. Its residual small/runtime-size typing deviation is parked as
+BUG-062 (`bug062.c`); no integer-generator steer is needed because that
+generator never emits `sizeof`. See
+[fix-plan.md](../../fix-plan.md#s1-high-bit-constant-sizeof-result-typing)
+for the stop, ruling, narrow fix and deferred typing-recovery track.
+
 ## Checking them
 
 ```sh
@@ -79,7 +88,8 @@ regular test:
 `tests/tpost8.c`, `tests/tinittyp.c`, `tests/tcmprhs.c`, `tests/tflncmp.c`,
 `tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tflidx.c`, `tests/tndwide.c`,
 `tests/tlbreuse.c`, `tests/twincadd.c`, `tests/tmerge16.c`, `tests/tearly16.c`,
-`tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c`, `tests/tbfcomp.c`, `tests/tfdivr.c` and `tests/tfpround.c` were promoted this way.
+`tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c`, `tests/tbfcomp.c`, `tests/tfdivr.c`, `tests/tfpround.c` and
+`tests/tsizhigh.c` were promoted this way.
 
 
 `tests/tlogblk.c` covers BUG-004's host-proven word and block-long facets
