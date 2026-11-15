@@ -26,19 +26,19 @@ and their historical diagnoses are retained separately below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-015](#bug-015) | #235 | wrong result | Nested-block pointer to a 32-bit object, and nested-block `unsigned char`, lose their type |
 | [BUG-041](#bug-041) | #261 | compile error | The value of a float `++`/`--` is rejected (`g = f++`, `if (f-- > x)`, `while (f-- > 0)`) |
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-059](#bug-059) | #316 | latent wrong result | Deferred float update arithmetic lacks an implicit integer-to-float conversion after type repair |
-
 | [BUG-062](#bug-062) | #327 | wrong result | Small and runtime `sizeof` results retain signed AST typing; full unsigned typing and exact-schedule recovery are deferred |
+| [BUG-063](#bug-063) | #332 | wrong result | A store through a nested-block pointer to a 32-bit object keeps the 16-bit conversion inserted for the assumed target |
+| [BUG-064](#bug-064) | #333 | wrong result | Integer seed 261 grows the stack without bound through a bounded recursion (`r0`) that the host terminates |
 
-Five are open: two give wrong results with no diagnostic,
+Six are open: three give wrong results with no diagnostic,
 two latent wrong-code findings are blocked by
 BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
 promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Fifty-five reported bugs are fixed: [one in cluster A3](#fixed-in-cluster-a3),
+Fifty-six reported bugs are fixed: [two in cluster A3](#fixed-in-cluster-a3),
 [one in cluster S1](#fixed-in-cluster-s1),
 [one in cluster F1](#fixed-in-cluster-f1),
 [one in cluster A2b-3](#fixed-in-cluster-a2b-3),
@@ -120,6 +120,48 @@ whole-VLA runtime form have the same residual defect.
   `sizeof`, so no `KNOWN_BUGS` steer is added and no generator is changed.
 
 
+## BUG-063
+
+**A store through a pointer declared in a nested block keeps the 16-bit
+conversion inserted for the assumed assignment target, so only the low word
+of a 32-bit value reaches the pointee.** `{ int32_t *q = &a[0]; *q = x; }`
+stores `0` for `x == 65536` and `-1` for `-65537`; `*q = (int32_t)65536`
+also stores `0`. The same store with `q` declared at function scope is
+correct. Found by A4's restored-`blockptr` probe (integer seed 96) and
+confirmed when the BUG-015 steers were removed in A3.
+
+- `mir_lower_expr_impl()` inserts a word conversion for the assumed target;
+  the later pointer/store repair sets `MIR_STORE_INDIRECT.memory_size` to four
+  but retains that `MIR_UNARY` source conversion. This is a store-conversion
+  obligation, distinct from the indirect-load/binary ordering fixed in A4.
+- Reproducer: [bug063.c](tests/known-bugs/bug063.c) (host clang O0/O2 and
+  ASan/UBSan agree; dcc fails three of four lines in both modes). Integer
+  generator steer `blockstore` (walks over 32-bit arrays through a
+  nested-block pointer) keeps `--off known` runs quiet.
+
+## BUG-064
+
+**Integer seed 261 (`scripts/clang-oracle-fuzz.py --gen int --seeds 261`)
+grows the stack without bound.** With stack checking the program reports
+`?stack overflow: exceeded by 0x0008 limit 0x1000`, and raising the limit
+to 8 KiB or 16 KiB only moves the overflow (`exceeded by 0x000C/0x000A`);
+without stack checking the no-stack-check configurations hang past 20 s
+until memory is corrupted. The host prints all 36 lines. The only recursive
+function is `r0(uint8_t x0, uint32_t x1)`, which returns when `(x0 & 7) == 0`
+and otherwise recurses with `(uint8_t)((x0 & 7) - 1)`; it is reached through
+the function pointer `h1_p` from `k0`, called twice from `f5` (call 16).
+
+- A standalone `r0`/`h1` probe terminates correctly, so the runaway depends on
+  the surrounding `f5` statement set: removing either the `if` block, the
+  later `k0` call or the `h1_p` call restores termination. The reduction is
+  recorded in `build/clang-oracle-fuzz/261/` and the single-call driver
+  `build/s261a.c`; a smaller reproducer is still to be produced.
+- Not a target limit: the fuzzer classifies a fixed `STACK` overflow as
+  limit-only, but this overflow tracks the limit, which is unbounded growth.
+- Reproduce: `python3 scripts/clang-oracle-fuzz.py --gen int --seeds 261
+  --off known --keep`, then run `build/clang-oracle-fuzz/261/t.c` with
+  `dcc-stack-check=true dcc-stack-bytes=16384`.
+
 ## BUG-062
 
 **Small constant and runtime `sizeof` results retain signed AST typing.**
@@ -197,137 +239,6 @@ instead of 6, which shows the comparison is the part that is wrong.
   with `++d` in the body or in the condition.
 - Correct: the loop not nested; `while (d < n) { … }`; `if (d < n)`;
   `d != n`; `n` set from a constant; a 16-bit `d`.
-
-## BUG-015
-
-**Locals declared in a nested block lose their declared type in further
-shapes.** Through a nested-block pointer to a 32-bit object, `*q *= k` is
-computed in 16 bits and `c <= *q` is compared as signed. A nested-block
-`unsigned char` is compared as `unsigned int`.
-
-```c
-{ uint32_t *q = &a4[4]; *q *= 11; }          /* 21930 * 11: want 0003ae4e, dcc ffffae4e */
-signed char c = -1;
-{ uint32_t *q = &a4[0]; if (c <= *q) r = 7; } /* false (c converts to 0xffffffff); dcc takes it */
-signed char l2 = -66;
-{ unsigned char b = 1; if ((b & s.m5) > l2) return 1; }   /* true; dcc does not take it */
-```
-
-- Each is correct when the pointer or the `unsigned char` is declared at
-  function scope.
-- These are grouped because they share the nested-block condition; they may
-  have separate causes. See also BUG-008.
-- Beside a nested-block 32-bit local, another operand's cast is lost:
-  `{ int32_t b = 0; out = b + ((int16_t)((uint16_t)a6[1])); }` with `a6[1]`
-  holding -1 gives 65535, and `if (b >= ((int16_t)((uint16_t)a6[1])))` is
-  not taken. Correct with `b` at function scope, or with one cast.
-  It is not about `a6`: `{ int32_t b = 0; if (((int16_t)g16) > b) r = 1; }`
-  with a `uint16_t g16` of 0x8000 takes the branch, as does
-  `b + ((int16_t)g16)` (32768, not -32768) and
-  `(int16_t)((uint16_t)(1 << (g1 & 15)))` with `g1` at 15 (seed 6006). The
-  `(int16_t)` of an unsigned 16-bit operand is lost.
-- **A3 clears only the explicit signed-word cast facet above:** the output
-  statements at `tests/known-bugs/bug015.c` lines **156–158** (`cast compare`,
-  `cast shift compare`, `cast sum`; expressions at lines 66, 77, 88) now pass
-  in peep and nopeep. Equal-width
-  casts are retained when a deferred binary implicitly widens their result,
-  using the same signedness-observing consumer proof as BUG-058. Host-proven
-  [tblkcast](tests/tblkcast.c) covers those three cases, unsigned interpretation,
-  operand order, word-only arithmetic and sign-boundary controls. The parked
-  thirteen-line reproducer is unchanged and still has five wrong lines
-  (152–154, 162–163); #235 stays open, with all BUG-015 steering retained.
-- A nested-block pointer to a `uint16_t` element with the top bit set is
-  shifted and divided as signed (found by fuzzing at `83dc7a91`; seeds
-  4245 and later): `{ uint16_t *q = &a2[1]; r = (*q) >> (g1 & 15); }` with
-  `a2[1]` = 0x8001 and `g1` = 239 gives 255, not 1, and `(*q) / (g1 & 15)`
-  gives 120, not 136. `*q >> 15` is wrong too; `r = (*q)` and `&` or `+`
-  are right, and so is a pointer declared at function scope.
-- A nested-block `uint16_t` that wraps is widened as signed (seed 6648):
-  `{ uint16_t b = 0; --b; g9 = b; }` with a 32-bit `g9` gives -1, not 65535;
-  `b--` and `(uint16_t)b` are wrong too, `b -= 1`, `b = 5; --b`, a store to a
-  16-bit target and a function-scope `b` are right.
-- Unary `-` of a nested-block `float` is computed on its low 16 bits as an
-  integer (float generator, seed 30): `{ float b = 1.0f; fg = -b; }` stores
-  0.0f, `{ float b = 1.1f; fg = -b; }` stores 13107.0f (the negated low word
-  0xcccd of 0x3f8ccccd), `-b - b` is -1.0f and `-(-b)` is 0.0f. Right:
-  `0.0f - b`, `-(b + z)`, `float c = -b;`, `-b` of a function-scope float.
-- A nested-block integer local used directly as the operand of float
-  arithmetic is not converted: its bits are taken as a float (so a small
-  integer is a denormal, about zero). `{ int16_t b = 3; fg = b + 1.0f; }`
-  gives 1.0f, `b * 2.0f` gives 0.0f, `b - 1.0f` gives -1.0f, and
-  `b + c * 1.0f` with two block locals gives the integer 7 in the low word.
-  The same for `int32_t` and `uint8_t` locals and for a C99 `for
-  (int16_t i = 0; …)` loop variable (`fg = i + 1.0f`). `(float)b + 1.0f`,
-  `(b + 0) * 1.0f` and `fg = b;` are right. Found by fuzzing (float
-  generator, seeds 20 and 41).
-- The same missing conversion in other float contexts: `fg *= b` gives 0
-  and `fg += b` leaves `fg` unchanged; a store to a float array element,
-  struct member or through a pointer (`fa[0] = b`, `s.m = b`, `*p = b`)
-  stores the integer bits (`00000003`); `b == 3.0f` is 0; `fg > 0.0f ? b :
-  fg` is `40400003`. A store to a plain float global or local (`fg = b`,
-  `float l = b`), a float call argument, `(float)b` and `b < 3.5f` are
-  right. Found by fuzzing (float generator, seeds 79 and 108).
-- The mirror case: a nested-block *float* local in arithmetic with an
-  integer operand (constant or variable) is wrong — `{ float b = 1.0f; fg
-  = b * 2; }` gives 0.0f, `1 + b` gives 1.0f, `b + 2` gives 1.0f,
-  `(int32_t)1 - b` gives -1.0f, `b - (uint32_t)1` gives 1.0f, `b * gl`
-  (32-bit global) gives 0.0f, and `b -= (int32_t)1` leaves `80000001`.
-  `b * 2.0f`, `b * (float)2` and a function-scope `b` are right. Found by
-  fuzzing (float generator, 20 of 1200 seeds, e.g. 292, 303, 370, 381,
-  435, 682, 689, 698, 722, 789, 1031, 1036, 1052, 1105, 1131, 1144, 1154,
-  1248, 1328, 1428).
-- The value of an assignment to a nested-block float behaves the same way:
-  `{ float b = 1.0f; fg = -(b = 1.18f); }` stores `c523d000` (-2621.0f, the
-  negated low word `0x0a3d` of `0x3f970a3d`), and `fg = (b = 1.0f) - 1;`
-  stores 1.0f. `fg = (b = 1.18f);` and a function-scope `b` are right.
-  Found by fuzzing (float generator, seeds 1490 and 1861).
-- A `?:` whose arms are both nested-block floats behaves like the variable:
-  `{ float b5 = 1.0f; g = 7 + (fg ? b5 : b5); }` stores 1 to an `int32_t`
-  `g` (want 8), as does `fg ? b5 : b6` with a second block float `b6`, and
-  storing to a float global. Right when either arm is a global
-  (`fg ? b5 : fg`), a constant (`fg ? b5 : 3.0f`) or `b5 + 0.0f`. Found by
-  fuzzing (float generator, seed 4750).
-
-E1 also corrects the `wrapped_decrement` facet: SSA forwarding now retains
-the unsigned word interpretation of its untyped decrement result before
-widening. The parked program improves from 10 to 9 wrong lines out of 13;
-all remaining pointer, byte, and cast facets still failed at that stage. No
-independent BUG-015 implementation or steering change was included in E1.
-
-At `8db72cbd`, E2-bitfield (#310) already makes the block-byte/bit-field
-comparison at reproducer statement line 55 (printed line 155) pass: deferred
-repair uses `mir_promoted_operand_type()`'s field-width range promotion.
-
-**A4 clears the direct block-pointer integer facets.** The scoped repair now
-infers scalar integer pointees from repaired block-pointer loads before
-retyping their binary consumers and provisional conversions. In both peep
-and nopeep, reproducer printed lines **152, 153, 154, 162 and 163** flip:
-`multiply ffffae4e` → `0003ae4e`, `compare char 7` → `0`, `compare int 7` →
-`0`, `shift u16 255` → `1`, and `divide u16 120` → `136` (statements 22,
-32, 44, 127 and 137). Line 155 remains correct without a bit-field edit.
-The parked program improves from **8 to 3 wrong lines of 13**; its cast
-lines 156–158 still fail. `tptrblk` separately covers the cleared pointer
-paths, function-scope controls and the already-correct byte/bit-field path.
-Both censuses preserve all 3,672 existing functions byte-for-byte, and all
-544 existing performance rows are unchanged. **BUG-015/#235 remains open**;
-its reproducer and integer/float steering stay parked for the independently
-owned cast and float facets. No float typing repair is included in A4.
-
-A4's temporary restored-`blockptr` fuzz probe finds another facet of this
-same deferred block-target typing bug (integer seed 96):
-`void f(int32_t x) { { int32_t *q = &a3[0]; *q = x; } }` stores **0** for
-65536 and **-1** for -65537. `*q = (int32_t)65536` also stores 0; declaring
-`q` at function scope stores the full correct value. The host and ASan/UBSan
-agree, and both dcc pipelines fail. `mir_lower_expr_impl()` inserts a word
-conversion to the assumed assignment target; subsequent pointer/store repair
-sets `MIR_STORE_INDIRECT.memory_size` to four but retains that `MIR_UNARY`
-source conversion (`type=2` from an `int32_t` parameter `type=4`). This is a
-**store-conversion obligation**, not the indirect-load/binary ordering fixed
-by A4. The diagnostic restored run is stopped under the partial-root stop
-rule; no second implementation is attempted, no new bug number is allocated,
-and `blockptr` steering is retained. The original `bug015.c` stays unchanged.
-
-
 
 ## BUG-037
 
@@ -730,6 +641,155 @@ Removing `blockwordinit` from `KNOWN_BUGS` restores integer seeds 1–300:
 production configurations. Final parked inventory: **7 reproducers, 7 fails**.
 Detailed release, debug and approved Python harness results are in A3 of
 [fix-plan.md](fix-plan.md).
+
+### BUG-015
+
+Closed by the combination of [E2-bitfield #310](#fixed-in-cluster-e2-bitfield)
+(bit-field promotion), [A4 #328](https://github.com/davidly/dcc/pull/328)
+(block-pointer load typing before binary repair; `tptrblk`), A3's shared
+widening-use proof (`tblkcast`) and the D2e-2 deferred float operand repair
+`mir_repair_deferred_float_types()` (`tflbconv`), cherry-picked into A3 after
+its agent stopped. Every printed line of the parked reproducer passes with
+and without dccpeep; it is promoted as [tblkbind](tests/tblkbind.c). The
+`blockptr`, `blockcast`, `blockdec`, `fblockneg` and `fblockint` steers are
+removed: restored integer seeds 1–300 give **293 ok / 3 INVALID / 3
+limit-only / 1 FAIL** (seed 261, logged as BUG-064; seed 96 is BUG-063 and is
+steered by `blockstore`), restored float seeds 1–300 give **295 ok / 5
+INVALID / zero FAIL**. All 3,736 census functions present on main are
+byte-identical; only the four new/changed-shape apps `tblkbind`, `tblkcast`,
+`tblkword` and `tflbconv` differ and were remeasured. The root early-typing
+fix remains deferred to the typing-recovery track.
+
+The original diagnosis follows.
+
+**Locals declared in a nested block lose their declared type in further
+shapes.** Through a nested-block pointer to a 32-bit object, `*q *= k` is
+computed in 16 bits and `c <= *q` is compared as signed. A nested-block
+`unsigned char` is compared as `unsigned int`.
+
+```c
+{ uint32_t *q = &a4[4]; *q *= 11; }          /* 21930 * 11: want 0003ae4e, dcc ffffae4e */
+signed char c = -1;
+{ uint32_t *q = &a4[0]; if (c <= *q) r = 7; } /* false (c converts to 0xffffffff); dcc takes it */
+signed char l2 = -66;
+{ unsigned char b = 1; if ((b & s.m5) > l2) return 1; }   /* true; dcc does not take it */
+```
+
+- Each is correct when the pointer or the `unsigned char` is declared at
+  function scope.
+- These are grouped because they share the nested-block condition; they may
+  have separate causes. See also BUG-008.
+- Beside a nested-block 32-bit local, another operand's cast is lost:
+  `{ int32_t b = 0; out = b + ((int16_t)((uint16_t)a6[1])); }` with `a6[1]`
+  holding -1 gives 65535, and `if (b >= ((int16_t)((uint16_t)a6[1])))` is
+  not taken. Correct with `b` at function scope, or with one cast.
+  It is not about `a6`: `{ int32_t b = 0; if (((int16_t)g16) > b) r = 1; }`
+  with a `uint16_t g16` of 0x8000 takes the branch, as does
+  `b + ((int16_t)g16)` (32768, not -32768) and
+  `(int16_t)((uint16_t)(1 << (g1 & 15)))` with `g1` at 15 (seed 6006). The
+  `(int16_t)` of an unsigned 16-bit operand is lost.
+- **A3 clears only the explicit signed-word cast facet above:** the output
+  statements at `tests/known-bugs/bug015.c` lines **156–158** (`cast compare`,
+  `cast shift compare`, `cast sum`; expressions at lines 66, 77, 88) now pass
+  in peep and nopeep. Equal-width
+  casts are retained when a deferred binary implicitly widens their result,
+  using the same signedness-observing consumer proof as BUG-058. Host-proven
+  [tblkcast](tests/tblkcast.c) covers those three cases, unsigned interpretation,
+  operand order, word-only arithmetic and sign-boundary controls. The parked
+  thirteen-line reproducer is unchanged and still has five wrong lines
+  (152–154, 162–163); #235 stays open, with all BUG-015 steering retained.
+- A nested-block pointer to a `uint16_t` element with the top bit set is
+  shifted and divided as signed (found by fuzzing at `83dc7a91`; seeds
+  4245 and later): `{ uint16_t *q = &a2[1]; r = (*q) >> (g1 & 15); }` with
+  `a2[1]` = 0x8001 and `g1` = 239 gives 255, not 1, and `(*q) / (g1 & 15)`
+  gives 120, not 136. `*q >> 15` is wrong too; `r = (*q)` and `&` or `+`
+  are right, and so is a pointer declared at function scope.
+- A nested-block `uint16_t` that wraps is widened as signed (seed 6648):
+  `{ uint16_t b = 0; --b; g9 = b; }` with a 32-bit `g9` gives -1, not 65535;
+  `b--` and `(uint16_t)b` are wrong too, `b -= 1`, `b = 5; --b`, a store to a
+  16-bit target and a function-scope `b` are right.
+- Unary `-` of a nested-block `float` is computed on its low 16 bits as an
+  integer (float generator, seed 30): `{ float b = 1.0f; fg = -b; }` stores
+  0.0f, `{ float b = 1.1f; fg = -b; }` stores 13107.0f (the negated low word
+  0xcccd of 0x3f8ccccd), `-b - b` is -1.0f and `-(-b)` is 0.0f. Right:
+  `0.0f - b`, `-(b + z)`, `float c = -b;`, `-b` of a function-scope float.
+- A nested-block integer local used directly as the operand of float
+  arithmetic is not converted: its bits are taken as a float (so a small
+  integer is a denormal, about zero). `{ int16_t b = 3; fg = b + 1.0f; }`
+  gives 1.0f, `b * 2.0f` gives 0.0f, `b - 1.0f` gives -1.0f, and
+  `b + c * 1.0f` with two block locals gives the integer 7 in the low word.
+  The same for `int32_t` and `uint8_t` locals and for a C99 `for
+  (int16_t i = 0; …)` loop variable (`fg = i + 1.0f`). `(float)b + 1.0f`,
+  `(b + 0) * 1.0f` and `fg = b;` are right. Found by fuzzing (float
+  generator, seeds 20 and 41).
+- The same missing conversion in other float contexts: `fg *= b` gives 0
+  and `fg += b` leaves `fg` unchanged; a store to a float array element,
+  struct member or through a pointer (`fa[0] = b`, `s.m = b`, `*p = b`)
+  stores the integer bits (`00000003`); `b == 3.0f` is 0; `fg > 0.0f ? b :
+  fg` is `40400003`. A store to a plain float global or local (`fg = b`,
+  `float l = b`), a float call argument, `(float)b` and `b < 3.5f` are
+  right. Found by fuzzing (float generator, seeds 79 and 108).
+- The mirror case: a nested-block *float* local in arithmetic with an
+  integer operand (constant or variable) is wrong — `{ float b = 1.0f; fg
+  = b * 2; }` gives 0.0f, `1 + b` gives 1.0f, `b + 2` gives 1.0f,
+  `(int32_t)1 - b` gives -1.0f, `b - (uint32_t)1` gives 1.0f, `b * gl`
+  (32-bit global) gives 0.0f, and `b -= (int32_t)1` leaves `80000001`.
+  `b * 2.0f`, `b * (float)2` and a function-scope `b` are right. Found by
+  fuzzing (float generator, 20 of 1200 seeds, e.g. 292, 303, 370, 381,
+  435, 682, 689, 698, 722, 789, 1031, 1036, 1052, 1105, 1131, 1144, 1154,
+  1248, 1328, 1428).
+- The value of an assignment to a nested-block float behaves the same way:
+  `{ float b = 1.0f; fg = -(b = 1.18f); }` stores `c523d000` (-2621.0f, the
+  negated low word `0x0a3d` of `0x3f970a3d`), and `fg = (b = 1.0f) - 1;`
+  stores 1.0f. `fg = (b = 1.18f);` and a function-scope `b` are right.
+  Found by fuzzing (float generator, seeds 1490 and 1861).
+- A `?:` whose arms are both nested-block floats behaves like the variable:
+  `{ float b5 = 1.0f; g = 7 + (fg ? b5 : b5); }` stores 1 to an `int32_t`
+  `g` (want 8), as does `fg ? b5 : b6` with a second block float `b6`, and
+  storing to a float global. Right when either arm is a global
+  (`fg ? b5 : fg`), a constant (`fg ? b5 : 3.0f`) or `b5 + 0.0f`. Found by
+  fuzzing (float generator, seed 4750).
+
+E1 also corrects the `wrapped_decrement` facet: SSA forwarding now retains
+the unsigned word interpretation of its untyped decrement result before
+widening. The parked program improves from 10 to 9 wrong lines out of 13;
+all remaining pointer, byte, and cast facets still failed at that stage. No
+independent BUG-015 implementation or steering change was included in E1.
+
+At `8db72cbd`, E2-bitfield (#310) already makes the block-byte/bit-field
+comparison at reproducer statement line 55 (printed line 155) pass: deferred
+repair uses `mir_promoted_operand_type()`'s field-width range promotion.
+
+**A4 clears the direct block-pointer integer facets.** The scoped repair now
+infers scalar integer pointees from repaired block-pointer loads before
+retyping their binary consumers and provisional conversions. In both peep
+and nopeep, reproducer printed lines **152, 153, 154, 162 and 163** flip:
+`multiply ffffae4e` → `0003ae4e`, `compare char 7` → `0`, `compare int 7` →
+`0`, `shift u16 255` → `1`, and `divide u16 120` → `136` (statements 22,
+32, 44, 127 and 137). Line 155 remains correct without a bit-field edit.
+The parked program improves from **8 to 3 wrong lines of 13**; its cast
+lines 156–158 still fail. `tptrblk` separately covers the cleared pointer
+paths, function-scope controls and the already-correct byte/bit-field path.
+Both censuses preserve all 3,672 existing functions byte-for-byte, and all
+544 existing performance rows are unchanged. **BUG-015/#235 remains open**;
+its reproducer and integer/float steering stay parked for the independently
+owned cast and float facets. No float typing repair is included in A4.
+
+A4's temporary restored-`blockptr` fuzz probe finds another facet of this
+same deferred block-target typing bug (integer seed 96):
+`void f(int32_t x) { { int32_t *q = &a3[0]; *q = x; } }` stores **0** for
+65536 and **-1** for -65537. `*q = (int32_t)65536` also stores 0; declaring
+`q` at function scope stores the full correct value. The host and ASan/UBSan
+agree, and both dcc pipelines fail. `mir_lower_expr_impl()` inserts a word
+conversion to the assumed assignment target; subsequent pointer/store repair
+sets `MIR_STORE_INDIRECT.memory_size` to four but retains that `MIR_UNARY`
+source conversion (`type=2` from an `int32_t` parameter `type=4`). This is a
+**store-conversion obligation**, not the indirect-load/binary ordering fixed
+by A4. The diagnostic restored run is stopped under the partial-root stop
+rule; no second implementation is attempted, no new bug number is allocated,
+and `blockptr` steering is retained. The original `bug015.c` stays unchanged.
+
+
 
 ## BUG-058
 

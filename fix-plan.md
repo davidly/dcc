@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has five open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has six open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -795,6 +795,23 @@ mutation-runner cases remain **unverified**, not skipped or fixed:
 
 No old-compiler check, prepush, expectation refresh, harness fix or new skip
 is made. Concurrent A2b-3/A4/D2e-2/S1/F1 compiler surfaces are untouched.
+
+**A3 close-out (BUG-015 promotion):** after #328 (A4) merged and the D2e-2
+root repair `f311a376` (`mir_repair_deferred_float_types()`, `tflbconv`) was
+cherry-picked onto this branch, `run-known-bugs.py bug015` reported `FIXED`
+in both modes. The reproducer is promoted as `tblkbind`
+(`tblkbind,214401,215283,5120,5376`; `tflbconv` remeasured under the F1
+runtime as `129599,130323,5760,5888`). The `blockptr`, `blockcast`,
+`blockdec`, `fblockneg` and `fblockint` steers are removed. Restored integer
+seeds 1–300: 293 ok / 3 INVALID / 3 limit-only / 1 FAIL (seed 261, parked as
+BUG-064/#333); restored float seeds 1–300: 295 ok / 5 INVALID / 0 FAIL. Seed 96
+(A4's store-conversion remainder) is parked as BUG-063/#332 with a new
+`blockstore` integer steer. Census against main `73d9daa4`: 3,736 functions
+on both sides, zero existing-function changes; the 14 differing functions are
+all in `tblkbind`/`tblkcast`/`tblkword`/`tflbconv`. The agent stopped on
+quota before documentation; the maintainer's orchestrator finished the branch
+directly. D2e-2's float update admission scope (BUG-041/056/059) is not part
+of this close-out and stays open.
 
 ### B1. Stale probe offset for a `for`-init declaration
 
@@ -4318,7 +4335,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | A2b-3 | [#329](https://github.com/davidly/dcc/pull/329) (`fix/cluster-a2b3-logical-byte`) | PR open; compiler gates verified; Python exceptions documented | BUG-004 promoted as tlogbyte; byte logical PHI retains its source type; restored integer 283 ok/14 INVALID/3 limit-only/zero FAIL; both 3,672-function existing censuses and all 544 existing perf rows unchanged |
 | A4 | [#328](https://github.com/davidly/dcc/pull/328) (`fix/cluster-a4-block-pointer-typing`) | PR open; verified partial BUG-015 fix | Printed lines 152/153/154/162/163 flip; 155 already passes at base; tptrblk added; 3,672 existing functions and 544 perf rows unchanged; steered fuzz 283 ok/14 INVALID/3 limits; restored seed 96 exposes store-conversion remainder; harness retries documented; no steering/reproducer removal |
 | A2c | [#318](https://github.com/davidly/dcc/pull/318) (`fix/cluster-a2c-block-type-resolution`) | draft PR; stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
-| A3 | [#331](https://github.com/davidly/dcc/pull/331) (`fix/cluster-a3-block-word-widening`) | PR open; compiler gates verified; approved Python harness exceptions | BUG-058 promoted as tblkword; BUG-015 statements 156–158 covered by tblkcast, full issue retained; 3,672 existing functions/mode and 544 perf rows unchanged; restored integer 290 ok/7 INVALID/3 limit-only/zero FAIL |
+| A3 | [#331](https://github.com/davidly/dcc/pull/331) (`fix/cluster-a3`) | merged; BUG-058 and BUG-015 closed | BUG-058 promoted as tblkword, BUG-015 as tblkbind (with A4 + cherry-picked D2e-2 repair); tblkcast kept; all existing census functions and perf rows unchanged; five steers removed; restored integer 293 ok/3 INVALID/3 limit/1 FAIL (seed 261 → BUG-064), float 295 ok/5 INVALID; seed 96 → BUG-063 with `blockstore` steer |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
@@ -4341,7 +4358,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | D2d | [#307](https://github.com/davidly/dcc/pull/307) (`fix/cluster-d2d-float-incdec-value`) | draft PR; stopped; admission withdrawn | 041/056 trial FIXED; dependent block-local float update arithmetic/comparison still wrong; restored float 288 ok/11 INVALID/1 FAIL (224); full trial withdrawn; final 20 reproducers: pre-existing 022 FIXED, 19 fails; both 3,532-function censuses and all 525 existing perf rows unchanged |
 | D2e | [#321](https://github.com/davidly/dcc/pull/321) (`fix/cluster-d2e-incdec-provenance`) | split under stop rule | D2e-1 retains AST update provenance only; D2e-2 float admission/MIR trial clears 041/056 but restored seed 224 exposes missing implicit operand conversion (new BUG-059/#316) |
 | D2e-1 | [#321](https://github.com/davidly/dcc/pull/321) (`fix/cluster-d2e-incdec-provenance`) | verified compiler gates; partial scope | Safe update provenance only; tupdprov added; 3,613 existing functions/mode and 535 perf rows unchanged; final float 283/17 and int 293/7, zero FAIL; strict 551/24 gates; #277 untouched, isolated fixture retry passes |
-| D2e-2 | [#316](https://github.com/davidly/dcc/issues/316) | open; trial withdrawn | 041/056/058 remain steered by fincdecval; unary/binary float types repaired but assumed-identity implicit conversions are absent; no second compiler fix |
+| D2e-2 | [#316](https://github.com/davidly/dcc/issues/316) | root repair shipped via #331; admission scope open | `mir_repair_deferred_float_types()` and tflbconv landed by cherry-pick (f311a376); 041/056/059 remain steered by fincdecval and admission-blocked; agent stopped on quota before float update admission |
 | E | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | split into E1 / E2 | Single SSA forwarding fix clears 016; 004 function facet and 015 word-widening facet improve, complete issues still open |
 | E1 | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | PR open; verified compiler gates; documented harness exceptions | 016 promoted as tinittyp; int 297/2/1 limit, float 281/19, zero FAIL; 3,509 functions and 520 perf rows unchanged; #277 and three isolated synthetic-fixture timing failures |
 | E2 | | split; byte-shift and bit-field bugs fixed | 013 fixed in E2-bitfield; 006 repaired in E2c with the approved tcmwide exception; 002/028 fixed in E2-shift; 004 repaired boolean conversion remains in A2b |

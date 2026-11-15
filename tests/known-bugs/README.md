@@ -89,7 +89,7 @@ regular test:
 `tests/tbcshl.c`, `tests/tbcsar.c`, `tests/tbfexpr.c`, `tests/tflidx.c`, `tests/tndwide.c`,
 `tests/tlbreuse.c`, `tests/twincadd.c`, `tests/tmerge16.c`, `tests/tearly16.c`,
 `tests/tphiarm.c`, `tests/twphicpy.c`, `tests/tphislot.c`, `tests/tbfcomp.c`, `tests/tfdivr.c`, `tests/tfpround.c` and
-`tests/tsizhigh.c` were promoted this way.
+`tests/tsizhigh.c`, `tests/tblkword.c` and `tests/tblkbind.c` were promoted this way.
 
 
 `tests/tlogblk.c` covers BUG-004's host-proven word and block-long facets
@@ -99,8 +99,19 @@ long consumers, nested/variable paths and short-circuit side effects.
 
 `tests/tblkword.c` promotes BUG-058's full word-initializer reproducer.
 `tests/tblkcast.c` separately covers the signed-word cast facet of BUG-015
-cleared by A3 (parked output statements 156–158). BUG-015 stays open and its
-reproducer remains parked with five wrong lines; its steering is retained.
+cleared by A3 (parked output statements 156–158). With A4's block-pointer
+load typing (`tests/tptrblk.c`) and the D2e-2 deferred float operand repair
+(`tests/tflbconv.c`) also present, BUG-015's reproducer passes completely and
+is promoted as `tests/tblkbind.c`; the `blockptr`, `blockcast`, `blockdec`,
+`fblockneg` and `fblockint` steers are removed.
+
+Restoring those shapes exposed two new parked defects. BUG-063 (#332, `bug063.c`)
+is a store through a nested-block pointer to a 32-bit object that keeps the
+16-bit conversion inserted for the assumed target; the integer generator steer
+`blockstore` holds it off. BUG-064 (#333, `bug064.c`) is integer seed 261 reduced
+to one call: a bounded recursion reached through a function pointer grows the
+Z80 stack without bound, so dcc overflows any stack limit where the host
+prints one line. It is not steered because its shape is not yet isolated.
 
 ## Adding one
 
