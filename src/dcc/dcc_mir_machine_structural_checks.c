@@ -6529,9 +6529,9 @@ static int mir_match_compound_check_runner(
 
     memset(plan, 0, sizeof(*plan));
     memset(opcode_counts, 0, sizeof(opcode_counts));
-    if (mir.count != 974 || mir_cfg_block_count() != 2 ||
+    if (mir.count != 976 || mir_cfg_block_count() != 2 ||
         mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
-        mir.local_bytes != 23 || final_load != 964)
+        mir.local_bytes != 23 || final_load != 966)
         return mir_machine_reject(
             "compound-check-runner", "shape");
     values = (struct MirCompoundValue *)calloc(
@@ -6813,11 +6813,11 @@ static int mir_match_compound_check_runner(
         plan->check_function == NULL ||
         plan->helper_function == NULL ||
         opcode_counts[MIR_LABEL] != 1 ||
-        opcode_counts[MIR_NOP] != 140 ||
+        opcode_counts[MIR_NOP] != 139 ||
         opcode_counts[MIR_CONST] != 163 ||
         opcode_counts[MIR_STRING_ADDRESS] != 71 ||
         opcode_counts[MIR_ARG] != 213 ||
-        opcode_counts[MIR_UNARY] != 19 ||
+        opcode_counts[MIR_UNARY] != 22 ||
         opcode_counts[MIR_BINARY] != 30 ||
         opcode_counts[MIR_ADDRESS] != 47 ||
         opcode_counts[MIR_INDEX_ADDRESS] != 20 ||
