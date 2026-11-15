@@ -705,6 +705,114 @@ identity, rather than only runtime behavior, is the requested gate.
 | `tvlaparm` | `cgrid_sum`*, `grid_fill`*, `grid_sum`*, `main`*, `smooth` |
 | `tvlax` | `checksum_loop`*, `goto_stable`, `loop_stable`, `main`*, `nested_stable`, `rec_probe`* |
 
+### A3. Deferred widened consumers must observe word interpretation
+
+| Bug | Issue | Outcome |
+| --- | --- | --- |
+| BUG-058 | #315 | Fixed; promoted as `tblkword` |
+| BUG-015 signed-word cast facet | #235 | Output statements 156–158 fixed; host-proven `tblkcast`; full issue/reproducer/steering retained |
+
+Investigated independently on `fix/cluster-a3-block-word-widening` from
+`8db72cbd`. The shared loss is confirmed, not the rejected A2c early-typing
+experiment: both paths already have the correct declared/cast word type,
+but representation reuse discards it before implicit widening.
+
+- BUG-058: deferred repair restores the block array-store load to signed
+  word, but `mir_promote_objects()` forwards it to the unsigned initializer.
+  Its typed-view guard only sees explicit widening unary consumers (hence
+  the correct scalar-global store), not the implicit wide indirect store.
+- BUG-015: `mir_unary_is_representation_identity()` removes the unsigned-to-
+  signed word cast whose direct consumer is a deferred binary. The binary's
+  late widening then sees the original unsigned load and extends 0x8000 to
+  +32768. Function-scope controls already have explicit widening conversions.
+
+The existing guards now share `mir_use_widens_value()`: recognize implicit
+wide indirect stores and wider deferred binary data operands, retaining
+exactly the needed typed word views. A shift count is not a widened data
+operand. No parser/early typing, source boundary, selector, machine schedule,
+runtime, fallback, byte-PHI, pointer, bit-field or float-admission edit is made.
+
+All nine original BUG-058 lines pass in both pipelines. BUG-015 changes from
+8/13 to 5/13 wrong lines: only output statements **156–158** flip (cast compare,
+cast shift compare, cast sum; expressions 66, 77, 88); lines **152–154 and
+162–163** remain wrong.
+The parked `bug015.c` is unchanged, #235 stays open, and no BUG-015 steer is
+removed. `tblkcast` covers the cleared facet plus mirror signedness, reversed
+operand order, same-width and sign-boundary controls; clang O0/O2 and
+ASan/UBSan agree on all eleven lines.
+
+Both original **3,672-function** census TSVs are byte-identical, including
+every selector and selected hash; final snapshots add only 18 new functions
+(3,690 total). No existing fallback is added. All **544
+existing performance rows** remain byte-identical in their original order.
+New stack-checked rows only: `tblkcast,226125,226907,5888,6016` and
+`tblkword,405538,406521,6400,6528`. Original `block_init` is **56→58 machine
+bytes peep / 63→77 nopeep**. Its peep body is identical to the correct
+same-signed control. Nopeep retains a 12-byte typed-word home store/reload
+beyond that control, removed by existing dccpeep rules; no runtime extension
+helper is added. Every original correct fixture function is unchanged.
+
+`blockwordinit` is removed only from `KNOWN_BUGS`, restoring production
+integer seeds 1–300: **290 ok, 7 INVALID, 3 target-limit-only, zero FAIL**.
+All four production configurations are covered; 3,000 seeds retain no
+remaining steered shape. No new compiler bug is found. Final parked inventory
+is **7 reproducers / 7 fails**; log tally **seven open / fifty-two fixed**.
+
+Canonical and independent CMake compiler builds pass. Compiler ASan/UBSan
+and cache-verify probes, required-MIR diagnostics, both **274/274** extended
+MIR censuses, debugger-host CTest **10/10**, existing focused typing/entrypoint/
+line-debug Python tests **51/51**, and new tightness/generator tests **9/9**
+pass. The two repaired shapes pass all **24** release/full-debug/line-debug,
+stack/no-stack, peep/nopeep pipelines; all eight `-gline` COMs are release-
+identical. Full debug retains the signed block word declaration at its actual
+two-byte frame home. Existing symbols, scopes, statement boundaries and
+locations are unchanged because existing function output is unchanged.
+
+Initial strict native Python full+extended regression is **559 passed,
+24 skipped, zero failures**. Final strict PowerShell full+extended runs in
+both stack modes are **561 passed, 24 skipped, zero failures**; stack-checked
+performance, diagnostics, dccpeep and extended gates pass. Final censuses have
+only the 18 new test functions; filtering those rows is byte-identical to
+both starting files. New normal host validations and the repeated promoted
+source debug matrix/tightness/generator checks all pass.
+
+Regular Python discovery: **338 tests, six failures, ten errors, two existing
+skips**. The campaign-baseline and exact-control failures are the approved
+[#277](https://github.com/davidly/dcc/issues/277) exceptions. Every other
+failing test was retried individually: **9/13 pass**, including inherited-pipe
+cleanup, healthy-baseline inclusion, watchdog, environment/explicit policy,
+post-exit grace, clobber-runner orphan supervision, zero completion budget,
+pipe-drain budget and deadline/explicit-stop cleanup. Four unchanged synthetic
+mutation-runner cases remain **unverified**, not skipped or fixed:
+
+| `test_mir_compiler_mutations` case | Isolated retry |
+| --- | --- |
+| `test_child_timeout_and_environment_isolation` | outer harness command times out after about 20 seconds |
+| `test_default_serial_and_parallel_are_equal_and_bounded` | mock runner command times out at 180 seconds |
+| `test_exited_worker_cleans_nested_process_scopes` | missing `watchdog-child` marker after 7.653 seconds |
+| `test_survivors_invalid_exits_builds_and_worker_errors_are_recorded` | mock runner command times out at 180 seconds; teardown also reports a nonempty fixture directory |
+
+
+No old-compiler check, prepush, expectation refresh, harness fix or new skip
+is made. Concurrent A2b-3/A4/D2e-2/S1/F1 compiler surfaces are untouched.
+
+**A3 close-out (BUG-015 promotion):** after #328 (A4) merged and the D2e-2
+root repair `f311a376` (`mir_repair_deferred_float_types()`, `tflbconv`) was
+cherry-picked onto this branch, `run-known-bugs.py bug015` reported `FIXED`
+in both modes. The reproducer is promoted as `tblkbind`
+(`tblkbind,214401,215283,5120,5376`; `tflbconv` remeasured under the F1
+runtime as `129599,130323,5760,5888`). The `blockptr`, `blockcast`,
+`blockdec`, `fblockneg` and `fblockint` steers are removed. Restored integer
+seeds 1–300: 293 ok / 3 INVALID / 3 limit-only / 1 FAIL (seed 261, parked as
+BUG-064/#333); restored float seeds 1–300: 295 ok / 5 INVALID / 0 FAIL. Seed 96
+(A4's store-conversion remainder) is parked as BUG-063/#332 with a new
+`blockstore` integer steer. Census against main `73d9daa4`: 3,736 functions
+on both sides, zero existing-function changes; the 14 differing functions are
+all in `tblkbind`/`tblkcast`/`tblkword`/`tflbconv`. The agent stopped on
+quota before documentation; the maintainer's orchestrator finished the branch
+directly. D2e-2's float update admission scope (BUG-041/056/059) is not part
+of this close-out and stays open.
+
 ### B1. Stale probe offset for a `for`-init declaration
 
 | Bug | Issue | Shape |
@@ -1789,6 +1897,26 @@ withdrawn, with the stopped-trial patch and probe artifacts retained only
 under `build/` for inspection.
 
 #### D2e. Update provenance ships separately; float admission stops again
+
+**D2e-2 follow-up (root repair):** late float typing now propagates through
+unary `+`/`-`, deferred binary and conditional consumers after lvalue/update
+repair. Missing implicit binary operand conversions are inserted there, while
+explicit casts and all integer-only graphs keep their interpretation. The
+non-update equivalents of BUG-059 and both A2b-2 float facets pass in
+`tflbconv` (host clang + ASan/UBSan, peep/nopeep). Its eight printed cases
+cover ordinary and assignment-value unary, mixed operands, compound values,
+conditional consumers and a constant/cast chain.
+
+Both **3,672-function / 559-app** starting census TSVs are byte-identical after
+this root-only change. The **544 original performance rows** are preserved
+byte-for-byte; only `tflbconv` is appended. All eight parked verdicts remain
+`fails` at this step: BUG-059/041/056 are still admission-blocked, and the
+integer-only `bug015.c` has **no changed output lines** (8/13 still wrong).
+The float facets in the A2b-2 table are additional probes, not printed lines
+in that parked integer fixture. BUG-015 stays open with A3/A4; its steering
+and reproducer are unchanged. Float update admission is attempted separately,
+after committing this shared repair.
+
 
 **D2e-1:** `ast_expr_base_ident_unresolved()` now follows `AST_POSTFIX`
 and prefix `TOK_INC`/`TOK_DEC` to the stored lvalue, just as it already follows
@@ -4207,6 +4335,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | A2b-3 | [#329](https://github.com/davidly/dcc/pull/329) (`fix/cluster-a2b3-logical-byte`) | PR open; compiler gates verified; Python exceptions documented | BUG-004 promoted as tlogbyte; byte logical PHI retains its source type; restored integer 283 ok/14 INVALID/3 limit-only/zero FAIL; both 3,672-function existing censuses and all 544 existing perf rows unchanged |
 | A4 | [#328](https://github.com/davidly/dcc/pull/328) (`fix/cluster-a4-block-pointer-typing`) | PR open; verified partial BUG-015 fix | Printed lines 152/153/154/162/163 flip; 155 already passes at base; tptrblk added; 3,672 existing functions and 544 perf rows unchanged; steered fuzz 283 ok/14 INVALID/3 limits; restored seed 96 exposes store-conversion remainder; harness retries documented; no steering/reproducer removal |
 | A2c | [#318](https://github.com/davidly/dcc/pull/318) (`fix/cluster-a2c-block-type-resolution`) | draft PR; stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
+| A3 | [#331](https://github.com/davidly/dcc/pull/331) (`fix/cluster-a3`) | merged; BUG-058 and BUG-015 closed | BUG-058 promoted as tblkword, BUG-015 as tblkbind (with A4 + cherry-picked D2e-2 repair); tblkcast kept; all existing census functions and perf rows unchanged; five steers removed; restored integer 293 ok/3 INVALID/3 limit/1 FAIL (seed 261 → BUG-064), float 295 ok/5 INVALID; seed 96 → BUG-063 with `blockstore` steer |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
@@ -4229,7 +4358,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | D2d | [#307](https://github.com/davidly/dcc/pull/307) (`fix/cluster-d2d-float-incdec-value`) | draft PR; stopped; admission withdrawn | 041/056 trial FIXED; dependent block-local float update arithmetic/comparison still wrong; restored float 288 ok/11 INVALID/1 FAIL (224); full trial withdrawn; final 20 reproducers: pre-existing 022 FIXED, 19 fails; both 3,532-function censuses and all 525 existing perf rows unchanged |
 | D2e | [#321](https://github.com/davidly/dcc/pull/321) (`fix/cluster-d2e-incdec-provenance`) | split under stop rule | D2e-1 retains AST update provenance only; D2e-2 float admission/MIR trial clears 041/056 but restored seed 224 exposes missing implicit operand conversion (new BUG-059/#316) |
 | D2e-1 | [#321](https://github.com/davidly/dcc/pull/321) (`fix/cluster-d2e-incdec-provenance`) | verified compiler gates; partial scope | Safe update provenance only; tupdprov added; 3,613 existing functions/mode and 535 perf rows unchanged; final float 283/17 and int 293/7, zero FAIL; strict 551/24 gates; #277 untouched, isolated fixture retry passes |
-| D2e-2 | [#316](https://github.com/davidly/dcc/issues/316) | open; trial withdrawn | 041/056/058 remain steered by fincdecval; unary/binary float types repaired but assumed-identity implicit conversions are absent; no second compiler fix |
+| D2e-2 | [#316](https://github.com/davidly/dcc/issues/316) | root repair shipped via #331; admission scope open | `mir_repair_deferred_float_types()` and tflbconv landed by cherry-pick (f311a376); 041/056/059 remain steered by fincdecval and admission-blocked; agent stopped on quota before float update admission |
 | E | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | split into E1 / E2 | Single SSA forwarding fix clears 016; 004 function facet and 015 word-widening facet improve, complete issues still open |
 | E1 | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | PR open; verified compiler gates; documented harness exceptions | 016 promoted as tinittyp; int 297/2/1 limit, float 281/19, zero FAIL; 3,509 functions and 520 perf rows unchanged; #277 and three isolated synthetic-fixture timing failures |
 | E2 | | split; byte-shift and bit-field bugs fixed | 013 fixed in E2-bitfield; 006 repaired in E2c with the approved tcmwide exception; 002/028 fixed in E2-shift; 004 repaired boolean conversion remains in A2b |

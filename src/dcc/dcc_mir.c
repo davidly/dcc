@@ -8155,6 +8155,24 @@ static int mir_block_name_has_multiple_declared_types(const char *name)
     return 0;
 }
 
+/* Deferred consumers can widen without an explicit conversion instruction. */
+static int mir_use_widens_value(
+    const struct MirInsn *use, int value, int type)
+{
+    if (use->opcode == MIR_UNARY && use->immediate == 0 &&
+        use->src1 == value)
+        return type_is_float(use->type) ||
+               type_size(use->type) > type_size(type);
+    if (use->opcode == MIR_STORE_INDIRECT && use->src2 == value)
+        return use->memory_size > type_size(type);
+    if (use->opcode == MIR_BINARY && use->deferred_operand_types &&
+        (use->src1 == value ||
+         (use->src2 == value && use->immediate != TOK_SHL &&
+          use->immediate != TOK_SHR)))
+        return type_size(use->secondary_offset) > type_size(type);
+    return 0;
+}
+
 /* Promotion may expose an initializer's raw bits. Preserve the declared
  * interpretation when a load's consumers can observe its signedness. */
 static int mir_value_has_signedness_use(int value, int type, int depth)
@@ -8166,10 +8184,10 @@ static int mir_value_has_signedness_use(int value, int type, int depth)
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *use = &mir.insns[instruction];
 
+        if (mir_use_widens_value(use, value, type))
+            return 1;
         if (use->opcode == MIR_UNARY && use->immediate == 0 &&
             use->src1 == value) {
-            if (type_is_float(use->type) || type_size(use->type) > type_size(type))
-                return 1;
             if (use->type == type &&
                 mir_value_has_signedness_use(use->dst, type, depth + 1))
                 return 1;
@@ -8213,16 +8231,13 @@ static int mir_unary_is_representation_identity(
         return 0;
     /*
      * Equal-width signed/unsigned casts preserve bits, but a later widening
-     * or float conversion must still see the cast's signedness.
-     * Other consumers already carry their effective computation/memory type
-     * and can safely use the original representation directly.
+     * or float conversion must still see the cast's signedness, including
+     * implicit widening in deferred binaries and indirect stores.
+     * Same-width consumers can use the original representation directly.
      */
     for (instruction = 0; instruction < mir.count; ++instruction)
-        if ((mir.insns[instruction].opcode == MIR_UNARY &&
-             mir.insns[instruction].immediate == 0 &&
-             mir.insns[instruction].src1 == insn->dst &&
-             (type_size(mir.insns[instruction].type) > target_size ||
-              type_is_float(mir.insns[instruction].type))) ||
+        if (mir_use_widens_value(
+                &mir.insns[instruction], insn->dst, insn->type) ||
             (mir.insns[instruction].opcode == MIR_STORE &&
              mir.insns[instruction].src1 == insn->dst &&
              mir.insns[instruction].type == insn->type &&
@@ -8566,6 +8581,120 @@ static int mir_fold_repaired_integer_unary(struct MirInsn *insn)
         source->dst = -1;
     }
     return 1;
+}
+
+/* Deferred arithmetic can acquire a float type only after its loads and
+ * updates are repaired. Materialize implicit conversions at that point;
+ * explicit casts remain authoritative and integer-only graphs stay intact. */
+static void mir_repair_deferred_float_types(void)
+{
+    int changed;
+    int i;
+
+    do {
+        changed = 0;
+        for (i = 0; i < mir.count; ++i) {
+            struct MirInsn *insn = &mir.insns[i];
+            struct MirInsn *left;
+            struct MirInsn *right;
+            struct MirInsn *left_conversion = NULL;
+            struct MirInsn *right_conversion = NULL;
+            int operand_type;
+            int result_type;
+            int left_value;
+            int right_value;
+            int convert_left;
+            int convert_right;
+
+            if (insn->opcode == MIR_UNARY && insn->src1 >= 0 &&
+                (insn->immediate == '+' || insn->immediate == '-')) {
+                left = mir_mutable_definition(insn->src1);
+                if (left != NULL && type_is_float(left->type) &&
+                    insn->type != left->type) {
+                    insn->type = left->type;
+                    changed = 1;
+                }
+                continue;
+            }
+            if ((insn->opcode != MIR_BINARY && insn->opcode != MIR_PHI) ||
+                !insn->deferred_operand_types ||
+                insn->src1 < 0 || insn->src2 < 0)
+                continue;
+            left = mir_mutable_definition(insn->src1);
+            right = mir_mutable_definition(insn->src2);
+            if (left != NULL && left->opcode == MIR_UNARY &&
+                left->deferred_operand_types) {
+                left_conversion = left;
+                left = mir_mutable_definition(left->src1);
+            }
+            if (right != NULL && right->opcode == MIR_UNARY &&
+                right->deferred_operand_types) {
+                right_conversion = right;
+                right = mir_mutable_definition(right->src1);
+            }
+            if (left == NULL || right == NULL ||
+                left->type == 0 || right->type == 0 ||
+                type_ptr_depth(left->type) != 0 ||
+                type_ptr_depth(right->type) != 0 ||
+                (!type_is_float(left->type) && !type_is_float(right->type)))
+                continue;
+            operand_type = common_arith_type(left->type, right->type);
+            result_type = insn->opcode == MIR_BINARY &&
+                is_cmp_op((int)insn->immediate) ? TYPE_INT : operand_type;
+            if (insn->type != result_type ||
+                (insn->opcode == MIR_BINARY &&
+                 insn->secondary_offset != operand_type)) {
+                insn->type = result_type;
+                if (insn->opcode == MIR_BINARY)
+                    insn->secondary_offset = operand_type;
+                changed = 1;
+            }
+            if (left_conversion != NULL &&
+                left_conversion->type != operand_type) {
+                left_conversion->type = operand_type;
+                changed = 1;
+            }
+            if (right_conversion != NULL &&
+                right_conversion->type != operand_type) {
+                right_conversion->type = operand_type;
+                changed = 1;
+            }
+            /* Deferred conditional arms already have edge-local conversions.
+             * Binary conversions omitted as assumed identities do not. */
+            if (insn->opcode != MIR_BINARY)
+                continue;
+            left_value = left->dst;
+            right_value = right->dst;
+            convert_left = left_conversion == NULL && left->type != operand_type;
+            convert_right = right_conversion == NULL && right->type != operand_type;
+            if (convert_left) {
+                int value = mir_new_value();
+                struct MirInsn *conversion =
+                    mir_insert_instruction_before(i++, MIR_UNARY);
+                if (conversion == NULL)
+                    fatal("cannot insert deferred float conversion");
+                conversion->dst = value;
+                conversion->src1 = left_value;
+                conversion->type = operand_type;
+                conversion->deferred_operand_types = 1;
+                mir.insns[i].src1 = value;
+                changed = 1;
+            }
+            if (convert_right) {
+                int value = mir_new_value();
+                struct MirInsn *conversion =
+                    mir_insert_instruction_before(i++, MIR_UNARY);
+                if (conversion == NULL)
+                    fatal("cannot insert deferred float conversion");
+                conversion->dst = value;
+                conversion->src1 = right_value;
+                conversion->type = operand_type;
+                conversion->deferred_operand_types = 1;
+                mir.insns[i].src2 = value;
+                changed = 1;
+            }
+        }
+    } while (changed);
 }
 
 void mir_resolve_deferred_metadata(void)
@@ -9555,6 +9684,7 @@ scoped_type_repair_done:
             one->immediate = 0x3f800000L;
         }
     }
+    mir_repair_deferred_float_types();
     /* Resolve conversion obligations only after load types are known.
      * Already-supported consumer representations keep the original graph. */
     for (i = 0; i < mir.count; ++i) {

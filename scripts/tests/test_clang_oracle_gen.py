@@ -13,7 +13,51 @@ finally:
 
 
 class IntegerKnownShapeTests(unittest.TestCase):
-    def test_block_word_initializer_steer_keeps_passing_controls(self):
+    def test_restored_block_word_cast_and_decrement_keep_their_shapes(self):
+        generator = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS))
+        word = gen.E('var', a=gen.Decl('x', gen.U16, 'block'))
+        decrement = generator.mk('incdec', [word], ('--', False))
+        self.assertEqual(decrement.op, 'incdec')
+        cast = gen.E('cast', [word], t=gen.I16)
+        wide = gen.E('var', a=gen.Decl('b', gen.I32, 'block'))
+        for operands in ([cast, wide], [wide, cast]):
+            expression = generator.mk('bin', operands, '>')
+            self.assertIn(cast, expression.k)
+            self.assertIs(cast.t, gen.I16)
+
+    def test_restored_block_pointer_walks_include_words_but_steer_longs(self):
+        for typ, off in ((gen.U16, frozenset(gen.KNOWN_BUGS)),
+                         (gen.I32, frozenset()), (gen.U32, frozenset())):
+            with self.subTest(typ=typ):
+                generator = gen.Gen(0, off=off)
+                function = gen.Func('probe', gen.I16, [], 'helper')
+                context = gen.Ctx(function, pure=True)
+                context.arrs.append(gen.Decl('a', typ, 'local', dims=(2,)))
+                with mock.patch.object(generator, 'gen_block', return_value=gen.Block()):
+                    generator.st_walk(context, 1, function.body)
+                self.assertEqual(len(function.body.stmts), 1)
+                pointer = function.body.stmts[0].b[0].decls[0]
+                self.assertIs(pointer.t.to, typ)
+                self.assertEqual(pointer.storage, 'block')
+        # BUG-063: a nested-block pointer to a 32-bit object is not walked
+        # under --off known, and a store through one is a known shape.
+        generator = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS))
+        function = gen.Func('probe', gen.I16, [], 'helper')
+        context = gen.Ctx(function, pure=True)
+        context.arrs.append(gen.Decl('a', gen.I32, 'local', dims=(2,)))
+        with mock.patch.object(generator, 'st_assign') as assign:
+            generator.st_walk(context, 1, function.body)
+        assign.assert_called_once()
+        pointer = gen.Decl('q', gen.PtrType(gen.I32), 'block')
+        store = gen.E('asg', [gen.E('deref', [gen.E('var', a=pointer)]),
+                              gen.E('const', a=65536, t=gen.I32)], '=')
+        self.assertTrue(gen.block_ptr_store(store.k[0]))
+        self.assertFalse(gen.block_ptr_store(gen.E('deref', [gen.E(
+            'var', a=gen.Decl('q', gen.PtrType(gen.I32), 'local'))])))
+        self.assertFalse(gen.block_ptr_store(gen.E('deref', [gen.E(
+            'var', a=gen.Decl('q', gen.PtrType(gen.U16), 'block'))])))
+
+    def test_restored_block_word_initializers_keep_optional_steer(self):
         cases = ((gen.I16, gen.U16, 'block', True),
                  (gen.U16, gen.I16, 'block', True),
                  (gen.I16, gen.I16, 'block', False),
@@ -27,7 +71,8 @@ class IntegerKnownShapeTests(unittest.TestCase):
                     expression = gen.E('var', a=gen.Decl('x', source, 'param'))
                     if cast:
                         expression = gen.E('cast', [expression], t=target)
-                    enabled = gen.Gen(0).initialiser(None, target, expression, storage)
+                    enabled = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS)).initialiser(
+                        None, target, expression, storage)
                     steered = gen.Gen(0, off={'blockwordinit'}).initialiser(
                         None, target, expression, storage)
                     self.assertIsNone(enabled[1])

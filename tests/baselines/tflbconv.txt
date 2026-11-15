@@ -1,0 +1,8 @@
+unary bfc00000
+assignment c0200000
+mixed 40900000
+reverse 3fc00000
+compound 40900000
+phi 41000000
+mixed phi 41000000
+chain bf800000

@@ -268,6 +268,24 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                     if options == ("-gline",):
                         self.assertEqual(actual, release)
 
+    @unittest.skipUnless((ROOT / "m80c").is_file() and (ROOT / "dccpeep").is_file(),
+                         "built assembler and peephole optimizer required")
+    def test_block_word_widening_matches_same_signed_control_after_peep(self):
+        for target, parameter in (("int16_t", "uint16_t"),
+                                  ("uint16_t", "int16_t")):
+            source = ("#include <stdint.h>\nint32_t g, a[2]; "
+                      "void probe(" + parameter + " x) { { " + target +
+                      " b = x; g = b; a[1] = b; } }\n")
+            control = source.replace(parameter + " x", target + " x")
+            with self.subTest(target=target):
+                actual = self.machine_sizes(source)
+                expected = self.machine_sizes(control)
+                self.assertEqual(actual["PEEP"], expected["PEEP"])
+                self.assertLessEqual(actual["RAW"], expected["RAW"] + 12)
+                for stack in ((), ("-fstack-check",)):
+                    self.assertEqual(self.code(self.compile(source, stack)),
+                                     self.code(self.compile(source, stack + ("-gline",))))
+
     def test_float_conversion_retains_cast_signedness(self):
         cases = (
             ("long x", "(unsigned long)x", "__fulf"),

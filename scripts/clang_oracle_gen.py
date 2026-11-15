@@ -505,6 +505,24 @@ def wide_block_store(lv, rhs):
         and rhs.a.t.bits == 32
 
 
+def block_ptr_store(lv):
+    """A 32-bit object stored through a pointer declared in a nested block:
+    the BUG-063 shape (seed 96 stores only the low word of an int32_t)."""
+    if lv.op == 'deref':
+        p = lv.k[0]
+        while p.op == 'incdec':
+            p = p.k[0]
+        if p.op != 'var':
+            return False
+        d = p.a
+    elif lv.op == 'pidx':
+        d = lv.a
+    else:
+        return False
+    return d.storage == 'block' and isinstance(d.t, PtrType) \
+        and is_int(d.t.to) and d.t.to.bits == 32
+
+
 def const_div_zero(e):
     """e is a constant divided by a constant zero, which dcc rejects even
     where it is never evaluated: the BUG-033 shape."""
@@ -556,12 +574,6 @@ def const_jump(s):
     return s.op == 'if' and is_constant(s.e[0]) and any(
         x.op in ('ret', 'break', 'continue') for sub in s.b if sub is not None
         for x in sub.stmts)
-
-
-def has_block_wide(e):
-    if e.op == 'var':
-        return e.a.storage == 'block' and is_int(e.a.t) and e.a.t.bits == 32
-    return any(has_block_wide(k) for k in e.k)
 
 
 def wide_increment_add(operator, operands):
@@ -636,6 +648,8 @@ def known_shapes(prog):
                         found.add('crosstypeasg')
                 if wide_block_store(lv, rhs):
                     found.add('blockwidecopy')
+                if block_ptr_store(lv):
+                    found.add('blockstore')
             elif is_int(lt):
                 local = lv.op == 'var' and lv.a.storage != 'global'
                 if lv.op != 'var' and lt.bits < 32 and ty(rhs).bits == 32:
@@ -664,8 +678,6 @@ def known_shapes(prog):
         elif op == 'incdec':
             lv = e.k[0]
             lt = ty(lv)
-            if lv.op == 'var' and lv.a.storage == 'block' and lt is U16:
-                found.add('blockdec')
             local = lv.op == 'var' and lv.a.storage != 'global'
             if is_int(lt) and lt.bits == 32:
                 if lv.op in ('idx', 'pidx') or (lv.op == 'fld' and lv.a.dims):
@@ -687,10 +699,6 @@ def known_shapes(prog):
                 found.add('wideincadd')
             if same_variable(e.k[0], e.k[1]):
                 found.add('selfoperand')
-            for i in (0, 1):
-                c, o = e.k[i], e.k[1 - i]
-                if c.op == 'cast' and c.t is I16 and ty(c.k[0]) is U16 and has_block_wide(o):
-                    found.add('blockcast')
             if const_div_zero(e):
                 found.add('constdivzero')
         elif op == 'call':
@@ -706,8 +714,6 @@ def known_shapes(prog):
     def decl(d):
         if wide_block_copy(d):
             found.add('blockwidecopy')
-        if d.storage == 'block' and isinstance(d.t, PtrType) and d.t.to is U16:
-            found.add('blockptr')
         if isinstance(d.init, E):
             if is_int(d.t):
                 stored(d.init, d)
@@ -1446,21 +1452,18 @@ FEATURES = frozenset((
     # forms that hit a logged dcc defect; see KNOWN_BUGS
     'widecassign', 'bytevarshl', 'castsfx', 'widepostinc', 'structbytecasg', 'negnotconst',
     'bfdivasg', 'wideidxincdec', 'logicinit', 'logicbyteinit', 'blockwidediv', 'ptrcallconv',
-    'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'blockptr', 'inittype',
+    'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'inittype',
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg', 'wideincadd',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
-    'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockcast',
-    'blockdec', 'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself', 'blockwordinit'))
+    'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockstore',
+    'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself', 'blockwordinit'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
 # table when its bug is fixed.
 KNOWN_BUGS = {
     'bytevarshl': 'BUG-002',
-    'blockptr': 'BUG-015',
-    'blockcast': 'BUG-015',
-    'blockdec': 'BUG-015',
-    'blockwordinit': 'BUG-058',
+    'blockstore': 'BUG-063',
 }
 
 
@@ -1493,21 +1496,10 @@ class Gen:
             # the checking layer only repairs a division that runs
             self.prog.nid += 1
             k = [k[0], E('const', (), 1, I16, self.prog.nid)]
-        if op == 'incdec' and not self.on('blockdec') and k[0].op == 'var' \
-                and k[0].a.storage == 'block' and ty(k[0]) is U16:
-            # a nested-block unsigned 16-bit local is changed with a compound assignment
-            return self.mk('asg', [k[0], self.small(1, 1)], a[0][0] + '=')
         if op == 'call' and not self.on('loopcallarg'):
             k = [self.mk('bin', [x, self.small(1, 1)], '^') if x.op == 'var'
                  and x.a.storage != 'global' and is_int(x.a.t) and x.a.t.bits == 32 else x
                  for x in k]
-        if op == 'bin' and not self.on('blockcast'):
-            for i in (0, 1):
-                c = k[i]
-                if c.op == 'cast' and c.t is I16 and ty(c.k[0]) is U16 and has_block_wide(k[1 - i]):
-                    # compare and combine the unsigned value without the signed cast
-                    k = list(k)
-                    k[i] = self.mk('cast', [c.k[0]], t=I32)
         self.prog.nid += 1
         return E(op, k, a, t, self.prog.nid)
 
@@ -2245,9 +2237,9 @@ class Gen:
 
     def st_walk(self, c, depth, b):
         r = self.rng
-        arrs = [d for d in c.arrs if len(d.dims) == 1 and (not c.pure or d.storage != 'global')
-                and (d.t.bits < 32 or self.on('blockptr'))
-                and (d.t is not U16 or self.on('blockptr'))]
+        arrs = [d for d in c.arrs if len(d.dims) == 1
+                and (not c.pure or d.storage != 'global')
+                and (d.t.bits < 32 or self.on('blockstore'))]
         if not arrs:
             return self.st_assign(c, depth, b)
         arr = r.choice(arrs)

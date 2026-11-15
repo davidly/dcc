@@ -1,10 +1,5 @@
-/* BUG-015: locals declared in a nested block lose their declared type in
- * further shapes. Through a nested-block pointer to a 32-bit object, `*q *= k`
- * is computed in 16 bits and `c <= *q` is compared as signed; a nested-block
- * unsigned char is compared as unsigned int. A nested-block pointer to a
- * uint16_t with the top bit set is shifted and divided as signed. Each is
- * correct when the local is declared at function scope. Beside a nested-block
- * 32-bit local, `(int16_t)` of an unsigned 16-bit value is lost as an operand. */
+/* Nested-block pointer arithmetic, byte/bit-field promotion, signed word
+ * casts, widened decrements and unsigned word pointer shifts/division. */
 #include <stdint.h>
 #include <stdio.h>
 

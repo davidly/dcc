@@ -47,16 +47,14 @@ FEATURES = frozenset((
     'fincdec', 'fincdecval', 'fasgval', 'fconst', 'mixarith', 'f2u', 'f2i8', 'i8', 'u32',
     'fchain', 'fcmpconst',
     # forms that hit a logged dcc defect; see KNOWN_BUGS
-    'fdivround', 'fconstfold', 'icasgf', 'fblockneg', 'fnegcmp', 'fretconv',
-    'fintprodadd', 'fu32cast', 'fnegzero_not', 'fparamcmp', 'fblockint', 'finittype',
+    'fdivround', 'fconstfold', 'icasgf', 'fnegcmp', 'fretconv',
+    'fintprodadd', 'fu32cast', 'fnegzero_not', 'fparamcmp', 'finittype',
     'fconstjump', 'fselfop', 'fconstcond', 'floopcallarg', 'fptrparam', 'farrloopindex'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering.
 KNOWN_BUGS = {
     'fincdecval': 'BUG-041, BUG-056, BUG-059',
-    'fblockneg': 'BUG-015',
-    'fblockint': 'BUG-015',
 }
 
 
@@ -183,30 +181,7 @@ def is_paramcmp(e):
         and not (is_anyconst(rhs.k[1]) and ty(rhs) is not F32)
 
 
-def block_object(e):
-    """The nested-block variable e reads: a variable, an element, or the
-    value of an assignment to one (`(b = 1.18f)` behaves like `b`, seeds
-    1490 and 1861); else None."""
-    if e.op == 'asg':
-        e = e.k[0]
-    if e.op in ('var', 'idx') and e.a.storage == 'block':
-        return e.a
-    return None
 
-
-def is_blockint(e):
-    """A nested-block integer variable used as it stands."""
-    d = block_object(e)
-    return d is not None and is_int(d.t)
-
-
-def is_blockfloat(e):
-    """A nested-block float variable, or a `?:` whose arms are all such
-    variables (`fg ? b5 : b6` behaves like `b5`, seed 4750)."""
-    if e.op == 'cond':
-        return all(is_blockfloat(a) for a in e.k[1:])
-    d = block_object(e)
-    return d is not None and d.t is F32
 
 
 def is_paramcond(e):
@@ -249,26 +224,6 @@ def is_selfop(e):
     a, b = e.k
     return same_variable(a, b) and a.a.storage != 'global' and is_wide(a.a.t)
 
-
-def blockint_operands(e):
-    """Indexes of e's operands that are the BUG-015 facet shapes: a
-    nested-block integer variable converted to float by its context
-    (arithmetic, comparison, `?:` arm, compound assignment, or a store to
-    a float element, member or pointee), or an integer operand of float
-    arithmetic/comparison/compound assignment whose other operand is a
-    nested-block float variable. A call argument and a store to a plain
-    float variable convert correctly, and so does `(float)b`."""
-    if e.op in ('call', 'cast'):
-        return []
-    if e.op == 'asg' and e.a == '=' and e.k[0].op == 'var':
-        return []
-    out = [i for i, (k, want) in enumerate(zip(e.k, float_contexts(e)))
-           if want is F32 and is_blockint(k)]
-    if (e.op == 'bin' and e.a in ('+', '-', '*', '/') + CMP) or \
-            (e.op == 'asg' and e.a != '='):
-        if any(is_blockfloat(k) for k in e.k):
-            out += [i for i, k in enumerate(e.k) if is_int(ty(k)) and i not in out]
-    return out
 
 
 def simple_const(v, t):
@@ -341,8 +296,6 @@ def known_shapes(prog):
             found.add('fconstfold')
         if e.op == 'asg' and e.a != '=' and is_int(ty(e.k[0])) and ty(e.k[1]) is F32:
             found.add('icasgf')
-        if e.op == 'un' and e.a == '-' and is_blockfloat(e.k[0]):
-            found.add('fblockneg')
         if is_loopcallarg(e):
             found.add('floopcallarg')
         if is_paramcond(e):
@@ -355,8 +308,6 @@ def known_shapes(prog):
             found.add('fintprodadd')
         if e.op == 'un' and e.a == '!' and ty(e.k[0]) is F32:
             found.add('fnegzero_not')
-        if blockint_operands(e):
-            found.add('fblockint')
         for k, want in zip(e.k, float_contexts(e)):
             if want is F32 and is_u32s(k):
                 found.add('fu32cast')
@@ -845,8 +796,6 @@ class Gen:
         if kind == 'neg':
             e = self.fexpr(c, depth - 1)
             if is_fconst(e) and not self.on('fconstfold'):
-                return e
-            if is_blockfloat(e) and not self.on('fblockneg'):
                 return e
             return self.mk('un', [e], '-')
         if kind == 'cond':
@@ -1344,9 +1293,6 @@ class Gen:
                     e2.k.append(E('const', a=0.0, t=F32))
                     slot_set(slot, e2)
                     e = e2
-                if not self.on('fblockint'):
-                    for i in blockint_operands(e):
-                        e.k[i] = self.fcast(e.k[i])
                 if not self.on('fselfop') and is_selfop(e):
                     # `b OP b` -> `b OP (b + 0)`
                     t = ty(e.k[1])
