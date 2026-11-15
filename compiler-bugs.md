@@ -561,7 +561,7 @@ interleaved debug-marker lines (see T2/D2d notes in fix-plan.md).
 
 ### BUG-041
 
-**Closed by D2e-2 (#PRNUM); promoted as `tests/tfincval.c`.**
+**Closed by D2e-2 (#337); promoted as `tests/tfincval.c`.**
 
 **The value of a float `++` or `--` expression is rejected.** `DCC-E1002`
 ("unsupported expression statement", "unsupported if condition or branch",
@@ -590,7 +590,7 @@ if (fa[1]++ > 1.0f) g = 9.0f;  /* array element, and a local float too */
 
 ### BUG-056
 
-**Closed by D2e-2 (#PRNUM); promoted as `tests/tfnegupd.c`.**
+**Closed by D2e-2 (#337); promoted as `tests/tfnegupd.c`.**
 
 **Latent: negating a float member-array `++` / `--` value uses integer
 negation and narrowing instead of IEEE sign-bit negation.** Found by D2b's
@@ -633,7 +633,7 @@ float out[2];
 
 ### BUG-059
 
-**Closed by D2e-2 (#PRNUM); promoted as `tests/tfupdcnv.c`.**
+**Closed by D2e-2 (#337); promoted as `tests/tfupdcnv.c`.**
 
 **Latent: deferred float update arithmetic is typed as float but lacks an
 implicit integer-to-float operand conversion.** Found at restored float seed
