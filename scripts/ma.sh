@@ -39,7 +39,7 @@ script options:
     --help, -h          show this help
 
 dcc pipeline:
-    dcc -> dccpeep (fast mode) -> m80c -> dccrtlstrip -> m80c -> l80c
+    dcc -> dccpeep (fast mode) -> dccrtlstrip --strip-apps -> m80c -> dccrtlstrip -> m80c -> l80c
     (or ntvcm M80.COM/L80.COM in place of m80c/l80c, with --emulated-m80/--emulated-l80)
 
 dcc options controlled by this helper:
@@ -70,6 +70,8 @@ tool and asset overrides:
 
 environment:
     DCC_ARGS                    extra whitespace-separated dcc options
+    DCC_STRIP_UNUSED=0          skip the whole-program unreachable function/object strip
+                                 that dccmake runs by default (dcc-strip-unused=false)
     NTVCM_ARGS                  extra whitespace-separated ntvcm options before M80/L80
 
 ntvcm options:
@@ -423,6 +425,13 @@ run_one() {
     if [ "$use_peep" -eq 1 ]; then
         "$(resolve_command "$DCCPEEP")" "$app_mac" "$peep_tmp"
         mv -f "$peep_tmp" "$app_mac"
+    fi
+
+    # Same whole-program strip dccmake runs before assembly: unreachable
+    # functions and objects (e.g. large static arrays only used in sizeof)
+    # would otherwise be assembled and can push the module past 64K.
+    if [ "${DCC_STRIP_UNUSED:-1}" != "0" ]; then
+        "$(resolve_command "$DCCRTLSTRIP")" --strip-apps "$app_mac"
     fi
 
     to_crlf "$app_mac"
