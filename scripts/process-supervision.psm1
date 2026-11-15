@@ -29,9 +29,14 @@ function Start-SupervisedProcess(
     $jobName = "Local\dcc-process-" + [guid]::NewGuid()
     $job = [IntPtr]::Zero
     $start.Environment["DCC_PROCESS_SCOPE"] = $scope
-    $useDirectUnixSupervisor = -not $IsWindows -and
-        $null -ne (Get-Command "setsid" -ErrorAction SilentlyContinue)
-    if (-not $useDirectUnixSupervisor) {
+    $unixLauncher = if ($IsWindows) {
+        $null
+    } elseif (Get-Command "setsid" -ErrorAction SilentlyContinue) {
+        "setsid"
+    } elseif (Get-Command "perl" -ErrorAction SilentlyContinue) {
+        "perl"
+    }
+    if ($null -eq $unixLauncher) {
         $start.FileName = (Get-Process -Id $PID).Path
         $request = Join-Path $scope "request.json"
         [ordered]@{
@@ -42,15 +47,25 @@ function Start-SupervisedProcess(
             (Join-Path $PSScriptRoot "process-supervisor.ps1"), "-RequestPath", $request)) {
             $start.ArgumentList.Add($argument)
         }
-    } else {
+    } elseif ($unixLauncher -eq "setsid") {
         # setsid and exec provide the same killable process group without an
-        # extra PowerShell runtime. Platforms without the setsid utility use
-        # the portable PowerShell supervisor, whose native helper calls setsid.
+        # extra PowerShell runtime.
         $start.FileName = "setsid"
         foreach ($argument in @(
             "/bin/sh", "-c",
             'umask 077; : > "$DCC_PROCESS_SCOPE/ready"; exec "$@"',
             "dcc-process-supervisor", $FilePath) + $Arguments) {
+            $start.ArgumentList.Add($argument)
+        }
+    } else {
+        # macOS ships no setsid utility but always has perl. A direct setsid
+        # and exec avoids starting a PowerShell runtime for every launch; the
+        # portable PowerShell supervisor below is the last resort.
+        $start.FileName = "perl"
+        $script = 'defined POSIX::setsid() or die "setsid: $!\n"; umask 077; ' +
+            'open(my $r, ">", "$ENV{DCC_PROCESS_SCOPE}/ready") or die "ready: $!\n"; ' +
+            'close $r; exec { $ARGV[0] } @ARGV or die "exec $ARGV[0]: $!\n"'
+        foreach ($argument in @("-MPOSIX", "-e", $script, "--", $FilePath) + $Arguments) {
             $start.ArgumentList.Add($argument)
         }
     }

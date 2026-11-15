@@ -137,6 +137,38 @@ Stop-SupervisedProcess $child
         self.assertEqual(result, {"exitCode": 0, "timedOut": False, "output": "42"})
 
     @unittest.skipIf(os.name == "nt", "setsid fallback is Unix-only")
+    @unittest.skipUnless(shutil.which("perl"), "requires perl")
+    def test_missing_setsid_with_perl_launches_directly(self):
+        tools = self.workspace / "perl-only-path"
+        tools.mkdir()
+        (tools / "perl").symlink_to(shutil.which("perl"))
+        environment = dict(os.environ, PATH=str(tools))
+        code = (
+            "import os, pathlib, time; "
+            f"pathlib.Path({str(self.workspace / 'child-pid')!r}).write_text(str(os.getpid())); "
+            "time.sleep(30)"
+        )
+        result = self.run_powershell("$code = @'\n" + code + "\n'@\n" + r'''
+$child = Start-SupervisedProcess $python @("-c", "print(44)") $directory
+$requestExists = Test-Path -LiteralPath (Join-Path $child.ScopePath "request.json")
+$result = Complete-SupervisedProcess $child
+$leader = Start-SupervisedProcess $python @("-c", $code) $directory
+while (-not (Test-Path -LiteralPath "$directory/child-pid")) { Start-Sleep -Milliseconds 10 }
+$ready = Test-Path -LiteralPath (Join-Path $leader.ScopePath "ready")
+$stopped = Complete-SupervisedProcess $leader 0
+@{ exitCode = $result.ExitCode; timedOut = $result.TimedOut;
+   output = $result.Output.Trim(); requestExists = $requestExists;
+   ready = $ready; leaderTimedOut = $stopped.TimedOut;
+   child = [int](Get-Content -LiteralPath "$directory/child-pid") } | ConvertTo-Json
+''', environment)
+        self.assertEqual(
+            {k: result[k] for k in ("exitCode", "timedOut", "output", "requestExists", "ready")},
+            {"exitCode": 0, "timedOut": False, "output": "44",
+             "requestExists": False, "ready": True})
+        self.assertTrue(result["leaderTimedOut"])
+        self.assert_process_gone(result["child"])
+
+    @unittest.skipIf(os.name == "nt", "setsid fallback is Unix-only")
     def test_missing_setsid_uses_portable_supervisor(self):
         environment = dict(os.environ, PATH=str(self.workspace / "empty-path"))
         result = self.run_powershell(r'''

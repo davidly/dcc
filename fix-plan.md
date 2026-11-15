@@ -912,6 +912,38 @@ also covers three-dimensional members, `sizeof a / sizeof a[0]` idioms,
 members through pointers and nested-struct arrays, and struct sizes that
 agree with the padded host layout.
 
+### T5. Proof-suite gates: compound-check exact control and process supervisor
+
+| Issue | Shape |
+| --- | --- |
+| #277 | `test_mir_exact_controls` cmp15ok/cmp4ok/cmp45ok: the compound-check-runner exact schedule rejected `main` in `cmpw4.c` since `523f5738` (the bool-branch rewrite) |
+| #280 | `test_mir_compiler_mutations` intermittently reports exit 139 with an empty log in whichever phase it wrapped |
+
+**#277:** the rewrite inserts three identity `int` conversions into `main`'s
+MIR (976 instructions, NOP 139, UNARY 22; final load at 966) while the
+semantic event walk the schedule proves is unchanged (71 checks, helper at
+58, 188 events). The fingerprint gate in
+`mir_match_compound_check_runner()` was refreshed to the new shape, and
+`scripts/compound-wave45-audit.py` now records the exact schedule's baseline
+hash (`40d373f3…`, S2 had captured the generic emitter's) with the post-522
+mutation indices shifted by two. Audit: 13/13
+mutations rejected, 24 source controls pass; cmpw4 peep 9344 → 8448 bytes,
+2,739,369 → 2,733,407 cycles; nopeep 9856 → 9344 bytes, 2,893,002 →
+2,886,530 cycles, identical output.
+
+**#280:** not a compiler bug. macOS has no `setsid` utility, so
+`Start-SupervisedProcess` launched a fresh `pwsh` supervisor (with an
+`Add-Type` C# compile) for every supervised process; a mutation run spawns
+hundreds, and a known intermittent .NET arm64 startup SIGSEGV surfaces as
+exit 139 with no log. The module now prefers `setsid`, then a direct
+`perl -MPOSIX` setsid/umask/`ready`/exec launcher, and keeps the PowerShell
+supervisor only as the last resort (and on Windows). Semantics (`ready`
+marker before exec, umask 077, scope env) are unchanged;
+`test_process_supervision` gains a perl-only-PATH case, the mutation test
+runs in 201 s instead of ~240 s, and the full script suite is green,
+closing the "pre-existing cmp15ok/cmp4ok/cmp45ok" caveats recorded in the
+S2, T3 and T4 notes below.
+
 ### T3. Nested-block derived operands typed before declaration replay
 
 | Bug | Issue | Shape |
@@ -4629,8 +4661,9 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | T1 | [#334](https://github.com/davidly/dcc/pull/334) (`fix/cluster-t1-promoted-slot-hole`) | merged; BUG-064 closed | hole proof rejects fused self-store/PHI-homed promoted locals; BUG-064 promoted as tslothol; all 591 test outputs byte-identical, census and 545 perf rows unchanged |
 | S2 | `fix/bug062-sizeof-size_t` | BUG-062, BUG-065 and BUG-066 closed; BUG-067 and BUG-068 logged | full unsigned `sizeof` with AST proven-signedness demotion; emitter/dccpeep recovery, 0 perf regressions / 255 improvements; tsizesgn, tvaiyhom and tszblock promoted; 39 campaign hashes refreshed; generator emits `sizeof` |
 | T2 | [#335](https://github.com/davidly/dcc/pull/335) (`fix/cluster-t2-store-conversion`) | merged; BUG-063 closed | implicit indirect-store conversion retargeted by pointee repair; BUG-063 promoted as tblkstor; `blockstore` steer removed; all test outputs byte-identical, 546 perf rows unchanged; int 1–300: 296 ok/4 INVALID/0 FAIL |
-| T3 | `fix/bug067-068-block-deferred` | PR open; BUG-067 and BUG-068 closed; BUG-069 logged | deferred `sizeof` and `INDEXADDR` typing for nested-block derived operands; tszderiv and tptrcasg promoted; five VLA exact-schedule hashes and the packed-record control hashes refreshed (main's were wrong); 0 perf regressions / 146 improvements; `blockcassign` steer removed |
-| T4 | `fix/bug069-member-sizeof` | PR open; BUG-069 closed | `sizeof` of a whole or partially indexed multi-dimensional array member uses the field size / remaining-dimension product; tszmdim promoted; 0 perf regressions / 146 improvements |
+| T3 | `fix/bug067-068-block-deferred` | Merged (#342); BUG-067 and BUG-068 closed; BUG-069 logged | deferred `sizeof` and `INDEXADDR` typing for nested-block derived operands; tszderiv and tptrcasg promoted; five VLA exact-schedule hashes and the packed-record control hashes refreshed (main's were wrong); 0 perf regressions / 146 improvements; `blockcassign` steer removed |
+| T4 | `fix/bug069-member-sizeof` | Merged (#343); BUG-069 closed | `sizeof` of a whole or partially indexed multi-dimensional array member uses the field size / remaining-dimension product; tszmdim promoted; 0 perf regressions / 146 improvements |
+| T5 | `fix/proof-suite-gates` | PR open; closes #277 and #280 | compound-check-runner exact schedule fingerprint refreshed after the bool-branch rewrite (cmp15ok/cmp4ok/cmp45ok controls pass again; wave-45 audit baseline and indices updated); process supervisor prefers `setsid`, then a direct perl setsid launcher, over a per-launch pwsh supervisor (removes the macOS exit-139 flake); 0 perf regressions |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
