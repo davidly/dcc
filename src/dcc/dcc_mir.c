@@ -3999,8 +3999,15 @@ static int mir_lower_expr_impl(const struct AstNode *node)
                 type_ptr_depth(address_definition->type) > 0)
                 target_type = type_decay_ptr(address_definition->type);
             if (node->op == '=') {
+                int converted;
                 value = mir_lower_expr(node->b);
-                value = mir_lower_conversion(value, target_type);
+                converted = mir_lower_conversion(value, target_type);
+                /* Flag 2048 marks a conversion to a target type that may
+                 * still be an assumption (block-scoped pointer not yet
+                 * typed); repair retargets it with the store. */
+                if (converted != value)
+                    mir_mutable_definition(converted)->memory_flags |= 2048;
+                value = converted;
             } else {
                 int binary_operator = mir_compound_binary_operator(node->op);
                 if (binary_operator == 0)
@@ -8355,6 +8362,30 @@ static void mir_repair_divmod_types(void)
     }
 }
 
+/* Assignment lowering converts a typed source to the target assumed for a
+ * pointer that is not yet typed (flag 2048). When indirect repair learns
+ * the real pointee, that implicit conversion must follow it or only part
+ * of the value reaches memory (BUG-063). An explicit cast is untouched. */
+static void mir_retarget_store_conversion(struct MirInsn *store,
+                                          int pointee_type)
+{
+    struct MirInsn *conversion = mir_mutable_definition(store->src2);
+    const struct MirInsn *source;
+
+    if (conversion == NULL || conversion->opcode != MIR_UNARY ||
+        (conversion->memory_flags & 2048) == 0 ||
+        conversion->type != store->type)
+        return;
+    source = mir_definition(conversion->src1);
+    if (source != NULL && source->type == pointee_type) {
+        mir_replace_value_uses(conversion->dst, conversion->src1);
+        conversion->opcode = MIR_NOP;
+        conversion->dst = -1;
+        return;
+    }
+    conversion->type = pointee_type;
+}
+
 /*
  * Try to resolve one deferred (memory_flags & 8) MIR_MEMBER_ADDRESS
  * instruction's field now: derive the base struct type either from a named
@@ -9615,9 +9646,16 @@ scoped_type_repair_done:
             insn->dst = -1;
             continue;
         }
+        if (insn->opcode == MIR_STORE_INDIRECT && insn->type != pointee_type)
+            mir_retarget_store_conversion(insn, pointee_type);
         insn->type = pointee_type;
         insn->memory_size = type_size(pointee_type);
     }
+    /* The store-conversion mark is lowering metadata only; downstream
+     * matchers require unflagged unaries. */
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_UNARY)
+            mir.insns[i].memory_flags &= ~2048;
 
     /* Retry any MIR_MEMBER_ADDRESS still left deferred by the pass above: a
      * chained access like `a.p->c` needs `a.p`'s MIR_LOAD_INDIRECT pointee

@@ -30,14 +30,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-056](#bug-056) | #299 | latent wrong result | Negated float member-array increment/decrement value is treated as an integer after admission |
 | [BUG-059](#bug-059) | #316 | latent wrong result | Deferred float update arithmetic lacks an implicit integer-to-float conversion after type repair |
 | [BUG-062](#bug-062) | #327 | wrong result | Small and runtime `sizeof` results retain signed AST typing; full unsigned typing and exact-schedule recovery are deferred |
-| [BUG-063](#bug-063) | #332 | wrong result | A store through a nested-block pointer to a 32-bit object keeps the 16-bit conversion inserted for the assumed target |
 
-Five are open: two give wrong results with no diagnostic,
+Four are open: one gives wrong results with no diagnostic,
 two latent wrong-code findings are blocked by
 BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
 promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Fifty-seven reported bugs are fixed: [one in cluster T1](#fixed-in-cluster-t1),
+Fifty-eight reported bugs are fixed: [one in cluster T2](#fixed-in-cluster-t2),
+[one in cluster T1](#fixed-in-cluster-t1),
 [two in cluster A3](#fixed-in-cluster-a3),
 [one in cluster S1](#fixed-in-cluster-s1),
 [one in cluster F1](#fixed-in-cluster-f1),
@@ -119,25 +119,6 @@ whole-VLA runtime form have the same residual defect.
   lines. The integer generator `scripts/clang_oracle_gen.py` never emits
   `sizeof`, so no `KNOWN_BUGS` steer is added and no generator is changed.
 
-
-## BUG-063
-
-**A store through a pointer declared in a nested block keeps the 16-bit
-conversion inserted for the assumed assignment target, so only the low word
-of a 32-bit value reaches the pointee.** `{ int32_t *q = &a[0]; *q = x; }`
-stores `0` for `x == 65536` and `-1` for `-65537`; `*q = (int32_t)65536`
-also stores `0`. The same store with `q` declared at function scope is
-correct. Found by A4's restored-`blockptr` probe (integer seed 96) and
-confirmed when the BUG-015 steers were removed in A3.
-
-- `mir_lower_expr_impl()` inserts a word conversion for the assumed target;
-  the later pointer/store repair sets `MIR_STORE_INDIRECT.memory_size` to four
-  but retains that `MIR_UNARY` source conversion. This is a store-conversion
-  obligation, distinct from the indirect-load/binary ordering fixed in A4.
-- Reproducer: [bug063.c](tests/known-bugs/bug063.c) (host clang O0/O2 and
-  ASan/UBSan agree; dcc fails three of four lines in both modes). Integer
-  generator steer `blockstore` (walks over 32-bit arrays through a
-  nested-block pointer) keeps `--off known` runs quiet.
 
 ## BUG-062
 
@@ -591,6 +572,48 @@ va = 1.0f; vb = 1.85f;  /* want 3f0a60dd, dcc 3f0a60de */
   so every float quotient goes through the one routine.
 - Also at v3.6.0 (`20290235`) with today's runtime.
 - Found by hand probing (the float generator excludes `/` as `fdivround`).
+
+## Fixed in cluster T2
+
+Assignment through an index or dereference lowers its right-hand side with
+`mir_lower_conversion()` to the target type known at that moment. For a
+pointer declared in a nested block that type is still the assumed `int`, so
+a typed 32-bit source gains an eager narrowing `MIR_UNARY`. The indirect
+store repair later learns the pointee and re-types the `MIR_STORE_INDIRECT`
+to four bytes but left that conversion in place, so only the low word was
+stored. The deferred-conversion obligation did not apply because it covers
+untyped sources only.
+
+The lowering now marks the implicit store conversion (flag 2048, cleared
+after repair), and when the repair changes an indirect store's type it
+retargets that conversion: it is bypassed when the source already has the
+pointee type, otherwise re-typed. Explicit casts are untouched. Generated
+assembly for all existing test programs is byte-identical and all 546
+existing perf rows are unchanged. With `blockstore` removed, integer seeds
+1–300 give 296 ok / 4 INVALID / 0 FAIL.
+
+### BUG-063
+
+**A store through a pointer declared in a nested block keeps the 16-bit
+conversion inserted for the assumed assignment target, so only the low word
+of a 32-bit value reaches the pointee.** `{ int32_t *q = &a[0]; *q = x; }`
+stores `0` for `x == 65536` and `-1` for `-65537`; `*q = (int32_t)65536`
+also stores `0`. The same store with `q` declared at function scope is
+correct. Found by A4's restored-`blockptr` probe (integer seed 96) and
+confirmed when the BUG-015 steers were removed in A3.
+
+- `mir_lower_expr_impl()` inserts a word conversion for the assumed target;
+  the later pointer/store repair sets `MIR_STORE_INDIRECT.memory_size` to four
+  but retains that `MIR_UNARY` source conversion. This is a store-conversion
+  obligation, distinct from the indirect-load/binary ordering fixed in A4.
+- Reproducer: [tblkstor.c](tests/tblkstor.c) (host clang O0/O2 and
+  ASan/UBSan agree; dcc fails three of four lines in both modes). Integer
+  generator steer `blockstore` (walks over 32-bit arrays through a
+  nested-block pointer) keeps `--off known` runs quiet.
+
+**Closed by T2 (#335).** The reproducer is promoted as
+[tblkstor](tests/tblkstor.c) (`tblkstor,102746,102844,3328,3328`) and the
+`blockstore` steer is removed.
 
 ## Fixed in cluster T1
 

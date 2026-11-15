@@ -505,24 +505,6 @@ def wide_block_store(lv, rhs):
         and rhs.a.t.bits == 32
 
 
-def block_ptr_store(lv):
-    """A 32-bit object stored through a pointer declared in a nested block:
-    the BUG-063 shape (seed 96 stores only the low word of an int32_t)."""
-    if lv.op == 'deref':
-        p = lv.k[0]
-        while p.op == 'incdec':
-            p = p.k[0]
-        if p.op != 'var':
-            return False
-        d = p.a
-    elif lv.op == 'pidx':
-        d = lv.a
-    else:
-        return False
-    return d.storage == 'block' and isinstance(d.t, PtrType) \
-        and is_int(d.t.to) and d.t.to.bits == 32
-
-
 def const_div_zero(e):
     """e is a constant divided by a constant zero, which dcc rejects even
     where it is never evaluated: the BUG-033 shape."""
@@ -648,8 +630,6 @@ def known_shapes(prog):
                         found.add('crosstypeasg')
                 if wide_block_store(lv, rhs):
                     found.add('blockwidecopy')
-                if block_ptr_store(lv):
-                    found.add('blockstore')
             elif is_int(lt):
                 local = lv.op == 'var' and lv.a.storage != 'global'
                 if lv.op != 'var' and lt.bits < 32 and ty(rhs).bits == 32:
@@ -1455,7 +1435,7 @@ FEATURES = frozenset((
     'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'inittype',
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg', 'wideincadd',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
-    'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum', 'blockstore',
+    'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum',
     'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself', 'blockwordinit'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
@@ -1463,7 +1443,6 @@ FEATURES = frozenset((
 # table when its bug is fixed.
 KNOWN_BUGS = {
     'bytevarshl': 'BUG-002',
-    'blockstore': 'BUG-063',
 }
 
 
@@ -2238,8 +2217,7 @@ class Gen:
     def st_walk(self, c, depth, b):
         r = self.rng
         arrs = [d for d in c.arrs if len(d.dims) == 1
-                and (not c.pure or d.storage != 'global')
-                and (d.t.bits < 32 or self.on('blockstore'))]
+                and (not c.pure or d.storage != 'global')]
         if not arrs:
             return self.st_assign(c, depth, b)
         arr = r.choice(arrs)

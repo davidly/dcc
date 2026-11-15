@@ -39,24 +39,6 @@ class IntegerKnownShapeTests(unittest.TestCase):
                 pointer = function.body.stmts[0].b[0].decls[0]
                 self.assertIs(pointer.t.to, typ)
                 self.assertEqual(pointer.storage, 'block')
-        # BUG-063: a nested-block pointer to a 32-bit object is not walked
-        # under --off known, and a store through one is a known shape.
-        generator = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS))
-        function = gen.Func('probe', gen.I16, [], 'helper')
-        context = gen.Ctx(function, pure=True)
-        context.arrs.append(gen.Decl('a', gen.I32, 'local', dims=(2,)))
-        with mock.patch.object(generator, 'st_assign') as assign:
-            generator.st_walk(context, 1, function.body)
-        assign.assert_called_once()
-        pointer = gen.Decl('q', gen.PtrType(gen.I32), 'block')
-        store = gen.E('asg', [gen.E('deref', [gen.E('var', a=pointer)]),
-                              gen.E('const', a=65536, t=gen.I32)], '=')
-        self.assertTrue(gen.block_ptr_store(store.k[0]))
-        self.assertFalse(gen.block_ptr_store(gen.E('deref', [gen.E(
-            'var', a=gen.Decl('q', gen.PtrType(gen.I32), 'local'))])))
-        self.assertFalse(gen.block_ptr_store(gen.E('deref', [gen.E(
-            'var', a=gen.Decl('q', gen.PtrType(gen.U16), 'block'))])))
-
     def test_restored_block_word_initializers_keep_optional_steer(self):
         cases = ((gen.I16, gen.U16, 'block', True),
                  (gen.U16, gen.I16, 'block', True),

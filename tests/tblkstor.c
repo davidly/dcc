@@ -1,7 +1,8 @@
-/* BUG-063: a store through a pointer declared in a nested block keeps the
- * 16-bit conversion that was inserted for the assumed assignment target, so
- * only the low word of a 32-bit value reaches the pointee. The same store is
- * correct when the pointer is declared at function scope. */
+/* Promoted BUG-063 (#332): a store through a pointer declared in a nested
+ * block converted the stored value to the target type assumed before the
+ * pointer was typed, so only the low word of a 32-bit value reached the
+ * pointee. The same store was correct with the pointer at function scope.
+ * Prints 65536 / -65537 / 65536 / 65536. */
 #include <stdint.h>
 #include <stdio.h>
 

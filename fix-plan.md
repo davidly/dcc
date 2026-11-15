@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has five open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has four open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -812,6 +812,34 @@ all in `tblkbind`/`tblkcast`/`tblkword`/`tflbconv`. The agent stopped on
 quota before documentation; the maintainer's orchestrator finished the branch
 directly. D2e-2's float update admission scope (BUG-041/056/059) is not part
 of this close-out and stays open.
+
+### T2. Implicit store conversion fixed to the assumed pointee
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-063 | #332 | `{ int32_t *q = &a[0]; *q = x; }` stores only the low word |
+
+**Confirmed root cause:** the `AST_INDEX`/`*` assignment path calls
+`mir_lower_conversion(value, target_type)` with the target type known at
+lowering. A block-scoped pointer is not yet typed, so the target is the
+assumed `int` and a typed `int32_t` source gets an eager narrowing
+`MIR_UNARY`. The indirect-store repair later sets the store's type and
+`memory_size` from the real pointee but never revisited that conversion.
+`deferred_conversion_type` does not cover it: it only handles untyped
+(type 0) sources.
+
+**Fix:** the implicit conversion is flagged (2048) at lowering; when the
+repair changes a `MIR_STORE_INDIRECT`'s type, `mir_retarget_store_conversion`
+bypasses the conversion if the source already has the pointee type and
+re-types it otherwise. The flag is cleared after repair because spilled
+matchers require unflagged unaries. Explicit casts are not flagged.
+
+**Validation:** `bug063` FIXED in both modes; all existing test outputs
+byte-identical against main `96cd2f05` (only `tstdc`'s `__TIME__`); all 546
+existing perf rows unchanged; strict runall full+extended SUCCESS; Python
+tool tests OK; `blockstore` steer removed, integer seeds 1–300: 296 ok /
+4 INVALID / 0 FAIL. Promoted as `tblkstor`
+(`tblkstor,102746,102844,3328,3328`).
 
 ### T1. Promoted-local slot hole reused under a materialized store
 
@@ -4365,6 +4393,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | A2c | [#318](https://github.com/davidly/dcc/pull/318) (`fix/cluster-a2c-block-type-resolution`) | draft PR; stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
 | A3 | [#331](https://github.com/davidly/dcc/pull/331) (`fix/cluster-a3`) | merged; BUG-058 and BUG-015 closed | BUG-058 promoted as tblkword, BUG-015 as tblkbind (with A4 + cherry-picked D2e-2 repair); tblkcast kept; all existing census functions and perf rows unchanged; five steers removed; restored integer 293 ok/3 INVALID/3 limit/1 FAIL (seed 261 → BUG-064), float 295 ok/5 INVALID; seed 96 → BUG-063 with `blockstore` steer |
 | T1 | [#334](https://github.com/davidly/dcc/pull/334) (`fix/cluster-t1-promoted-slot-hole`) | merged; BUG-064 closed | hole proof rejects fused self-store/PHI-homed promoted locals; BUG-064 promoted as tslothol; all 591 test outputs byte-identical, census and 545 perf rows unchanged |
+| T2 | [#335](https://github.com/davidly/dcc/pull/335) (`fix/cluster-t2-store-conversion`) | merged; BUG-063 closed | implicit indirect-store conversion retargeted by pointee repair; BUG-063 promoted as tblkstor; `blockstore` steer removed; all test outputs byte-identical, 546 perf rows unchanged; int 1–300: 296 ok/4 INVALID/0 FAIL |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |

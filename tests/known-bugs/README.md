@@ -105,11 +105,12 @@ load typing (`tests/tptrblk.c`) and the D2e-2 deferred float operand repair
 is promoted as `tests/tblkbind.c`; the `blockptr`, `blockcast`, `blockdec`,
 `fblockneg` and `fblockint` steers are removed.
 
-Restoring those shapes exposed two new parked defects. BUG-063 (#332, `bug063.c`)
-is a store through a nested-block pointer to a 32-bit object that keeps the
-16-bit conversion inserted for the assumed target; the integer generator steer
-`blockstore` holds it off. BUG-064 (#333) was integer seed 261 reduced to one
-call: a promoted local's frame slot was reused as a spill hole while its fused
+Restoring those shapes exposed two defects, both since fixed. BUG-063 (#332)
+was a store through a nested-block pointer to a 32-bit object that kept the
+16-bit conversion inserted for the assumed target; T2 retargets that
+conversion in the pointee repair and promotes the reproducer as
+`tests/tblkstor.c`. BUG-064 (#333) was integer seed 261 reduced to one call:
+a promoted local's frame slot was reused as a spill hole while its fused
 `inc (ix+n)` self-store still wrote it, incrementing a spilled function
 pointer. T1 tightened the hole proof and promoted the reproducer as
 `tests/tslothol.c`.
