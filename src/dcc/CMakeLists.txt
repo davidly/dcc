@@ -55,6 +55,7 @@ set(DCC_SOURCES
     dcc_ast_capture.c      # AST initializer capture and inline metadata
     dcc_ast_stmt_classify.c      # AST statement/condition classification gates
     dcc_ast_stmt_meta.c     # AST statement parsing/sizing metadata
+    dcc_ast_sizeof.c        # proven int demotion of sizeof-derived terms
     dcc_mir.c               # MIR lowering, metadata repair, and analysis
     dcc_mir_verify.c
     dcc_mir_emit_common.c

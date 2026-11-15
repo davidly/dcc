@@ -38,7 +38,7 @@ REJECT_REASON = re.compile(
     r"template=symbol-insert-schedule reject=(?P<reason>\S+)"
 )
 BASELINE_SHA256 = (
-    "eca6daabf5f6a3a4f3eceac8d7bf1af579f77a35488ad24948b9b84311cb8dc8"
+    "e526be4a60cb8a1ed99f8c8cb4ea81a83c472e35820f3f60fe585b8f912c5910"
 )
 BASELINE_SELECTED_HASH = "32ea8a28"
 BASELINE_RUNTIME = (

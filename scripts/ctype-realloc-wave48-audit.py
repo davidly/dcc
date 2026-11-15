@@ -38,7 +38,7 @@ REJECT_REASON = re.compile(
     r"template=ctype-realloc-schedule reject=(?P<reason>\S+)"
 )
 BASELINE_SHA256 = (
-    "79b812a81fb9c15ef1e7fc40845a4b2a38193a14ceab48f83e3261fbc3132b3f"
+    "31211ca32e7681337bc20d5270880f13c2189bfa92bc73dab52fdc91aff0b8e7"
 )
 BASELINE_SELECTED_HASH = "c2afdec0"
 BASELINE_RUNTIME = (

@@ -1371,12 +1371,16 @@ static int mir_can_forward_hl_to_next(int value)
          * the address into HL, so an immediately preceding producer can
          * forward HL exactly like it can for MIR_STORE. */
     } else if (next->opcode == MIR_BINARY && next->src2 == value &&
-               mir_forwarded_stack_value == next->src1 &&
-               mir_forwarded_stack_target_instruction ==
-                   next_instruction) {
-        /* The binary's left operand is already below SP. Keep this
-         * adjacent right operand in HL; the binary emitter moves it to DE
-         * before popping the left operand back into HL. */
+               ((mir_forwarded_stack_value == next->src1 &&
+                 mir_forwarded_stack_target_instruction ==
+                     next_instruction) ||
+                (mir_planned_stack_matches_consumer(next->src1,
+                                                    next_instruction) &&
+                 mir_planned_stack_is_emitted(next->src1)))) {
+        /* The binary's left operand is already below SP (dynamic or
+         * planned handoff). Keep this adjacent right operand in HL; the
+         * binary emitter moves it to DE before popping the left operand
+         * back into HL. */
     } else if (next->src1 != value)
             return 0;
     switch (next->opcode) {
@@ -6821,6 +6825,24 @@ static int mir_planned_stack_interval_fits(int producer, int consumer)
         return 0;
     }
     return 1;
+}
+
+/* True when BINARY's constant right operand has an immediate mask fast
+ * path (`& const`, unsigned `% pow2`) whose consumer needs the left
+ * operand in HL rather than on the stack. */
+static int mir_binary_const_rhs_mask_fast_path(
+    const struct MirInsn *binary)
+{
+    const struct MirInsn *rhs;
+
+    if (binary->immediate == '&')
+        return 1;
+    if (binary->immediate != '%' || (binary->type & TYPE_UNSIGNED) == 0)
+        return 0;
+    rhs = mir_definition(binary->src2);
+    return rhs != NULL && rhs->opcode == MIR_CONST &&
+           mir_ulong_log2_pow2(
+               (unsigned long)rhs->immediate & 0xffffUL) >= 0;
 }
 
 static int mir_planned_stack_consumer(int value, int producer)
@@ -15635,6 +15657,11 @@ static int mir_compound_address_needs_frame_shift(
     int storage;
     int type;
 
+    /* va_list state lives in a local whose IX offset is carried in
+     * immediate; it must move with the rest of the local frame. */
+    if (insn->opcode == MIR_VA_START || insn->opcode == MIR_VA_END ||
+        insn->opcode == MIR_VA_ARG)
+        return insn->immediate < 0;
     if (insn->opcode != MIR_COMPOUND_ADDRESS)
         return 0;
     if (insn->object >= 0 && insn->object < mir.object_count)
@@ -15965,6 +15992,9 @@ void mir_emit_virtual_load(MirStream *out, int value)
  * directly vs. materialize+store - differs). The exclusion is removed:
  * a fusable comparison's left operand can be forwarded exactly the same
  * as any other binary operator's. */
+/* Returns the consuming binary's instruction index, or -1.  Plain MIR_NOP
+ * markers between the constant and the binary (e.g. a NOP'd identity
+ * conversion left by MIR repair) emit nothing and are looked through. */
 static int mir_can_forward_stack_to_binary_const(int value)
 {
     const struct MirInsn *middle;
@@ -15974,21 +16004,28 @@ static int mir_can_forward_stack_to_binary_const(int value)
 
     if (mir_emit_instruction_index < 0 ||
         mir_emit_instruction_index + 2 >= mir.count)
-        return 0;
+        return -1;
     middle = &mir.insns[mir_emit_instruction_index + 1];
     binary_instruction = mir_emit_instruction_index + 2;
+    while (binary_instruction + 1 < mir.count &&
+           mir.insns[binary_instruction].opcode == MIR_NOP)
+        ++binary_instruction;
     binary = &mir.insns[binary_instruction];
     if (middle->opcode != MIR_CONST || binary->opcode != MIR_BINARY ||
         binary->src1 != value || binary->src2 != middle->dst)
-        return 0;
+        return -1;
     if (type_size(binary->secondary_offset) == 4)
-        return 0;
+        return -1;
     if (mir_divmod_partner(binary_instruction) >= 0)
-        return 0;
+        return -1;
     if (binary->immediate == '*' &&
         mir_mul_const_fast_path_eligible(
             (unsigned long)middle->immediate & 0xffffUL, binary->dst))
-        return 0;
+        return -1;
+    /* `& const` and unsigned `% pow2` have in-register immediate fast
+     * paths that a pending stack handoff disables (see the emitter).  The
+     * adjacent shape keeps its established behaviour (declining there can
+     * cost the value a frame slot); only the NOP-separated shape declines. */
     /* A branch-fused zero comparison skips the pop that ordinary binary
      * emission performs. Materialized equality may still use this handoff:
      * framed functions discard it in their SP-restoring epilogue, while a
@@ -15996,18 +16033,24 @@ static int mir_can_forward_stack_to_binary_const(int value)
     if (mir_binary_is_fusable_comparison(binary_instruction) > 0 &&
         (mir_fused_compare_is_const_zero_rhs(binary_instruction) ||
          mir_fused_compare_is_signed_zero_sign_test(binary_instruction)))
-        return 0;
+        return -1;
+    /* A materialized zero test never pops the handoff either; the adjacent
+     * shape keeps its established epilogue-discard behaviour, but do not
+     * widen that leak to the NOP-separated shape. */
+    if (binary_instruction != mir_emit_instruction_index + 2 &&
+        mir_fused_compare_is_const_zero_rhs(binary_instruction))
+        return -1;
     for (instruction = binary_instruction + 1;
          instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->src1 == value || insn->src2 == value)
-            return 0;
+            return -1;
         if ((insn->opcode == MIR_CALL ||
              insn->opcode == MIR_CALL_AGGREGATE) &&
             mir_call_uses_value(insn, value))
-            return 0;
+            return -1;
     }
-    return 1;
+    return binary_instruction;
 }
 
 static int mir_can_forward_stack_to_binary_lhs(int value)
@@ -16066,20 +16109,23 @@ static int mir_can_forward_stack_to_binary_rhs(int value)
 
     if (mir_emit_instruction_index < 0 ||
         mir_emit_instruction_index + 1 >= mir.count)
-        return 0;
+        return -1;
     binary_instruction = mir_emit_instruction_index + 1;
+    while (binary_instruction + 1 < mir.count &&
+           mir.insns[binary_instruction].opcode == MIR_NOP)
+        ++binary_instruction;
     binary = &mir.insns[binary_instruction];
     if (binary->opcode != MIR_BINARY || binary->src2 != value)
-        return 0;
+        return -1;
     if (type_size(binary->secondary_offset) == 4)
-        return 0;
+        return -1;
     if (mir_value_use_count(value) != 1)
-        return 0;
+        return -1;
     if (!mir_binary_only_constant(binary->src1) &&
         !mir_general_rhs_stack_forwarding_enabled)
-        return 0;
+        return -1;
     if (mir_divmod_partner(binary_instruction) >= 0)
-        return 0;
+        return -1;
     /* Defensive: mirrors the same Item T17 zero-RHS guard as
      * mir_can_forward_stack_to_binary_const above. src2 (the forwarded
      * value here) is not expected to itself be a plain constant in
@@ -16088,18 +16134,18 @@ static int mir_can_forward_stack_to_binary_rhs(int value)
     if (mir_binary_is_fusable_comparison(binary_instruction) > 0 &&
         (mir_fused_compare_is_const_zero_rhs(binary_instruction) ||
          mir_fused_compare_is_signed_zero_sign_test(binary_instruction)))
-        return 0;
+        return -1;
     for (instruction = binary_instruction + 1;
          instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->src1 == value || insn->src2 == value)
-            return 0;
+            return -1;
         if ((insn->opcode == MIR_CALL ||
              insn->opcode == MIR_CALL_AGGREGATE) &&
             mir_call_uses_value(insn, value))
-            return 0;
+            return -1;
     }
-    return 1;
+    return binary_instruction;
 }
 
 static int mir_can_forward_stack_to_indirect_store_value(int value)
@@ -16149,11 +16195,10 @@ static int mir_stack_forward_target(int value, int *dynamic_index)
         return mir_emit_instruction_index + 1;
     if (mir_can_forward_stack_to_binary_lhs(value))
         return mir_emit_instruction_index + 2;
-    if (mir_can_forward_stack_to_binary_const(value))
-        return mir_emit_instruction_index + 2;
-    if (mir_can_forward_stack_to_binary_rhs(value))
-        return mir_emit_instruction_index + 1;
-    return -1;
+    target = mir_can_forward_stack_to_binary_const(value);
+    if (target >= 0)
+        return target;
+    return mir_can_forward_stack_to_binary_rhs(value);
 }
 
 static int mir_stack_backend_slot_forwardable(
@@ -35302,10 +35347,26 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                  * xor-128 flip and only flip HL's sign bit. */
                 int de_holds_biased_constant = 0;
                 int small_positive_increment = 0;
+                const struct MirInsn *swapped_left_constant = NULL;
                 int byte_unit_update =
                     mir_binary_is_byte_unit_update(insn);
                 int pointer_difference_shift =
                     mir_pointer_difference_pow2_shift(insn);
+                if (stack_forwarded_left &&
+                    right_definition != NULL &&
+                    right_definition->opcode == MIR_CONST &&
+                    mir_binary_const_rhs_mask_fast_path(insn)) {
+                    /* The `& const` / unsigned `% pow2` mask fast paths
+                     * below need the lhs in HL; nothing was emitted
+                     * between the push and this consumer, so pop it here
+                     * instead of falling back to the generic dance. */
+                    mir_stream_puts("\tpop hl\n", out);
+                    mir_forwarded_stack_value = -1;
+                    mir_forwarded_stack_instruction = -1;
+                    mir_forwarded_stack_target_instruction = -1;
+                    stack_forwarded_left = 0;
+                    planned_stack_left_in_hl = 1;
+                }
                 if (planned_stack_forwarded_left &&
                     (divmod_partner >= 0 ||
                      (insn->immediate == '*' &&
@@ -35313,6 +35374,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                       right_definition->opcode == MIR_CONST &&
                       mir_mul_const_fast_path_eligible(
                           multiplier, insn->dst)) ||
+                     (right_definition != NULL &&
+                      right_definition->opcode == MIR_CONST &&
+                      mir_binary_const_rhs_mask_fast_path(insn)) ||
                      (mir_binary_is_fusable_comparison(i) > 0 &&
                       (mir_fused_compare_is_const_zero_rhs(i) ||
                        mir_fused_compare_is_signed_zero_sign_test(i))))) {
@@ -35388,6 +35452,22 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                                 zero_lhs_right->immediate & 0xffffL);
                     else
                         mir_emit_virtual_load(out, insn->src2);
+                } else if (mir_binary_only_constant(insn->src1) &&
+                           stack_forwarded_right &&
+                           (insn->immediate == '+' ||
+                            insn->immediate == '&' ||
+                            insn->immediate == '|' ||
+                            insn->immediate == '^')) {
+                    /* Commutative operation with a constant left operand
+                     * and the right operand already pushed: pop it into
+                     * HL and treat the constant as the DE-side operand so
+                     * the `ld de,N` / `inc hl` immediate forms apply. */
+                    mir_stream_puts("\tpop hl\n", out);
+                    mir_forwarded_stack_value = -1;
+                    mir_forwarded_stack_instruction = -1;
+                    mir_forwarded_stack_target_instruction = -1;
+                    stack_forwarded_right = 0;
+                    swapped_left_constant = mir_definition(insn->src1);
                 } else if (mir_binary_only_constant(insn->src1)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src1);
@@ -35551,6 +35631,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                  */
                 if (fused_zero_lhs) {
                     /* EQ/NE is symmetric and HL already holds src2. */
+                } else if (swapped_left_constant != NULL) {
+                    if (mir_cfg_block_count() >= 300 &&
+                        insn->immediate == '+' &&
+                        (swapped_left_constant->immediate == 1 ||
+                         swapped_left_constant->immediate == 2))
+                        small_positive_increment =
+                            (int)swapped_left_constant->immediate;
+                    else
+                        mir_stream_printf(out, "\tld de,%ld\n",
+                                swapped_left_constant->immediate & 0xffffL);
                 } else if (stack_forwarded_right) {
                     /* Item T16: the right operand is already on the
                      * stack from its own definition site. Pop it into DE

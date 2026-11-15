@@ -25,7 +25,7 @@ GENERIC_SELECTION = re.compile(
     r"regional-homed-scalar-cfg|spilled-scalar-cfg) result=mir"
 )
 BASELINE_SHA256 = (
-    "54e8c7687bf2509d4364c1e4e3adc837949640b9a5f46d8c7a0a66c7a9f9ec7d"
+    "354494163babe07890c43b2048cf31b5c299f09daeaccd3b6be4b1516759cf22"
 )
 FIELD_VALUES = {
     "type": (-12345, 32767),

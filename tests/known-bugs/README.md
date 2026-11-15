@@ -31,14 +31,25 @@ BUG-060 was promoted as `tfpround`: exact-bit `%f` nearest-even rounding,
 decimal carries, signed zero and subnormal fractions. `%e`/`%g` remain
 unsupported; `scripts/printf-float-proof.py` checks their pre-existing behavior.
 
-BUG-061 was promoted as `tests/tsizhigh.c` after the maintainer approved
-unsigned typing only for compile-time `sizeof` values at or above `0x8000`.
-The full unsigned-type trial changed existing output and exact schedules and
-is deferred. Its residual small/runtime-size typing deviation is parked as
-BUG-062 (`bug062.c`); no integer-generator steer is needed because that
-generator never emits `sizeof`. See
-[fix-plan.md](../../fix-plan.md#s1-high-bit-constant-sizeof-result-typing)
-for the stop, ruling, narrow fix and deferred typing-recovery track.
+BUG-061 was promoted as `tests/tsizhigh.c` (unsigned typing for compile-time
+`sizeof` values at or above `0x8000`). BUG-062, the residual small/runtime
+`sizeof` signedness, is closed by the full unsigned `size_t` typing with an
+AST proven-signedness demotion pass and promoted as `tests/tsizesgn.c`; the
+integer generator now emits `sizeof` forms. See
+[fix-plan.md](../../fix-plan.md#s1-high-bit-constant-sizeof-result-typing).
+
+BUG-065 (va_list frame offset not shifted when a variadic function takes an
+IY register home, corrupting the caller's saved IY) was found while measuring
+that trial and is promoted as `tests/tvaiyhom.c`. BUG-066 (`sizeof` of a
+nested-block scalar local reporting 2) was found by the first fuzz run with
+the generator's `sizeof` leaf and is promoted as `tests/tszblock.c`.
+
+Open reproducers:
+
+- `bug067.c`: `sizeof` of an element, member or dereference of a
+  nested-block local reports 2 (#338); the bare-identifier form is BUG-066.
+- `bug068.c`: `*q op= rhs` through a nested-block pointer to a 32-bit object
+  adds only the low word (#339); the plain-store form was BUG-063.
 
 ## Checking them
 

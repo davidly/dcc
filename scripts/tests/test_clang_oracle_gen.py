@@ -205,3 +205,58 @@ class IntegerKnownShapeTests(unittest.TestCase):
                 steered = disabled.stored(rhs, target_type, "local")
                 self.assertEqual(steered.op, "cast")
                 self.assertEqual(steered.k[0].t, gen.I32)
+
+
+class SizeofTests(unittest.TestCase):
+    def context(self):
+        function = gen.Func("probe", gen.I16, [], "helper")
+        context = gen.Ctx(function, True)
+        context.ints.append(gen.Decl("x", gen.I16, "local"))
+        context.arrs.append(gen.Decl("a", gen.U8, "local", dims=(4,)))
+        context.arrs.append(gen.Decl("p", gen.I16, "param", dims=(4,)))
+        return context
+
+    def test_sizeof_names_only_host_sized_objects_or_types(self):
+        generator = gen.Gen(0)
+        seen = set()
+        for _ in range(200):
+            expression = generator.gen_sizeof(self.context())
+            self.assertEqual(expression.op, "sizeof")
+            self.assertIs(gen.ty(expression), gen.U16)
+            self.assertTrue(gen.is_constant(expression))
+            if isinstance(expression.a, gen.Decl):
+                self.assertNotEqual(expression.a.storage, "param")
+                seen.add(expression.a.name)
+            else:
+                seen.add(expression.a.cname)
+        self.assertIn("x", seen)
+        self.assertIn("a", seen)
+        self.assertNotIn("p", seen)
+        renderer = gen.Renderer()
+        self.assertEqual(renderer.ex(gen.E("sizeof", a=gen.Decl("a", gen.U8, "local", dims=(4,)),
+                                           t=gen.U16)), "sizeof(a)")
+        self.assertEqual(renderer.ex(gen.E("sizeof", a=gen.I32, t=gen.U16)), "sizeof(int32_t)")
+
+    def test_bare_sizeof_is_kept_beside_words_and_cast_beside_longs(self):
+        generator = gen.Gen(0)
+        size = gen.E("sizeof", a=gen.I16, t=gen.U16)
+        word = gen.E("var", a=gen.Decl("w", gen.I16, "local"))
+        wide = gen.E("var", a=gen.Decl("l", gen.I32, "local"))
+        kept = generator.mk("bin", [word, size], "<")
+        self.assertIs(kept.k[1], size)
+        self.assertEqual(gen.Renderer().ex(kept), "(((uint16_t)w) < sizeof(int16_t))")
+        for op, operands in (("bin", [wide, size]), ("bin", [size, wide]),
+                             ("cond", [word, size, wide]), ("asg", [wide, size])):
+            with self.subTest(op=op):
+                expression = generator.mk(op, list(operands), "/" if op == "bin" else "=")
+                cast = [k for k in expression.k if k.op == "cast"]
+                self.assertEqual(len(cast), 1)
+                self.assertIs(cast[0].k[0], size)
+                self.assertIs(cast[0].t, gen.U16)
+        shifted = generator.mk("bin", [size, wide], "<<")
+        self.assertIs(shifted.k[0], size)
+
+    def test_sizeof_is_off_with_its_feature(self):
+        generator = gen.Gen(0, off={"sizeof"})
+        for _ in range(100):
+            self.assertNotEqual(generator.gen_leaf(self.context(), 1).op, "sizeof")

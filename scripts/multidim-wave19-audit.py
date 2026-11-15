@@ -26,7 +26,7 @@ GENERIC_SELECTION = re.compile(
 )
 BASELINE_SHA256 = (
     # Wide parameter-store repair removes a spurious assembler-name registration.
-    "ac7b8b6aee4b66f87381219c4f79781b0eda57b1f2f212992c02090a4646b2a0"
+    "ff8436cbe63713613c77a02bf0f5acbac6441b6accc34e0b93407c89dfbf452b"
 )
 FIELD_VALUES = {
     "type": (-12345, 32767),

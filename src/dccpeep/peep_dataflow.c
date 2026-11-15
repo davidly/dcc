@@ -212,6 +212,25 @@ static void solve_liveness(int start, int end)
             writes = info->effects.writes;
             flags_read = info->effects.flags_read;
             flags_written = info->effects.flags_written;
+            if (info->effects.unknown &&
+                strcmp(info->mnemonic, "ex") == 0) {
+                char clean[MAX_LINE];
+
+                strip_peep_comment_copy(clean, lines[i]);
+                if (strcmp(clean, "ex de,hl") == 0) {
+                    /* Exact transfer: the exchange is a permutation of
+                     * D/E and H/L liveness and leaves flags untouched. */
+                    unsigned swapped =
+                        live_out & ~(PEEP_REG_DE | PEEP_REG_HL);
+                    if (live_out & PEEP_REG_D) swapped |= PEEP_REG_H;
+                    if (live_out & PEEP_REG_E) swapped |= PEEP_REG_L;
+                    if (live_out & PEEP_REG_H) swapped |= PEEP_REG_D;
+                    if (live_out & PEEP_REG_L) swapped |= PEEP_REG_E;
+                    live_in = swapped;
+                    flags_in = flags_out;
+                    goto record;
+                }
+            }
             if (info->effects.unknown) {
                 char clean[MAX_LINE];
 
@@ -230,6 +249,7 @@ static void solve_liveness(int start, int end)
             }
             live_in = reads | (live_out & ~writes);
             flags_in = flags_read | (flags_out & ~flags_written);
+        record:
             if (flow->live_in != live_in || flow->live_out != live_out ||
                 flow->flags_live_in != flags_in ||
                 flow->flags_live_out != flags_out) {
