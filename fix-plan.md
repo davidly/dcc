@@ -883,6 +883,59 @@ tool tests OK; `blockstore` steer removed, integer seeds 1–300: 296 ok /
 4 INVALID / 0 FAIL. Promoted as `tblkstor`
 (`tblkstor,102746,102844,3328,3328`).
 
+### T3. Nested-block derived operands typed before declaration replay
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-067 | #338 | `sizeof v[0]`, `sizeof s.q`, `sizeof *p` over a nested-block local report 2 |
+| BUG-068 | #339 | `*q op= x`, `q[i] op= x` through a nested-block pointer to a 32-bit object add only the low word; `b[k]` through a nested-block `uint8_t *` reads a word |
+
+**Confirmed root cause:** block-scope declaration spans are replayed into the
+symbol table after the enclosing statement is lowered, so a base identifier
+inside a derived expression has no symbol (`mir_ident_symbol() == NULL`) when
+the statement is lowered. `sizeof` took the `TYPE_INT` fallback for the whole
+operand; the `INDEXADDR` over such a pointer kept the stale `int *` node type
+with `target_type == 0`, so the stride fix-up repaired the immediate but the
+pointee repair then inferred `int` for the element load/store; and the
+compound lowering narrowed the right-hand side to the assumed `int` target
+exactly as BUG-063 did for the plain store.
+
+**Fix:**
+- `AST_SIZEOF_EXPR` whose operand derives from an unreplayed identifier is
+  registered (`mir_register_deferred_sizeof`, bounded by
+  `MAX_DEFERRED_SIZEOF`) and lowered as a deferred `MIR_VLA_SIZE` (flag 8);
+  `ast_process_stmt_metadata` resolves it with
+  `ast_sizeof_expr_value_replayed`, which retypes the operand bottom-up once
+  the declarations exist. The VLA-size fix-up consults the resolved value.
+- `mir_lower_lvalue_address` flags an `INDEXADDR` over a deferred pointer
+  (`deferred_operand_types`); the stride-repair loop retypes it and its
+  `memory_size` from the repaired base load so the pointee repair types the
+  element access.
+- The `*q`/`q[i]` compound path passes `pointer_deferred` as a deferred
+  right-hand side and flags the narrowing unary (2048) so T2's
+  `mir_retarget_store_conversion` retargets it.
+- Five `dcc_mir_spilled_cfg.c` VLA exact-schedule hash pairs (`vla_in_loop`,
+  `loop_stable`, `goto_stable`, two `nested_stable` orderings) replaced with
+  the typed-shape hashes; a 601-file census shows only those functions owned
+  the old hashes and only they own the new ones. Output is byte-identical
+  for the four; `vla_nested` is shorter and now stores its `char` VLA as
+  bytes.
+- Packed-record campaign controls: expected FNV hash 1949229535 → 3306097631
+  (padded variant 19367263 → 514719583) and the wave-20 `BASELINE_SHA256`
+  refreshed; the host compiler confirms the new values, so main's controls
+  encoded the BUG-068 read defect.
+
+**Validation:** `bug067`/`bug068` FIXED in both modes; strict full+extended
+runall (stack and no-stack) SUCCESS with 0 perf regressions, 146 of 561 rows
+improve (tvla −0.58 %, tvlax −1.72 % peep); packed-record clobber cases
+120/120 and wave-20 audit 3509 mutations clean; campaign baseline and exact
+control unit tests pass except the pre-existing cmp15ok/cmp4ok/cmp45ok
+(bisected to `523f5738`, see S2). Promoted as `tszderiv`
+(`tszderiv,116548,117765,3840,4096`) and `tptrcasg`
+(`tptrcasg,685899,690226,9088,9472`); `blockcassign` steer removed. New
+BUG-069 (#341, two-dimensional member `sizeof`) logged with
+`tests/known-bugs/bug069.c`.
+
 ### T1. Promoted-local slot hole reused under a materialized store
 
 | Bug | Issue | Shape |
@@ -4547,6 +4600,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | T1 | [#334](https://github.com/davidly/dcc/pull/334) (`fix/cluster-t1-promoted-slot-hole`) | merged; BUG-064 closed | hole proof rejects fused self-store/PHI-homed promoted locals; BUG-064 promoted as tslothol; all 591 test outputs byte-identical, census and 545 perf rows unchanged |
 | S2 | `fix/bug062-sizeof-size_t` | BUG-062, BUG-065 and BUG-066 closed; BUG-067 and BUG-068 logged | full unsigned `sizeof` with AST proven-signedness demotion; emitter/dccpeep recovery, 0 perf regressions / 255 improvements; tsizesgn, tvaiyhom and tszblock promoted; 39 campaign hashes refreshed; generator emits `sizeof` |
 | T2 | [#335](https://github.com/davidly/dcc/pull/335) (`fix/cluster-t2-store-conversion`) | merged; BUG-063 closed | implicit indirect-store conversion retargeted by pointee repair; BUG-063 promoted as tblkstor; `blockstore` steer removed; all test outputs byte-identical, 546 perf rows unchanged; int 1–300: 296 ok/4 INVALID/0 FAIL |
+| T3 | `fix/bug067-068-block-deferred` | PR open; BUG-067 and BUG-068 closed; BUG-069 logged | deferred `sizeof` and `INDEXADDR` typing for nested-block derived operands; tszderiv and tptrcasg promoted; five VLA exact-schedule hashes and the packed-record control hashes refreshed (main's were wrong); 0 perf regressions / 146 improvements; `blockcassign` steer removed |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |

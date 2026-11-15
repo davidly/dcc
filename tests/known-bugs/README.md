@@ -44,12 +44,15 @@ that trial and is promoted as `tests/tvaiyhom.c`. BUG-066 (`sizeof` of a
 nested-block scalar local reporting 2) was found by the first fuzz run with
 the generator's `sizeof` leaf and is promoted as `tests/tszblock.c`.
 
+BUG-067 (`sizeof` of an element, member or dereference of a nested-block
+local) and BUG-068 (`op=` and indexed reads through a nested-block pointer)
+are closed by T3 and promoted as `tests/tszderiv.c` and `tests/tptrcasg.c`;
+the `blockcassign` steer is removed.
+
 Open reproducers:
 
-- `bug067.c`: `sizeof` of an element, member or dereference of a
-  nested-block local reports 2 (#338); the bare-identifier form is BUG-066.
-- `bug068.c`: `*q op= rhs` through a nested-block pointer to a 32-bit object
-  adds only the low word (#339); the plain-store form was BUG-063.
+- `bug069.c`: `sizeof` of a two-dimensional array struct member, or a
+  partially indexed one, reports the innermost row size (#341).
 
 ## Checking them
 

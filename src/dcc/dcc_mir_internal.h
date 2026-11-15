@@ -59,6 +59,7 @@
 #define MIR_AGGREGATE_FORWARD_OFFSET (-32768L)
 #define MIR_AGGREGATE_VALUE_DEST_OFFSET (-32767L)
 #define MIR_AGGREGATE_GLOBAL_DEST_OFFSET (-32766L)
+#define MAX_DEFERRED_SIZEOF 256
 
 enum MirOpcode {
     MIR_NOP,
@@ -241,6 +242,12 @@ struct MirFunction {
     const struct AstNode *declaration_nodes[1024];
     unsigned char declaration_consumed[1024];
     int declaration_count;
+    /* sizeof operands over not-yet-replayed nested-block locals: the node
+     * is valid only until the owning statement's metadata walk, which
+     * resolves the value; MIR_VLA_SIZE.bit_shift holds index + 1. */
+    const struct AstNode *deferred_sizeof_nodes[MAX_DEFERRED_SIZEOF];
+    int deferred_sizeof_values[MAX_DEFERRED_SIZEOF];
+    int deferred_sizeof_count;
     int declaration_cursor;
     int declaration_capture_start;
     int declaration_placeholder;

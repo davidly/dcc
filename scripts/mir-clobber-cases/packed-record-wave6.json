@@ -5,7 +5,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -20,7 +20,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -40,7 +40,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -60,7 +60,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -80,7 +80,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -100,7 +100,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -120,7 +120,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -140,7 +140,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -160,7 +160,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -180,7 +180,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": ["PR6_DUMP_FASTCALL"],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,
@@ -198,7 +198,7 @@
     "Sources": ["tests/mir-clobber/pr6rec.c"],
     "Defines": [],
     "Expected": [
-      "PR6 oracle failures=0 hash=1949229535 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
+      "PR6 oracle failures=0 hash=3306097631 first=0,0,0,0,0,0 last=19,38,76,-19,-38,-76 guards=0,0,0,0"
     ],
     "Exit": 0,
     "StackBytes": 512,

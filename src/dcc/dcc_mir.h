@@ -63,6 +63,9 @@ void mir_end_label_replay(void);
 /* Declared-symbol facts used while resolving lowered values. */
 void mir_note_declared_symbol(struct Sym *symbol);
 void mir_note_declared_alias(const char *source_name, struct Sym *symbol);
+/* Metadata-walk resolution of a sizeof whose operand named a nested-block
+ * local that was unreplayed when the expression was lowered. */
+void mir_resolve_deferred_sizeof(const struct AstNode *node);
 void mir_note_narrowed_for_counter(void);
 
 /* Debug records preserved for the selected generated candidate. */

@@ -1190,6 +1190,66 @@ static struct Sym *mir_ident_symbol(const struct AstNode *node)
     return NULL;
 }
 
+/* True when the operand names a local whose nested-block declaration span
+ * has not been replayed yet (no symbol at parse time and none in scope now),
+ * so its type cannot be derived until the statement's metadata walk. */
+static int mir_sizeof_operand_unreplayed(const struct AstNode *node)
+{
+    int i;
+    if (node == NULL)
+        return 0;
+    if (node->kind == AST_IDENT)
+        return node->sval != NULL && mir_ident_symbol(node) == NULL &&
+               find_enum_const(node->sval) < 0;
+    if (node->kind == AST_SIZEOF_TYPE || node->kind == AST_CAST)
+        return 0;
+    if (node->kind == AST_CALL)
+        return 0;
+    if (mir_sizeof_operand_unreplayed(node->a) ||
+        mir_sizeof_operand_unreplayed(node->b) ||
+        mir_sizeof_operand_unreplayed(node->c) ||
+        mir_sizeof_operand_unreplayed(node->d))
+        return 1;
+    for (i = 0; i < node->list_len; ++i)
+        if (mir_sizeof_operand_unreplayed(node->list[i]))
+            return 1;
+    return 0;
+}
+
+static void mir_register_deferred_sizeof(struct MirInsn *insn,
+                                         const struct AstNode *node)
+{
+    int i = mir.deferred_sizeof_count;
+    if (i >= MAX_DEFERRED_SIZEOF)
+        return;
+    mir.deferred_sizeof_nodes[i] = node;
+    mir.deferred_sizeof_values[i] = 0;
+    mir.deferred_sizeof_count = i + 1;
+    insn->bit_shift = i + 1;
+}
+
+void mir_resolve_deferred_sizeof(const struct AstNode *node)
+{
+    int i;
+    if (!mir.active || node == NULL || node->kind != AST_SIZEOF_EXPR)
+        return;
+    for (i = 0; i < mir.deferred_sizeof_count; ++i)
+        if (mir.deferred_sizeof_nodes[i] == node) {
+            mir.deferred_sizeof_nodes[i] = NULL;
+            mir.deferred_sizeof_values[i] =
+                ast_sizeof_expr_value_replayed(node->a);
+            return;
+        }
+}
+
+static int mir_deferred_sizeof_value(const struct MirInsn *insn)
+{
+    int i = insn->bit_shift - 1;
+    if (i < 0 || i >= mir.deferred_sizeof_count)
+        return 0;
+    return mir.deferred_sizeof_values[i];
+}
+
 static int mir_inline_arg_reusable(const struct AstNode *node)
 {
     if (node == NULL)
@@ -2351,6 +2411,15 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
             if (base_definition != NULL &&
                 type_ptr_depth(base_definition->type) > 0)
                 element_type = type_decay_ptr(base_definition->type);
+            /* A pointer declared in a nested block has no type yet, so
+             * this element type is assumed until repair retypes it from
+             * the replayed pointer (BUG-068). */
+            else if (base_definition != NULL &&
+                     base_definition->opcode == MIR_LOAD &&
+                     base_definition->type == 0 &&
+                     node->a != NULL && node->a->kind == AST_IDENT &&
+                     mir_ident_symbol(node->a) == NULL)
+                insn->deferred_operand_types = 1;
         }
         insn->type = type_add_ptr(element_type);
         insn->immediate = mir_index_stride(node);
@@ -2501,6 +2570,25 @@ static int mir_compound_rhs_deferred(const struct AstNode *rhs)
         return 1;
     /* A closed block's local no longer resolves; its load is typed later. */
     return rhs->kind == AST_IDENT && mir_ident_symbol(rhs) == NULL;
+}
+
+/* Whether a compound assignment through `*p` or `p[i]` dereferences a
+ * pointer declared in a nested block whose span is not replayed yet, so the
+ * pointee type its lowering assumes is only repaired later. */
+static int mir_compound_pointer_lhs_deferred(const struct AstNode *lvalue)
+{
+    const struct AstNode *base = lvalue;
+
+    if (base == NULL)
+        return 0;
+    if (base->kind == AST_UNARY && base->op == '*')
+        base = base->a;
+    else {
+        while (base != NULL && base->kind == AST_INDEX)
+            base = base->a;
+    }
+    return base != NULL && base != lvalue && base->kind == AST_IDENT &&
+           mir_ident_symbol(base) == NULL;
 }
 
 /* The expression whose value its statement discards (an expression
@@ -3333,6 +3421,7 @@ static int mir_lower_expr_impl(const struct AstNode *node)
     case AST_SIZEOF_EXPR:
         {
             struct Sym *vla = ast_sizeof_whole_vla_sym(node->a);
+            int unreplayed = mir_sizeof_operand_unreplayed(node->a);
             value = mir_new_value();
             if (vla != NULL && vla->vla_size_offset != 0) {
                 insn = mir_emit(MIR_VLA_SIZE);
@@ -3362,10 +3451,20 @@ static int mir_lower_expr_impl(const struct AstNode *node)
                     mir_copy_name(insn->name, root->name);
                 else if (base != NULL && base->kind == AST_IDENT)
                     mir_copy_name(insn->name, mir_ident_name(base));
+            } else if (unreplayed) {
+                /* The operand derives from an unreplayed nested-block local
+                 * (member, dereference, ...): its type is unknown until the
+                 * metadata walk, so defer like the other shapes. */
+                insn = mir_emit(MIR_VLA_SIZE);
+                insn->memory_flags |= 8;
+                insn->secondary_offset = ast_sizeof_expr_value(node->a);
             } else {
                 insn = mir_emit(MIR_CONST);
                 insn->immediate = ast_sizeof_expr_value(node->a);
             }
+            if (unreplayed && insn->opcode == MIR_VLA_SIZE &&
+                (insn->memory_flags & 8) != 0)
+                mir_register_deferred_sizeof(insn, node);
             insn->dst = value;
             insn->type = node->type;
             return value;
@@ -4017,6 +4116,7 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             int address = mir_lower_lvalue_address(node->a);
             int target_type = mir_lvalue_type(node->a);
             const struct MirInsn *address_definition;
+            int pointer_deferred;
             if (address < 0)
                 break;
             address_definition = mir_mutable_definition(address);
@@ -4045,10 +4145,25 @@ static int mir_lower_expr_impl(const struct AstNode *node)
                 mir_set_node_memory(insn, node->a);
                 insn->memory_size = type_size(target_type);
                 right = mir_lower_expr(node->b);
+                /* A pointer declared in a nested block has no symbol yet,
+                 * so this target type is assumed as well; the narrowing
+                 * back to it must follow the repaired pointee like a plain
+                 * store's conversion (BUG-068). */
+                pointer_deferred =
+                    mir_compound_pointer_lhs_deferred(node->a);
                 value = mir_lower_compound_value(
                     left, right, binary_operator, target_type,
                     node != mir_discarded_expr,
-                    mir_compound_rhs_deferred(node->b));
+                    mir_compound_rhs_deferred(node->b) || pointer_deferred);
+                if (pointer_deferred) {
+                    struct MirInsn *narrowing =
+                        mir_mutable_definition(value);
+                    if (narrowing != NULL &&
+                        narrowing->opcode == MIR_UNARY &&
+                        narrowing->immediate == 0 &&
+                        narrowing->type == target_type)
+                        narrowing->memory_flags |= 2048;
+                }
             }
             insn = mir_emit(MIR_STORE_INDIRECT);
             insn->src1 = address;
@@ -4693,6 +4808,7 @@ void mir_begin_function(const char *name, const char *assembly_name,
     mir.regional_segment_count = 0;
     mir.regional_spill_slot_count = 0;
     mir.declared_count = 0;
+    mir.deferred_sizeof_count = 0;
     mir.alias_count = 0;
     mir.initializer_target = NULL;
     mir.init_expression_target = NULL;
@@ -4770,7 +4886,10 @@ void mir_begin_function(const char *name, const char *assembly_name,
 
 void mir_capture_stmt(const struct AstNode *stmt)
 {
+    int i;
     if (mir.active) {
+        for (i = 0; i < mir.deferred_sizeof_count; ++i)
+            mir.deferred_sizeof_nodes[i] = NULL;
         ast_sizeof_reset_stmt();
         mir_lower_stmt(stmt);
     }
@@ -9430,6 +9549,7 @@ scoped_type_repair_done:
             (mir.insns[i].memory_flags & 8) != 0) {
             int offset = 0;
             int prior;
+            int resolved = mir_deferred_sizeof_value(&mir.insns[i]);
             if (mir.insns[i].bit_width > 0) {
                 int subobject_size =
                     mir_declared_is_array_object(mir.insns[i].name)
@@ -9438,9 +9558,12 @@ scoped_type_repair_done:
                     : 0;
                 mir.insns[i].opcode = MIR_CONST;
                 mir.insns[i].immediate = subobject_size > 0
-                    ? subobject_size : mir.insns[i].secondary_offset;
+                    ? subobject_size
+                    : resolved > 0 ? resolved
+                    : mir.insns[i].secondary_offset;
                 mir.insns[i].secondary_offset = 0;
                 mir.insns[i].bit_width = 0;
+                mir.insns[i].bit_shift = 0;
                 mir.insns[i].memory_flags &= ~8;
                 continue;
             }
@@ -9454,6 +9577,7 @@ scoped_type_repair_done:
                 offset = mir_declared_vla_size_offset(mir.insns[i].name);
             if (offset != 0) {
                 mir.insns[i].immediate = offset;
+                mir.insns[i].bit_shift = 0;
                 mir.insns[i].memory_flags &= ~(8 | 16);
             } else {
                 mir.insns[i].opcode = MIR_CONST;
@@ -9466,9 +9590,11 @@ scoped_type_repair_done:
                        ? mir_declared_subobject_size(
                              mir.insns[i].name, mir.insns[i].bit_width)
                        : mir_declared_object_size(mir.insns[i].name))
+                    : resolved > 0 ? resolved
                     : mir.insns[i].secondary_offset;
                 mir.insns[i].secondary_offset = 0;
                 mir.insns[i].bit_width = 0;
+                mir.insns[i].bit_shift = 0;
                 mir.insns[i].memory_flags &= ~(8 | 16);
             }
         }
@@ -9546,6 +9672,14 @@ scoped_type_repair_done:
                     stride = type_index_elem_size(base->type);
                 if (stride > 0)
                     mir.insns[i].immediate = stride;
+                if (mir.insns[i].deferred_operand_types &&
+                    base->opcode == MIR_LOAD &&
+                    type_size(type_decay_ptr(base->type)) > 0) {
+                    mir.insns[i].type = base->type;
+                    mir.insns[i].memory_size =
+                        type_size(type_decay_ptr(base->type));
+                    mir.insns[i].deferred_operand_types = 0;
+                }
             }
         }
 

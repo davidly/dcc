@@ -25,14 +25,14 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| BUG-067 | [#338](https://github.com/davidly/dcc/issues/338) | codegen | `sizeof` of an element, member or dereference of a nested-block local reports 2 |
-| BUG-068 | [#339](https://github.com/davidly/dcc/issues/339) | codegen | `*q op= rhs` through a nested-block pointer to a 32-bit object adds only the low word |
+| BUG-069 | [#341](https://github.com/davidly/dcc/issues/341) | codegen | `sizeof` of a two-dimensional array struct member, or a partially indexed one, reports the innermost row size |
 
-Two entries are open, both found while closing cluster S2 and logged rather
-than fixed there. BUG-013's unsigned bit-field promotion, BUG-009's hang and
+One entry is open, found while closing cluster T3 and logged rather than
+fixed there. BUG-013's unsigned bit-field promotion, BUG-009's hang and
 BUG-022's masked diagnostic are fixed below.
 
-Sixty-four reported bugs are fixed:
+Sixty-six reported bugs are fixed:
+[two in cluster T3](#fixed-in-cluster-t3),
 [three in cluster S2](#fixed-in-cluster-s2),
 [three in cluster D2e-2](#fixed-in-cluster-d2e-2),
 [one in cluster T2](#fixed-in-cluster-t2),
@@ -157,122 +157,111 @@ symbol and the deferred `MIR_VLA_SIZE` fix-up takes the declared object size
 for any such non-VLA object; the demotion pass no longer guesses a constant
 for an unreplayed operand and instead proves whole-VLA and unreplayed-local
 sizes stack-bounded. Promoted as [tszblock](tests/tszblock.c)
-(`tszblock,50531,50790,3200,3328`). The derived-operand forms are BUG-067.
+(`tszblock,50531,50790,3200,3328`). The derived-operand forms were BUG-067,
+closed by T3.
 
 
-## BUG-067
+## Fixed in cluster T3
+
+Both `sizeof` over a derived expression of a nested-block local and
+read-modify-write or indexed access through a nested-block pointer are now
+typed from the declaration once the enclosing statement's declaration spans
+are replayed. The `AST_SIZEOF_EXPR` lowering registers a derived operand whose
+base identifier has no symbol yet and emits a deferred `MIR_VLA_SIZE`; the
+statement metadata walk resolves it by retyping the operand bottom-up
+(`ast_sizeof_expr_value_replayed`). An `INDEXADDR` over a deferred pointer is
+flagged and retyped from the repaired base load in the stride fix-up, so the
+pointee repair types the element load and store correctly; the compound
+lowering through `*q`/`q[i]` defers the right-hand conversion and flags its
+narrowing unary (2048) so the pointee repair retargets it like T2's plain
+store. Five VLA exact-schedule hashes in `dcc_mir_spilled_cfg.c` were refreshed
+because the now-typed element access changes the MIR shape; their output is
+byte-identical to before (`vla_nested` in `tvla` is shorter and correct: its
+`char` VLA was stored as 16-bit words). The packed-record campaign controls'
+expected FNV hashes were wrong on main for the same reason (a nested-block
+`const uint8_t *` was read as words) and are corrected to the host values.
+All 561 performance rows are non-regressing in both modes (146 improve).
+
+### BUG-067
 
 **`sizeof` of a derived expression over a nested-block local reports 2.**
 (#338)
 
 Block-scope declaration spans are replayed into the symbol table after the
 enclosing statement is lowered. When a `sizeof` operand is a bare identifier
-naming such a local, the lowering now defers to the declared-object table
-(BUG-066, closed by S2). When the
-operand *derives* from such a local, the base identifier still has no symbol
-when the size is taken, so it is typed as `int` and the result is 2:
+naming such a local, the lowering defers to the declared-object table
+(BUG-066, closed by S2). When the operand *derives* from such a local the base
+identifier still had no symbol when the size was taken, so it was typed as
+`int` and the result was 2: an element of a block-scoped VLA (`sizeof v[0]`,
+and `sizeof v / sizeof v[0]` gave `2 * n`), a struct member (`sizeof s.q`),
+a dereferenced pointer (`sizeof *p`, `sizeof p[0]`). Function-scope objects
+were correct. Reproduced on `7dbe99d8` in both modes.
 
-- an element of a block-scoped VLA: `int32_t v[n]; sizeof v[0]` gives 2, and
-  `sizeof v / sizeof v[0]` gives `2 * n` rather than `n`;
-- a struct member: `struct { int32_t q; uint8_t r; } s; sizeof s.q` gives 2;
-- a dereferenced pointer: `int32_t *p; sizeof *p` and `sizeof p[0]` give 2.
+**Closed by T3.** The operand node is registered as a deferred `sizeof` and
+resolved when the statement's declarations are replayed. Promoted as
+[tszderiv](tests/tszderiv.c).
 
-The same expressions with the object declared at function scope are correct.
-Both peep and nopeep fail all four lines; clang O0 and ASan+UBSan agree on the
-baseline. Reproduces on `7dbe99d8`.
-
-### Diagnosis
-
-`mir_lower_expr_impl()` lowers `AST_SIZEOF_EXPR` through
-`ast_sizeof_expr_value()`, which types the operand with
-`ast_expr_type_for_sizeof()`; for an `AST_IDENT` with no symbol that falls
-back to `TYPE_INT`. The deferred `MIR_VLA_SIZE` fix-up (flag 8) resolves whole
-objects by name from `mir.declared_*`, but has no path for index, member or
-dereference chains. A complete fix resolves the operand's type at fix-up time
-from the declared table (element size by depth, pointee type, struct field
-size) or carries the operand node until the declaration spans are replayed.
-
-### Parked reproducer
-
-`tests/known-bugs/bug067.c`, baseline `tests/known-bugs/baselines/bug067.txt`
-(`python3 scripts/run-known-bugs.py bug067`). The integer generator's
-`sizeof` leaf only emits bare identifiers and type names, so `--off known`
-runs are already quiet.
-
-Expected:
-```
-vla 4 3
-member 4
-deref 4
-mixed 8
-```
-
-dcc:
-```
-vla 2 6
-member 2
-deref 2
-mixed 4
-```
-
-## BUG-068
+### BUG-068
 
 **Compound assignment through a nested-block pointer to a 32-bit object adds only the low word.**
 (#339)
 
 T2 (#335, BUG-063) repaired the plain store `*q = x` through a pointer declared
-in a nested block. The compound forms are still wrong: with
+in a nested block. The compound forms were still wrong: with
 `{ int32_t *q = &a3[0]; (*q) += s0.m0; }` and `s0.m0 == 0x00ff00ff`, dcc
-produces `15 + 0x00ff == 270` rather than `16711950`. `-=`, a global int32
-right-hand side and an `(int32_t)65536` constant fail the same way (the
-constant adds 0). The same statement with `q` declared at function scope is
-correct. Both peep and nopeep fail; clang O0 and ASan+UBSan agree on the
-baseline. Reproduces on `7dbe99d8`.
+produced `15 + 0x00ff == 270` rather than `16711950`; `-=`, a global int32
+right-hand side and an `(int32_t)65536` constant failed the same way, as did
+`q[i] op= x`. The indexed forms also mis-typed plain reads: a nested-block
+`const uint8_t *b` indexed as `b[k]` loaded a 16-bit word and sign-extended
+it, which is what had been baked into the packed-record campaign controls'
+expected hashes. Function-scope pointers were correct. Found by integer fuzz
+seed 193; reproduced on `7dbe99d8` in both modes.
 
-Found by integer fuzz seed 193 on the first run after the generator gained its
-`sizeof` leaf (the changed random stream exposed it; the statement itself has
-no `sizeof`). Reduced form:
+**Closed by T3.** The right-hand conversion is deferred and its narrowing
+unary retargeted by the pointee repair; the `INDEXADDR` over a deferred
+pointer is retyped from the repaired base load. Promoted as
+[tptrcasg](tests/tptrcasg.c); the `blockcassign` generator steer is removed.
 
-```c
-int32_t a3[4] = { 15, 271, 63, -128 };
-static struct S0 s0 = { 16711935, ... };
-static uint16_t f2(void)
-{
-    {
-        int32_t *q5 = &a3[0];
-        (*q5) += s0.m0;
-    }
-    return 1;
-}
-```
+## BUG-069
 
-### Diagnosis
+**`sizeof` of a two-dimensional array struct member, or a partially indexed
+one, reports the innermost row size.** (#341)
 
-Sibling of BUG-063: the right-hand operand of the compound store through the
-deferred-type block pointer keeps the 16-bit conversion inserted for the
-assumed assignment target, and the pointee repair that now retargets the
-plain `MIR_STORE_INDIRECT` source does not cover the read-modify-write
-lowering of `op=`.
+With `struct T { int32_t a[3]; uint8_t b; int16_t c[2][2]; } t;`:
+
+- `sizeof t.c`, `sizeof arr[1].c` and `sizeof u.m` (for `uint8_t m[3][4]`)
+  give 4, 4 and 3 rather than 8, 8 and 12: `ast_sizeof_expr_value()` sizes an
+  `AST_MEMBER` array field as `element_size * first_dimension`;
+- `sizeof t.c[1]` and `sizeof pt->c[1]` give 2 rather than 4:
+  `ast_expr_type_for_sizeof()` types a partially indexed member as the scalar
+  element.
+
+A direct `int16_t direct[2][2]` local, a fully indexed `t.c[1][0]` and the
+one-dimensional member `arr[1].a[0]` are correct. Function scope and nested
+blocks fail alike; both peep and nopeep fail; clang and ASan+UBSan agree on
+the baseline. Reproduces on `3ca3ff90` (main after T2). Found while
+building the BUG-067 regression; logged rather than fixed in T3 because the
+defect is in the AST member typing, not the block-deferral path.
 
 ### Parked reproducer
 
-`tests/known-bugs/bug068.c`, baseline `tests/known-bugs/baselines/bug068.txt`
-(`python3 scripts/run-known-bugs.py bug068`). Integer generator steer
-`blockcassign` (`scripts/clang_oracle_gen.py`, `block_ptr_cassign()`: the
-compound is rewritten as `*q = *q op rhs`, or a plain store when the pointer
-is updated inside the lvalue) keeps `--off known` runs quiet; remove it when
-fixed.
+`tests/known-bugs/bug069.c`, baseline `tests/known-bugs/baselines/bug069.txt`
+(`python3 scripts/run-known-bugs.py bug069`). The integer generator's
+`sizeof` leaf does not emit multi-dimensional members, so `--off known` runs
+are already quiet.
 
 Expected:
 ```
-16711950 16712206 65599 -16712063
-16711950
+4 8 4
+4 8 4
+8 2 12
 ```
 
 dcc:
 ```
-270 526 63 -383
-16711950
+2 4 4
+2 4 4
+8 2 3
 ```
 
 ## BUG-006

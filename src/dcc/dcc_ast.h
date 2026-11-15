@@ -259,6 +259,9 @@ struct Sym *ast_indirect_call_proto_sym(const struct AstNode *n);
  * declaration's span has already run and its symbol is in scope - not at
  * AST-build time, where such a symbol is not yet in the local table. */
 int ast_sizeof_expr_value(const struct AstNode *n);
+/* As above, for an operand lowered before its nested-block locals were
+ * replayed: first re-derives the stale parse-time types of its subtree. */
+int ast_sizeof_expr_value_replayed(const struct AstNode *n);
 struct FieldDef *ast_unique_field_by_name(const char *name);
 int ast_va_arg_deref_type(const struct AstNode *n, int *out_type);
 int ast_index_composite_elem_type(const struct AstNode *n, int *out_elem);
