@@ -47,12 +47,11 @@ the generator's `sizeof` leaf and is promoted as `tests/tszblock.c`.
 BUG-067 (`sizeof` of an element, member or dereference of a nested-block
 local) and BUG-068 (`op=` and indexed reads through a nested-block pointer)
 are closed by T3 and promoted as `tests/tszderiv.c` and `tests/tptrcasg.c`;
-the `blockcassign` steer is removed.
+the `blockcassign` steer is removed. BUG-069 (`sizeof` of a
+two-dimensional or partially indexed array struct member) is closed by T4 and
+promoted as `tests/tszmdim.c`.
 
-Open reproducers:
-
-- `bug069.c`: `sizeof` of a two-dimensional array struct member, or a
-  partially indexed one, reports the innermost row size (#341).
+Open reproducers: none.
 
 ## Checking them
 

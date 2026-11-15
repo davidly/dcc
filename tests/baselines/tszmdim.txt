@@ -1,0 +1,9 @@
+fs 4 8 12
+fs 4 8 4
+fs 8 2 12
+fs 48 24 8 4
+blk 12 4 8 4
+idiom 3 4 2
+glob 8 4 48 4
+ptr 12 24 8
+struct 24 60 48

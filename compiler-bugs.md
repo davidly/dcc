@@ -25,13 +25,12 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| BUG-069 | [#341](https://github.com/davidly/dcc/issues/341) | codegen | `sizeof` of a two-dimensional array struct member, or a partially indexed one, reports the innermost row size |
 
-One entry is open, found while closing cluster T3 and logged rather than
-fixed there. BUG-013's unsigned bit-field promotion, BUG-009's hang and
-BUG-022's masked diagnostic are fixed below.
+No entries are open. BUG-013's unsigned bit-field promotion, BUG-009's hang
+and BUG-022's masked diagnostic are fixed below.
 
-Sixty-six reported bugs are fixed:
+Sixty-seven reported bugs are fixed:
+[one in cluster T4](#fixed-in-cluster-t4),
 [two in cluster T3](#fixed-in-cluster-t3),
 [three in cluster S2](#fixed-in-cluster-s2),
 [three in cluster D2e-2](#fixed-in-cluster-d2e-2),
@@ -161,6 +160,38 @@ sizes stack-bounded. Promoted as [tszblock](tests/tszblock.c)
 closed by T3.
 
 
+## Fixed in cluster T4
+
+`sizeof` over an array struct member now uses the field's byte size, and a
+partially indexed member is sized as a row: element size times the product of
+the remaining dimensions (`field_array_elems_from_level`, exported from
+`dcc_decl.c`). All 561 performance rows are non-regressing in both modes
+(146 improve against main).
+
+### BUG-069
+
+**`sizeof` of a two-dimensional array struct member, or a partially indexed
+one, reports the innermost row size.** (#341)
+
+With `struct T { int32_t a[3]; uint8_t b; int16_t c[2][2]; } t;`:
+
+- `sizeof t.c`, `sizeof arr[1].c` and `sizeof u.m` (for `uint8_t m[3][4]`)
+  gave 4, 4 and 3 rather than 8, 8 and 12: `ast_sizeof_expr_value()` sized an
+  `AST_MEMBER` array field as `element_size * first_dimension`;
+- `sizeof t.c[1]` and `sizeof pt->c[1]` gave 2 rather than 4: the `AST_INDEX`
+  case only handled identifier roots, so a partially indexed member fell to
+  the scalar element type.
+
+A direct `int16_t direct[2][2]` local, a fully indexed `t.c[1][0]` and the
+one-dimensional member `arr[1].a[0]` were correct. Function scope and nested
+blocks failed alike in both modes. Reproduced on `3ca3ff90` (main after T2).
+Found while building the BUG-067 regression; logged in T3 because the defect
+is in the AST member sizing, not the block-deferral path.
+
+**Closed by T4.** Promoted as [tszmdim](tests/tszmdim.c), which also covers
+three-dimensional members, `sizeof a / sizeof a[0]` idioms, members reached
+through pointers and nested-struct arrays, and the host-agreeing struct sizes.
+
 ## Fixed in cluster T3
 
 Both `sizeof` over a derived expression of a nested-block local and
@@ -221,48 +252,6 @@ seed 193; reproduced on `7dbe99d8` in both modes.
 unary retargeted by the pointee repair; the `INDEXADDR` over a deferred
 pointer is retyped from the repaired base load. Promoted as
 [tptrcasg](tests/tptrcasg.c); the `blockcassign` generator steer is removed.
-
-## BUG-069
-
-**`sizeof` of a two-dimensional array struct member, or a partially indexed
-one, reports the innermost row size.** (#341)
-
-With `struct T { int32_t a[3]; uint8_t b; int16_t c[2][2]; } t;`:
-
-- `sizeof t.c`, `sizeof arr[1].c` and `sizeof u.m` (for `uint8_t m[3][4]`)
-  give 4, 4 and 3 rather than 8, 8 and 12: `ast_sizeof_expr_value()` sizes an
-  `AST_MEMBER` array field as `element_size * first_dimension`;
-- `sizeof t.c[1]` and `sizeof pt->c[1]` give 2 rather than 4:
-  `ast_expr_type_for_sizeof()` types a partially indexed member as the scalar
-  element.
-
-A direct `int16_t direct[2][2]` local, a fully indexed `t.c[1][0]` and the
-one-dimensional member `arr[1].a[0]` are correct. Function scope and nested
-blocks fail alike; both peep and nopeep fail; clang and ASan+UBSan agree on
-the baseline. Reproduces on `3ca3ff90` (main after T2). Found while
-building the BUG-067 regression; logged rather than fixed in T3 because the
-defect is in the AST member typing, not the block-deferral path.
-
-### Parked reproducer
-
-`tests/known-bugs/bug069.c`, baseline `tests/known-bugs/baselines/bug069.txt`
-(`python3 scripts/run-known-bugs.py bug069`). The integer generator's
-`sizeof` leaf does not emit multi-dimensional members, so `--off known` runs
-are already quiet.
-
-Expected:
-```
-4 8 4
-4 8 4
-8 2 12
-```
-
-dcc:
-```
-2 4 4
-2 4 4
-8 2 3
-```
 
 ## BUG-006
 

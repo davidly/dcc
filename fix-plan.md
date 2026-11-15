@@ -883,6 +883,35 @@ tool tests OK; `blockstore` steer removed, integer seeds 1–300: 296 ok /
 4 INVALID / 0 FAIL. Promoted as `tblkstor`
 (`tblkstor,102746,102844,3328,3328`).
 
+### T4. Multi-dimensional array member `sizeof`
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-069 | #341 | `sizeof t.c` for `int16_t c[2][2]` reports 4; `sizeof t.c[1]` reports 2 |
+
+**Confirmed root cause:** `ast_sizeof_expr_value()` sized an `AST_MEMBER`
+array field as `elem_size * array_len`, and `FieldDef.array_len` is only the
+first dimension; its `AST_INDEX` case handled identifier roots only, so a
+partially indexed member fell through to `type_size()` of the scalar element.
+
+**Fix:** the member case returns `fd->size`; the index case gains a member
+root branch that, for `index_count < fd->dim_count`, returns `fd->elem_size *
+field_array_elems_from_level(fd, index_count)` (now exported from
+`dcc_decl.c`, mirroring the identifier path's
+`sym_array_elems_from_level`). No MIR change, so no exact-schedule hashes
+moved.
+
+**Validation:** both strict runall full+extended suites SUCCESS; 0 perf
+regressions / 146 improvements against main across 561 apps; dccpeep
+fixtures 73/73; debugger ctest 10/10; ASan+UBSan dcc clean over tszmdim,
+tszderiv, tptrcasg, tsizesgn, tszblock, tstruct; `-gline` output identical
+and `-g` run correct; Python tool tests pass except the pre-existing
+cmp15ok control; integer seeds 1–300 `--off known`: 295 ok / 5 INVALID /
+0 FAIL. Promoted as `tszmdim` (`tszmdim,150822,150992,3456,3456`), which
+also covers three-dimensional members, `sizeof a / sizeof a[0]` idioms,
+members through pointers and nested-struct arrays, and struct sizes that
+agree with the padded host layout.
+
 ### T3. Nested-block derived operands typed before declaration replay
 
 | Bug | Issue | Shape |
@@ -4601,6 +4630,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | S2 | `fix/bug062-sizeof-size_t` | BUG-062, BUG-065 and BUG-066 closed; BUG-067 and BUG-068 logged | full unsigned `sizeof` with AST proven-signedness demotion; emitter/dccpeep recovery, 0 perf regressions / 255 improvements; tsizesgn, tvaiyhom and tszblock promoted; 39 campaign hashes refreshed; generator emits `sizeof` |
 | T2 | [#335](https://github.com/davidly/dcc/pull/335) (`fix/cluster-t2-store-conversion`) | merged; BUG-063 closed | implicit indirect-store conversion retargeted by pointee repair; BUG-063 promoted as tblkstor; `blockstore` steer removed; all test outputs byte-identical, 546 perf rows unchanged; int 1–300: 296 ok/4 INVALID/0 FAIL |
 | T3 | `fix/bug067-068-block-deferred` | PR open; BUG-067 and BUG-068 closed; BUG-069 logged | deferred `sizeof` and `INDEXADDR` typing for nested-block derived operands; tszderiv and tptrcasg promoted; five VLA exact-schedule hashes and the packed-record control hashes refreshed (main's were wrong); 0 perf regressions / 146 improvements; `blockcassign` steer removed |
+| T4 | `fix/bug069-member-sizeof` | PR open; BUG-069 closed | `sizeof` of a whole or partially indexed multi-dimensional array member uses the field size / remaining-dimension product; tszmdim promoted; 0 perf regressions / 146 improvements |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |
