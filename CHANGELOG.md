@@ -1,0 +1,229 @@
+# Changelog
+
+## Clang-oracle differential campaign (2026-11-13 → 2026-11-16)
+
+A differential fuzzing campaign against Apple clang, started after the
+miscompiles fixed by #219 and #220 showed that the unit-test corpus was not
+catching serious wrong-code bugs. Every reproducer is defined C whose host
+output does not depend on `int` width, proven with the local clang and clean
+under ASan/UBSan; every fix was gated on the strict full+extended regression
+suites with no performance-baseline regressions.
+
+**Totals:** 69 bugs logged (BUG-001 … BUG-069), 67 fixed on `main` across
+47 pull requests, 2 fixed upstream before they were reported. 53 came from
+the first fuzzing pass (#274); 16 more surfaced as fixes removed the
+generator's steering around known defects. ~60 reproducers were promoted to
+permanent tests in `tests/` with host-proven baselines and checked
+performance rows. Two proof-suite gate failures (#277, #280) were also fixed.
+The bug record is [compiler-bugs.md](compiler-bugs.md); the root-cause
+plan and per-cluster validation notes are [fix-plan.md](fix-plan.md).
+
+### Infrastructure
+
+- **#274** `scripts/clang-oracle-fuzz.py`: integer and float program
+  generators, host-clang oracle, reduction and `--off known` steering;
+  `scripts/run-known-bugs.py`; `tests/known-bugs/` reproducers.
+- **#275** `clang-oracle-testing` skill and the root-cause `fix-plan.md`.
+- **#221**, **#222** forced-regional MIR regression coverage; stale campaign
+  assembly hashes repaired.
+- Generators later gained `sizeof` emission, nested-block declarations,
+  float update values and compound-assignment-through-pointer shapes as
+  steers were removed (S2, T2, T3).
+
+### Wrong code — nested-block (block-scope) local typing
+
+Locals declared in nested blocks lost their declared type because block
+declaration spans were replayed into the symbol table after the enclosing
+statement had been lowered.
+
+- **BUG-007** (#227) indirect call with a nested-block argument needing
+  conversion failed `incorrect argument ABI type` or crashed — A1 #281.
+- **BUG-025** (#245) `return x;` of a nested-block object was not converted
+  to the return type — A1 #281.
+- **BUG-031** (#251) nested-block 32-bit local stored to a 16-bit target
+  wrote a garbage high byte — A1 #281.
+- **BUG-008** (#228) negative constant assigned to a 32-bit nested-block
+  local rejected — A2a #283, `tblkneg`.
+- **BUG-004** (#225) 16-bit local initialised from `&&`/`||` then stored to a
+  32-bit lvalue left garbage in the high word — A2b-1 #314, A2b-3 #329
+  (byte logical PHI keeps its source type), `tlogblk`, `tlogbyte`.
+- **BUG-015** (#235) nested-block pointer to a 32-bit object and nested-block
+  `unsigned char` lost their declared type — A4 #328 (partial), A3 #331,
+  `tptrblk`, `tblkbind`, `tblkcast`.
+- **BUG-016** (#236) a local took the signedness of its initialiser instead
+  of its declared type — E1 #306, `tinittyp`.
+- **BUG-058** (#315) nested-block word initialised across signedness widened
+  with the initialiser type into a 32-bit array — A3 #331, `tblkword`.
+- **BUG-063** (#332) store through a nested-block pointer truncated a 32-bit
+  value to 16 bits — T2 #335, `tblkstor`.
+- **BUG-066** `sizeof` of a nested-block scalar local reported 2 — S2 #340,
+  `tszblock`.
+- **BUG-067** (#338) `sizeof` of an element, member or dereference of a
+  nested-block local reported 2 — T3 #342, `tszderiv`.
+- **BUG-068** (#339) `*q op= x` / `q[i] op= x` through a nested-block pointer
+  to a 32-bit object added only the low word — T3 #342, `tptrcasg`.
+
+### Wrong code — `++`/`--` and update expressions
+
+- **BUG-003** (#224) `++`/`--` on a 32-bit array element computed in 16 bits
+  and sign-extended — D1 #297, `tinc32a`.
+- **BUG-044** (#264) `++`/`--` on a float was a no-op on a scalar and a
+  16-bit integer increment on an element — D1 #297, `tflinc`.
+- **BUG-021** (#241) `x++`/`x--` yielded the new value — D2a #300, `tpost16`.
+- **BUG-023** (#243) `if (x++ > K) x = v;` left `x` as 1 when not taken —
+  D2a #300, `tpostbr`.
+- **BUG-010** (#230) cast or narrowing return of a 32-bit post-increment
+  rejected — D2b #301, `tpost32`.
+- **BUG-024** (#244) `if (x++)` in a loop tested the incremented value —
+  D2c #305, `tpost8`.
+- **BUG-041** (#261) value of a float `++`/`--` rejected — D2e-1 #321
+  (update provenance, `tupdprov`), D2e-2 #337, `tfincval`.
+- **BUG-056** (#299) float member-array update values negated as integers
+  (latent) — D2e-2 #337, `tfnegupd`.
+- **BUG-059** (#316) deferred float update arithmetic lacked the implicit
+  integer-to-float conversion (latent) — D2e-2 #337, `tfupdcnv`,
+  `tflbconv`.
+- **BUG-014** (#234) 32-bit local with two definitions, incremented, then
+  stored to a global: `missing direct MIR named-home offset` — B2a #292,
+  `twincg`.
+- **BUG-057** (#304) fused 32-bit increment used as an addition operand read
+  a stale backend slot — M #311, `twincadd`.
+- **BUG-009** (#229) `do … while (d < n)` nested in another loop never
+  exited with 32-bit `d` — M #311, `tndwide`.
+
+### Wrong code — PHI homes, liveness and stack slots
+
+- **BUG-017** (#237) `x &= x` on an `unsigned short` parameter returned
+  through a widening cast gave 0 — B3 #289, `tandself`.
+- **BUG-026** (#246) `int d = a - b; return d * d;` read an unallocated
+  slot — B3 #289, `tselfop`.
+- **BUG-030** (#250) `for`-init declaration shared a slot with the enclosing
+  block's locals — B1 #286, `tforhome`.
+- **BUG-036** (#256) 32-bit local assigned in a loop and passed directly to
+  a call kept its old value — B4 #293, `tlpcall`.
+- **BUG-027** (#247), **BUG-038** (#258) local assigned in an `if … else`
+  then updated lost the assignment when a loop / early return followed —
+  C1 #313 (materialise word PHI edges for store-only fused adjustments).
+- **BUG-029** (#249) 8-bit local and another variable assigned in opposite
+  arms, then `(int)c + x` lost `x` — C2a #320, `tphiarm`.
+- **BUG-037** (#257) `l = i;` copied a 32-bit loop counter after its
+  increment — C2b #319, `twphicpy`.
+- **BUG-052** (#272) folded `?:` on a 32-bit parameter accumulated into the
+  parameter when it was assigned after the loop — C2c #317, `tphislot`.
+- **BUG-019** (#239) unreachable nested-scope declaration after
+  `return`/`break`/`goto` rejected — B2b #303, `tdeadblk`.
+- **BUG-064** (#333) bounded recursion through a function pointer grew the
+  stack without bound (promoted-local slot hole vs fused self-store) —
+  T1 #334, `tslothol`.
+- **BUG-020** (#240) after a `switch`, `v >= (param % k)` with a 32-bit
+  parameter rejected — H #308, `tcmprhs`.
+- **BUG-045** (#265) comparison against a negative float constant combined
+  with another operand rejected — H #308, `tflncmp`.
+
+### Wrong code — signedness, shifts and bit-fields
+
+- **BUG-002** (#223) `unsigned char <<= unsigned char` not truncated to 8
+  bits on return — E2-shift #309, `tbcshl`.
+- **BUG-028** (#248) `>>=` on a `signed char` with an `unsigned int` count
+  shifted logically — E2-shift #309, `tbcsar`.
+- **BUG-013** (#233) unsigned bit-field not promoted to `int` as an operand
+  — E2-bitfield #310, `tbfexpr`.
+- **BUG-006** (#226) `/=`, `%=`, `>>=` on an unsigned bit-field with the top
+  bit set stored the wrong value — E2c #324, `tbfcomp`.
+
+### Valid C rejected — compound assignment and constant folding
+
+- **BUG-011** (#231) compound assignment to a `char` array element inside a
+  struct; **BUG-018** (#238) 32-bit value compound-assigned to a bit-field or
+  16-bit array member element; **BUG-043** (#263) compound assignment to an
+  integer lvalue with a float right operand — F #296.
+- **BUG-012** (#232) unary `-`/`~` applied to `!` of a constant — G1 #295,
+  `tconstun`.
+- **BUG-033** (#253) constant divided by constant zero in unreachable code —
+  G2 #302, `tconstdz`.
+- **BUG-040** (#260) static float initialiser had to be a bare constant —
+  G2 #302, `tflcini`.
+- **BUG-042** (#262) float constant needing folding or a truth test rejected
+  — G2 #302, `tflcnot`.
+
+### Wrong code — floating point
+
+- **BUG-046** (#266) `return` did not convert between `float` and a 32-bit
+  integer — I1 #285, `tfltret`.
+- **BUG-048** (#268) `(uint32_t)x` to float converted the signed value;
+  **BUG-050** (#270) `(int32_t)(uint32_t)x` converted the unsigned value —
+  I2 #287, `tflucast`, `tflscast`.
+- **BUG-047** (#267) `f + (x * y)` dropped the product in several operand
+  shapes — J #290, `tflmadd`.
+- **BUG-049** (#269) `!f` was 0 for negative zero — J2 #291, `tflnot`.
+- **BUG-055** (#294) variable-index store into a local float array in an
+  `else` arm lost between nested loops — N #312, `tflidx`.
+- **BUG-039** (#259) runtime `__fdiv` off by 1 ulp in about a fifth of cases
+  — R1 #325 (normalise before rounding; helper 11 bytes smaller).
+- **BUG-060** (#322) `%f` rounded exact IEEE bits to the wrong last decimal
+  digit — F1 #330, `tfpround`.
+
+### Wrong code — `sizeof`
+
+- **BUG-061** (#323) `sizeof` ≥ 32768 sign-extended or divided as signed —
+  S1 #326, `tsizhigh`.
+- **BUG-062** (#327) small constant and runtime `sizeof` kept signed typing —
+  S2 #340: `size_t` result in every form, with an AST proven-signedness
+  demotion pass plus emitter and dccpeep recovery (param-only IX-frame
+  elimination, `push hl / pop de` copies, exact `ex de,hl` liveness) so all
+  baselines are non-regressing and 255 improve; `tsizesgn`.
+- **BUG-069** (#341) `sizeof` of a multi-dimensional array struct member, or
+  a partially indexed one, reported the innermost row — T4 #343, `tszmdim`.
+
+### Runtime
+
+- **BUG-065** a variadic function homed in IY corrupted its caller's IY
+  (`va_list` frame shift) — S2 #340, `tvaiyhom`.
+- **BUG-039**, **BUG-060** above are `DCCRTL.MAC` fixes.
+
+### dccpeep
+
+- **BUG-032** (#252) `small_const_incr_carry_skip` dropped `x + K` when the
+  sum was then copied; **BUG-034** (#254) `cp8_to_bit3` turned `8 == v` into
+  a bit-3 test; **BUG-035** (#255) `preserve_ix_word_signed_range` compared
+  a 16-bit local with itself; **BUG-053** (#273) `pass_elim_dead_ix_stores`
+  forgot an escape at an LS label — K #278.
+- **BUG-054** (#288) byte local loaded from a global and used twice by a
+  binary operator lost a live register — K2 #298, `tpephl`.
+
+### Preprocessor and diagnostics
+
+- **BUG-051** (#271) macro parameter named like a numeric suffix (`f`, `u`,
+  `L`) substituted inside a constant — L #279, `tppsuf`.
+- **BUG-022** (#242) a reused label name in a nested block hid
+  `MIR emission is required` for later functions (exit 0, program hung) —
+  M #311, `tlbreuse`.
+
+### Fixed upstream before being reported
+
+- **BUG-001** compound assignment of a 32-bit value to an 8/16-bit member,
+  element or pointer target rejected; **BUG-005** nested-block divisor into a
+  32-bit member zeroed the high word — upstream `34e35b3a`.
+
+### Proof suite and CI
+
+- **#277** compound-check-runner exact schedule rejected `main` in `cmpw4.c`
+  after the bool-branch rewrite (cmp15ok/cmp4ok/cmp45ok controls failed);
+  fingerprint and wave-45 audit baseline refreshed — T5 #344.
+- **#280** `test_mir_compiler_mutations` intermittent exit 139 on macOS:
+  the process supervisor spawned a `pwsh` runtime per supervised process;
+  it now prefers `setsid`, then a direct `perl -MPOSIX` launcher — T5 #344.
+- **#336** `ma.sh` runs `dccrtlstrip --strip-apps` like `dccmake` (fixes the
+  m-posix CI job).
+- Stale exact-schedule hashes found along the way were corrected rather than
+  accepted: 39 campaign `BASELINE_SHA256` values (S2), five VLA schedules and
+  the packed-record controls (T3).
+
+### Withdrawn experiments (documented, not shipped)
+
+- **A2c** #318 early lexical typing — changed 259 existing functions per
+  mode and checked performance.
+- **D2d** #307 float update provenance at binary consumers — dependent
+  arithmetic still wrong; superseded by D2e-1/D2e-2.
+- **A2**, **B**, **B2**, **D**, **E**, **G** — first root fix cleared only
+  part of each cluster; split into the sub-clusters above.
