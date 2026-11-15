@@ -108,10 +108,11 @@ is promoted as `tests/tblkbind.c`; the `blockptr`, `blockcast`, `blockdec`,
 Restoring those shapes exposed two new parked defects. BUG-063 (#332, `bug063.c`)
 is a store through a nested-block pointer to a 32-bit object that keeps the
 16-bit conversion inserted for the assumed target; the integer generator steer
-`blockstore` holds it off. BUG-064 (#333, `bug064.c`) is integer seed 261 reduced
-to one call: a bounded recursion reached through a function pointer grows the
-Z80 stack without bound, so dcc overflows any stack limit where the host
-prints one line. It is not steered because its shape is not yet isolated.
+`blockstore` holds it off. BUG-064 (#333) was integer seed 261 reduced to one
+call: a promoted local's frame slot was reused as a spill hole while its fused
+`inc (ix+n)` self-store still wrote it, incrementing a spilled function
+pointer. T1 tightened the hole proof and promoted the reproducer as
+`tests/tslothol.c`.
 
 ## Adding one
 

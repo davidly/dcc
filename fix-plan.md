@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has six open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has five open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -812,6 +812,34 @@ all in `tblkbind`/`tblkcast`/`tblkword`/`tflbconv`. The agent stopped on
 quota before documentation; the maintainer's orchestrator finished the branch
 directly. D2e-2's float update admission scope (BUG-041/056/059) is not part
 of this close-out and stays open.
+
+### T1. Promoted-local slot hole reused under a materialized store
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-064 | #333 | Integer seed 261: bounded recursion through a function pointer grows the stack without bound |
+
+**Confirmed root cause (not recursion):** in `f5` the spilled scalar-cfg
+emitter promotes `l1` fully (no `MIR_LOAD`), so
+`mir_promoted_local_slot_hole()` hands its frame slot `(ix-2)` to the
+backend spill pool, skipping the object's own `MIR_STORE`s on the assumption
+they emit nothing. The `h1_p` load (v144) is then spilled into that hole. But
+`l1++` is still emitted by `mir_emit_selfstore_incdec()` as an in-place
+`inc (ix-2) / jp nz / inc (ix-1)`, which increments the spilled function
+pointer; `__CALL` enters `h1` at `h1+1`, after its `push ix`, and the
+`pop ix / ret` epilogue unwinds into the caller's frame. ntvcm's
+instruction trace showed 291 entries to `h1+1`.
+
+**Fix:** the hole proof rejects an object when a retained store's source is a
+fused self-store (`mir_value_is_selfstore_incdec`) or when a PHI over the
+object is homed in its slot (`mir_phi_uses_scalar_object_home`). No emitter,
+selector, schedule or runtime change.
+
+**Validation:** `bug064` FIXED in both modes; generated assembly for all 591
+existing test programs byte-identical against main `c3d46493`; MIR census
+identical; all 545 existing perf rows unchanged; strict runall full+extended
+SUCCESS; Python tool tests OK. Promoted as `tslothol`
+(`tslothol,50581,55840,5760,6016`).
 
 ### B1. Stale probe offset for a `for`-init declaration
 
@@ -4336,6 +4364,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | A4 | [#328](https://github.com/davidly/dcc/pull/328) (`fix/cluster-a4-block-pointer-typing`) | PR open; verified partial BUG-015 fix | Printed lines 152/153/154/162/163 flip; 155 already passes at base; tptrblk added; 3,672 existing functions and 544 perf rows unchanged; steered fuzz 283 ok/14 INVALID/3 limits; restored seed 96 exposes store-conversion remainder; harness retries documented; no steering/reproducer removal |
 | A2c | [#318](https://github.com/davidly/dcc/pull/318) (`fix/cluster-a2c-block-type-resolution`) | draft PR; stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
 | A3 | [#331](https://github.com/davidly/dcc/pull/331) (`fix/cluster-a3`) | merged; BUG-058 and BUG-015 closed | BUG-058 promoted as tblkword, BUG-015 as tblkbind (with A4 + cherry-picked D2e-2 repair); tblkcast kept; all existing census functions and perf rows unchanged; five steers removed; restored integer 293 ok/3 INVALID/3 limit/1 FAIL (seed 261 → BUG-064), float 295 ok/5 INVALID; seed 96 → BUG-063 with `blockstore` steer |
+| T1 | [#334](https://github.com/davidly/dcc/pull/334) (`fix/cluster-t1-promoted-slot-hole`) | merged; BUG-064 closed | hole proof rejects fused self-store/PHI-homed promoted locals; BUG-064 promoted as tslothol; all 591 test outputs byte-identical, census and 545 perf rows unchanged |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |
 | B2 | `fix/cluster-b2-home-fatals` | stopped; split | First root fix clears only 014; separate traces disprove shared cause |

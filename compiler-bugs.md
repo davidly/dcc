@@ -31,14 +31,14 @@ and their historical diagnoses are retained separately below.
 | [BUG-059](#bug-059) | #316 | latent wrong result | Deferred float update arithmetic lacks an implicit integer-to-float conversion after type repair |
 | [BUG-062](#bug-062) | #327 | wrong result | Small and runtime `sizeof` results retain signed AST typing; full unsigned typing and exact-schedule recovery are deferred |
 | [BUG-063](#bug-063) | #332 | wrong result | A store through a nested-block pointer to a 32-bit object keeps the 16-bit conversion inserted for the assumed target |
-| [BUG-064](#bug-064) | #333 | wrong result | Integer seed 261 grows the stack without bound through a bounded recursion (`r0`) that the host terminates |
 
-Six are open: three give wrong results with no diagnostic,
+Five are open: two give wrong results with no diagnostic,
 two latent wrong-code findings are blocked by
 BUG-041 admission, and one stops the compile. BUG-013's unsigned bit-field
 promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-Fifty-six reported bugs are fixed: [two in cluster A3](#fixed-in-cluster-a3),
+Fifty-seven reported bugs are fixed: [one in cluster T1](#fixed-in-cluster-t1),
+[two in cluster A3](#fixed-in-cluster-a3),
 [one in cluster S1](#fixed-in-cluster-s1),
 [one in cluster F1](#fixed-in-cluster-f1),
 [one in cluster A2b-3](#fixed-in-cluster-a2b-3),
@@ -138,29 +138,6 @@ confirmed when the BUG-015 steers were removed in A3.
   ASan/UBSan agree; dcc fails three of four lines in both modes). Integer
   generator steer `blockstore` (walks over 32-bit arrays through a
   nested-block pointer) keeps `--off known` runs quiet.
-
-## BUG-064
-
-**Integer seed 261 (`scripts/clang-oracle-fuzz.py --gen int --seeds 261`)
-grows the stack without bound.** With stack checking the program reports
-`?stack overflow: exceeded by 0x0008 limit 0x1000`, and raising the limit
-to 8 KiB or 16 KiB only moves the overflow (`exceeded by 0x000C/0x000A`);
-without stack checking the no-stack-check configurations hang past 20 s
-until memory is corrupted. The host prints all 36 lines. The only recursive
-function is `r0(uint8_t x0, uint32_t x1)`, which returns when `(x0 & 7) == 0`
-and otherwise recurses with `(uint8_t)((x0 & 7) - 1)`; it is reached through
-the function pointer `h1_p` from `k0`, called twice from `f5` (call 16).
-
-- A standalone `r0`/`h1` probe terminates correctly, so the runaway depends on
-  the surrounding `f5` statement set: removing either the `if` block, the
-  later `k0` call or the `h1_p` call restores termination. The reduction is
-  recorded in `build/clang-oracle-fuzz/261/` and the single-call driver
-  `build/s261a.c`; a smaller reproducer is still to be produced.
-- Not a target limit: the fuzzer classifies a fixed `STACK` overflow as
-  limit-only, but this overflow tracks the limit, which is unbounded growth.
-- Reproduce: `python3 scripts/clang-oracle-fuzz.py --gen int --seeds 261
-  --off known --keep`, then run `build/clang-oracle-fuzz/261/t.c` with
-  `dcc-stack-check=true dcc-stack-bytes=16384`.
 
 ## BUG-062
 
@@ -614,6 +591,54 @@ va = 1.0f; vb = 1.85f;  /* want 3f0a60dd, dcc 3f0a60de */
   so every float quotient goes through the one routine.
 - Also at v3.6.0 (`20290235`) with today's runtime.
 - Found by hand probing (the float generator excludes `/` as `fdivround`).
+
+## Fixed in cluster T1
+
+The scalar-cfg (spilled) emitter hands the frame slot of a fully promoted,
+non-address-taken local to the backend spill pool as a reusable hole
+(`mir_promoted_local_slot_hole`), skipping `MIR_STORE`s to that object on
+the assumption that they emit nothing. A fused self-store adjustment
+(`l1++` emitted in place as `inc (ix-2) / jp nz / inc (ix-1)` by
+`mir_emit_selfstore_incdec`) and a PHI homed in the object's slot both do
+write that slot. In `f5` the `h1_p` load was spilled into the hole, the
+increment landed on the function pointer, and the call entered `h1` at
+`h1+1`, after its `push ix`, so `pop ix / ret` unwound into the caller's
+frame and the program ran away.
+
+The hole proof now rejects an object whose retained store source is a fused
+self-store (`mir_value_is_selfstore_incdec`) or that homes a PHI
+(`mir_phi_uses_scalar_object_home`). Generated assembly for all 591 existing
+test programs is byte-identical, the MIR census is unchanged and all 545
+existing perf rows are untouched.
+
+### BUG-064
+
+**Integer seed 261 (`scripts/clang-oracle-fuzz.py --gen int --seeds 261`)
+grows the stack without bound.** With stack checking the program reports
+`?stack overflow: exceeded by 0x0008 limit 0x1000`, and raising the limit
+to 8 KiB or 16 KiB only moves the overflow (`exceeded by 0x000C/0x000A`);
+without stack checking the no-stack-check configurations hang past 20 s
+until memory is corrupted. The host prints all 36 lines. The only recursive
+function is `r0(uint8_t x0, uint32_t x1)`, which returns when `(x0 & 7) == 0`
+and otherwise recurses with `(uint8_t)((x0 & 7) - 1)`; it is reached through
+the function pointer `h1_p` from `k0`, called twice from `f5` (call 16).
+
+- A standalone `r0`/`h1` probe terminates correctly, so the runaway depends on
+  the surrounding `f5` statement set: removing either the `if` block, the
+  later `k0` call or the `h1_p` call restores termination. The reduction is
+  recorded in `build/clang-oracle-fuzz/261/` and the single-call driver
+  `build/s261a.c`; a smaller reproducer is still to be produced.
+- Not a target limit: the fuzzer classifies a fixed `STACK` overflow as
+  limit-only, but this overflow tracks the limit, which is unbounded growth.
+- Reproduce: `python3 scripts/clang-oracle-fuzz.py --gen int --seeds 261
+  --off known --keep`, then run `build/clang-oracle-fuzz/261/t.c` with
+  `dcc-stack-check=true dcc-stack-bytes=16384`.
+
+**Closed by T1 (#334).** The reduced 158-line reproducer is promoted as
+[tslothol](tests/tslothol.c) (`tslothol,50581,55840,5760,6016`). The
+"bounded recursion" was a symptom: a backend slot collision incremented the
+spilled `h1_p` function pointer so the indirect call entered `h1` one byte
+late, skipping `push ix`.
 
 ## Fixed in cluster A3
 
