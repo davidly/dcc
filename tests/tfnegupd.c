@@ -1,8 +1,6 @@
-/* BUG-056: latent wrong-code exposed while admitting float update values
- * for BUG-041. Negating a member-array or block-local float ++/-- result
- * uses integer negation/narrowing
- * instead of IEEE sign-bit negation. The admission experiment is not shipped;
- * until BUG-041 is safely fixed this reproducer is rejected with DCC-E1002. */
+/* Negating a member-array or block-local float `++`/`--` result uses IEEE
+ * sign-bit negation, not integer negation/narrowing.
+ * Promoted from BUG-056 (cluster D2e-2). */
 #include <stdint.h>
 #include <stdio.h>
 

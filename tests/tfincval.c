@@ -1,9 +1,6 @@
-/* BUG-041: the value of a float `++` or `--` expression is rejected with
- * DCC-E1002 "unsupported expression statement" / "unsupported if condition
- * or branch" / "unsupported while condition or body" wherever it is used:
- * assigned, compared, tested for truth, in `?:`, on a global, an array
- * element or a local. `f++;` as a statement and the value of `f += 1.0f`
- * are accepted, and so is the value of an integer `++`. */
+/* The value of a float `++`/`--` expression is usable everywhere an rvalue
+ * is: assignment, comparison, truth test, `?:`, on globals, array elements
+ * and locals, pre and post forms. Promoted from BUG-041 (cluster D2e-2). */
 #include <stdio.h>
 
 static float f, g, fa[4];

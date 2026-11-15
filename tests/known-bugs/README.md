@@ -19,11 +19,13 @@ rejects in every debug mode; only a copy with the old M-b guards masks it.
 The historical runnable program was already fixed by BUG-008/019 and is kept
 as `tests/tlbreuse.c` alongside that negative regression.
 
-BUG-059 records the independent missing implicit float conversion exposed by
-the stopped D2e admission trial. Like BUG-056, it remains latent behind
-BUG-041 admission; neither parked fixture is promoted by D2e-1.
+BUG-041 (float `++`/`--` value rejected) and the two latent defects behind
+it, BUG-056 (negated update treated as an integer) and BUG-059 (missing
+implicit int→float operand conversion), are closed by D2e-2's admission and
+promoted as `tests/tfincval.c`, `tests/tfnegupd.c` and `tests/tfupdcnv.c`;
+`tests/tblfcons.c` covers block integer operands feeding float arithmetic.
 `tests/tupdprov.c` separately covers the already-admitted wide update
-provenance repaired by that safe subset.
+provenance repaired by D2e-1.
 
 BUG-060 was promoted as `tfpround`: exact-bit `%f` nearest-even rounding,
 decimal carries, signed zero and subnormal fractions. `%e`/`%g` remain

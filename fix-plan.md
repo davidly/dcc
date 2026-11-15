@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has four open bugs found by the
+[compiler-bugs.md](compiler-bugs.md) has one open bug found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -812,6 +812,48 @@ all in `tblkbind`/`tblkcast`/`tblkword`/`tflbconv`. The agent stopped on
 quota before documentation; the maintainer's orchestrator finished the branch
 directly. D2e-2's float update admission scope (BUG-041/056/059) is not part
 of this close-out and stays open.
+
+### D2e-2 (admission). Float `++`/`--` value admitted
+
+| Bug | Issue | Shape |
+| --- | --- | --- |
+| BUG-041 | #261 | `g = f++`, `if (f-- > x)`, `while (f-- > 0)` rejected with DCC-E1002 |
+| BUG-056 | #299 | `-(s[1].a[1]++)` negated as an integer (latent, admission-blocked) |
+| BUG-059 | #316 | `-(local++) + (uint16_t)1` lacks the int→float operand conversion (latent) |
+
+**Confirmed root cause (admission half):** `ast_value_is_float_word()` asked
+`ast_expr_supported()` before looking at the update, and neither the
+scalar-binary nor the other-expression classifier had a float case for
+`TOK_INC`/`TOK_DEC`, so the value of any float update was rejected. The two
+latent wrong-code facets (056, 059) were downstream typing defects that only
+an admitted update could reach; their roots were repaired by D1 and the
+D2e-2 root repair (`mir_repair_deferred_float_types()`, shipped via #331).
+
+**Fix:** `ast_update_lvalue_float_type()` proves the updated lvalue is a
+float scalar, array element, member or dereference; the scalar-binary
+pre-update case, the other-expression postfix case and
+`ast_value_is_float_word()` (checked before expression admission to avoid
+the recursion) admit it. `fincdecval` leaves the float generator's
+`KNOWN_BUGS` (now empty).
+
+**Debug-metadata fix found by the admission gate:** the admitted BUG-056
+shape selected the compacted regional homed CFG, whose text-adjacency
+rewrites (`mir_compact_regional_candidate`, `mir_compact_adjacent_exx`) did
+not see across interleaved `;@dcc-loc`/`;@dcc-line` lines, so `-gline` kept
+`exx; exx` pairs that release elided (D2d had noted this). Both passes now
+match instruction lines only and replay skipped marker lines ahead of the
+rewritten span. Release output has no body comments, so release text is
+unchanged.
+
+**Validation:** bug041/056/059 FIXED in both modes; all 594 test outputs
+byte-identical against main `464af0b6` (only `tstdc`'s `__TIME__`); all 546
+existing perf rows unchanged; strict runall full+extended SUCCESS; Python
+tool tests OK; `-gline` binaries identical to release for all three
+reproducers in peep and nopeep; strict `-g` and `-gline` census 3753/3753;
+`test_line_debug` and debugger-host ctest (10/10) pass; integer seeds 1–300:
+296 ok / 4 INVALID / 0 FAIL; float seeds 1–300 with `fincdecval` restored:
+297 ok / 3 INVALID / 0 FAIL. Promoted as `tfincval`, `tfnegupd`, `tfupdcnv`, plus the
+block-integer-operand companion `tblfcons`.
 
 ### T2. Implicit store conversion fixed to the assumed pointee
 
@@ -4416,7 +4458,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | D2d | [#307](https://github.com/davidly/dcc/pull/307) (`fix/cluster-d2d-float-incdec-value`) | draft PR; stopped; admission withdrawn | 041/056 trial FIXED; dependent block-local float update arithmetic/comparison still wrong; restored float 288 ok/11 INVALID/1 FAIL (224); full trial withdrawn; final 20 reproducers: pre-existing 022 FIXED, 19 fails; both 3,532-function censuses and all 525 existing perf rows unchanged |
 | D2e | [#321](https://github.com/davidly/dcc/pull/321) (`fix/cluster-d2e-incdec-provenance`) | split under stop rule | D2e-1 retains AST update provenance only; D2e-2 float admission/MIR trial clears 041/056 but restored seed 224 exposes missing implicit operand conversion (new BUG-059/#316) |
 | D2e-1 | [#321](https://github.com/davidly/dcc/pull/321) (`fix/cluster-d2e-incdec-provenance`) | verified compiler gates; partial scope | Safe update provenance only; tupdprov added; 3,613 existing functions/mode and 535 perf rows unchanged; final float 283/17 and int 293/7, zero FAIL; strict 551/24 gates; #277 untouched, isolated fixture retry passes |
-| D2e-2 | [#316](https://github.com/davidly/dcc/issues/316) | root repair shipped via #331; admission scope open | `mir_repair_deferred_float_types()` and tflbconv landed by cherry-pick (f311a376); 041/056/059 remain steered by fincdecval and admission-blocked; agent stopped on quota before float update admission |
+| D2e-2 | [#PRNUM](https://github.com/davidly/dcc/pull/PRNUM) (`fix/cluster-d2e2-admission`) | merged; BUG-041, BUG-056, BUG-059 closed | float update value admitted via `ast_update_lvalue_float_type()`; regional compaction made debug-marker transparent for `-gline` identity; promoted as tfincval/tfnegupd/tfupdcnv (+tblfcons); all outputs byte-identical, 546 perf rows unchanged; int 1–300 296 ok/4 INVALID/0 FAIL; float 1–300 297 ok / 3 INVALID / 0 FAIL. Earlier: root repair shipped via #331; `mir_repair_deferred_float_types()` and tflbconv landed by cherry-pick (f311a376); 041/056/059 remain steered by fincdecval and admission-blocked; agent stopped on quota before float update admission |
 | E | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | split into E1 / E2 | Single SSA forwarding fix clears 016; 004 function facet and 015 word-widening facet improve, complete issues still open |
 | E1 | [#306](https://github.com/davidly/dcc/pull/306) (`fix/cluster-e-signedness`) | PR open; verified compiler gates; documented harness exceptions | 016 promoted as tinittyp; int 297/2/1 limit, float 281/19, zero FAIL; 3,509 functions and 520 perf rows unchanged; #277 and three isolated synthetic-fixture timing failures |
 | E2 | | split; byte-shift and bit-field bugs fixed | 013 fixed in E2-bitfield; 006 repaired in E2c with the approved tcmwide exception; 002/028 fixed in E2-shift; 004 repaired boolean conversion remains in A2b |

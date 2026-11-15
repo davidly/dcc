@@ -1,7 +1,6 @@
-/* Latent D2e admission trial: a block-local float update reaches correctly
- * typed unary/binary MIR, but an assumed-identity arithmetic conversion is
- * never materialized when its type resolves to float. The trial is withdrawn;
- * shipped admission rejects these expressions with BUG-041's DCC-E1002. */
+/* Block-local float updates that reach typed unary/binary MIR materialize
+ * their arithmetic conversion once the deferred type resolves to float.
+ * Promoted from BUG-059 (cluster D2e-2). */
 #include <stdint.h>
 #include <stdio.h>
 
