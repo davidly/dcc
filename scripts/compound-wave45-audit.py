@@ -38,7 +38,7 @@ REJECT_REASON = re.compile(
     r"template=compound-check-runner reject=(?P<reason>\S+)"
 )
 BASELINE_SHA256 = (
-    "4238f800ed00074f2053fbebe75a700ae44563fea1e6952f3f15837bdb068d4e"
+    "40d373f36bb19645432472e104abdff22d0a6819a7baf23439058b98cc937b95"
 )
 BASELINE_SELECTED_HASH = "044ec27d"
 EXPECTED_RUNTIME = (
@@ -86,10 +86,10 @@ MUTATION_CASES = (
     MutationCase("index-address-src1-kind", "513:src1:321"),
     MutationCase("index-address-src2-kind", "513:src2:320"),
     MutationCase("index-address-type", "513:type:18"),
-    MutationCase("member-address-negative-offset", "685:immediate:-1"),
-    MutationCase("member-address-width", "685:memory_size:1"),
-    MutationCase("storeind-value-kind", "945:src2:621"),
-    MutationCase("final-load-type", "964:type:17"),
+    MutationCase("member-address-negative-offset", "687:immediate:-1"),
+    MutationCase("member-address-width", "687:memory_size:1"),
+    MutationCase("storeind-value-kind", "947:src2:621"),
+    MutationCase("final-load-type", "966:type:17"),
 )
 
 
