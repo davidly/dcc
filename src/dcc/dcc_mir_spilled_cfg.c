@@ -6981,9 +6981,23 @@ static int mir_promoted_local_slot_hole(int object, int *offset, int *size)
         if (memory_storage != SC_LOCAL || memory_size <= 0 ||
             !mir_ranges_overlap(*offset, *size, memory_offset, memory_size))
             continue;
-        if (insn->object == object && insn->opcode == MIR_STORE)
+        /* A store to a fully promoted object normally emits nothing, so
+         * it does not keep the home alive. A fused self-store adjustment
+         * (mir_emit_selfstore_incdec and friends) is the exception: it
+         * writes the object's frame slot directly, and a PHI homed in the
+         * object's slot materializes its edges there too. Either one would
+         * clobber a backend value reusing the hole (BUG-064). */
+        if (insn->object == object && insn->opcode == MIR_STORE &&
+            !mir_value_is_selfstore_incdec(insn->src1))
             continue;
         return 0;
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_PHI && insn->object == object &&
+            mir_phi_uses_scalar_object_home(insn->dst))
+            return 0;
     }
     return 1;
 }

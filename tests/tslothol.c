@@ -1,9 +1,11 @@
-/* BUG-064: this bounded recursion (r0 returns once (x0 & 7) == 0 and
- * otherwise recurses on (x0 & 7) - 1, reached through the h1_p function
- * pointer) grows the Z80 stack without bound, so the program overflows any
- * stack limit instead of printing the one result line. The host prints
- * `0010 00000000`. Reduced from clang-oracle-fuzz.py integer seed 261, call
- * 16; the empty nested if/else block in f5 is still required to reproduce. */
+/* Promoted BUG-064 (#333): a fully promoted local (`l1`) whose home slot is
+ * handed to the backend spill pool as a hole, while its retained `l1++`
+ * store is still emitted as a fused in-place `inc (ix+n)` on that same slot.
+ * The increment clobbered the spilled `h1_p` function pointer, so the
+ * indirect call landed one byte into `h1` and the stack grew without bound.
+ * The empty nested if/else block in f5 is required to reproduce. Reduced
+ * from clang-oracle-fuzz.py integer seed 261, call 16; prints
+ * `0010 00000000`. */
 #include <stdint.h>
 #include <stdio.h>
 
