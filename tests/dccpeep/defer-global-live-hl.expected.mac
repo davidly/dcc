@@ -70,7 +70,7 @@ _safe_split_sign_extension:
 	rlca
 	sbc a,a
 	ld h,a
-	ex de,hl ; peep: push_hl_pop_de_to_ex
+	ex de,hl ; peep: de_copy_before_pop_hl_to_ex
 	ld hl,(_word) ; peep: defer_global_push_reload
 	add hl,de
 	ret

@@ -1,16 +1,18 @@
 	public _check
 _check:
-	push ix
-	ld ix,0
-	add ix,sp
-	ld c,(ix+8)
-	ld b,(ix+9)
+	ld hl,6 ; peep: param_frame
+	add hl,sp
+	ld c,(hl)
+	inc hl
+	ld b,(hl)
 	ld hl,4
 	add hl,bc
 	ld b,h
 	ld c,l
 	ld e,4
-	ld a,(ix+4) ; peep: affine_byte_compare_loop
+	ld hl,2 ; peep: param_frame
+	add hl,sp
+	ld a,(hl) ; peep: affine_byte_compare_loop
 	add a,e ; peep: affine_byte_compare_loop
 	ld h,a ; peep: affine_byte_compare_loop
 	add a,124 ; peep: affine_byte_compare_loop
@@ -22,8 +24,6 @@ Lloop:
 	inc bc
 	jp z, Lcontinue
 	ld hl,0
-	ld sp,ix
-	pop ix
 	ret
 Lcontinue:
 	inc e
@@ -31,6 +31,4 @@ Lcontinue:
 	cp d ; peep: affine_byte_compare_loop
 	jp nz, Lloop
 	ld hl,1
-	ld sp,ix
-	pop ix
 	ret

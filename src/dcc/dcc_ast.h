@@ -28,6 +28,7 @@
  * - dcc_ast_capture.c: initializer capture, inline metadata, expression
  *   helpers.
  * - dcc_ast_stmt_classify.c: statement/condition gates and branch-shape helpers.
+ * - dcc_ast_sizeof.c: proven int demotion of sizeof-derived unsigned terms.
  * - dcc_ast_internal.h: private contract shared by the split modules.
  *
  * @par Boundary
@@ -265,6 +266,27 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
                           int *out_no_deref);
 int ast_index_array_row_ptr_type(const struct AstNode *n, int *out_type);
 struct Sym *ast_sizeof_whole_vla_sym(const struct AstNode *n);
+
+/* Declaration-span name facts recorded while scanning an AST_DECL (see
+ * dcc_ast_build.c).  touches: the span writes or takes the address of name;
+ * declares: the span (possibly) declares name, shadowing an outer one.  Both
+ * answer 1 for a NULL/foreign node or on recording overflow.  int_counter
+ * returns NAME for a span of exactly `[register] int NAME = <literal>;`. */
+int ast_decl_span_touches_name(const struct AstNode *n, const char *name);
+int ast_decl_span_declares_name(const struct AstNode *n, const char *name);
+const char *ast_decl_span_int_counter(const struct AstNode *n, long *init);
+int ast_decl_span_simple_type(const struct AstNode *n, const char *name);
+
+/* sizeof signedness demotion (dcc_ast_sizeof.c).  Run on each full
+ * expression just before MIR lowering; target_type is the type the root
+ * value converts to (0 when discarded or used as a condition). */
+void ast_sizeof_demote_expr(const struct AstNode *root, int target_type);
+void ast_sizeof_reset_function(void);
+void ast_sizeof_reset_stmt(void);
+void ast_sizeof_note_decl(const struct AstNode *decl);
+int ast_sizeof_loop_push(const struct AstNode *for_node);
+void ast_sizeof_loop_set_header(int in_header);
+void ast_sizeof_loop_pop(void);
 
 /* Detects a for-loop whose whole body is one assignment to an array-element
  * lvalue whose address is provably the same on every iteration (see

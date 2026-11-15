@@ -1527,6 +1527,7 @@ static int mir_emit_inline_local_temp(struct Sym *fn_sym,
     mir_inline_local_src_name = saved_src_name;
     mir_inline_local_temp_name = saved_temp_name;
     tmp->type = fn_sym->inline_local_type;
+    ast_sizeof_demote_expr(init_substituted, tmp->type);
     value = mir_lower_expr(init_substituted);
     value = mir_lower_conversion(value, tmp->type);
     mir_emit_symbol_store(tmp, value);
@@ -1650,6 +1651,8 @@ static int mir_try_lower_inline_call_expr(const struct AstNode *call,
         mir_end_inline_call_scope(&scope);
         return 0;
     }
+    /* The clone is fresh per call site: refine it for this site's context. */
+    ast_sizeof_demote_expr(expr, fn_sym != NULL ? fn_sym->type : TYPE_INT);
     *out_value = mir_lower_expr(expr);
     if (fn_sym != NULL && type_ptr_depth(fn_sym->type) > 0 &&
         (fn_sym->pointee_volatile_mask != 0 || fn_sym->pointee_is_volatile)) {
@@ -1696,9 +1699,10 @@ static int mir_try_lower_inline_call_stmt(const struct AstNode *call)
         return 0;
     if (stmt != NULL)
         mir_lower_stmt(stmt);
-    else if (expr != NULL)
+    else if (expr != NULL) {
+        ast_sizeof_demote_expr(expr, 0);
         (void)mir_lower_expr(expr);
-    else {
+    } else {
         mir_end_inline_call_scope(&scope);
         return 0;
     }
@@ -3136,6 +3140,13 @@ static int mir_lower_aggregate_call_address(const struct AstNode *call,
     return value;
 }
 
+/* Conversion target of the full expression about to be lowered: set by the
+ * statement-level caller (return, initializer) and consumed once by the
+ * outermost mir_lower_expr() so the sizeof demotion pass sees the real
+ * consumer of the root value. */
+static int mir_expr_root_target;
+static int mir_expr_depth;
+
 static int mir_lower_expr(const struct AstNode *node)
 {
     struct MirAstPreflight preflight;
@@ -3144,6 +3155,15 @@ static int mir_lower_expr(const struct AstNode *node)
 
     if (node == NULL)
         return -1;
+    if (mir_expr_depth == 0) {
+        int target = mir_expr_root_target;
+        mir_expr_root_target = 0;
+        ast_sizeof_demote_expr(node, target);
+        mir_expr_depth++;
+        value = mir_lower_expr(node);
+        mir_expr_depth--;
+        return value;
+    }
     if (mir_ast_preflight_contains(mir_active_ast_preflight, node))
         return mir_lower_expr_impl(node);
     if (!mir_expr_ast_preflight(node, &preflight)) {
@@ -3321,6 +3341,11 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             } else if (node->a != NULL && node->a->kind == AST_IDENT) {
                 insn = mir_emit(MIR_VLA_SIZE);
                 insn->memory_flags |= 8;
+                /* A nested-block local's declaration span has not been
+                 * replayed yet, so its symbol is unknown here; flag 16 lets
+                 * the deferred fix-up take the declared object size. */
+                if (mir_ident_symbol(node->a) == NULL)
+                    insn->memory_flags |= 16;
                 insn->secondary_offset = ast_sizeof_expr_value(node->a);
                 mir_copy_name(insn->name, node->a->sval);
             } else if (node->a != NULL && node->a->kind == AST_INDEX) {
@@ -4332,6 +4357,7 @@ static void mir_lower_stmt(const struct AstNode *node)
     int next_label;
     int case_value;
     int compare_value;
+    int counter_proof;
     struct MirSwitchContext *switch_context;
     int i;
 
@@ -4348,6 +4374,7 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir_lower_discarded_expr(node->a);
         return;
     case AST_DECL:
+        ast_sizeof_note_decl(node);
         insn = mir_emit(MIR_DECL_PLACEHOLDER);
         if (mir.declaration_count < 1024) {
             mir.declaration_placeholders[mir.declaration_count] =
@@ -4380,6 +4407,7 @@ static void mir_lower_stmt(const struct AstNode *node)
             node->a->kind == AST_CALL)
             condition = mir_lower_aggregate_call_address(node->a, NULL);
         else {
+            mir_expr_root_target = mir.return_type;
             condition = mir_lower_expr(node->a);
             if (!type_is_struct_object(mir.return_type))
                 condition = mir_lower_conversion(condition, mir.return_type);
@@ -4530,6 +4558,7 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir.break_labels[mir.flow_depth] = end_label;
         mir.continue_labels[mir.flow_depth] = continue_label;
         ++mir.flow_depth;
+        counter_proof = ast_sizeof_loop_push(node);
         mir_emit_label(top_label);
         mir_emit_object_merges();
         if (node->b != NULL) {
@@ -4538,10 +4567,16 @@ static void mir_lower_stmt(const struct AstNode *node)
             insn->src1 = condition;
             insn->label = end_label;
         }
+        if (counter_proof)
+            ast_sizeof_loop_set_header(0);
         mir_lower_stmt(node->d);
+        if (counter_proof)
+            ast_sizeof_loop_set_header(1);
         mir_emit_label(continue_label);
         if (node->c != NULL)
             mir_lower_discarded_expr(node->c);
+        if (counter_proof)
+            ast_sizeof_loop_pop();
         mir_emit_jump(top_label);
         mir_emit_label(end_label);
         --mir.flow_depth;
@@ -4663,6 +4698,9 @@ void mir_begin_function(const char *name, const char *assembly_name,
     mir.init_expression_target = NULL;
     mir.vla_target = NULL;
     mir.sink_purpose = sink_purpose;
+    ast_sizeof_reset_function();
+    mir_expr_root_target = 0;
+    mir_expr_depth = 0;
     mir.report_mode = getenv("DCC_MIR_REPORT") != NULL ||
                       getenv("DCC_MIR_FUNCTION") != NULL ||
                       getenv("DCC_MIR_EMIT_FUNCTION") != NULL ||
@@ -4732,8 +4770,10 @@ void mir_begin_function(const char *name, const char *assembly_name,
 
 void mir_capture_stmt(const struct AstNode *stmt)
 {
-    if (mir.active)
+    if (mir.active) {
+        ast_sizeof_reset_stmt();
         mir_lower_stmt(stmt);
+    }
 }
 
 int mir_is_active(void)
@@ -5449,6 +5489,7 @@ void mir_capture_initializer(const struct AstNode *expr)
     }
     if (mir.initializer_target == NULL)
         return;
+    mir_expr_root_target = mir.initializer_target->type;
     value = mir_lower_expr(expr);
     if (!type_is_struct_object(mir.initializer_target->type))
         value = mir_lower_conversion(value, mir.initializer_target->type);
@@ -9413,11 +9454,13 @@ scoped_type_repair_done:
                 offset = mir_declared_vla_size_offset(mir.insns[i].name);
             if (offset != 0) {
                 mir.insns[i].immediate = offset;
-                mir.insns[i].memory_flags &= ~8;
+                mir.insns[i].memory_flags &= ~(8 | 16);
             } else {
                 mir.insns[i].opcode = MIR_CONST;
                 mir.insns[i].immediate =
-                    mir_declared_is_array_object(mir.insns[i].name) &&
+                    (mir_declared_is_array_object(mir.insns[i].name) ||
+                     ((mir.insns[i].memory_flags & 16) != 0 &&
+                      !mir_declared_is_vla_object(mir.insns[i].name))) &&
                     mir_declared_object_size(mir.insns[i].name) > 0
                     ? (mir.insns[i].bit_width > 0
                        ? mir_declared_subobject_size(
@@ -9426,7 +9469,7 @@ scoped_type_repair_done:
                     : mir.insns[i].secondary_offset;
                 mir.insns[i].secondary_offset = 0;
                 mir.insns[i].bit_width = 0;
-                mir.insns[i].memory_flags &= ~8;
+                mir.insns[i].memory_flags &= ~(8 | 16);
             }
         }
 

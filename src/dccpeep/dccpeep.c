@@ -2146,6 +2146,300 @@ static int pass_elim_ix_frame(void)
     return changed;
 }
 
+/*
+ * Parameter-only IX frames.
+ *
+ * The spilled MIR emitter always addresses parameters through an IX frame,
+ * even when the function allocates no locals. When the frame pointer's only
+ * remaining uses are `ld r,(ix+N)` parameter reads, the frame costs
+ * push ix / ld ix,0 / add ix,sp / pop ix (58 T-states, 8 bytes) per call and
+ * each read can instead be an SP-relative load once the stack depth at that
+ * point is known. The depth is propagated over the liveness CFG from the
+ * prologue; every push/pop/inc sp/dec sp adjusts it and every join must agree.
+ *
+ * Rewrites (the scratch registers and carry must be dead after the load;
+ * `add hl,sp` leaves Z, S and P/V untouched):
+ *
+ *   ld l,(ix+N) / ld h,(ix+N+1)  ->  ld hl,off / add hl,sp / ld a,(hl) /
+ *                                    inc hl / ld h,(hl) / ld l,a      (+7 T)
+ *   ld e,(ix+N) / ld d,(ix+N+1)  ->  ld hl,off / add hl,sp / ld e,(hl) /
+ *                                    inc hl / ld d,(hl)               (+7 T)
+ *   ld r,(ix+N)                  ->  ld hl,off / add hl,sp / ld r,(hl) (+9 T)
+ *
+ * with off = depth + N - 2. The rewrite only applies when the static sum of
+ * those per-load costs stays below the frame cost in both T-states and bytes
+ * and no rewritten load sits inside a loop, so the dynamic count of each
+ * load is bounded by its static count and the function is strictly cheaper.
+ */
+
+#define MAX_PARAM_FRAME_LOADS 8
+
+struct ParamFrameLoad {
+    int line;
+    int count;              /* 1 = byte, 2 = word pair */
+    int sp_offset;
+    char low;               /* destination of the first load */
+    char high;              /* destination of the second load, or 0 */
+    int via_a;              /* word pair into HL through A, else through DE */
+};
+
+static int param_frame_parse_load(int line, char *reg, int *offset)
+{
+    char clean[MAX_LINE];
+    char *end;
+    long value;
+
+    strip_peep_comment_copy(clean, lines[line]);
+    if (strncmp(clean, "ld ", 3) != 0 || clean[3] == 0 ||
+        strchr("abcdehl", clean[3]) == NULL || clean[4] != ',' ||
+        strncmp(clean + 5, "(ix+", 4) != 0)
+        return 0;
+    value = strtol(clean + 9, &end, 10);
+    if (end == clean + 9 || strcmp(end, ")") != 0 || value < 4 || value > 255)
+        return 0;
+    *reg = clean[3];
+    *offset = (int)value;
+    return 1;
+}
+
+static unsigned param_frame_register_bit(char reg)
+{
+    switch (reg) {
+    case 'a': return PEEP_REG_A;
+    case 'b': return PEEP_REG_B;
+    case 'c': return PEEP_REG_C;
+    case 'd': return PEEP_REG_D;
+    case 'e': return PEEP_REG_E;
+    case 'h': return PEEP_REG_H;
+    case 'l': return PEEP_REG_L;
+    default: return 0;
+    }
+}
+
+/* Depth propagation over the function's flow graph. Returns 0 when any
+ * instruction changes SP unpredictably, any join disagrees, or any exit is
+ * not a `pop ix / ret` epilogue at depth zero. */
+static int param_frame_depths(int body, int end, int *depth)
+{
+    static int queue[MAX_LINES];
+    int head = 0, tail = 0;
+    int j;
+
+    for (j = body; j < end; ++j)
+        depth[j] = -1;
+    depth[body] = 0;
+    queue[tail++] = body;
+    while (head < tail) {
+        int line = queue[head++];
+        const PeepLineInfo *info = peep_line_info(line);
+        const PeepFlowLine *flow = peep_flow_line(line);
+        char clean[MAX_LINE];
+        int next = depth[line];
+        int s;
+
+        if (info == NULL || flow == NULL || info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        strip_peep_comment_copy(clean, lines[line]);
+        if (info->kind == PEEP_LINE_INSTRUCTION) {
+            if (strcmp(clean, "pop ix") == 0) {
+                if (next != 0 || line + 1 >= end || !eq(line + 1, "ret"))
+                    return 0;
+            } else if (strcmp(clean, "ld sp,ix") == 0) {
+                if (next != 0)
+                    return 0;
+            } else if (strstr(clean, "ix") != NULL) {
+                char reg;
+                int offset;
+
+                if (!param_frame_parse_load(line, &reg, &offset))
+                    return 0;
+            } else if (strncmp(clean, "push ", 5) == 0) {
+                next += 2;
+            } else if (strncmp(clean, "pop ", 4) == 0) {
+                next -= 2;
+            } else if (strcmp(clean, "inc sp") == 0) {
+                next -= 1;
+            } else if (strcmp(clean, "dec sp") == 0) {
+                next += 1;
+            } else if (strcmp(clean, "ex (sp),hl") == 0) {
+                ;
+            } else if (strstr(clean, "sp") != NULL) {
+                return 0;
+            } else if (strncmp(clean, "ret", 3) == 0) {
+                if (next != 0 || line - 1 < body || !eq(line - 1, "pop ix"))
+                    return 0;
+            }
+            if (next < 0)
+                return 0;
+            if (flow->successor_count == 0 && strncmp(clean, "ret", 3) != 0)
+                return 0;
+        }
+        for (s = 0; s < flow->successor_count; ++s) {
+            int target = flow->successors[s];
+
+            if (target < body || target >= end)
+                return 0;
+            if (depth[target] < 0) {
+                depth[target] = next;
+                queue[tail++] = target;
+            } else if (depth[target] != next) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int param_frame_in_loop(int body, int end, int line)
+{
+    int j;
+
+    for (j = line; j < end; ++j) {
+        const PeepFlowLine *flow = peep_flow_line(j);
+        int s;
+
+        if (flow == NULL)
+            return 1;
+        for (s = 0; s < flow->successor_count; ++s)
+            if (flow->successors[s] >= body && flow->successors[s] <= line)
+                return 1;
+    }
+    return 0;
+}
+
+static int pass_elim_param_only_ix_frame(void)
+{
+    static int depth[MAX_LINES];
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 4 < nlines; i++) {
+        int end, body = i + 3;
+        int j, k;
+        struct ParamFrameLoad loads[MAX_PARAM_FRAME_LOADS];
+        int load_count = 0;
+        int saved_tstates = 58, saved_bytes = 8;
+        int added_tstates = 0, added_bytes = 0;
+        int ok = 1;
+
+        if (!eq(i, "push ix") || !eq(i + 1, "ld ix,0") || !eq(i + 2, "add ix,sp"))
+            continue;
+        end = nlines;
+        for (j = body; j < nlines; j++) {
+            if (strncmp(lines[j], "public ", 7) == 0 || is_global_asm_label_line(j)) {
+                end = j;
+                break;
+            }
+        }
+        if (!param_frame_depths(body, end, depth))
+            continue;
+
+        for (j = body; j < end && ok; j++) {
+            struct ParamFrameLoad *load;
+            char reg, reg2;
+            int offset, offset2;
+
+            if (eq(j, "ld sp,ix")) {
+                saved_tstates += 10;
+                saved_bytes += 2;
+                continue;
+            }
+            if (!param_frame_parse_load(j, &reg, &offset))
+                continue;
+            if (depth[j] < 0 || load_count >= MAX_PARAM_FRAME_LOADS ||
+                param_frame_in_loop(body, end, j)) {
+                ok = 0;
+                break;
+            }
+            load = &loads[load_count++];
+            load->line = j;
+            load->low = reg;
+            load->high = 0;
+            load->sp_offset = depth[j] + offset - 2;
+            load->via_a = 0;
+            if (j + 1 < end && param_frame_parse_load(j + 1, &reg2, &offset2) &&
+                offset2 == offset + 1 && depth[j + 1] == depth[j] &&
+                ((reg == 'l' && reg2 == 'h') || (reg == 'e' && reg2 == 'd') ||
+                 (reg == 'c' && reg2 == 'b'))) {
+                load->count = 2;
+                load->high = reg2;
+                if (reg == 'l') {
+                    if (peep_registers_dead_after(j + 1, PEEP_REG_A))
+                        load->via_a = 1;
+                    else if (!peep_registers_dead_after(j + 1, PEEP_REG_DE))
+                        ok = 0;
+                } else if (!peep_registers_dead_after(j + 1, PEEP_REG_HL)) {
+                    ok = 0;
+                }
+                if (!peep_flags_dead_after(j + 1, PEEP_FLAG_C))
+                    ok = 0;
+                added_tstates += 7;
+                added_bytes += 2;
+                j++;
+            } else {
+                unsigned clobbered = PEEP_REG_HL & ~param_frame_register_bit(reg);
+
+                load->count = 1;
+                if (!peep_registers_dead_after(j, clobbered) ||
+                    !peep_flags_dead_after(j, PEEP_FLAG_C))
+                    ok = 0;
+                added_tstates += 9;
+                added_bytes += 2;
+            }
+        }
+        if (!ok || load_count == 0 ||
+            added_tstates >= saved_tstates || added_bytes > saved_bytes)
+            continue;
+
+        /* Rewrite from the bottom so earlier line indexes stay valid. */
+        for (j = end - 1; j >= body; j--) {
+            if (eq(j, "pop ix") || eq(j, "ld sp,ix")) {
+                delete_n(j, 1);
+                continue;
+            }
+            for (k = 0; k < load_count; k++)
+                if (loads[k].line == j)
+                    break;
+            if (k == load_count)
+                continue;
+            {
+                struct ParamFrameLoad *load = &loads[k];
+                char text[64];
+                int at = j;
+
+                delete_n(j, load->count);
+                sprintf(text, "ld hl,%d", load->sp_offset);
+                insert_line_tagged(at++, text, "param_frame");
+                insert_line(at++, "add hl,sp");
+                if (load->count == 1) {
+                    sprintf(text, "ld %c,(hl)", load->low);
+                    insert_line(at++, text);
+                } else if (load->via_a) {
+                    insert_line(at++, "ld a,(hl)");
+                    insert_line(at++, "inc hl");
+                    insert_line(at++, "ld h,(hl)");
+                    insert_line(at++, "ld l,a");
+                } else if (load->low == 'l') {
+                    insert_line(at++, "ld e,(hl)");
+                    insert_line(at++, "inc hl");
+                    insert_line(at++, "ld d,(hl)");
+                    insert_line(at++, "ex de,hl");
+                } else {
+                    sprintf(text, "ld %c,(hl)", load->low);
+                    insert_line(at++, text);
+                    insert_line(at++, "inc hl");
+                    sprintf(text, "ld %c,(hl)", load->high);
+                    insert_line(at++, text);
+                }
+            }
+        }
+        delete_n(i, 3);
+        changed = 1;
+        i--;
+    }
+    return changed;
+}
+
 static int pass_byte_minmax_patterns(void)
 {
     int i;
@@ -4103,16 +4397,23 @@ static int pass_ix_pair_load_to_de(void)
     char new_lo[64], new_hi[64];
 
     for (i = 0; i + 4 < nlines; i++) {
+        int transfer;           /* lines moving HL to DE: ex, or ld e,l/ld d,h */
+
         if (!eq(i, "push hl")) continue;
         if (!peep_parse_ld_ix_pair(lines[i + 1], lines[i + 2], &off)) continue;
-        if (!eq(i + 3, "ex de,hl")) continue;
-        if (!eq(i + 4, "pop hl")) continue;
+        if (eq(i + 3, "ex de,hl"))
+            transfer = 1;
+        else if (i + 5 < nlines && eq(i + 3, "ld e,l") && eq(i + 4, "ld d,h"))
+            transfer = 2;
+        else
+            continue;
+        if (!eq(i + 3 + transfer, "pop hl")) continue;
 
         sprintf(new_lo, "ld e,(ix%+d)", off);
         sprintf(new_hi, "ld d,(ix%+d)", off + 1);
         replace1_tagged(i, new_lo, "ix_pair_load_to_de");
         replace1(i + 1, new_hi);
-        delete_n(i + 2, 3);
+        delete_n(i + 2, 2 + transfer);
 
         changed = 1;
         if (i > 0) i--;
@@ -9098,6 +9399,27 @@ static int pass_elim_zero_add_via_stack(void)
  * other pass claim a push/pop pair first; this only mops up whatever
  * survives untouched to the very end.
  */
+/* Post-convergence counterpart of pass_push_hl_pop_de_to_ex's copy case:
+ * `ld e,l / ld d,h` is `ex de,hl` whenever HL is dead afterwards (the
+ * canonical case is a following `pop hl`, which overwrites HL without
+ * reading it). */
+static int pass_de_copy_before_pop_hl_to_ex(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 2 < nlines; i++) {
+        if (!eq(i, "ld e,l") || !eq(i + 1, "ld d,h") ||
+            !(eq(i + 2, "pop hl") ||
+              peep_registers_dead_after(i + 1, PEEP_REG_HL)))
+            continue;
+        replace1_tagged(i, "ex de,hl", "de_copy_before_pop_hl_to_ex");
+        delete_n(i + 1, 1);
+        changed = 1;
+    }
+    return changed;
+}
+
 static int pass_push_hl_pop_de_to_ex(void)
 {
     int i;
@@ -9167,6 +9489,15 @@ static int pass_push_hl_pop_de_to_ex(void)
             !line_touches_reg_pair(clean2 + 6, "h", "l", "hl")) {
             replace1_tagged(i, "ex de,hl", "push_hl_pop_de_to_ex");
             delete_n(i + 1, 1);
+            changed = 1;
+            continue;
+        }
+        /* A stack-forwarded right operand followed by its planned-stack
+         * left operand.  Copy rather than exchange: `ex` is opaque to the
+         * effects model and would keep DE/A live for later passes. */
+        if (strcmp(clean2, "pop hl") == 0) {
+            replace1_tagged(i, "ld e,l", "push_hl_pop_de_to_copy");
+            replace1(i + 1, "ld d,h");
             changed = 1;
             continue;
         }
@@ -9702,7 +10033,7 @@ static int pass_affine_byte_store_loop(void)
     int i, changed = 0;
     char label[128], back[160];
 
-    for (i = 7; i + 11 < nlines; ++i) {
+    for (i = 7; i + 9 < nlines; ++i) {
         int init, limit;
         if (!starts_label(lines[i]))
             continue;
@@ -9726,8 +10057,10 @@ static int pass_affine_byte_store_loop(void)
             init >= limit)
             continue;
         /* D must be dead at loop exit; accept only the canonical framed
-         * epilogue emitted for this leaf shape. */
-        if (!(eq(i + 9, "ld sp,ix") && eq(i + 10, "pop ix") &&
+         * epilogue emitted for this leaf shape, or the plain `ret` left
+         * once the parameter-only frame has been removed. */
+        if (!eq(i + 9, "ret") &&
+            !(eq(i + 9, "ld sp,ix") && eq(i + 10, "pop ix") &&
               eq(i + 11, "ret")))
             continue;
 
@@ -9767,12 +10100,20 @@ static int pass_affine_byte_compare_loop(void)
     int i, changed = 0;
     char label[128], back[160], cont[128], branch[160];
 
-    for (i = 2; i + 16 < nlines; ++i) {
+    for (i = 2; i + 14 < nlines; ++i) {
         int init, limit;
+        int t;                  /* line of the mismatch exit's `ret` */
         const char *arg;
         char load_a[MAX_LINE], adddelta[40];
-        if (!starts_label(lines[i]) ||
-            sscanf(lines[i - 2], "ld e,%d", &init) != 1)
+        if (!starts_label(lines[i]))
+            continue;
+        /* `ld e,N` directly precedes the H load, or precedes the
+         * three-line SP-relative parameter load pass_elim_param_only_ix_frame
+         * substitutes for `ld h,(ix+N)`; neither form touches E. */
+        if (sscanf(lines[i - 2], "ld e,%d", &init) != 1 &&
+            !(i >= 4 && sscanf(lines[i - 4], "ld e,%d", &init) == 1 &&
+              strncmp(lines[i - 3], "ld hl,", 6) == 0 &&
+              eq(i - 2, "add hl,sp")))
             continue;
         arg = strchr(lines[i - 1], ',');
         if (strncmp(lines[i - 1], "ld h,", 5) != 0 || arg == NULL)
@@ -9784,32 +10125,42 @@ static int pass_affine_byte_compare_loop(void)
             !eq(i + 5, "cp d") || !eq(i + 6, "inc bc") ||
             !jump_target_any(lines[i + 7], cont) ||
             strncmp(lines[i + 7], "jp z,", 5) != 0 ||
-            !eq(i + 8, "ld hl,0") || !eq(i + 9, "ld sp,ix") ||
-            !eq(i + 10, "pop ix") || !eq(i + 11, "ret") ||
-            !starts_label(lines[i + 12]) || !eq(i + 13, "inc e") ||
-            !eq(i + 14, "ld a,e") ||
-            sscanf(lines[i + 15], "cp %d", &limit) != 1)
+            !eq(i + 8, "ld hl,0"))
+            continue;
+        /* Framed epilogue, or the plain `ret` left once the parameter-only
+         * frame has been removed. */
+        if (eq(i + 9, "ret"))
+            t = i + 9;
+        else if (eq(i + 9, "ld sp,ix") && eq(i + 10, "pop ix") &&
+                 eq(i + 11, "ret"))
+            t = i + 11;
+        else
+            continue;
+        if (t + 5 >= nlines ||
+            !starts_label(lines[t + 1]) || !eq(t + 2, "inc e") ||
+            !eq(t + 3, "ld a,e") ||
+            sscanf(lines[t + 4], "cp %d", &limit) != 1)
             continue;
         {
             char actual_cont[128];
-            strcpy(actual_cont, lines[i + 12]);
+            strcpy(actual_cont, lines[t + 1]);
             strip_label_colon(actual_cont);
             if (strcmp(actual_cont, cont) != 0)
                 continue;
         }
         snprintf(back, sizeof(back), "jp c, %s", label);
-        if (!eq(i + 16, back)) {
+        if (!eq(t + 5, back)) {
             snprintf(back, sizeof(back), "jp c,%s", label);
-            if (!eq(i + 16, back))
+            if (!eq(t + 5, back))
                 continue;
         }
         if (init < 0 || init > 255 || limit < 0 || limit > 255 ||
             init >= limit)
             continue;
 
-        replace1_tagged(i + 15, "cp d", "affine_byte_compare_loop");
+        replace1_tagged(t + 4, "cp d", "affine_byte_compare_loop");
         snprintf(branch, sizeof(branch), "jp nz, %s", label);
-        replace1(i + 16, branch);
+        replace1(t + 5, branch);
         replace1_tagged(i + 1, "ld a,(bc)", "affine_byte_compare_loop");
         replace1(i + 2, "cp e");
         replace1(i + 3, "inc bc");
@@ -9825,7 +10176,7 @@ static int pass_affine_byte_compare_loop(void)
         insert_line_tagged(i, "ld h,a", "affine_byte_compare_loop");
         insert_line_tagged(i, "add a,e", "affine_byte_compare_loop");
         changed = 1;
-        i += 14;
+        i = t + 2;
     }
     return changed;
 }
@@ -12261,14 +12612,27 @@ int main(int argc, char **argv)
      * adjacency that pass turns into a tail call. pass_cond_jp_to_cond_ret()
      * is the same story once more: a conditional jump to that same
      * newly-collapsed label only now looks like a plain "ret" to it. */
-    if (RUN_PASS(pass_elim_ix_frame)) {
-        RUN_PASS(pass_jp_to_plain_ret);
-        RUN_PASS(pass_cond_jp_to_cond_ret);
-        RUN_PASS(pass_call_to_tail_jp);
-        RUN_PASS(pass_remove_unreferenced_labels);
-        RUN_PASS(pass_once);
-        RUN_PASS(pass_labels);
+    {
+        int frames_removed = RUN_PASS(pass_elim_ix_frame);
+
+        /* Frames whose only IX uses are parameter reads become SP-relative
+         * loads; this needs the final push/pop shape, so it also runs after
+         * convergence. */
+        frames_removed |= RUN_PASS(pass_elim_param_only_ix_frame);
+        if (frames_removed) {
+            RUN_PASS(pass_jp_to_plain_ret);
+            RUN_PASS(pass_cond_jp_to_cond_ret);
+            RUN_PASS(pass_call_to_tail_jp);
+            RUN_PASS(pass_remove_unreferenced_labels);
+            RUN_PASS(pass_once);
+            RUN_PASS(pass_labels);
+        }
     }
+
+    /* Runs after every effects-model consumer: `ex` is opaque to that
+     * model, so pass_push_hl_pop_de_to_ex emitted a register copy
+     * instead and left this final 4 T-state tightening for here. */
+    RUN_PASS(pass_de_copy_before_pop_hl_to_ex);
 
     /* Convert remaining framed prologues/epilogues to shared stub calls.
      * Runs after frame elimination so only functions that genuinely need IX

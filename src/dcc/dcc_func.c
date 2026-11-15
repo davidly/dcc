@@ -913,6 +913,15 @@ int local_name_address_taken_in_function(const char *name)
     return ident_addr_taken_for(name);
 }
 
+/* Conservative variant for range proofs: a name the bounded identifier table
+ * could not record (table full) is reported as address-taken. */
+int local_name_address_taken_or_unknown(const char *name)
+{
+    if (ident_count_for(name) == 0 && g_ident_count_n >= MAX_IDENT_COUNTS)
+        return 1;
+    return ident_addr_taken_for(name);
+}
+
 /* Record (or update, on a later pass) that the array at this frame offset got
  * a cache slot. Keyed on array_offset, NOT name: two distinct arrays with the
  * same name can legitimately exist in the same function in separate,

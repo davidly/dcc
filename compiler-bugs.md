@@ -1,13 +1,12 @@
 # dcc compiler bugs
 
 Defects found by differential testing against the host C compiler (Apple
-clang). Every open entry except BUG-056/059 reproduces with a shipped configuration: no
-diagnostic environment variables (some require `dccpeep`). BUG-056 and BUG-059 are latent
-wrong-code findings from withdrawn BUG-041 admission experiments; their parked
-sources remain rejected by the shipped admission gate. Fixed entries
-and their historical diagnoses are retained separately below.
+clang). Every entry reproduced with a shipped configuration: no diagnostic
+environment variables (some required `dccpeep`), except BUG-056/059, latent
+wrong-code findings from withdrawn BUG-041 admission experiments. Fixed
+entries and their historical diagnoses are retained below.
 
-- **Compiler under test:** `8db72cbd` plus the cluster A3 word-interpretation repair (2026-11-15).
+- **Compiler under test:** `7dbe99d8` plus the cluster S2 `sizeof` typing repair (2026-11-16).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -26,13 +25,15 @@ and their historical diagnoses are retained separately below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-062](#bug-062) | #327 | wrong result | Small and runtime `sizeof` results retain signed AST typing; full unsigned typing and exact-schedule recovery are deferred |
+| BUG-067 | [#338](https://github.com/davidly/dcc/issues/338) | codegen | `sizeof` of an element, member or dereference of a nested-block local reports 2 |
+| BUG-068 | [#339](https://github.com/davidly/dcc/issues/339) | codegen | `*q op= rhs` through a nested-block pointer to a 32-bit object adds only the low word |
 
-One is open: it gives wrong results with no diagnostic. BUG-013's unsigned
-bit-field promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed
-below.
+Two entries are open, both found while closing cluster S2 and logged rather
+than fixed there. BUG-013's unsigned bit-field promotion, BUG-009's hang and
+BUG-022's masked diagnostic are fixed below.
 
-Sixty-one reported bugs are fixed:
+Sixty-four reported bugs are fixed:
+[three in cluster S2](#fixed-in-cluster-s2),
 [three in cluster D2e-2](#fixed-in-cluster-d2e-2),
 [one in cluster T2](#fixed-in-cluster-t2),
 [one in cluster T1](#fixed-in-cluster-t1),
@@ -91,62 +92,188 @@ was only tried with today's runtime, which is not a reliable pairing.
 ---
 
 
-**Small constant and runtime `sizeof` results retain signed AST typing.**
-For an eight-byte array `x` and `int i = -1`, both `i < sizeof(x)` and
-`sizeof(x) > -1` must be false: the unsigned `size_t` result converts -1 to
-its unsigned maximum. Both instead evaluate to true. A loop starting at -1
-against `sizeof(x)` runs nine times rather than zero. The type-name form and
-whole-VLA runtime form have the same residual defect.
+## Fixed in cluster S2
 
-- The maintainer-approved interim S1 rule makes `sizeof` unsigned only when
-  its compile-time constant value is at least `0x8000`; smaller, unknown and
-  runtime values deliberately retain today's signed `TYPE_INT`. One shared
-  helper applies this rule at the three AST construction/inference sites.
-  This representation-range repair closes BUG-061, not the full C type defect.
-- A complete unsigned result-type correction at `8db72cbd` changed 173
-  existing functions in both regular censuses, including 36 exact schedules
-  moving to spilled emission. It was withdrawn. The full correction is
-  deferred to the separately planned **correct typing + exact-schedule
-  recovery** track, alongside BUG-015's root typing work; see
-  [S1](fix-plan.md#s1-high-bit-constant-sizeof-result-typing) for all affected
-  functions and the maintainer ruling.
-- Explicit unsigned casts, the repaired high-bit constant-size comparisons,
-  and declaration/global-initializer constant parsing are correct controls.
-- Regression is parked as [bug062.c](tests/known-bugs/bug062.c). Host clang
-  O0/O2 and combined ASan+UBSan agree; both target modes fail four of seven
-  lines. The integer generator `scripts/clang_oracle_gen.py` never emits
-  `sizeof`, so no `KNOWN_BUGS` steer is added and no generator is changed.
+`sizeof` now has the unsigned `size_t` result type in every form (object,
+type name, VLA) regardless of its value. The exact-schedule and performance
+cost that stopped the first trial is recovered rather than accepted: an AST
+proven-signedness pass (`dcc_ast_sizeof.c`) demotes a `sizeof` back to
+`TYPE_INT` only where every use is proven signedness-indifferent (narrowing
+stores, equality tests, operands already converted to a wider or signed
+type), which keeps the exact schedules; the scalar-cfg emitter forwards
+stack temporaries through `MIR_NOP`s, pops `BINARY` constant operands early
+and folds `& const` masks on byte halves; and `dccpeep` gains a param-only
+IX-frame elimination pass, a `push hl / pop de` copy form and exact `ex de,hl`
+liveness. Every `perf_baselines.csv` row is non-regressing in both modes (255
+improve), the dccpeep fixtures were regenerated, the sanitizers and debugger
+host tests pass, and `-gline` output stays release-identical. 39 campaign
+`BASELINE_SHA256` values were refreshed (four were already stale on main).
 
-
-## BUG-062
+### BUG-062
 
 **Small constant and runtime `sizeof` results retain signed AST typing.**
 For an eight-byte array `x` and `int i = -1`, both `i < sizeof(x)` and
 `sizeof(x) > -1` must be false: the unsigned `size_t` result converts -1 to
-its unsigned maximum. Both instead evaluate to true. A loop starting at -1
-against `sizeof(x)` runs nine times rather than zero. The type-name form and
-whole-VLA runtime form have the same residual defect.
+its unsigned maximum. Both instead evaluated to true, and a loop starting at
+-1 against `sizeof(x)` ran nine times rather than zero. The type-name form
+and whole-VLA runtime form had the same defect. The interim S1 rule had made
+`sizeof` unsigned only for compile-time values at or above `0x8000`.
 
-- The maintainer-approved interim S1 rule makes `sizeof` unsigned only when
-  its compile-time constant value is at least `0x8000`; smaller, unknown and
-  runtime values deliberately retain today's signed `TYPE_INT`. One shared
-  helper applies this rule at the three AST construction/inference sites.
-  This representation-range repair closes BUG-061, not the full C type defect.
-- A complete unsigned result-type correction at `8db72cbd` changed 173
-  existing functions in both regular censuses, including 36 exact schedules
-  moving to spilled emission. It was withdrawn. The full correction is
-  deferred to the separately planned **correct typing + exact-schedule
-  recovery** track, alongside BUG-015's root typing work; see
-  [S1](fix-plan.md#s1-high-bit-constant-sizeof-result-typing) for all affected
-  functions and the maintainer ruling.
-- Explicit unsigned casts, the repaired high-bit constant-size comparisons,
-  and declaration/global-initializer constant parsing are correct controls.
-- Regression is parked as [bug062.c](tests/known-bugs/bug062.c). Host clang
-  O0/O2 and combined ASan+UBSan agree; both target modes fail four of seven
-  lines. The integer generator `scripts/clang_oracle_gen.py` never emits
-  `sizeof`, so no `KNOWN_BUGS` steer is added and no generator is changed.
+**Closed by S2 (#327).** Promoted as [tsizesgn](tests/tsizesgn.c)
+(`tsizesgn,74485,74675,3328,3328`). The integer generator now emits `sizeof`
+of host-sized objects and fixed-width types, bare beside 16-bit operands and
+cast to `uint16_t` beside 32-bit ones so the host's 64-bit `size_t` agrees.
+
+### BUG-065
+
+**A variadic function given an IY register home corrupts its caller's IY.**
+When the scalar-cfg emitter homes a loop PHI in IY, the prologue saves the
+caller's IY at `(ix-2)` and `mir_shift_frame_for_iy_register` moves every
+local by two bytes, but the `va_list` offset carried in the immediate of
+`MIR_VA_START`/`MIR_VA_END`/`MIR_VA_ARG` was not shifted, so `va_start`
+overwrote the saved IY. In the reproducer `main` keeps `expected_length` in
+IY across the call and printed 19 (nopeep) or -331 (peep) instead of 25.
+Found while measuring the S2 trial, where the IY-slot threshold moved on a
+variadic join routine; reproduces on `7dbe99d8` in both modes.
+
+**Closed by S2.** `mir_compound_address_needs_frame_shift` now shifts the
+`VA_*` immediates with the other frame offsets. Promoted as
+[tvaiyhom](tests/tvaiyhom.c) (`tvaiyhom,115015,119198,4224,4608`).
+
+### BUG-066
+
+**`sizeof` of a nested-block scalar local reports 2.** With
+`{ uint32_t b = 1; *p = sizeof(b); }` dcc stored 2; `long`, `float`,
+`char`, struct, shadowed and `for`-initialiser block locals all reported 2
+(arrays were already correct). Block-scope declaration spans are replayed
+into the symbol table after the enclosing statement is lowered, so the
+operand identifier had no symbol when the size was taken and
+`ast_expr_type_for_sizeof()` fell back to `int`. Found by the first integer
+fuzz run with the generator's `sizeof` leaf (five seeds); reproduces on
+`7dbe99d8` in both modes.
+
+**Closed by S2.** The `AST_SIZEOF_EXPR` lowering flags an identifier with no
+symbol and the deferred `MIR_VLA_SIZE` fix-up takes the declared object size
+for any such non-VLA object; the demotion pass no longer guesses a constant
+for an unreplayed operand and instead proves whole-VLA and unreplayed-local
+sizes stack-bounded. Promoted as [tszblock](tests/tszblock.c)
+(`tszblock,50531,50790,3200,3328`). The derived-operand forms are BUG-067.
 
 
+## BUG-067
+
+**`sizeof` of a derived expression over a nested-block local reports 2.**
+(#338)
+
+Block-scope declaration spans are replayed into the symbol table after the
+enclosing statement is lowered. When a `sizeof` operand is a bare identifier
+naming such a local, the lowering now defers to the declared-object table
+(BUG-066, closed by S2). When the
+operand *derives* from such a local, the base identifier still has no symbol
+when the size is taken, so it is typed as `int` and the result is 2:
+
+- an element of a block-scoped VLA: `int32_t v[n]; sizeof v[0]` gives 2, and
+  `sizeof v / sizeof v[0]` gives `2 * n` rather than `n`;
+- a struct member: `struct { int32_t q; uint8_t r; } s; sizeof s.q` gives 2;
+- a dereferenced pointer: `int32_t *p; sizeof *p` and `sizeof p[0]` give 2.
+
+The same expressions with the object declared at function scope are correct.
+Both peep and nopeep fail all four lines; clang O0 and ASan+UBSan agree on the
+baseline. Reproduces on `7dbe99d8`.
+
+### Diagnosis
+
+`mir_lower_expr_impl()` lowers `AST_SIZEOF_EXPR` through
+`ast_sizeof_expr_value()`, which types the operand with
+`ast_expr_type_for_sizeof()`; for an `AST_IDENT` with no symbol that falls
+back to `TYPE_INT`. The deferred `MIR_VLA_SIZE` fix-up (flag 8) resolves whole
+objects by name from `mir.declared_*`, but has no path for index, member or
+dereference chains. A complete fix resolves the operand's type at fix-up time
+from the declared table (element size by depth, pointee type, struct field
+size) or carries the operand node until the declaration spans are replayed.
+
+### Parked reproducer
+
+`tests/known-bugs/bug067.c`, baseline `tests/known-bugs/baselines/bug067.txt`
+(`python3 scripts/run-known-bugs.py bug067`). The integer generator's
+`sizeof` leaf only emits bare identifiers and type names, so `--off known`
+runs are already quiet.
+
+Expected:
+```
+vla 4 3
+member 4
+deref 4
+mixed 8
+```
+
+dcc:
+```
+vla 2 6
+member 2
+deref 2
+mixed 4
+```
+
+## BUG-068
+
+**Compound assignment through a nested-block pointer to a 32-bit object adds only the low word.**
+(#339)
+
+T2 (#335, BUG-063) repaired the plain store `*q = x` through a pointer declared
+in a nested block. The compound forms are still wrong: with
+`{ int32_t *q = &a3[0]; (*q) += s0.m0; }` and `s0.m0 == 0x00ff00ff`, dcc
+produces `15 + 0x00ff == 270` rather than `16711950`. `-=`, a global int32
+right-hand side and an `(int32_t)65536` constant fail the same way (the
+constant adds 0). The same statement with `q` declared at function scope is
+correct. Both peep and nopeep fail; clang O0 and ASan+UBSan agree on the
+baseline. Reproduces on `7dbe99d8`.
+
+Found by integer fuzz seed 193 on the first run after the generator gained its
+`sizeof` leaf (the changed random stream exposed it; the statement itself has
+no `sizeof`). Reduced form:
+
+```c
+int32_t a3[4] = { 15, 271, 63, -128 };
+static struct S0 s0 = { 16711935, ... };
+static uint16_t f2(void)
+{
+    {
+        int32_t *q5 = &a3[0];
+        (*q5) += s0.m0;
+    }
+    return 1;
+}
+```
+
+### Diagnosis
+
+Sibling of BUG-063: the right-hand operand of the compound store through the
+deferred-type block pointer keeps the 16-bit conversion inserted for the
+assumed assignment target, and the pointee repair that now retargets the
+plain `MIR_STORE_INDIRECT` source does not cover the read-modify-write
+lowering of `op=`.
+
+### Parked reproducer
+
+`tests/known-bugs/bug068.c`, baseline `tests/known-bugs/baselines/bug068.txt`
+(`python3 scripts/run-known-bugs.py bug068`). Integer generator steer
+`blockcassign` (`scripts/clang_oracle_gen.py`, `block_ptr_cassign()`: the
+compound is rewritten as `*q = *q op rhs`, or a plain store when the pointer
+is updated inside the lvalue) keeps `--off known` runs quiet; remove it when
+fixed.
+
+Expected:
+```
+16711950 16712206 65599 -16712063
+16711950
+```
+
+dcc:
+```
+270 526 63 -383
+16711950
+```
 
 ## BUG-006
 

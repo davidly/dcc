@@ -38,7 +38,7 @@ REJECT_REASON = re.compile(
     r"template=pointer-condition-main reject=(?P<reason>\S+)"
 )
 BASELINE_SHA256 = (
-    "8816c4cf4df3c7a7bccb69042a4a814d5c72ea979642204b95fcc23f896ffbfb"
+    "749d6f47d33fed6502cea3d9d3a4db0e0fed35cca31808fb440e19cc1fa9ef68"
 )
 BASELINE_SELECTED_HASH = "d4d8d799"
 EXPECTED_RUNTIME = ("tptrcnd start", "PASS")

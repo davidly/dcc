@@ -1,5 +1,5 @@
 _narrow_store:
-	ld e,l ; peep: narrow_indirect_byte_store
+	ld e,l ; peep: narrow_indirect_byte_store_after_exchange
 	pop hl
 	ld (hl),e
 	xor a
@@ -20,8 +20,7 @@ _narrow_store_de_live:
 	rlca
 	sbc a,a
 	ld h,a
-	push hl
-	pop de
+	ex de,hl ; peep: de_copy_before_pop_hl_to_ex
 	pop hl
 	ld (hl),e
 	ld a,d

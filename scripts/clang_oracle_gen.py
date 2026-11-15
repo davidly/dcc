@@ -219,6 +219,7 @@ class E:
     call    arguments               Func
     asg     lvalue, value           operator (= += ...)
     incdec  lvalue                  (operator, is_prefix)
+    sizeof  -                       Decl or IntType  (t is U16: size_t)
     """
     __slots__ = ('op', 't', 'k', 'a', 'id')
 
@@ -284,7 +285,7 @@ class Program:
 def ty(e):
     """dcc type of an expression."""
     op = e.op
-    if op in ('const', 'cast'):
+    if op in ('const', 'cast', 'sizeof'):
         return e.t
     if op in ('var', 'idx'):
         return e.a.t
@@ -410,8 +411,8 @@ def folds(e):
     value: `~3`, `-(x = 77)`."""
     if e.op == 'asg':
         return e.a == '=' and folds(e.k[1])
-    return e.op == 'const' or (e.op in ('bin', 'un', 'cast', 'cond')
-                               and all(folds(k) for k in e.k))
+    return e.op in ('const', 'sizeof') or (e.op in ('bin', 'un', 'cast', 'cond')
+                                           and all(folds(k) for k in e.k))
 
 
 def negative_constant(rhs, t):
@@ -505,6 +506,27 @@ def wide_block_store(lv, rhs):
         and rhs.a.t.bits == 32
 
 
+def block_ptr_cassign(lv, op):
+    """A compound assignment to a 32-bit object through a pointer declared in
+    a nested block: the BUG-068 shape (seed 193 adds only the low word of the
+    right-hand side)."""
+    if op == '=':
+        return False
+    if lv.op == 'deref':
+        p = lv.k[0]
+        while p.op == 'incdec':
+            p = p.k[0]
+        if p.op != 'var':
+            return False
+        d = p.a
+    elif lv.op == 'pidx':
+        d = lv.a
+    else:
+        return False
+    return d.storage == 'block' and isinstance(d.t, PtrType) \
+        and is_int(d.t.to) and d.t.to.bits == 32
+
+
 def const_div_zero(e):
     """e is a constant divided by a constant zero, which dcc rejects even
     where it is never evaluated: the BUG-033 shape."""
@@ -544,8 +566,8 @@ def logic_value(e):
 
 def is_constant(e):
     """e names no object and calls nothing, so a compiler can fold it."""
-    return e.op == 'const' or (e.op in ('bin', 'un', 'cast', 'cond')
-                               and all(is_constant(k) for k in e.k))
+    return e.op in ('const', 'sizeof') or (e.op in ('bin', 'un', 'cast', 'cond')
+                                           and all(is_constant(k) for k in e.k))
 
 
 def const_jump(s):
@@ -647,6 +669,8 @@ def known_shapes(prog):
                     found.add('blockwidediv')
                 if lv.op == 'fld' and lv.a.dims and lt.bits == 8:
                     found.add('structbytecasg')
+                if block_ptr_cassign(lv, e.a):
+                    found.add('blockcassign')
                 if lv.op == 'var' and rhs.op == 'var' and rhs.a is lv.a:
                     found.add('selfand')
                 if local and lt.bits == 32 and e.a == '+=' and rhs.op == 'const' and rhs.a == 1 \
@@ -1049,6 +1073,11 @@ class Renderer:
     def ex_cast(self, e):
         return self.cast(e.t.cname, e.k[0])
 
+    def ex_sizeof(self, e):
+        """sizeof an object or fixed-width type: `size_t` on both compilers,
+        so only the U16 result casts of the enclosing operators are needed."""
+        return 'sizeof(%s)' % (e.a.name if isinstance(e.a, Decl) else e.a.cname)
+
     def ex_un(self, e):
         a = self.ex(e.k[0])
         if e.a == '!':
@@ -1428,7 +1457,7 @@ FEATURES = frozenset((
     'if', 'for', 'while', 'do', 'switch', 'block', 'call', 'scopy', 'walk', 'brk', 'ret',
     'goto', 'c99for', 'blockdecl', 'static', 'varbound',
     'logic', 'un', 'cast', 'cond', 'shift', 'div', 'pcall', 'sfx', 'fnptr', 'rec',
-    'cassign', 'incdec', 'i8', 'i32',
+    'cassign', 'incdec', 'i8', 'i32', 'sizeof',
     # forms that hit a logged dcc defect; see KNOWN_BUGS
     'widecassign', 'bytevarshl', 'castsfx', 'widepostinc', 'structbytecasg', 'negnotconst',
     'bfdivasg', 'wideidxincdec', 'logicinit', 'logicbyteinit', 'blockwidediv', 'ptrcallconv',
@@ -1436,13 +1465,14 @@ FEATURES = frozenset((
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg', 'wideincadd',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
     'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum',
-    'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself', 'blockwordinit'))
+    'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself', 'blockwordinit', 'blockcassign'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
 # table when its bug is fixed.
 KNOWN_BUGS = {
     'bytevarshl': 'BUG-002',
+    'blockcassign': 'BUG-068',
 }
 
 
@@ -1460,6 +1490,8 @@ class Gen:
     # ---- small helpers
 
     def mk(self, op, k=(), a=None, t=None):
+        if op in ('bin', 'cond', 'asg'):
+            k = self.host_sized(op, k, a)
         if op == 'bin' and not self.on('wideincadd') and wide_increment_add(a, k):
             # Subtraction retains the update without using the faulty direct add.
             a = '-'
@@ -1481,6 +1513,21 @@ class Gen:
                  for x in k]
         self.prog.nid += 1
         return E(op, k, a, t, self.prog.nid)
+
+    def host_sized(self, op, k, a):
+        """A bare `sizeof` next to a 32-bit operand is cast to `uint16_t`:
+        dcc converts it to `long` while the host keeps 64-bit `size_t`, which
+        would compare, divide and shift differently. Next to 16-bit operands
+        the bare form is kept so dcc's unsigned `size_t` typing is exercised."""
+        if op == 'bin' and (a in LOGIC or a in SHIFT):
+            return k
+        operands = list(k[1:]) if op == 'cond' else list(k)
+        if not all(is_int(ty(x)) for x in operands):
+            return k
+        if len(operands) == 2 and any(x.op == 'sizeof' for x in operands) \
+                and any(promote(ty(x)).bits == 32 for x in operands):
+            k = [E('cast', [x], t=U16) if x.op == 'sizeof' else x for x in k]
+        return k
 
     def pick(self, weighted):
         total = sum(w for _, w in weighted)
@@ -1684,9 +1731,23 @@ class Gen:
         return None
 
     def gen_leaf(self, c, depth):
-        if self.rng.random() < 0.22:
+        x = self.rng.random()
+        if x < 0.22:
             return self.const()
+        if x < 0.28 and self.on('sizeof'):
+            return self.gen_sizeof(c)
         return self.gen_lvalue(c, depth) or self.const()
+
+    def gen_sizeof(self, c):
+        """sizeof a scalar or array whose size is the same on the host: a
+        fixed-width integer object (arrays only when not a decayed parameter)
+        or a fixed-width type. The value is `size_t`, unsigned, so `-1 <
+        sizeof(x)` is false and `sizeof(x) % 4` is an `and` mask."""
+        objects = [d for d in c.ints if is_int(d.t)] + \
+            [d for d in c.arrs if is_int(d.t) and d.storage != 'param']
+        if objects and self.rng.random() < 0.75:
+            return self.mk('sizeof', a=self.rng.choice(objects), t=U16)
+        return self.mk('sizeof', a=self.int_type(), t=U16)
 
     def victim(self, c):
         cands = [d for d in c.ints if d.storage != 'global' and not d.addr_taken
@@ -1909,6 +1970,12 @@ class Gen:
                 return self.mk('asg', [lv, rhs], '=')
             if not self.on('blockwidediv') and lv.op == 'fld' and lt.bits == 32 \
                     and op in ('/=', '%='):
+                rhs = self.mk('bin', [clone(lv), rhs], op[:-1])
+                return self.mk('asg', [lv, rhs], '=')
+            if not self.on('blockcassign') and block_ptr_cassign(lv, op):
+                # A pointer update inside the lvalue must not be cloned.
+                if lv.op == 'deref' and lv.k[0].op == 'incdec':
+                    return self.mk('asg', [lv, rhs], '=')
                 rhs = self.mk('bin', [clone(lv), rhs], op[:-1])
                 return self.mk('asg', [lv, rhs], '=')
             if not self.on('widecassign') and lv.op != 'var' and lt.bits < 32 \

@@ -24,7 +24,7 @@ TEMPLATE = "float-sweep-schedule"
 FORCED_CANDIDATE = "spilled-phi-slot"
 INSTRUCTION_COUNT = 431
 BASELINE_SHA256 = (
-    "74674d626ad7b36e43e807e1f1f421a3ae5972aacf8acca749a8e1ef38c82827"
+    "c31ad93913d48138f8777deb1a5b6a3c3c4e8727bccf873b2157bc4c8062b291"
 )
 BASELINE_SELECTED_HASH = "2a78fb3a"
 EXPECTED_RUNTIME = "float sweep failures=0 checks=11"

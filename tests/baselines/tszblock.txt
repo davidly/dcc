@@ -1,0 +1,5 @@
+scalar 4
+shadowed 41
+total 426
+for 12
+cond 4 1

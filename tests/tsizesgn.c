@@ -1,4 +1,4 @@
-/* BUG-062: small and runtime sizeof results retain signed AST typing. */
+/* sizeof is unsigned size_t even when the result is small or runtime-sized (BUG-062). */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

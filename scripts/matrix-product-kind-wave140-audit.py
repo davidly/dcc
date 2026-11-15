@@ -21,7 +21,7 @@ SOURCE = "tests/mir-clobber/matkind.c"
 TEMPLATE = "matrix-product-schedule"
 FORCED_CANDIDATE = "spilled-store-address"
 BASELINE_SHA256 = (
-    "b3d565637021d445de314147095b9e7aba6fcd7a5de036f89e130d952a263452"
+    "8570a13dca4092145f1538e5ec91e849096883364a710d797fc3ba0c3b5b64f4"
 )
 EXPECTED_RUNTIME = (
     "matrix kind transposed failures=0 values=32767,32031,-31584,32767",

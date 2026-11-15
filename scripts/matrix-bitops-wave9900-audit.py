@@ -24,7 +24,7 @@ TEMPLATE = "matrix-bitops-schedule"
 FORCED_CANDIDATE = "spilled-phi-slot"
 INSTRUCTION_COUNT = 89
 BASELINE_SHA256 = (
-    "ece644935f884b1ef8d9a940dab5597734ba53ff19b046aa1e7fadfc26ce1982"
+    "b37624505e4ddcb79fccf8ea9245555fbcee9980a5c4a580e9c42002c70aa0ec"
 )
 BASELINE_SELECTED_HASH = "6eaf1744"
 SELECTION = re.compile(

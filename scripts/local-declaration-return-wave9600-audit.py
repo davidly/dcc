@@ -24,7 +24,7 @@ TEMPLATE = "local-declaration-return-schedule"
 FORCED_CANDIDATE = "spilled-phi-slot"
 INSTRUCTION_COUNT = 9
 BASELINE_SHA256 = (
-    "1e2d5f8f1f80459eeefb037c11fc9ef1780c4c6689b06701b2a8243f79306ad3"
+    "c11965d31af8c4ed0bc7b3ba8b994b9cbb22d8f4e2066dcf16f15c5d558a8942"
 )
 BASELINE_SELECTED_HASH = "0c83fd27"
 SELECTION = re.compile(

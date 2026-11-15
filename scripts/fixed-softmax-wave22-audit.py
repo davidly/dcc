@@ -26,7 +26,7 @@ GENERIC_SELECTION = re.compile(
 )
 BASELINE_SHA256 = (
     # Includes the surrounding functions' corrected promoted-bool homes.
-    "1cc71a4f3688bfc3ffd8fefb65ee60b7e757c762417eeddbb6eb2da6ac23e30d"
+    "827d84834a5c3148389d2c917e6a4999c2e98dc12fc792cda950473a569a0f05"
 )
 EXPECTED_OUTCOMES = Counter(rejected=1893, accepted=586)
 EXPECTED_BENIGN = Counter(

@@ -19,7 +19,6 @@
  */
 #include "dcc.h"
 #include "dcc_ast.h"
-#include <stdlib.h>
 #include <string.h>
 
 int g_ast_dump_enabled;
@@ -52,7 +51,7 @@ static int ast_num_text_plain_decimal(const char *s)
     return 1;
 }
 
-static struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n);
+struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n);
 
 static int ast_expr_is_null_pointer_constant(const struct AstNode *n)
 {
@@ -90,7 +89,7 @@ static int ast_expr_is_function_designator(const struct AstNode *n)
     return s != NULL && s->storage == SC_FUNC;
 }
 
-static struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n)
+struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n)
 {
     struct Sym *s;
     int base_type = 0;
@@ -128,7 +127,7 @@ int ast_call_result_type(const struct AstNode *n)
     return n != NULL && n->type != 0 ? n->type : TYPE_INT;
 }
 
-static int ast_promoted_operand_type(const struct AstNode *n)
+int ast_promoted_operand_type(const struct AstNode *n)
 {
     int type = n != NULL && n->type != 0
         ? n->type : ast_expr_type_for_sizeof(n);
@@ -145,18 +144,12 @@ static int ast_promoted_operand_type(const struct AstNode *n)
     return promote_int_type(type);
 }
 
-/* Interim BUG-061 repair: keep today's signed sizeof type unless a known
- * constant sets bit 15. Full unsigned size_t typing, including VLAs, is
- * deferred to BUG-062's typing and exact-schedule recovery track. */
+/* sizeof yields size_t: unsigned int on this target, for constant and
+ * runtime (VLA) operands alike. */
 static int ast_sizeof_result_type(const struct AstNode *n)
 {
-    long size = 0;
-
-    if (n->kind == AST_SIZEOF_TYPE)
-        size = n->ival;
-    else if (ast_sizeof_whole_vla_sym(n->a) == NULL)
-        size = ast_sizeof_expr_value(n->a);
-    return size >= 0x8000L ? TYPE_INT | TYPE_UNSIGNED : TYPE_INT;
+    (void)n;
+    return TYPE_INT | TYPE_UNSIGNED;
 }
 
 int ast_expr_type_for_sizeof(const struct AstNode *n)
@@ -866,7 +859,7 @@ static int binop_level(int k)
 /* Whether n's type is unknown at build: its value derives from a nested-block
  * local, directly, through an update or unary +, - or ~, or through a binary
  * whose own operand types were. */
-static int ast_types_deferred(const struct AstNode *n)
+int ast_types_deferred(const struct AstNode *n)
 {
     if (n == NULL)
         return 0;
@@ -1353,6 +1346,9 @@ static struct AstNode *ast_build_switch_stmt(struct AstArena *ar)
  * declaration parser/codegen (rebuilding locals[] / frame offsets exactly as
  * the frame-sizing scan did), instead of duplicating declaration lowering in
  * the AST walker. */
+#define DECL_SPAN_MAX_NAMES 12
+#define DECL_SPAN_NAME_LEN 32
+
 struct DeclSpan {
     long posi;
     long tok_start_pos;
@@ -1360,7 +1356,59 @@ struct DeclSpan {
     int tok_line;
     int unsupported_for_storage;
     struct Token tok;
+    /* Name facts recorded while scanning, for range proofs that must know
+     * whether a nested declaration can write or shadow a loop counter without
+     * replaying it. Overflow flags make the predicates answer "yes". */
+    char touched[DECL_SPAN_MAX_NAMES][DECL_SPAN_NAME_LEN];
+    char declared[DECL_SPAN_MAX_NAMES][DECL_SPAN_NAME_LEN];
+    int touched_count;
+    int declared_count;
+    int names_overflow;
+    /* `[register] int NAME = <decimal literal>;` exactly: counter_name is
+     * NAME and counter_init its value; otherwise counter_name[0] == 0. */
+    char counter_name[DECL_SPAN_NAME_LEN];
+    long counter_init;
+    /* `[register|const] <scalar type> NAME [= init];` with one declarator:
+     * simple_type is the declared scalar type, else 0.  Volatile, pointer,
+     * array, and multi-declarator spans record 0. */
+    int simple_type;
+    char simple_name[DECL_SPAN_NAME_LEN];
 };
+
+static void decl_span_add_name(char names[][DECL_SPAN_NAME_LEN], int *count,
+                               int *overflow, const char *text)
+{
+    int i;
+
+    if (strlen(text) >= DECL_SPAN_NAME_LEN) {
+        *overflow = 1;
+        return;
+    }
+    for (i = 0; i < *count; ++i)
+        if (strcmp(names[i], text) == 0)
+            return;
+    if (*count >= DECL_SPAN_MAX_NAMES) {
+        *overflow = 1;
+        return;
+    }
+    strcpy(names[(*count)++], text);
+}
+
+static int decl_span_has_name(const char names[][DECL_SPAN_NAME_LEN], int count,
+                              const char *name)
+{
+    int i;
+
+    for (i = 0; i < count; ++i)
+        if (strcmp(names[i], name) == 0)
+            return 1;
+    return 0;
+}
+
+static int tok_is_compound_assign(int kind)
+{
+    return kind >= TOK_ADDEQ && kind <= TOK_SHREQ;
+}
 
 /* Capture the declaration that begins at the current lexer position as an
  * AST_DECL span node and advance past it so sibling parsing can continue.  A
@@ -1373,6 +1421,11 @@ static struct AstNode *ast_build_decl_span(struct AstArena *ar)
     struct AstNode *n;
     struct DeclSpan *sp;
     int depth;
+    int prev_kind;
+    int counter_step;
+    int simple_step;
+    int simple_type;
+    char prev_id[DECL_SPAN_NAME_LEN];
 
     sp = (struct DeclSpan *)ast_arena_alloc(ar, sizeof(struct DeclSpan));
     sp->posi = g_lex.posi;
@@ -1381,11 +1434,134 @@ static struct AstNode *ast_build_decl_span(struct AstArena *ar)
     sp->tok_line = g_lex.tok_line;
     sp->unsupported_for_storage = 0;
     sp->tok = g_lex.tok;
+    sp->touched_count = 0;
+    sp->declared_count = 0;
+    sp->names_overflow = 0;
+    sp->counter_name[0] = 0;
+    sp->counter_init = 0;
+    sp->simple_type = 0;
+    sp->simple_name[0] = 0;
+    prev_kind = 0;
+    prev_id[0] = 0;
+    counter_step = 0;
+    simple_step = 0;
+    simple_type = 0;
 
     depth = 0;
     for (;;) {
-        if (g_lex.tok.kind == TOK_EOF)
+        int kind = g_lex.tok.kind;
+        if (kind == TOK_EOF)
             return NULL;
+        /* Name facts: an identifier is touched when it is written or has its
+         * address taken anywhere in the span, and declared when it sits in
+         * declarator position (followed by = ; , [ ) near depth zero). */
+        if (prev_kind == TOK_ID) {
+            if (kind == TOK_INC || kind == TOK_DEC || kind == '=' ||
+                tok_is_compound_assign(kind))
+                decl_span_add_name(sp->touched, &sp->touched_count,
+                                   &sp->names_overflow, prev_id);
+            if (depth <= 1 && (kind == '=' || kind == ';' || kind == ',' ||
+                               kind == '[' || kind == ')'))
+                decl_span_add_name(sp->declared, &sp->declared_count,
+                                   &sp->names_overflow, prev_id);
+        }
+        if (kind == TOK_ID) {
+            if (prev_kind == TOK_INC || prev_kind == TOK_DEC || prev_kind == '&')
+                decl_span_add_name(sp->touched, &sp->touched_count,
+                                   &sp->names_overflow, g_lex.tok.text);
+            strncpy(prev_id, g_lex.tok.text, DECL_SPAN_NAME_LEN - 1);
+            prev_id[DECL_SPAN_NAME_LEN - 1] = 0;
+        } else if (prev_kind == '&' && kind == '(')
+            sp->names_overflow = 1;
+        /* Counter shape `[register] int NAME = <decimal literal> ;`. */
+        switch (counter_step) {
+        case 0:
+            counter_step = kind == TOK_REGISTER ? 0 : kind == TOK_INT ? 1 : -1;
+            break;
+        case 1:
+            if (kind == TOK_ID && strlen(g_lex.tok.text) < DECL_SPAN_NAME_LEN) {
+                strcpy(sp->counter_name, g_lex.tok.text);
+                counter_step = 2;
+            } else
+                counter_step = -1;
+            break;
+        case 2:
+            counter_step = kind == '=' ? 3 : -1;
+            break;
+        case 3:
+            if (kind == TOK_NUM && !g_tok_long_suffix && !g_tok_unsigned_suffix &&
+                g_lex.tok.val >= 0 && g_lex.tok.val <= 0x7fff) {
+                sp->counter_init = g_lex.tok.val;
+                counter_step = 4;
+            } else
+                counter_step = -1;
+            break;
+        case 4:
+            counter_step = kind == ';' && depth == 0 ? 5 : -1;
+            break;
+        default:
+            break;
+        }
+        if (counter_step < 0)
+            sp->counter_name[0] = 0;
+        /* Simple scalar declaration `[register|const] T NAME [= init];`. */
+        switch (simple_step) {
+        case 0:
+            if (kind == TOK_REGISTER || kind == TOK_CONST)
+                break;
+            if (kind == TOK_INT) {
+                simple_type = TYPE_INT;
+                simple_step = 2;
+            } else if (kind == TOK_UNSIGNED) {
+                simple_type = TYPE_INT | TYPE_UNSIGNED;
+                simple_step = 1;
+            } else if (kind == TOK_ID) {
+                int td = find_typedef(g_lex.tok.text);
+                if (td >= 0 && !typedefs[td].is_volatile &&
+                    typedefs[td].array_len == 0 && !typedefs[td].is_func &&
+                    typedefs[td].dim_count == 0 &&
+                    type_ptr_depth(typedefs[td].type) == 0 &&
+                    !type_is_struct_object(typedefs[td].type)) {
+                    simple_type = typedefs[td].type;
+                    simple_step = 2;
+                } else
+                    simple_step = -1;
+            } else
+                simple_step = -1;
+            break;
+        case 1:
+            if (kind == TOK_INT)
+                break;
+            /* fall through: `unsigned NAME` */
+        case 2:
+            if (kind == TOK_CONST)
+                break;
+            if (kind == TOK_ID && strlen(g_lex.tok.text) < DECL_SPAN_NAME_LEN) {
+                strcpy(sp->simple_name, g_lex.tok.text);
+                simple_step = 3;
+            } else
+                simple_step = -1;
+            break;
+        case 3:
+            if (kind == ';' && depth == 0)
+                simple_step = 4;
+            else if (kind == '=')
+                simple_step = 5;
+            else
+                simple_step = -1;
+            break;
+        case 5:
+            if (kind == ',' && depth == 0)
+                simple_step = -1;
+            else if (kind == ';' && depth == 0)
+                simple_step = 4;
+            break;
+        default:
+            break;
+        }
+        if (simple_step < 0)
+            sp->simple_name[0] = 0;
+        prev_kind = kind;
         /* C99/C11 6.8.5p3 permits only object declarations with storage class
          * auto or register in a for-init declaration.  dcc treats auto/register
          * as automatic locals; `register` remains an allocation hint, exactly
@@ -1410,10 +1586,57 @@ static struct AstNode *ast_build_decl_span(struct AstArena *ar)
         next_token();
     }
 
+    if (simple_step == 4 && sp->simple_name[0] != 0)
+        sp->simple_type = simple_type;
+    else
+        sp->simple_name[0] = 0;
+
     n = ast_new(ar, AST_DECL);
     n->aux = sp;
     n->line = sp->tok_line;
     return n;
+}
+
+int ast_decl_span_simple_type(const struct AstNode *n, const char *name)
+{
+    const struct DeclSpan *sp;
+
+    if (n == NULL || n->kind != AST_DECL || (sp = n->aux) == NULL ||
+        sp->simple_type == 0 || strcmp(sp->simple_name, name) != 0)
+        return 0;
+    return sp->simple_type;
+}
+
+int ast_decl_span_touches_name(const struct AstNode *n, const char *name)
+{
+    const struct DeclSpan *sp;
+
+    if (n == NULL || n->kind != AST_DECL || (sp = n->aux) == NULL)
+        return 1;
+    return sp->names_overflow ||
+           decl_span_has_name(sp->touched, sp->touched_count, name) ||
+           decl_span_has_name(sp->declared, sp->declared_count, name);
+}
+
+int ast_decl_span_declares_name(const struct AstNode *n, const char *name)
+{
+    const struct DeclSpan *sp;
+
+    if (n == NULL || n->kind != AST_DECL || (sp = n->aux) == NULL)
+        return 1;
+    return sp->names_overflow ||
+           decl_span_has_name(sp->declared, sp->declared_count, name);
+}
+
+const char *ast_decl_span_int_counter(const struct AstNode *n, long *init)
+{
+    const struct DeclSpan *sp;
+
+    if (n == NULL || n->kind != AST_DECL || (sp = n->aux) == NULL ||
+        sp->counter_name[0] == 0 || sp->counter_init > 0x7fff)
+        return NULL;
+    *init = sp->counter_init;
+    return sp->counter_name;
 }
 
 int ast_for_decl_storage_supported(const struct AstNode *n)

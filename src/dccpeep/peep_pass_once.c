@@ -2051,6 +2051,24 @@ int pass_once(void)
             continue;
         }
 
+        /* Copy form of the same shape (pass_push_hl_pop_de_to_ex emits
+         * `ld e,l / ld d,h` instead of `ex` inside the fixed point):
+         *   push hl / ld hl,N / ld e,l / ld d,h / pop hl
+         * becomes push hl / ld de,N / pop hl. */
+        if (eq(i, "push hl") &&
+            i + 4 < nlines &&
+            parse_ld_hl_imm(lines[i + 1], v, sizeof(v)) &&
+            eq(i + 2, "ld e,l") &&
+            eq(i + 3, "ld d,h") &&
+            eq(i + 4, "pop hl")) {
+            sprintf(out, "ld de,%s", v);
+            replace1_tagged(i + 1, out, "const_to_de");
+            delete_n(i + 2, 2);
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
         /*
          * After the safe constant-to-DE rewrite above, this common leftover:
          *   push hl

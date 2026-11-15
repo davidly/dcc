@@ -5,62 +5,65 @@
 
 ; positive 1: "xor 80h" already reset carry, so "or a" is dead.
 _bias:
-	push ix
-	ld ix,0
-	add ix,sp
-	ld l,(ix+4)
-	ld h,(ix+5)
+	ld hl,2 ; peep: param_frame
+	add hl,sp
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
 	ld de,32775
 	ld a,h
 	xor 80h
 	ld h,a
 	sbc hl,de
-	jr nc,L1
+	ret nc ; peep: cond_jp_to_cond_ret
 	ld hl,1
-L1:
-	ld sp,ix
-	pop ix
 	ret
 
 ; positive 2: reached only by falling through "jr c", so carry is clear.
 _fallthrough:
-	push ix
-	ld ix,0
-	add ix,sp
-	ld l,(ix+4)
-	ld h,(ix+5)
+	ld hl,2 ; peep: param_frame
+	add hl,sp
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	ex de,hl
 	ld de,7
 	or a
 	sbc hl,de
-	jr c,L2
-	ld l,(ix+4)
-	ld h,(ix+5)
+	ret c ; peep: cond_jp_to_cond_ret
+	ld hl,2 ; peep: param_frame
+	add hl,sp
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	ex de,hl
 	ld de,9
+	or a
 	sbc hl,de
-L2:
-	ld sp,ix
-	pop ix
 	ret
 
 ; negative 1: reached by falling through "jr nc", so carry is SET.
 _carryset:
-	push ix
-	ld ix,0
-	add ix,sp
-	ld l,(ix+4)
-	ld h,(ix+5)
+	ld hl,2 ; peep: param_frame
+	add hl,sp
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	ex de,hl
 	ld de,7
 	or a
 	sbc hl,de
-	jr nc,L3
-	ld l,(ix+4)
-	ld h,(ix+5)
+	ret nc ; peep: cond_jp_to_cond_ret
+	ld hl,2 ; peep: param_frame
+	add hl,sp
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	ex de,hl
 	ld de,9
 	or a
 	sbc hl,de
-L3:
-	ld sp,ix
-	pop ix
 	ret
 
 ; negative 2: "cp" leaves a data-dependent carry, so the clear is required.

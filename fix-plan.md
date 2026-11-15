@@ -3256,7 +3256,7 @@ Minimum-cost rationale keys, applying per row below:
 | Bug | Issue | Outcome |
 | --- | --- | --- |
 | BUG-061 | #323 | Fixed by the approved shared high-bit-only AST result-type rule; promoted as `tsizhigh` |
-| BUG-062 | #327 | Residual small/runtime-size unsigned typing deviation; deferred to the correct-typing and exact-schedule recovery track |
+| BUG-062 | #327 | Residual small/runtime-size unsigned typing deviation; fixed in [S2](#s2-full-unsigned-sizeof-typing-with-recovery) |
 
 Investigated on `fix/cluster-s1-sizeof-unsigned` from `8db72cbd`.
 The initial full unsigned-type trial stopped at the existing-output gate.
@@ -3441,6 +3441,116 @@ No out-of-cluster compiler defect is fixed. `prepush.ps1` and old-compiler
 checks were not run, as instructed. The remaining gate caveats are #277's
 known expectations and the unverified default-Make synthetic timing bound;
 all compiler correctness, output/performance-invariance and debug gates pass.
+
+
+### S2. Full unsigned `sizeof` typing with recovery
+
+| Bug | Issue | Outcome |
+| --- | --- | --- |
+| BUG-062 | #327 | `sizeof` is unsigned `size_t` in every form; promoted as `tsizesgn` |
+| BUG-065 | — | va_list offset not shifted with an IY register home; found during the trial, fixed, promoted as `tvaiyhom` |
+| BUG-066 | — | `sizeof` of a nested-block scalar local reported 2; found by the first `sizeof`-emitting fuzz run, fixed, promoted as `tszblock` |
+| BUG-067 | #338 | `sizeof` of an element, member or dereference of a nested-block local reports 2; logged with `tests/known-bugs/bug067.c` |
+| BUG-068 | #339 | `*q op= rhs` through a nested-block pointer to a 32-bit object adds only the low word (sibling of BUG-063); surfaced by the changed fuzz stream, logged with `tests/known-bugs/bug068.c` and generator steer `blockcassign` |
+
+Maintainer ruling after S1: do the full fix and claw the losses back through
+optimisation, ideally improving ("I'd like this done right and for you to
+then work to claw back losses and ideally improve"). Branch
+`fix/bug062-sizeof-size_t` from `7dbe99d8`.
+
+#### Typing
+
+`sizeof` yields `size_t` (unsigned int) at all three construction/inference
+sites; the S1 high-bit helper is gone. A new AST pass, `dcc_ast_sizeof.c`,
+runs on each full expression just before MIR lowering and retypes a constant
+`sizeof` subterm (value in `[0, 0x7fff]`) back to plain `int` exactly when
+that is unobservable: every sign-sensitive operation that would see it
+(ordered compare, `/`, `%`, `>>`, widening to long or float) has both operands
+proven to lie in `[0, 0x7fff]` — from constants, narrow unsigned types or a
+structural counting-loop proof — or already has a genuinely unsigned operand.
+Unproven contexts keep the true unsigned typing. The re-census against
+`build/census-main.tsv` went from 173 changed functions in the raw trial to
+12, each inspected and justified.
+
+#### Recovery
+
+- Scalar-cfg emitter: stack-to-`BINARY` constant forwarding looks through
+  `MIR_NOP`s; a planned-lhs rule forwards HL into a `BINARY` rhs; constant
+  operands are popped early and `swapped_left_constant` avoids an `ex`;
+  `& const` masks with a zero high byte fold to `ld h,0 / and K`.
+- dccpeep: `pass_elim_param_only_ix_frame` removes the IX frame of a function
+  whose only frame accesses are parameter loads (CFG SP-depth propagation
+  rewrites them SP-relative); `push hl / pop de` copy forms become `ex de,hl`
+  with exact `ex` liveness in `peep_dataflow.c`; the affine passes accept the
+  copy form. Ten fixtures regenerated, 73/73 pass.
+- Negative: loop-weighting the shared-slot access count in
+  `mir_choose_iy_register_slot` (weight 2 or 4 inside back-edge spans) fixed
+  `varjoin` but regressed 15 rows (tblkret, tcmdapp, tdecl, tforjmp,
+  tforhome, tm, tnestfor, tpfargs, tflidx, tppasgn, trowptr, tstr, tunfphi
+  among them); reverted. The selector cost model is static and pre-dccpeep,
+  and the IY-slot chooser is a separate unilateral heuristic (shared-slot
+  static access count >= 12) that no cost candidate arbitrates; a future
+  recovery of `varjoin` should arbitrate it rather than reweight it.
+
+#### BUG-065
+
+Reproduced on `7dbe99d8` with a variadic join routine whose loop counter is
+IY-homed: `mir_shift_frame_for_iy_register` moved locals, objects, slots and
+`COMPOUND_ADDRESS` immediates but not the `MIR_VA_START/VA_END/VA_ARG`
+immediate, so `va_start` wrote the saved caller IY at `(ix-2)`.
+`mir_compound_address_needs_frame_shift` now shifts `VA_*` immediates with
+negative offsets.
+
+#### BUG-066 and BUG-067
+
+The first integer fuzz run with the generator's new `sizeof` leaf failed five
+seeds, all pre-existing on `7dbe99d8`: `{ uint32_t b = 1; *p = sizeof(b); }`
+stored 2. Block-scope declaration spans are replayed after the enclosing
+statement is lowered, so the operand identifier had no symbol and
+`ast_expr_type_for_sizeof()` fell back to `int`; arrays were already right
+because the deferred `MIR_VLA_SIZE` fix-up used the declared-object table.
+The lowering now flags an identifier with no symbol (flag 16) and the fix-up
+takes the declared size for any such non-VLA object. In the demotion pass the
+same unresolved operand is no longer given a guessed constant; it uses the
+noted simple scalar type or declines a value, and a whole VLA or unreplayed
+local object is instead proven stack-bounded (`opt_stack_size <= 0x7fff`),
+which keeps `sizeof a / sizeof a[0]` signed — `tvla` runs 36K cycles faster
+than before the repair, and `tc89size` is unchanged. The derived-operand
+shapes (`sizeof v[0]` of a block VLA, `sizeof s.q`, `sizeof *p`) still report
+2 and are logged as BUG-067 rather than fixed here: they need the operand type
+derived from the declared table at fix-up time, a separate piece of work.
+
+#### Gates
+
+- Both strict full+extended runs (stack and no-stack): zero failures;
+  performance passed with **0 regressions and 255 improvements**; peep and
+  nopeep both non-regressing. Three new rows: `tsizesgn,74485,74675,3328,3328`,
+  `tvaiyhom,115015,119198,4224,4608` and `tszblock,50531,50790,3200,3328`.
+- Campaign assembly: 39 `BASELINE_SHA256` values refreshed (every hunk shape
+  categorised: `push hl/pop de -> ex de,hl`, dead IX store/reload removal,
+  byte-half `and` masks, early pops, frame-slot shifts); four of them
+  (compound-check/compound-wave45, gnarly-runner-wave100,
+  raw-conversion-check-wave8000, nested-for-runner-wave8200) were already
+  stale on main. `symbol-insert-wave22-audit.py` re-run: pass, counters
+  unchanged. Campaign programs run end to end with identical output and
+  equal-or-fewer cycles except `varjoin` (IY-slot threshold, see Negative).
+- ASan/UBSan `dcc` over `tests/*.c`, `tests/mir-clobber/*.c` and known-bug
+  sources and ASan/UBSan `dccpeep` over 605 `.mac` files: clean. Debugger
+  host CTest 10/10; `-gline` COM bytes release-identical in both modes for
+  13 programs.
+- Script unit tests: all pass except
+  `test_mir_exact_controls` cmp15ok/cmp4ok/cmp45ok, which fail identically
+  on a clean `7dbe99d8` worktree (`compound-check-runner reject=shape` for
+  `cmpw15.c`/`cmpw4.c` `main`); bisected to `523f5738` (2026-10-28,
+  "Optimize boolean branches and preserve callback pointer argument
+  types"). Pre-existing; not touched here.
+- Integer fuzz seeds 1–300 with the generator now emitting `sizeof`: the
+  first run failed five seeds (all BUG-066, pre-existing on `7dbe99d8`);
+  after the fix one seed remained (193, BUG-068, unrelated to `sizeof`),
+  steered as `blockcassign`. Final run `--off known`: **300 programs, FAIL 0,
+  INVALID 5, ok 295**.
+- Known-bugs runner: two reproducers, `bug067` and `bug068` (both fail, as
+  expected).
 
 
 ### K. dccpeep
@@ -4435,6 +4545,7 @@ New measured row `tfpround`: peep_cycles=627367, nopeep_cycles=627384, peep_size
 | A2c | [#318](https://github.com/davidly/dcc/pull/318) (`fix/cluster-a2c-block-type-resolution`) | draft PR; stopped; root trial withdrawn | Early lexical typing clears trial BUG-015 facets but changes 259/3,613 functions per mode and existing checked performance; BUG-004 byte PHI is independent; docs only, no steers/promotions |
 | A3 | [#331](https://github.com/davidly/dcc/pull/331) (`fix/cluster-a3`) | merged; BUG-058 and BUG-015 closed | BUG-058 promoted as tblkword, BUG-015 as tblkbind (with A4 + cherry-picked D2e-2 repair); tblkcast kept; all existing census functions and perf rows unchanged; five steers removed; restored integer 293 ok/3 INVALID/3 limit/1 FAIL (seed 261 → BUG-064), float 295 ok/5 INVALID; seed 96 → BUG-063 with `blockstore` steer |
 | T1 | [#334](https://github.com/davidly/dcc/pull/334) (`fix/cluster-t1-promoted-slot-hole`) | merged; BUG-064 closed | hole proof rejects fused self-store/PHI-homed promoted locals; BUG-064 promoted as tslothol; all 591 test outputs byte-identical, census and 545 perf rows unchanged |
+| S2 | `fix/bug062-sizeof-size_t` | BUG-062, BUG-065 and BUG-066 closed; BUG-067 and BUG-068 logged | full unsigned `sizeof` with AST proven-signedness demotion; emitter/dccpeep recovery, 0 perf regressions / 255 improvements; tsizesgn, tvaiyhom and tszblock promoted; 39 campaign hashes refreshed; generator emits `sizeof` |
 | T2 | [#335](https://github.com/davidly/dcc/pull/335) (`fix/cluster-t2-store-conversion`) | merged; BUG-063 closed | implicit indirect-store conversion retargeted by pointee repair; BUG-063 promoted as tblkstor; `blockstore` steer removed; all test outputs byte-identical, 546 perf rows unchanged; int 1–300: 296 ok/4 INVALID/0 FAIL |
 | B | `fix/cluster-b-stack-homes` (no PR) | stopped; split | First root fix cleared only 030; 014/019/026/036 unchanged; experiment rejected for six existing-function changes |
 | B1 | [#286](https://github.com/davidly/dcc/pull/286) | merged | BUG-030 promoted as tforhome; 300 seeds clean; 500 existing perf rows and 3,366 existing census functions unchanged; strict stack/no-stack pass; approved #277 failures only (#280 fixture passes) |

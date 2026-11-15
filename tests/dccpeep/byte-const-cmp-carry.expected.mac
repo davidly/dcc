@@ -2,48 +2,39 @@
 	cseg
 	public _lt
 _lt:
-	push ix
-	ld ix,0
-	add ix,sp
-	ld a,(ix+4) ; peep: byte_const_cmp
+	ld hl,2 ; peep: param_frame
+	add hl,sp
+	ld a,(hl)
 	cp 128
 	jr nc,L1 ; peep: jp_to_jr
 	ld hl,0
-	pop ix
 	ret
 L1:
 	ld hl,1
-	pop ix
 	ret
 	public _ge
 _ge:
-	push ix
-	ld ix,0
-	add ix,sp
-	ld a,(ix+4) ; peep: byte_const_cmp
+	ld hl,2 ; peep: param_frame
+	add hl,sp
+	ld a,(hl)
 	cp 11
 	jr c,L2 ; peep: jp_to_jr
 	ld hl,0
-	pop ix
 	ret
 L2:
 	ld hl,1
-	pop ix
 	ret
 	public _eq
 _eq:
-	push ix
-	ld ix,0
-	add ix,sp
-	ld a,(ix+4) ; peep: byte_const_cmp
+	ld hl,2 ; peep: param_frame
+	add hl,sp
+	ld a,(hl)
 	cp 7
 	jr z,L3 ; peep: jp_to_jr
 	ld hl,0
-	pop ix
 	ret
 L3:
 	ld hl,1
-	pop ix
 	ret
 	public _top
 _top:

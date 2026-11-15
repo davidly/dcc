@@ -1,10 +1,10 @@
 	public _fill
 _fill:
-	push ix
-	ld ix,0
-	add ix,sp
-	ld c,(ix+8)
-	ld b,(ix+9)
+	ld hl,6 ; peep: param_frame
+	add hl,sp
+	ld c,(hl)
+	inc hl
+	ld b,(hl)
 	ld hl,4
 	add hl,bc
 	ld b,h
@@ -23,6 +23,4 @@ Lloop:
 	ld a,e
 	cp d ; peep: affine_byte_store_loop
 	jp nz, Lloop
-	ld sp,ix
-	pop ix
 	ret
