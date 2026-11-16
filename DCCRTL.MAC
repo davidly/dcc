@@ -24249,8 +24249,7 @@ cal_dim_lookup:
 
 ; static function cal_breakdown
 CDZ0004:
-        ; Save the nonnegative time_t argument.  Only the initial day split
-        ; needs 32-bit arithmetic; every remaining value fits in 16 bits.
+        ; Reject negative time_t before touching the shared result.
         ld      hl,2
         add     hl,sp
         ld      c,(hl)
@@ -24262,55 +24261,66 @@ CDZ0004:
         ld      d,(hl)
         bit     7,d
         jp      nz,cal_breakdown_bad
-        ld      (__cal_input),bc
-        ld      (__cal_input+2),de
+        ; 86400 = 128 * 675.  Divide the upper 24 bits (t >> 7) by
+        ; 675 once, retaining both quotient and remainder.  Shifting t left
+        ; once puts those bits in D:E:B and the low seven bits in C[7:1].
+        ; The seeded remainder is at most 255; each of the sixteen steps
+        ; stays below 1350, so ADC HL,HL always clears carry before SBC.
+        sla     c
+        rl      b
+        rl      e
+        rl      d
+        push    bc              ; retain the low seven bits for the remainder
+        ld      c,b
+        ld      b,e
+        ld      l,d
+        ld      h,0
+        ld      de,675
+        ld      a,16
+cal_day_divide:
+        sla     c
+        rl      b
+        adc     hl,hl
+        sbc     hl,de
+        jr      nc,cal_day_bit
+        add     hl,de
+        jr      cal_day_next
+cal_day_bit:
+        inc     c
+cal_day_next:
+        dec     a
+        jr      nz,cal_day_divide
+        ld      (CDZ0005+14),bc ; total days, later day of year
 
-        push    de
-        push    bc
-        ld      hl,5180h        ; 86400
-        ld      de,1
-        call    __lds
-        pop     bc
-        pop     bc
-        ld      (CDZ0005+14),hl ; total days, later day of year
-
-        ld      hl,(__cal_input)
-        ld      de,(__cal_input+2)
-        push    de
-        push    hl
-        ld      hl,5180h
-        ld      de,1
-        call    __lms           ; DE:HL = seconds within day
-        pop     bc
-        pop     bc
-
-        ; Divide the at-most-17-bit remainder by 3600.  The bounded loop runs
-        ; no more than 23 times and leaves a sub-hour remainder in HL.
-        ld      b,0
-cal_hour_loop:
-        ld      a,d
-        or      e
-        jr      nz,cal_take_hour
-        ld      a,h
-        cp      0eh
-        jr      c,cal_hour_done
-        jr      nz,cal_take_hour
-        ld      a,l
-        cp      10h
-        jr      c,cal_hour_done
-cal_take_hour:
-        ld      a,l
-        sub     10h
+        ; Seconds within day = remainder * 128 + (t & 127), at most
+        ; 86399.  Form the 24-bit remainder:low-bits pair, then shift once.
+        pop     de
+        ld      a,e
+        ld      e,h
+        ld      h,l
         ld      l,a
-        ld      a,h
-        sbc     a,0eh
-        ld      h,a
-        jr      nc,cal_hour_no_borrow
-        dec     de
-cal_hour_no_borrow:
+        ld      d,0
+        srl     e
+        rr      h
+        rr      l               ; DE:HL = seconds within day
+
+        ; Divide the at-most-17-bit remainder by 3600.  C holds its high
+        ; bit; a trial subtraction consumes an hour unless that bit borrows.
+        ; At most 23 successful trials leave a sub-hour remainder in HL.
+        ld      b,0
+        ld      c,e
+        ld      de,3600
+cal_hour_loop:
+        or      a
+        sbc     hl,de
+        ld      a,c
+        sbc     a,0
+        jr      c,cal_hour_done
+        ld      c,a
         inc     b
         jr      cal_hour_loop
 cal_hour_done:
+        add     hl,de
         ld      a,b
         ld      (CDZ0005+4),a
         xor     a
@@ -24342,13 +24352,13 @@ cal_minute_done:
         ld      hl,1970
         ld      (CDZ0005+10),hl
 cal_year_loop:
-        push    hl
-        call    CDZ0001
-        pop     bc
-        ld      a,h
-        or      l
+        ; Valid signed time_t reaches only 1970..2038.  Throughout that
+        ; interval (including 2000), divisibility by four is sufficient.
+        ; Keep the general Gregorian helper for mktime's wider input years.
+        ld      a,l
+        and     3
         ld      de,365
-        jr      z,cal_year_length
+        jr      nz,cal_year_length
         inc     de
 cal_year_length:
         ld      hl,(CDZ0005+14)
@@ -24367,6 +24377,8 @@ cal_year_done:
         sbc     hl,de
         ld      (CDZ0005+10),hl
 
+        ld      hl,(CDZ0005+14)
+        push    hl              ; preserve tm_yday while finding the month
         ld      hl,0
         ld      (CDZ0005+8),hl
 cal_month_loop:
@@ -24392,6 +24404,8 @@ cal_month_done:
         add     hl,de
         inc     hl
         ld      (CDZ0005+6),hl
+        pop     hl
+        ld      (CDZ0005+14),hl
         ld      hl,0
         ld      (CDZ0005+16),hl
         ld      hl,CDZ0005
@@ -24406,8 +24420,6 @@ CDZ0003:
         db 31,28,31,30,31,30,31,31,30,31,30,31
 CDZ0005:
         ds 18
-__cal_input:
-        ds 4
 
         public __asc_data
 __asc_data:
