@@ -16925,11 +16925,15 @@ static int mir_divmod_partner(int instruction)
                other->word_divmod_partner == instruction + 1)) ||
             other->secondary_offset != candidate->secondary_offset)
             continue;
+        /* Shared operands do not prove that both operations execute.  The
+         * first operation eagerly stores both results and the second only
+         * reloads its temporary, so they must belong to the same block. */
+        if (!mir_divmod_same_block(instruction, partner))
+            continue;
         /* Eager wide results held across a call increased frame pressure
          * enough to grow nopeep code despite saving the second divide. */
         if (type_size(candidate->secondary_offset) == 4 &&
-            (!mir_divmod_same_block(instruction, partner) ||
-             mir_divmod_crosses_call(instruction, partner)))
+            mir_divmod_crosses_call(instruction, partner))
             continue;
         if ((candidate->immediate == '/' && other->immediate == '%') ||
             (candidate->immediate == '%' && other->immediate == '/'))
