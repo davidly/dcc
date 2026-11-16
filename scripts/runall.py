@@ -364,7 +364,7 @@ def check_run(name, directory, baseline, run_args, stdin, args, perf=True,
 def app_timeout_args(args, override):
     """Give expensive tests a timeout floor while retaining an unlimited run."""
     timeout = max(args.timeout, override.get("run_timeout", 0)) if args.timeout else 0
-    return argparse.Namespace(**(vars(args) | {"timeout": timeout}))
+    return argparse.Namespace(**{**vars(args), "timeout": timeout})
 
 
 def batch_workers(limit, modes, count):
@@ -556,7 +556,7 @@ def dccpeep_fixtures(workers: int):
     with tempfile.TemporaryDirectory(prefix="dccpeep-tests-") as temp:
         temp = Path(temp)
         def one(source):
-            stem = source.name.removesuffix(".in.mac"); actual, again = temp / f"{stem}.actual", temp / f"{stem}.again"
+            stem = source.name[:-len(".in.mac")]; actual, again = temp / f"{stem}.actual", temp / f"{stem}.again"
             expected = fixture_dir / f"{stem}.expected.mac"
             if not expected.is_file(): return False
             opts = ["-Os"] if stem.endswith(".os") else []
@@ -644,7 +644,10 @@ def update_perf_baseline(results, path: Path, excluded_apps=None):
         os.replace(temporary, path)
     finally:
         if temporary:
-            temporary.unlink(missing_ok=True)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def write_report(results, path: Path, clock_hz: int, excluded_apps=None):
@@ -663,7 +666,7 @@ def write_report(results, path: Path, clock_hz: int, excluded_apps=None):
         writer = csv.DictWriter(f, fieldnames=fields)
         if new_file: writer.writeheader()
         for app, data in sorted(grouped.items()):
-            row = {x: "" for x in fields}; row.update({"machine": platform.node(), "os": platform.system(), "utc-timestamp": datetime.datetime.now(datetime.UTC).isoformat(), "app": app, "clock_hz": clock_hz})
+            row = {x: "" for x in fields}; row.update({"machine": platform.node(), "os": platform.system(), "utc-timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(), "app": app, "clock_hz": clock_hz})
             for mode, prefix in (("peep", "peep"), ("nopeep", "nopeep")):
                 metric = data.get(mode)
                 if metric: row[f"{prefix}_cycles"], row[f"{prefix}_size"] = metric.get("cycles", ""), metric.get("size", ""); row[f"{prefix}_ms"] = round(metric["cycles"] / clock_hz * 1000, 3) if metric.get("cycles") else ""
