@@ -1028,12 +1028,13 @@ static int mir_find_object(const char *name)
     int declaration;
     int object;
 
-    for (object = 0; object < mir.object_count; ++object)
-        if (strcmp(mir.objects[object].name, name) == 0)
-            return object;
     suffix = strstr(name, "#b");
-    if (suffix == NULL)
+    if (suffix == NULL) {
+        for (object = 0; object < mir.object_count; ++object)
+            if (strcmp(mir.objects[object].name, name) == 0)
+                return object;
         return -1;
+    }
     for (declaration = mir.declared_count - 1; declaration >= 0;
          --declaration)
         if (strcmp(mir.declared_names[declaration], name) == 0) {
@@ -1041,6 +1042,16 @@ static int mir_find_object(const char *name)
             declared_storage = mir.declared_storage[declaration];
             break;
         }
+    /* The support gate numbers blocks apart from lowering, so a probe of
+     * another block may have left an object under this very name: in a
+     * switch, case 1's `c#b3#0` can be the default case's `int c`.  Take
+     * a same-named object only if it has the declared type. */
+    for (object = 0; object < mir.object_count; ++object)
+        if (strcmp(mir.objects[object].name, name) == 0 &&
+            (declaration < 0 ||
+             (mir.objects[object].type == declared_type &&
+              mir.objects[object].storage == declared_storage)))
+            return object;
     if (declaration < 0)
         return -1;
     source_length = (size_t)(suffix - name);
@@ -8986,9 +8997,16 @@ void mir_resolve_deferred_metadata(void)
          * a later call site reusing the same #itmp slot with a narrower
          * (uint8_t) parameter retroactively truncated an earlier, still-
          * live-in-this-loop uint16_t argument load to a byte. */
-        if (mir_declared_type_is_unstable(insn->name))
-            continue;
-        named_type = mir_named_type(insn->name);
+        if (mir_declared_type_is_unstable(insn->name)) {
+            /* A block local whose name a support probe declared with
+             * another block's type (mir_find_object) still has the right
+             * object. */
+            if (strstr(insn->name, "#b") == NULL || insn->object < 0 ||
+                insn->object >= mir.object_count)
+                continue;
+            named_type = mir.objects[insn->object].type;
+        } else
+            named_type = mir_named_type(insn->name);
         if (named_type == 0)
             continue;
         /* A C99 for-init alias can retarget a merge emitted while the
