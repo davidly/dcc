@@ -673,6 +673,26 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                 self.assertNotRegex(self.compile(header + body),
                                     r"\bcall __mcf\n\s*ex de,hl")
 
+    def test_word_divmod_fusion_stays_in_one_block(self):
+        for typename, helper in (("int", "__sdivmod"),
+                                 ("unsigned int", "__udivmod")):
+            for first, second in (("/", "%"), ("%", "/")):
+                for options in ((), ("-fstack-check",), ("-gline",)):
+                    with self.subTest(typename=typename, first=first,
+                                      options=options):
+                        signature = (f"{typename} probe(int op, {typename} x, "
+                                     f"{typename} y) {{ {typename} r;")
+                        body = (f"switch(op) {{ case 0: r=x{first}y; break;"
+                                f" case 1: r=x{second}y; break;"
+                                " default: r=0; break; } return r; }")
+                        assembly = self.compile(signature + body, options)
+                        self.assertNotIn("call " + helper, assembly)
+                        # The same operands within one block still fuse.
+                        body = (f"{typename} s; r=x{first}y; s=x{second}y;"
+                                " return r+s; }")
+                        assembly = self.compile(signature + body, options)
+                        self.assertEqual(assembly.count("call " + helper), 1)
+
     def test_remainder_first_decimal_fusion(self):
         source = (
             "void probe(char *dest, int value, int width) { int i;"

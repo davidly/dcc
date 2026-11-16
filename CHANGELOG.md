@@ -1,5 +1,20 @@
 # Changelog
 
+## 16-bit div/mod fusion across switch cases (2026-11-16)
+
+Div/mod fusion now requires both operations to be in the same basic block.
+Previously, 16-bit operations with shared operands could fuse across exclusive
+switch cases, leaving a case to read a temporary initialized only by another
+case. For example, `100 % 7` could return a stale value instead of `2`.
+Valid fusion within one block is preserved. `tdmcfg` covers signed and unsigned
+switch cases in both operator orders, changing operands, conditionals, and
+early returns; code-generation tests check that same-block pairs still fuse.
+Validation: all 40 integer optimization tests passed. Strict full and extended
+suites passed with and without stack checking (588 apps passed, 24 skipped
+per run), along with diagnostics and peephole fixtures. Checked performance
+baselines passed, and `tdmcfg` has a measured baseline. Apple Clang 21 matched
+its expected output at `-O0`, `-O2`, and with UBSan.
+
 ## Heap allocation performance (2026-11-16)
 
 `malloc` now starts at a conservative first-free hint, skipping the known
