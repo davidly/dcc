@@ -173,8 +173,14 @@ are deliberate target or measured-size decisions, not unintegrated audit work:
 
 - **PF-F11** remains deferred because defensive NULL `%s` handling would add
   cost to every valid `%s` call.
-- Subnormal multiply/divide/square-root work from **FC-F2** remains open because
+- Subnormal multiply/divide work from **FC-F2** remains open because
   the correct designs measured so far add too much linked code for the target.
+- Follow-up (2026-11-16): square root now normalizes subnormal significands
+  and reduces positive finite inputs to `[1, 4)` before Newton iteration.
+  This resolves the square-root portion of **FC-F2** and the old deferred
+  large-argument accuracy limit, including the small-argument failure that
+  affected `asinf`/`acosf` near their endpoints. The findings below retain
+  their original audited snapshot descriptions.
 - **FI-1** remains excluded because an 8 MiB CP/M file is outside this target's
   practical media limits. **FI-9** remains limited by the absence of a universal
   CP/M 2.2 metadata-flush service.

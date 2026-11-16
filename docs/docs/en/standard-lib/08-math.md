@@ -85,6 +85,12 @@ I/O subset.
 
 ## Accuracy
 
+`sqrtf` supports the full finite nonnegative `float` range, including
+subnormal inputs. It reduces the argument by an even power of two before
+Newton iteration, so very small and very large inputs have the same accuracy
+as inputs near 1. Signed zero and positive infinity are preserved; negative
+nonzero inputs return NaN and set `errno` to `EDOM`.
+
 The transcendental routines (`expf`/`logf`/`powf`, the trig and hyperbolic
 families) are single-precision polynomial and series approximations: expect
 roughly 5-6 significant digits on ordinary ranges, not full `float` round-trip
