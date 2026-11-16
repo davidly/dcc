@@ -1505,6 +1505,10 @@ static int peep_is_exact_call_for(const char *line, const char *name)
 
     strip_peep_comment_copy(clean, line);
     snprintf(want, sizeof(want), "call %s", name);
+    if (strcmp(clean, want) == 0)
+        return 1;
+    /* call_to_tail_jp turns a final call into a jump that still needs it. */
+    snprintf(want, sizeof(want), "jp %s", name);
     return strcmp(clean, want) == 0;
 }
 
@@ -4458,15 +4462,34 @@ static int pass_bc_pair_load_to_de(void)
     return changed;
 }
 
-/* Returns 1 if instruction s is safe to skip over when checking whether a
- * reload of HL from (ix+off_lo)/(ix+off_hi) is redundant.  An instruction
- * is safe when it neither modifies L/H nor writes to the two stored slots. */
+/* Returns 1 if the instruction at line is safe to skip over when checking
+ * whether a reload of HL from (ix+off_lo)/(ix+off_hi) is redundant.  An
+ * instruction is safe when it neither modifies L/H nor writes to the two
+ * stored slots. */
 static int hl_store_reload_safe_intervening(
-    const char *s, int off_lo, int off_hi)
+    int line, int off_lo, int off_hi)
 {
+    const char *s = lines[line];
+    const PeepLineInfo *info = peep_line_info(line);
     char tmp[MAX_LINE];
     char store_lo[64], store_hi[64];
 
+    /* Shifts and rotates (`sra h`, `rr l`) are not modelled; any unmodelled
+     * instruction naming H or L, or one touching a stored slot other than a
+     * plain load, may change what the reload would read. */
+    if (info == NULL || (info->effects.writes & PEEP_REG_HL) != 0)
+        return 0;
+    if (info->effects.unknown &&
+        ((info->left.registers | info->right.registers) & PEEP_REG_HL) != 0)
+        return 0;
+    if (info->opcode != PEEP_OPCODE_LD &&
+        ((info->left.frame_offset_valid &&
+          (info->left.frame_offset == off_lo ||
+           info->left.frame_offset == off_hi)) ||
+         (info->right.frame_offset_valid &&
+          (info->right.frame_offset == off_lo ||
+           info->right.frame_offset == off_hi))))
+        return 0;
     strip_peep_comment_copy(tmp, s);
     if (starts_label(tmp))          return 0;
     if (strncmp(tmp, "ld l,",   5) == 0) return 0;
@@ -4526,8 +4549,7 @@ static int pass_remove_ix_store_reload_hl(void)
                 }
                 break;
             }
-            if (!hl_store_reload_safe_intervening(
-                    lines[j], off, off + 1))
+            if (!hl_store_reload_safe_intervening(j, off, off + 1))
                 break;
         }
     }

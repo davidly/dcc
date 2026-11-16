@@ -1,0 +1,47 @@
+; A word reload of a just-stored HL is redundant only while H and L and the slot are unchanged: shifts, rotates and in-place slot updates keep it.
+cseg
+
+_shift_right:
+ld (ix-2),l
+ld (ix-1),h
+sra h
+rr l
+push hl
+ld l,(ix-2)
+ld h,(ix-1)
+ld de,7
+call __divs
+ex de,hl
+pop hl
+ret
+
+_shift_left:
+ld (ix-2),l
+ld (ix-1),h
+sla l
+rl h
+push hl
+ld l,(ix-2)
+ld h,(ix-1)
+ld de,7
+call __divs
+ex de,hl
+pop hl
+ret
+
+_slot_increment:
+ld (ix-2),l
+ld (ix-1),h
+inc (ix-2)
+ld l,(ix-2)
+ld h,(ix-1)
+ret
+
+_accumulator_rotate:
+ld (ix-2),l
+ld (ix-1),h
+rlca
+ld l,(ix-2)
+ld h,(ix-1)
+ld (_g),hl
+ret

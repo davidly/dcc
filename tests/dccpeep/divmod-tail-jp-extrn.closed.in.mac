@@ -1,0 +1,26 @@
+; A constant-divisor helper reached by a tail jump still needs its EXTRN: the divisor helper is chosen first, and the call becomes a jump once the parameter frame goes.
+      cseg
+;@dcc.lto begin _quotient
+
+	public _quotient
+_quotient:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld l,(ix+10)
+	ld h,(ix+11)
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	push hl
+	ld hl,32767
+	ex de,hl
+	pop hl
+	extrn __divu
+	call __divu
+	pop ix
+	ret
+	pop ix
+	ret
+;@dcc.lto end _quotient

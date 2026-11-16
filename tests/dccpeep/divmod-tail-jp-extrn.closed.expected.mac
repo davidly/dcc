@@ -1,0 +1,20 @@
+	extrn __q2u
+; A constant-divisor helper reached by a tail jump still needs its EXTRN: the divisor helper is chosen first, and the call becomes a jump once the parameter frame goes.
+	cseg
+;@dcc.lto begin _quotient
+
+	public _quotient
+_quotient:
+	ld hl,8 ; peep: param_frame
+	add hl,sp
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	ld de,32767 ; peep: push_lde_pop
+	jp __q2u ; peep: call_to_tail_jp
+;@dcc.lto end _quotient
