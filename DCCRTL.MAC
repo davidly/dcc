@@ -312,6 +312,7 @@ argv0:
         public  __conout
 COBSZ   equ     128
 __conout:
+        push    hl
         ld      a,e
         cp      0ah             ; LF?
         jr      nz,co_one
@@ -319,46 +320,32 @@ __conout:
         call    __cob_put
         ld      a,0ah
 co_one:
-        call    __cob_put       ; append the character
+        call    __cob_put
+        pop     hl
         ld      a,(__cob_mode)
         or      a               ; 0 = _IOFBF: no per-char flush
         ret     z
         dec     a               ; 1 = _IOLBF
-        jr      z,co_line
-        call    __cflush        ; 2 = _IONBF: flush every character
-        jr      co_ret
-co_line:
+        jr      nz,__cflush     ; 2 = _IONBF: flush every character
         ld      a,e
         cp      0ah             ; flush the buffered line on newline
         ret     nz
-        call    __cflush
-co_ret:
-        ret
+        jr      __cflush
 
-; __cob_put: append the character in A to the console buffer; flush if it is
-; now full.  Preserves BC/DE/HL (DE still holds the char for __conout);
-; clobbers A and flags.  The active buffer base is __cob_ptr and the fill
-; threshold (usable bytes before a forced flush) is __cob_cap; these point at
-; the internal __cobuf/COBSZ by default or at a caller buffer set via setvbuf.
+; Append A using only HL; __conout saves the caller's HL once for CR/LF too.
+; Compare the cursor with the exclusive end, testing low bytes first.
 __cob_put:
-        push    de
-        push    hl
-        ld      hl,(__cobcnt)
-        ld      de,(__cob_ptr)
-        add     hl,de
-        ld      (hl),a          ; buffer[cobcnt] = A
-        ld      hl,(__cobcnt)
+        ld      hl,(__cob_next)
+        ld      (hl),a
         inc     hl
-        ld      (__cobcnt),hl
-        ld      de,(__cob_cap)
-        or      a
-        sbc     hl,de           ; cobcnt - capacity
-        jr      c,cp_done       ; still room in the buffer
-        call    __cflush        ; buffer full: drain it
-cp_done:
-        pop     hl
-        pop     de
-        ret
+        ld      (__cob_next),hl
+        ld      a,(__cob_end)
+        cp      l
+        ret     nz
+        ld      a,(__cob_end+1)
+        cp      h
+        ret     nz
+        jp      __cflush
 
 ; __cflush: drain the console buffer to the BDOS.  Maximal runs of non-'$'
 ; characters go out with BDOS function 9 (print '$'-terminated string) and any
@@ -368,22 +355,49 @@ cp_done:
 ; terminator.  Preserves all registers except F.
 __cflush:
         push    af
+        push    hl
+        ld      hl,(__cob_next)
+        ld      a,(__cob_ptr)
+        cp      l
+        jr      nz,cf_start
+        ld      a,(__cob_ptr+1)
+        cp      h
+        jr      z,cf_done       ; empty: no BC/DE saves or buffer reset
+cf_start:
         push    bc
         push    de
-        push    hl
-        ld      bc,(__cobcnt)
-        ld      a,b
-        or      c
-        jr      z,cf_done       ; already reset: nothing buffered
-        ld      hl,(__cob_ptr)
+        ld      de,(__cob_ptr)
+        or      a
+        sbc     hl,de           ; buffered length = next - base
+        ld      b,h
+        ld      c,l
+        ex      de,hl           ; HL = first buffered byte
 cf_outer:
-        ld      a,b
-        or      c
-        jr      z,cf_reset      ; all bytes emitted
         ld      a,(hl)
         cp      '$'
-        jr      nz,cf_run
-        ; literal '$' -> BDOS function 2
+        jr      z,cf_dollar
+        ld      d,h
+        ld      e,l             ; DE = start of the non-'$' run
+        ld      a,'$'
+        cpir                    ; scan at most BC buffered bytes
+        jr      nz,cf_emit      ; no '$': HL is the guard, BC is zero
+        dec     hl              ; leave the literal '$' for function 2
+        inc     bc
+cf_emit:
+        ; Run is [DE, HL).  Temporarily terminate it with '$' at HL.
+        ld      a,(hl)
+        push    af              ; save the terminator byte and CPIR's Z flag
+        ld      (hl),'$'
+        push    bc
+        push    hl
+        ld      c,9             ; BDOS print '$'-terminated string (DE = start)
+        call    5
+        pop     hl
+        pop     bc
+        pop     af
+        ld      (hl),a          ; restore the byte without changing restored Z
+        jr      nz,cf_reset     ; no '$' found: the whole buffer was emitted
+cf_dollar:
         push    bc
         push    hl
         ld      e,'$'
@@ -393,55 +407,30 @@ cf_outer:
         pop     bc
         inc     hl
         dec     bc
-        jr      cf_outer
-cf_run:
-        ld      d,h
-        ld      e,l             ; DE = start of the non-'$' run
-cf_scan:
-        ld      a,(hl)
-        cp      '$'
-        jr      z,cf_emit
-        inc     hl
-        dec     bc
         ld      a,b
         or      c
-        jr      nz,cf_scan
-cf_emit:
-        ; Run is [DE, HL).  Temporarily terminate it with '$' at HL.
-        ld      a,(hl)
-        push    af              ; save the real '$' or the guard byte
-        ld      (hl),'$'
-        push    bc
-        push    hl
-        ld      c,9             ; BDOS print '$'-terminated string (DE = start)
-        call    5
-        pop     hl
-        pop     bc
-        pop     af
-        ld      (hl),a          ; restore the saved byte
-        jr      cf_outer
+        jr      nz,cf_outer
 cf_reset:
-        ld      hl,0
-        ld      (__cobcnt),hl
-cf_done:
-        pop     hl
+        ld      hl,(__cob_ptr)
+        ld      (__cob_next),hl
         pop     de
         pop     bc
+cf_done:
+        pop     hl
         pop     af
         ret
 
 __cob_mode:
         db      1               ; default _IOLBF (line-buffered console)
-__cobcnt:
-        dw      0
-; Active console buffer: base pointer + usable capacity (bytes appended before
-; a forced flush).  Default to the internal buffer; setvbuf/setbuf may repoint
-; these at a caller-supplied buffer (capacity = size-1, reserving one guard
-; byte for the '$' terminator borrowed by __cflush).
+; Keep the append cursor and exclusive end so ordinary output needs only HL,
+; without reloading/incrementing a count or doing 16-bit arithmetic per byte.
+; __cflush derives the length from next-base only when it actually drains.
+__cob_next:
+        dw      __cobuf
 __cob_ptr:
         dw      __cobuf
-__cob_cap:
-        dw      COBSZ
+__cob_end:
+        dw      __cobuf+COBSZ
 __cobuf:
         ds      COBSZ+1         ; +1 guard slot for the '$' terminator
 
@@ -656,7 +645,7 @@ svb_bad:
 
 ; __cob_setbuf: adopt a caller buffer for console output.
 ; IN:  HL = buffer base, DE = buffer size.
-; Sets __cob_ptr = HL and __cob_cap = size-1 (one byte reserved as the '$'
+; Sets base/next = HL and end = HL+size-1 (one byte reserved as the '$'
 ; guard slot used by __cflush).  A size < 2 cannot host the guard byte, so it
 ; falls back to the internal buffer.  Clobbers A/DE/HL.
 __cob_setbuf:
@@ -668,8 +657,10 @@ __cob_setbuf:
         jr      c,__cobdflt         ; size 0 or 1: too small for a guard
 csb_ok:
         ld      (__cob_ptr),hl
+        ld      (__cob_next),hl
         dec     de                      ; capacity = size - 1 (reserve guard)
-        ld      (__cob_cap),de
+        add     hl,de
+        ld      (__cob_end),hl
         ret
 
 ; __cobdflt: revert console output to the internal __cobuf/COBSZ buffer.
@@ -677,8 +668,9 @@ csb_ok:
 __cobdflt:
         ld      hl,__cobuf
         ld      (__cob_ptr),hl
-        ld      hl,COBSZ
-        ld      (__cob_cap),hl
+        ld      (__cob_next),hl
+        ld      hl,__cobuf+COBSZ
+        ld      (__cob_end),hl
         ret
 
         public  _strerror
