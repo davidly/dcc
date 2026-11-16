@@ -2,6 +2,7 @@
   "apps": [
     { "name": "a1", "run_timeout": 300 },
     { "name": "tbigfunc", "run_timeout": 300 },
+    { "name": "tptrrhs", "run_timeout": 300 },
     { "name": "tdvbyte", "run_timeout": 300, "run_batches": 7 },
     { "name": "ttt", "args": "10" },
     { "name": "pint", "args": "e.pas", "stack_size": 1024, "fixtures": ["E.PAS"],
