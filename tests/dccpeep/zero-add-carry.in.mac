@@ -1,0 +1,18 @@
+; Adding zero to HL is a no-op only when nothing reads its flags: an adc after it needs the carry it clears.
+cseg
+
+_carry_live:
+ld a,h
+rlca
+sbc a,a
+ld d,a
+ld e,a
+ld bc,0
+add hl,bc
+ex de,hl
+ld bc,0
+adc hl,bc
+ex de,hl
+ret
+
+end

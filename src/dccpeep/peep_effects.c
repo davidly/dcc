@@ -215,12 +215,18 @@ static void classify_instruction(PeepLineInfo *info, const char *line)
         info->effects.reads = left_regs | PEEP_REG_SP;
         info->effects.writes = PEEP_REG_SP;
         info->effects.memory_written = PEEP_MEM_STACK;
+        if (!strcmp(left, "af"))
+            info->effects.flags_read = PEEP_FLAG_C | PEEP_FLAG_Z |
+                                       PEEP_FLAG_S | PEEP_FLAG_PV;
         info->effects.unknown = 0;
     } else if (!strcmp(mnemonic, "pop")) {
         info->opcode = PEEP_OPCODE_POP;
         info->effects.reads = PEEP_REG_SP;
         info->effects.writes = left_regs | PEEP_REG_SP;
         info->effects.memory_read = PEEP_MEM_STACK;
+        if (!strcmp(left, "af"))
+            info->effects.flags_written = PEEP_FLAG_C | PEEP_FLAG_Z |
+                                          PEEP_FLAG_S | PEEP_FLAG_PV;
         info->effects.unknown = 0;
     } else if (!strcmp(mnemonic, "inc") || !strcmp(mnemonic, "dec")) {
         info->opcode = PEEP_OPCODE_ALU;
@@ -249,6 +255,9 @@ static void classify_instruction(PeepLineInfo *info, const char *line)
             info->effects.memory_read = operand_memory_class(&info->left);
         info->effects.flags_written = PEEP_FLAG_C | PEEP_FLAG_Z |
                                       PEEP_FLAG_S | PEEP_FLAG_PV;
+        /* adc and sbc consume the carry an earlier add or sub left. */
+        if (strcmp(mnemonic, "add") != 0)
+            info->effects.flags_read |= PEEP_FLAG_C;
         info->effects.unknown = 0;
     } else if (!strcmp(mnemonic, "sub") || !strcmp(mnemonic, "and") ||
                !strcmp(mnemonic, "or") || !strcmp(mnemonic, "xor") ||

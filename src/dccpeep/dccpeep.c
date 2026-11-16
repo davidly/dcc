@@ -9423,7 +9423,8 @@ static int pass_elim_redundant_pop_push(void)
  * single hottest opcode handler at ~12.6% of sieve.ada's total runtime,
  * does exactly this pair twice per call. Declines whenever anything later
  * could still depend on the flags this add would have set, using the same
- * CFG-based liveness as pass_word_postinc_ix_local_no_save above. Any
+ * CFG-based liveness as pass_word_postinc_ix_local_no_save above, except
+ * that a live carry alone (a following adc) keeps "or a" to clear it. Any
  * "ld de,0"/"ld bc,0" left dead by the deletion is swept up later by
  * pass_elim_dead_register_loads.
  */
@@ -9439,8 +9440,16 @@ static int pass_elim_zero_add_hl(void)
 
         if (!is_de && !is_bc)
             continue;
-        if (!peep_flags_dead_after(i + 1, all_flags))
+        if (!peep_flags_dead_after(i + 1, all_flags)) {
+            /* A long's high word may add with carry: keep the cleared
+             * carry the zero add leaves, which "or a" gives for less. */
+            if (!peep_flags_dead_after(i + 1, PEEP_FLAG_Z | PEEP_FLAG_S |
+                                              PEEP_FLAG_PV))
+                continue;
+            replace1_tagged(i + 1, "or a", "zero_add_clears_carry");
+            changed = 1;
             continue;
+        }
 
         delete_n(i + 1, 1);
         changed = 1;
