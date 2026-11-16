@@ -22709,8 +22709,7 @@ xm_open:
         ld      de,__xfcbb
         ld      c,35
         call    5
-        ld      e,(__xfcbb+33)  ; DE = low 16 bits of record count
-        ld      d,(__xfcbb+34)
+        ld      de,(__xfcbb+33) ; DE = low 16 bits of record count
         ld      a,(__xfcbb+35)  ; A = upper record-count byte R2
         ld      hl,(0006h)      ; HL = FBASE, the exclusive TPA limit
         call    __xfit

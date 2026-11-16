@@ -783,6 +783,10 @@ static int emit_z80_ld(Asm *a,char **av,int n) {
         emitw(a,e);
         return 1;
     }
+    /* Only A can load an absolute byte address.  Do not silently turn
+    LD r,(nn) into LD r,n or treat B/D/H as 8080 register-pair aliases.
+    (HL) and indexed forms were handled above. */
+    if(r1>=0 && av[1][0]=='(') return 0;
     if(av[0][0]=='(' && streqi(av[1],"HL")) {
         e=eval(a,av[0]+1);
         emitb(a,0x22);
