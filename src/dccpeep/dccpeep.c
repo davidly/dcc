@@ -5666,6 +5666,53 @@ static int global_write_count_in_file(const char *name)
  * the write itself, mirroring dcc_global_scan.c's own
  * global_text_written_in_function check for its narrower C-source-level
  * version of the same proof. */
+/* Can line i store to memory through a register pointer (ld (hl),r,
+ * inc (hl), ldir, ...)? */
+static int line_may_store_through_pointer(int i)
+{
+    const PeepLineInfo *info = peep_line_info(i);
+
+    return info != NULL &&
+           ((info->effects.memory_written &
+             (PEEP_MEM_INDIRECT | PEEP_MEM_OPAQUE)) != 0 ||
+            (info->effects.unknown &&
+             (info->left.kind == PEEP_OPERAND_INDIRECT ||
+              info->right.kind == PEEP_OPERAND_INDIRECT)));
+}
+
+static int range_may_store_through_pointer(int start, int end)
+{
+    int i;
+
+    for (i = start; i < end && i < nlines; i++)
+        if (line_may_store_through_pointer(i))
+            return 1;
+    return 0;
+}
+
+/* Does [start,end) take the address of a frame slot, so that a store
+ * through a pointer may reach an (ix+d) local?  dcc forms one as
+ * "push ix / pop rr" or an "add hl,sp" that is not a frame allocation. */
+static int range_takes_frame_address(int start, int end)
+{
+    char clean[MAX_LINE];
+    char next[MAX_LINE];
+    int i;
+
+    for (i = start; i < end && i < nlines; i++) {
+        strip_peep_comment_copy(clean, lines[i]);
+        if (i + 1 < nlines)
+            strip_peep_comment_copy(next, lines[i + 1]);
+        else
+            next[0] = 0;
+        if (strcmp(clean, "push ix") == 0 && strncmp(next, "pop ", 4) == 0)
+            return 1;
+        if (strcmp(clean, "add hl,sp") == 0 && strcmp(next, "ld sp,hl") != 0)
+            return 1;
+    }
+    return 0;
+}
+
 /* Can a pointer reach global `base`?  Only if its address is used outside a
  * "(base...)" memory operand, or another module may take it. */
 static int global_address_may_escape(const char *base, size_t base_len)
@@ -5730,11 +5777,7 @@ static int global_word_may_change_in_range(const char *name, int start,
 
         if (info == NULL)
             continue;
-        if ((info->effects.memory_written &
-             (PEEP_MEM_INDIRECT | PEEP_MEM_OPAQUE)) != 0 ||
-            (info->effects.unknown &&
-             (info->left.kind == PEEP_OPERAND_INDIRECT ||
-              info->right.kind == PEEP_OPERAND_INDIRECT))) {
+        if (line_may_store_through_pointer(i)) {
             if (escapes < 0)
                 escapes = global_address_may_escape(base, base_len);
             if (escapes)
@@ -6910,11 +6953,9 @@ static int ix_offset_written_in_range(int off, int start, int end)
  * offset only means anything within this one function, and a segment
  * already never crosses a call or a function boundary), just that the
  * offset isn't written anywhere in-segment (ix_offset_written_in_range
- * above). Like the global version, this doesn't attempt to prove the
- * local's address was never taken and written through elsewhere without
- * literal "(ix-N)," text - the same "distinctly-stored objects don't
- * alias" assumption already accepted for the global case, validated the
- * same way: full regression plus the extended corpus, not a formal proof.
+ * above), and that no store through a pointer can reach it: one in the
+ * segment declines once the function takes any frame address
+ * (range_takes_frame_address), as for a global whose address escapes.
  *
  * Uses line_clobbers_bc directly for its own segment boundaries - this
  * pass's own target shape (a value materialized once, then reloaded across
@@ -7102,6 +7143,16 @@ static int pass_cache_ix_local_word_reload(void)
              * lines, which read, not write, the slot. */
             if (noc > 0 && ix_offset_written_in_range(best_off, occ[0] + 2, i))
                 noc = 0;
+            /* Nor through a pointer, once the function has taken a frame
+             * address: `p = (unsigned char *)&k; ... p[0] = 7;` between reads
+             * of k. */
+            if (noc > 0 && range_may_store_through_pointer(occ[0] + 2, i)) {
+                int func_start, func_end;
+
+                find_function_bounds_any(i - 1, &func_start, &func_end);
+                if (range_takes_frame_address(func_start, func_end))
+                    noc = 0;
+            }
 
             if (noc > 0) {
                 delta = 0;
@@ -10830,6 +10881,18 @@ static int pass_hoist_index_ptr_to_bc(void)
         sprintf(pat_h, "ld h,(ix%+d)", off + 1);
         sprintf(probe_p, "(ix%+d)", off);
         sprintf(probe_p1, "(ix%+d)", off + 1);
+
+        /* A store through a pointer may write the slot once the function
+         * has taken a frame address: `((unsigned char *)&k)[0] = k >> 3;`
+         * in a loop otherwise kept reading k's first value from BC. */
+        {
+            int func_start, func_end;
+
+            find_function_bounds_any(i, &func_start, &func_end);
+            if (range_may_store_through_pointer(i + 1, loop_end) &&
+                range_takes_frame_address(func_start, func_end))
+                continue;
+        }
 
         ok = 1;
         for (k = i + 1; k < loop_end && ok; ++k) {
