@@ -159,7 +159,7 @@ __hlimit:       dw      0
 ; original intent (shared by neither malloc-only nor free-only builds)
 ; without that side effect.
 ; Entry: HL=addr, DE=packed, BC=size (true, even user size).
-; Exit: HL clobbered (ends at footer+2). AF clobbered. DE, BC preserved.
+; Exit: HL clobbered (ends at footer+1). AF clobbered. DE, BC preserved.
         public  __wr_hf
 __wr_hf:
         ld      (hl),e
@@ -10462,6 +10462,9 @@ rl_try_grow:
         ld      hl,(__rl_old)
         ld      de,0-HDRSIZE
         add     hl,de                   ; HL = header
+        ; The hint may name the free header about to disappear. Rewind to
+        ; this surviving boundary before absorbing it (also safe on split).
+        call    __hlower
         ld      bc,(__rl_cnt)           ; BC = combined size
         ld      d,b
         ld      e,c                     ; DE = packed(used) = combined size
@@ -10487,6 +10490,8 @@ rl_try_grow_top:
         jr      z,rl_grow_ok            ; new_end == hlimit
         jr      rl_do_alloc ; peep: jp_to_jr
 rl_grow_ok:
+        ld      de,(__brk)
+        call    __hskip                 ; old top may be the hint
         ld      (__brk),hl              ; extend heap to the new end
         ld      hl,(__rl_old)
         ld      de,0-HDRSIZE
@@ -10660,17 +10665,57 @@ fr_write:
         ld      e,c
         set     0,e                     ; DE = packed(free) = size|1
         ld      hl,(__fr_hdr)
+        call    __hlower                ; include merged predecessors too
         jp      __wr_hf
 
 fr_trim:
         ; Nothing needs writing above the new break.  This is the common LIFO
         ; free path and also trims through an immediately preceding free block.
         ld      hl,(__fr_hdr)
+        call    __hlower                ; hint must not remain above new top
         ld      (__brk),hl              ; drop the heap high-water mark
         ret
 
 __fr_hdr:       dw      0
 __fr_csz:       dw      0
+
+        public  __hfirst
+; Conservative first-free hint: a block boundary <= the first free block
+; (or <= __brk if none). Everything below it is allocated.
+; It may point at a used block, but never inside a block or above __brk.
+; Keeping small, skipped holes below later fits preserves first-fit order.
+; Initialize in the image so programs without allocation pay no startup
+; cost; the separate PUBLIC also lets dccrtlstrip discard this state.
+__hfirst:       dw      __hstart
+
+        public  __hlower
+; HL = surviving boundary. Lower the hint if needed after free/coalescing
+; or realloc absorption. Preserve HL, BC, DE; corrupt AF only.
+__hlower:
+        push    de
+        push    hl
+        ld      de,(__hfirst)
+        or      a
+        sbc     hl,de
+        pop     hl
+        pop     de
+        ret     nc
+        ld      (__hfirst),hl
+        ret
+
+        public  __hskip
+; DE = consumed boundary, HL = replacement boundary. Advance the hint only
+; if it names DE: earlier too-small free blocks must remain searchable.
+; Preserve HL, BC, DE; corrupt AF only.
+__hskip:
+        push    hl
+        ld      hl,(__hfirst)
+        or      a
+        sbc     hl,de
+        pop     hl
+        ret     nz
+        ld      (__hfirst),hl
+        ret
 
         public  __mlh
 ; Internal: HL = requested size (0 treated as 2; odd sizes rounded up to
@@ -10693,10 +10738,44 @@ mh_rnd_ok:
 mh_sz_ok:
         ld      (__ml_need),hl
 
-        ; Walk free list from __hstart to __brk. Keep the hot traversal
-        ; pointer in BC; materialize __ml_p only when a fitting block is
-        ; found (the split/write helpers then need BC for their own args).
-        ld      bc,__hstart
+        ; Skip the known allocated prefix. On sequential malloc-only calls
+        ; __hfirst == __brk, so extending takes constant time per call.
+        ; Keep the hot traversal pointer in BC; materialize __ml_p only
+        ; when a fitting block is found (the split/write helpers then need
+        ; BC for their own args).
+        ld      bc,(__hfirst)
+
+mh_prefix:
+        ; Retire used boundaries left by a whole-block reuse or realloc
+        ; absorption. Do this only up to the FIRST free block: the ordinary
+        ; fit search below must keep earlier holes that are too small.
+        ld      hl,(__brk)
+        ld      d,b
+        ld      e,c
+        or      a
+        sbc     hl,de
+        jr      z,mh_prefix_end
+        jr      c,mh_prefix_end
+        ld      h,b
+        ld      l,c
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        bit     0,e
+        jr      nz,mh_prefix_free
+        inc     hl
+        inc     hl
+        inc     hl              ; header + size + footer = next boundary
+        add     hl,de
+        ld      b,h
+        ld      c,l
+        jr      mh_prefix
+mh_prefix_end:
+        ld      (__hfirst),bc
+        jp      mh_extend
+mh_prefix_free:
+        ld      (__hfirst),bc
+        jr      mh_free
 
 mh_walk:
         ; Stop if walk pointer has reached (or passed) __brk
@@ -10718,6 +10797,7 @@ mh_walk:
         bit     0,e
         jr      z,mh_used
 
+mh_free:
         ; --- Free block --- DE currently holds size|1; mask to true size.
         ld      a,e
         and     0feh
@@ -10754,6 +10834,10 @@ mh_walk:
         ld      e,l             ; DE = packed(used) = user_size unchanged
         ld      hl,(__ml_p)
         call    __wr_hf
+        ; __wr_hf leaves HL on the footer's high byte.
+        inc     hl              ; next block boundary, past both footer bytes
+        ld      de,(__ml_p)
+        call    __hskip
         ld      hl,(__ml_p)
         ld      de,HDRSIZE
         add     hl,de
@@ -10789,10 +10873,12 @@ mh_split:
         sbc     hl,de           ; HL = new free user_size (true, even)
         ld      b,h
         ld      c,l             ; BC = new free user_size
-        ld      d,h
-        ld      e,l
-        set     0,e             ; DE = packed(free) = user_size|1
         ld      hl,(__ml_fp)
+        ld      de,(__ml_p)
+        call    __hskip         ; the split remainder replaces the hint
+        ld      d,b
+        ld      e,c
+        set     0,e
         call    __wr_hf
 
         ; Return __ml_p + HDRSIZE
@@ -10864,6 +10950,8 @@ mh_extend_ok:
         ld      hl,(__ml_p)
         call    __wr_hf
         pop     hl              ; validated new_brk
+        ld      de,(__ml_p)
+        call    __hskip
         ld      (__brk),hl
         ; Return old_brk + HDRSIZE
         ld      hl,(__ml_p)
