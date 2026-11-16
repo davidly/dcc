@@ -332,9 +332,16 @@ def check_run(name, directory, baseline, run_args, stdin, args, perf=True,
                                "size": (directory / com).stat().st_size if (directory / com).is_file() else None}
 
 
+def app_timeout_args(args, override):
+    """Give expensive tests a timeout floor while retaining an unlimited run."""
+    timeout = max(args.timeout, override.get("run_timeout", 0)) if args.timeout else 0
+    return argparse.Namespace(**(vars(args) | {"timeout": timeout}))
+
+
 def app_job(name, mode, overrides, sources, baselines, root, args):
     began, lines = time.monotonic(), []
     override = overrides.get(name, {})
+    args = app_timeout_args(args, override)
     directory = root / name / mode
     fixtures = list(override.get("fixtures", []))
     scenarios = list(override.get("extra_scenarios", []))
@@ -388,6 +395,7 @@ def extended_job(case, mode, overrides, baseline, root, args):
 def narrow_job(name, overrides, sources, root, args):
     """Build normally and with -fno-narrow, then compare observable stdout."""
     began, override, lines = time.monotonic(), overrides.get(name, {}), []
+    args = app_timeout_args(args, override)
     fixtures = override.get("fixtures", [])
     normal_dir, wide_dir = root / name / "normal", root / name / "no-narrow"
     missing = stage(fixtures, normal_dir, sources) + stage(fixtures, wide_dir, sources)

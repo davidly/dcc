@@ -215,6 +215,8 @@ speed:
   App overrides are loaded from tests/_test_overrides.json:
     - args: command-line arguments for the app
         - stdin: text piped to app stdin during execution
+    - run_timeout: minimum per-test timeout in seconds (e.g. 300 for tdvbyte);
+      a larger -RunTimeout still takes precedence
     - stack_size: C stack reserve override (default 512)
     - fixtures: CP/M data files (from tests/) this app reads at runtime,
       copied into its build dir under their UPPERCASE name before it runs -
@@ -447,6 +449,7 @@ if (-not (Test-Path $appOverridesPath)) {
         $appOverrides[$app.name] = @{}
         if ($app.args) { $appOverrides[$app.name]['args'] = $app.args }
         if ($app.stdin) { $appOverrides[$app.name]['stdin'] = $app.stdin }
+        if ($app.run_timeout) { $appOverrides[$app.name]['run_timeout'] = [int]$app.run_timeout }
         if ($app.stack_size) { $appOverrides[$app.name]['stack_size'] = $app.stack_size }
         if ($app.dcc_args) { $appOverrides[$app.name]['dcc_args'] = $app.dcc_args }
         if ($null -ne $app.dcc_floatio) { $appOverrides[$app.name]['dcc_floatio'] = $app.dcc_floatio }
@@ -1563,6 +1566,10 @@ foreach ($app in $testFiles) {
         $skipped++
         continue
     }
+    $appRunTimeout = $RunTimeout
+    if ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['run_timeout']) {
+        $appRunTimeout = [Math]::Max($RunTimeout, [int]$appOverrides[$app]['run_timeout'])
+    }
     $preparedScenarios = @(Get-AppExtraScenarios $app | ForEach-Object {
         $scenario = $_
         [pscustomobject]@{
@@ -1576,6 +1583,7 @@ foreach ($app in $testFiles) {
     $workItems.Add([pscustomobject]@{
         App          = $app
         SourcePath   = Join-Path $testDir "$app.c"
+        RunTimeout   = $appRunTimeout
         RunArgs      = (Get-AppArgs $app)
         RunStdin     = (Get-AppStdin $app)
         StackSize    = (Get-StackSize $app)
@@ -2027,6 +2035,7 @@ if ($Parallel) {
             $dispatchItems.Add([pscustomobject]@{
                 App = $item.App; Mode = $buildModeKey
                 SourcePath = $item.SourcePath
+                RunTimeout = $item.RunTimeout
                 RunArgs = $item.RunArgs; RunStdin = $item.RunStdin
                 StackSize = $item.StackSize; DccArgs = $item.DccArgs
                 DccFloatio = $item.DccFloatio; DccLongio = $item.DccLongio
@@ -2095,7 +2104,7 @@ if ($Parallel) {
             -UseEmulatedM80:$using:UseEmulatedM80 -UseEmulatedL80:$using:UseEmulatedL80 `
             -EmulatorRunArgs $using:runArgs `
             -Fixtures $item.Fixtures -StageFixtures $true `
-            -ExtraScenarios $item.ExtraScenarios -RunTimeout $using:RunTimeout
+            -ExtraScenarios $item.ExtraScenarios -RunTimeout $item.RunTimeout
         Add-Member -InputObject $r -NotePropertyName DispatchMode -NotePropertyValue $item.Mode -PassThru
     } | ForEach-Object {
         $result = $_
@@ -2180,7 +2189,7 @@ else {
             -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 `
             -EmulatorRunArgs $emulatorRunArgs `
             -Fixtures $item.Fixtures -StageFixtures $true `
-            -ExtraScenarios $item.ExtraScenarios -RunTimeout $RunTimeout
+            -ExtraScenarios $item.ExtraScenarios -RunTimeout $item.RunTimeout
         if ((-not $FailuresOnly) -or (-not $result.Passed)) {
             Show-AppResult $result
         }
@@ -2406,7 +2415,7 @@ if ($NarrowDiff) {
                 -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
                 -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
                 -UseEmulatedM80:$using:UseEmulatedM80 -UseEmulatedL80:$using:UseEmulatedL80 `
-                -EmulatorRunArgs $using:ndRunArgs -Fixtures $item.Fixtures -RunTimeout $using:RunTimeout
+                -EmulatorRunArgs $using:ndRunArgs -Fixtures $item.Fixtures -RunTimeout $item.RunTimeout
         } | ForEach-Object {
             $result = $_
             $narrowResults += $result
@@ -2431,7 +2440,7 @@ if ($NarrowDiff) {
                 -RunArgs $item.RunArgs -RunStdin $item.RunStdin -StackSize $item.StackSize `
                 -DccArgs $item.DccArgs -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
                 -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 `
-                -EmulatorRunArgs $emulatorRunArgs -Fixtures $item.Fixtures -RunTimeout $RunTimeout
+                -EmulatorRunArgs $emulatorRunArgs -Fixtures $item.Fixtures -RunTimeout $item.RunTimeout
             $narrowResults += $result
             $narrowDone++
             $status = if ($result.Passed) { "PASS" } else { "FAIL" }
