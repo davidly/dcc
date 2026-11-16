@@ -9459,10 +9459,114 @@ static void verify_frontend_initializer_capture_only(void)
     fclose(output);
 }
 
+/* Run before verifier/selection scopes activate. Mutation queries must see
+ * each operand rewrite immediately, without depending on invalidation. */
+static void verify_uncached_call_use_counts(void)
+{
+    int ok;
+    setup(10, 3, 1);
+    mir.next_call_id = 2;
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[3].opcode = MIR_ARG;
+    mir.insns[3].src1 = 0;
+    mir.insns[4].opcode = MIR_CALL;
+    mir.insns[4].src1 = 0; /* indirect callee is a separate explicit use */
+    mir.insns[5].opcode = MIR_CALL_AGGREGATE;
+    mir.insns[5].secondary_offset = 1;
+    mir.insns[6].opcode = MIR_ARG;
+    mir.insns[6].src1 = 0;
+    mir.insns[6].secondary_offset = 1;
+    mir.insns[7].opcode = MIR_BINARY;
+    mir.insns[7].src1 = 0;
+    mir.insns[7].src2 = 0;
+    ok = mir_value_use_count(0) == 9;
+    mir.insns[3].src1 = 1;
+    ok = ok && mir_value_use_count(0) == 8;
+    mir.insns[2].src1 = 1;
+    ok = ok && mir_value_use_count(0) == 6;
+    mir.insns[5].secondary_offset = 0;
+    ok = ok && mir_value_use_count(0) == 5;
+    /* Synthetic/malformed call ids must retain the reference semantics. */
+    mir.insns[5].secondary_offset = -1;
+    mir.insns[6].secondary_offset = -1;
+    ok = ok && mir_value_use_count(0) == 6;
+    mir.insns[5].secondary_offset = 20;
+    mir.insns[6].secondary_offset = 20;
+    ok = ok && mir_value_use_count(0) == 6;
+    setup(3, 1, 1);
+    ok = ok && mir_value_use_count(0) == 1;
+    if (!ok) {
+        fprintf(stderr, "FAIL uncached call use counts after mutation\n");
+        ++failures;
+    }
+}
+
+static void verify_indexed_backend_queries(void)
+{
+    int struct_id = add_struct_def("verify_odd_argument");
+    int odd_type = make_struct_type(struct_id);
+    int ok;
+    struct_defs[struct_id - 1].size = 3;
+
+    /* Enter the existing immutable analysis scope through a valid function. */
+    setup(3, 1, 1);
+    ok = mir_verify_and_dump();
+    clear_liveness();
+    setup(8, 3, 1);
+    mir.next_call_id = 2;
+    mir.insns[2].opcode = MIR_ARG;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].type = odd_type;
+    mir.insns[3].opcode = MIR_ARG;
+    mir.insns[3].src1 = 0;
+    mir.insns[3].type = TYPE_CHAR; /* scalar arguments occupy even slots */
+    mir.insns[4].opcode = MIR_ARG;
+    mir.insns[4].src1 = 0;
+    mir.insns[4].type = odd_type;
+    mir.insns[4].secondary_offset = 1;
+    mir.insns[5].opcode = MIR_CALL;
+    mir.insns[6].opcode = MIR_CALL_AGGREGATE;
+    mir.insns[6].secondary_offset = 1;
+    ok = ok && mir_call_has_odd_argument_bytes(&mir.insns[5]);
+    ok = ok && !mir_call_has_odd_argument_bytes(&mir.insns[6]);
+    mir.insns[2].type = TYPE_LONG;
+    mir_invalidate_use_cache();
+    ok = ok && !mir_call_has_odd_argument_bytes(&mir.insns[5]);
+    mir.insns[3].type = odd_type;
+    mir.insns[6].opcode = MIR_CALL;
+    mir_invalidate_use_cache();
+    ok = ok && mir_call_has_odd_argument_bytes(&mir.insns[5]);
+    ok = ok && mir_call_has_odd_argument_bytes(&mir.insns[6]);
+    ok = ok && !mir_call_has_odd_argument_bytes(NULL);
+    setup(5, 1, 2);
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].label = 1;
+    ok = ok && !mir_has_cfg_backedge();
+    mir.insns[2].label = 0;
+    mir_invalidate_use_cache();
+    ok = ok && mir_has_cfg_backedge();
+    mir.insns[2].label = 20;
+    mir_invalidate_use_cache();
+    ok = ok && !mir_has_cfg_backedge();
+    if (!ok) {
+        fprintf(stderr, "FAIL indexed argument/backedge queries\n");
+        ++failures;
+    }
+}
+
 int main(int argc, char **argv)
 {
     struct Sym *callee;
     int mutation;
+    if (argc == 2 && !strcmp(argv[1], "--use-query-proof")) {
+        verify_uncached_call_use_counts();
+        verify_indexed_backend_queries();
+        printf("MIR use query failures=%d\n", failures);
+        return failures != 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--bitset-proof")) {
         set_test_environment("DCC_MIR_LIVENESS_VERIFY", "1");
         verify_bitset_word_boundaries();

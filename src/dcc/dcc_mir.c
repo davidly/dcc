@@ -10502,6 +10502,7 @@ static int mir_use_cache_verify_enabled(void)
 }
 static int mir_use_cache_dirty = 1;
 static int *mir_use_cache_arg_head;
+static unsigned char *mir_use_cache_arg_odd;
 static int mir_use_cache_arg_head_capacity;
 static int *mir_use_cache_arg_next;
 static int *mir_use_cache_count;
@@ -10644,7 +10645,9 @@ static void mir_ensure_use_cache(void)
         mir_use_cache_arg_head = (int *)realloc(mir_use_cache_arg_head,
             (size_t)mir_use_cache_arg_head_capacity *
                 sizeof(*mir_use_cache_arg_head));
-        if (mir_use_cache_arg_head == NULL)
+        mir_use_cache_arg_odd = (unsigned char *)realloc(mir_use_cache_arg_odd,
+            (size_t)mir_use_cache_arg_head_capacity);
+        if (mir_use_cache_arg_odd == NULL || mir_use_cache_arg_head == NULL)
             fatal("out of memory building MIR use cache");
     }
     if (mir.next_value > mir_use_cache_count_capacity) {
@@ -10668,8 +10671,10 @@ static void mir_ensure_use_cache(void)
      * answers. This was found and reproduced via DCC_MIR_CACHE_VERIFY=1 on
      * a trivial zero-value helper compiled immediately after a
      * larger function. */
-    for (i = 0; i < mir_use_cache_arg_head_capacity; ++i)
+    for (i = 0; i < mir_use_cache_arg_head_capacity; ++i) {
         mir_use_cache_arg_head[i] = -1;
+        mir_use_cache_arg_odd[i] = 0;
+    }
     for (i = 0; i < mir_use_cache_count_capacity; ++i) {
         mir_use_cache_count[i] = 0;
         mir_use_cache_def_index[i] = -1;
@@ -10686,9 +10691,13 @@ static void mir_ensure_use_cache(void)
             mir_use_cache_def_index[insn->dst] = i;
         if (insn->opcode == MIR_ARG && insn->secondary_offset >= 0 &&
             insn->secondary_offset < mir.next_call_id) {
+            int size = type_size(insn->type);
             mir_use_cache_arg_next[i] =
                 mir_use_cache_arg_head[insn->secondary_offset];
             mir_use_cache_arg_head[insn->secondary_offset] = i;
+            mir_use_cache_arg_odd[insn->secondary_offset] ^=
+                (unsigned char)((type_is_struct_object(insn->type)
+                    ? size : (size == 4 ? 4 : 2)) & 1);
         }
     }
     /* mir_call_uses_value returns a boolean (does this call use value v at
@@ -10785,6 +10794,45 @@ int mir_next_phi_in_block(int block_start, int from)
             saw_instruction = 1;
     }
     return -1;
+}
+
+static int mir_call_has_odd_argument_bytes_uncached(const struct MirInsn *call)
+{
+    int argument_bytes = 0;
+    int instruction;
+
+    if (call == NULL || call->opcode != MIR_CALL)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int size;
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        size = type_size(arg->type);
+        argument_bytes += type_is_struct_object(arg->type)
+            ? size : (size == 4 ? 4 : 2);
+    }
+    return (argument_bytes & 1) != 0;
+}
+
+/* Argument layout is stable under the same scopes as the def-use index.
+ * Fold its parity once per call id instead of scanning every instruction
+ * for each backend query. Invalid ids retain the reference behavior. */
+int mir_call_has_odd_argument_bytes(const struct MirInsn *call)
+{
+    int result;
+    if (call == NULL || call->opcode != MIR_CALL)
+        return 0;
+    if (!mir_use_cache_scope_active || call->secondary_offset < 0 ||
+        call->secondary_offset >= mir.next_call_id)
+        return mir_call_has_odd_argument_bytes_uncached(call);
+    mir_ensure_use_cache();
+    result = mir_use_cache_arg_odd[call->secondary_offset];
+    if (mir_use_cache_verify_enabled() &&
+        result != mir_call_has_odd_argument_bytes_uncached(call))
+        fatal("MIR call argument parity cache mismatch");
+    return result;
 }
 
 static int mir_call_uses_value_uncached(const struct MirInsn *call, int value)
@@ -10991,7 +11039,7 @@ int mir_de_home_live_in(int instruction)
     return 0;
 }
 
-static int mir_value_use_count_uncached(int value)
+static int mir_value_use_count_reference(int value)
 {
     int count = 0;
     int instruction;
@@ -11007,6 +11055,62 @@ static int mir_value_use_count_uncached(int value)
     return count;
 }
 
+/* Mutation passes deliberately query outside the cache scope. Rebuild only
+ * the call-membership information needed for this one value, so rewrites
+ * made between queries are immediately visible. The old implementation
+ * scanned the entire function again for every call, even if no argument
+ * used this value: O(instructions * calls) per query. */
+static int mir_value_use_count_uncached(int value)
+{
+    static unsigned *call_marks;
+    static int call_capacity;
+    static unsigned stamp;
+    int count = 0;
+    int instruction;
+
+    if (mir.next_call_id > call_capacity) {
+        unsigned *grown = (unsigned *)realloc(call_marks,
+            (size_t)mir.next_call_id * sizeof(*grown));
+        if (grown == NULL)
+            fatal("out of memory counting MIR call uses");
+        call_marks = grown;
+        memset(call_marks + call_capacity, 0,
+            (size_t)(mir.next_call_id - call_capacity) * sizeof(*call_marks));
+        call_capacity = mir.next_call_id;
+    }
+    if (++stamp == 0) {
+        if (call_capacity > 0)
+            memset(call_marks, 0, (size_t)call_capacity * sizeof(*call_marks));
+        ++stamp;
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value)
+            ++count;
+        if (insn->src2 == value)
+            ++count;
+        if (insn->opcode == MIR_ARG && insn->src1 == value) {
+            if (insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id)
+                return mir_value_use_count_reference(value);
+            call_marks[insn->secondary_offset] = stamp;
+        }
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            insn->secondary_offset >= 0 &&
+            insn->secondary_offset < mir.next_call_id &&
+            call_marks[insn->secondary_offset] == stamp)
+            ++count;
+    }
+    if (mir_use_cache_verify_enabled() &&
+        count != mir_value_use_count_reference(value))
+        fatal("MIR uncached use count mismatch");
+    return count;
+}
+
 int mir_value_use_count(int value)
 {
     int result;
@@ -11017,11 +11121,11 @@ int mir_value_use_count(int value)
     result = value < mir_use_cache_count_capacity ?
         mir_use_cache_count[value] : 0;
     if (mir_use_cache_verify_enabled() &&
-        result != mir_value_use_count_uncached(value)) {
+        result != mir_value_use_count_reference(value)) {
         fprintf(stderr,
                 "; MIR CACHE MISMATCH mir_value_use_count function=%s "
                 "value=%d cached=%d uncached=%d\n",
-                mir.name, value, result, mir_value_use_count_uncached(value));
+                mir.name, value, result, mir_value_use_count_reference(value));
         fatal("MIR use-cache mismatch");
     }
     return result;

@@ -159,6 +159,7 @@ if(DCC_BUILD_MIR_TESTS)
             LINK_FLAGS " -fprofile-instr-generate")
     endif()
     add_test(NAME mir-verify COMMAND mir-verify-test)
+    add_test(NAME mir-use-queries COMMAND mir-verify-test --use-query-proof)
     add_test(NAME mir-bitset-layout COMMAND mir-verify-test --bitset-proof)
     add_test(NAME mir-scalar-dag COMMAND mir-scalar-dag-test)
     add_test(

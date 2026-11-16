@@ -903,6 +903,7 @@ int mir_value_has_use(int value);
 int mir_value_has_use_after(int value, int instruction);
 int mir_value_live_out_of_instruction(int value, int instruction);
 int mir_value_use_count(int value);
+int mir_call_has_odd_argument_bytes(const struct MirInsn *call);
 int mir_verify_and_dump(void);
 int mir_verify_dominance(void);
 int mir_target_constraint_for_insn(

@@ -162,7 +162,6 @@ static int mir_call_uses_inline_simple_indexed_store(
 int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
 static int mir_is_redundant_divmod_operand(const struct MirInsn *insn);
-static int mir_call_has_odd_argument_bytes(const struct MirInsn *call);
 static int mir_call_uses_generic_stack_arguments(int instruction);
 static unsigned mir_call_argument_staging_clobbers_before(
     int argument_instruction, int call_instruction);
@@ -2250,7 +2249,11 @@ static int mir_call_only_constant(int value)
          definition->opcode != MIR_FLOAT_CONST &&
          definition->opcode != MIR_STRING_ADDRESS))
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    /* The use index also lists calls using this value implicitly through
+     * MIR_ARG. Ignore those synthetic uses: the original predicate tests
+     * only explicit src1/src2 operands and counts each MIR_ARG once. */
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->opcode == MIR_ARG && insn->src1 == value) {
             ++argument_count;
@@ -4501,26 +4504,6 @@ static int mir_can_forward_hl_to_call_argument_first_use(int value)
         call_insn->secondary_offset != arg_insn->secondary_offset)
         return 0;
     return mir_forward_note_success();
-}
-
-static int mir_call_has_odd_argument_bytes(const struct MirInsn *call)
-{
-    int argument_bytes = 0;
-    int instruction;
-
-    if (call == NULL || call->opcode != MIR_CALL)
-        return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
-        const struct MirInsn *arg = &mir.insns[instruction];
-        int size;
-        if (arg->opcode != MIR_ARG ||
-            arg->secondary_offset != call->secondary_offset)
-            continue;
-        size = type_size(arg->type);
-        argument_bytes += type_is_struct_object(arg->type)
-            ? size : (size == 4 ? 4 : 2);
-    }
-    return (argument_bytes & 1) != 0;
 }
 
 static int mir_call_argument_cache_target_for_state(

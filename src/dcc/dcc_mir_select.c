@@ -3651,18 +3651,17 @@ static int mir_has_declared_pointer_array(void)
 int mir_has_cfg_backedge(void)
 {
     int i;
-    int j;
 
     for (i = 0; i < mir.count; ++i) {
         int target;
         if (mir.insns[i].opcode != MIR_JUMP &&
             mir.insns[i].opcode != MIR_BRANCH_FALSE)
             continue;
-        target = mir.insns[i].label;
-        for (j = 0; j <= i; ++j)
-            if (mir.insns[j].opcode == MIR_LABEL &&
-                mir.insns[j].label == target)
-                return 1;
+        /* The label index returns the first matching instruction, just as
+         * the old prefix scan did, without an O(i) search per branch. */
+        target = mir_find_label(mir.insns[i].label);
+        if (target >= 0 && target <= i)
+            return 1;
     }
     return 0;
 }
