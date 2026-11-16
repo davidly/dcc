@@ -673,6 +673,31 @@ def write_report(results, path: Path, clock_hz: int, excluded_apps=None):
             writer.writerow(row)
 
 
+def select_build_base(build_dir, no_ram_disk):
+    """Use tmpfs only when both system memory and its free space allow it."""
+    disk_base = ROOT / build_dir
+    if no_ram_disk or not sys.platform.startswith("linux"):
+        return disk_base
+    if not os.access("/dev/shm", os.W_OK):
+        return disk_base
+    try:
+        # Leave small Linux hosts (including Pi 4 models) on disk. MemTotal
+        # excludes reserved memory, so nominal 8 GiB hosts also fall back.
+        memory = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, value = line.split(":", 1)
+            memory[key] = int(value.split()[0]) * 1024
+        gib = 1024 ** 3
+        if memory.get("MemTotal", 0) < 8 * gib:
+            return disk_base
+        if memory.get("MemAvailable", 0) < 4 * gib:
+            return disk_base
+        if shutil.disk_usage("/dev/shm").free < 4 * gib:
+            return disk_base
+    except (OSError, ValueError, IndexError):
+        return disk_base
+    return Path("/dev/shm/dcc-runall")
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-mode", "--mode", choices=("fast", "nopeep", "full"), default="fast")
@@ -699,7 +724,8 @@ def main():
     parser.add_argument("-reportClockHz", "--report-clock-hz", type=int, default=400000000)
     parser.add_argument("-timingBreakdown", "--timing-breakdown", action="store_true")
     parser.add_argument("-narrowDiff", "--narrow-diff", action="store_true")
-    parser.add_argument("-noRamDisk", "--no-ram-disk", action="store_true")
+    parser.add_argument("-noRamDisk", "--no-ram-disk", action="store_true",
+                        help="disable automatic tmpfs use (requires 8 GiB RAM, 4 GiB available RAM and tmpfs space)")
     parser.add_argument("--color", choices=("auto", "always", "never"), default="auto",
                         help="ANSI colour mode (default: auto)")
     args = parser.parse_args()
@@ -745,9 +771,7 @@ def main():
     skipped = sum(bool(overrides.get(x, {}).get("ignore")) for x in apps)
     apps = [x for x in apps if not overrides.get(x, {}).get("ignore")]
     modes = ["peep", "nopeep"] if args.mode == "full" else ["peep" if args.mode == "fast" else "nopeep"]
-    build_base = ROOT / args.build_dir
-    if sys.platform.startswith("linux") and not args.no_ram_disk and os.access("/dev/shm", os.W_OK):
-        build_base = Path("/dev/shm/dcc-runall")
+    build_base = select_build_base(args.build_dir, args.no_ram_disk)
     runroot = build_base / f"run-{os.getpid()}"
     began = time.monotonic()
     out("--- stack-check: building every app with -fstack-check (default; use --no-stack-check to disable) ---" if not args.no_stack_check else "--- stack-check disabled (--no-stack-check) ---", "cyan" if not args.no_stack_check else "gray")

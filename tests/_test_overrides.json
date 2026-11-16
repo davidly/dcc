@@ -1,5 +1,6 @@
 {
   "apps": [
+    { "name": "a1", "run_timeout": 300 },
     { "name": "tbigfunc", "run_timeout": 300 },
     { "name": "tdvbyte", "run_timeout": 300, "run_batches": 7 },
     { "name": "ttt", "args": "10" },
