@@ -241,6 +241,12 @@
     { "name": "tvpapar", "requires-non-msvc-host-compiler": true, "host-skip-reason": "Requires evaluation of a variable-length array parameter bound, unsupported by MSVC." },
     { "name": "ttrace", "ignore": true },
     { "name": "texecdp", "stack_size": 2048 },
+    { "name": "teximage",
+      "extra_scenarios": [
+        { "suffix": "execv", "args": "V" },
+        { "suffix": "large", "args": "E LARGE" },
+        { "suffix": "vlarge", "args": "V LARGE" }
+      ] },
     { "name": "tbfprom", "perf_ignore": true, "requires-non-msvc-host-compiler": true, "host-skip-reason": "MSVC's narrow unsigned bit-field promotions differ from this test's expected int promotions." },
     { "name": "tstrtri", "perf_ignore": true },
     { "name": "ttdarrp", "perf_ignore": true },

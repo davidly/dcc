@@ -108,6 +108,25 @@ class M80cCorrectnessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.linked_bytes("ROTATE")[:4], bytes([0xCB, 0x00, 0xCB, 0x09]))
 
+    def test_byte_register_absolute_loads_are_rejected(self):
+        for reg in "BCDEHL":
+            with self.subTest(register=reg):
+                self.assert_assembly_error(
+                    "BADLD" + reg,
+                    "\tCSEG\n\tLD %s,(1234H)\n\tEND\n" % reg,
+                    "unknown opcode",
+                )
+
+    def test_memory_loads_keep_valid_z80_encodings(self):
+        result = self.assemble(
+            "MEMLD",
+            "\tCSEG\n\tLD DE,(1234H)\n\tLD A,(1234H)\n"
+            "\tLD E,(HL)\n\tLD D,(IX+1)\n\tLD E,(IY+2)\n\tEND\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = bytes.fromhex("ed 5b 34 12 3a 34 12 5e dd 56 01 fd 5e 02")
+        self.assertEqual(self.linked_bytes("MEMLD")[:len(expected)], expected)
+
     def test_cpi_uses_selected_mnemonic_mode(self):
         intel = self.assemble("CPINT", "\tCSEG\n\tCPI 5\n\tEND\n", mode="/I")
         self.assertEqual(intel.returncode, 0, intel.stdout + intel.stderr)
