@@ -2545,7 +2545,12 @@ __udivmod:
         push    bc
         push    af
         ld      a,d
-        or      e
+        or      a
+        jr      nz,dms_rs0
+        ld      a,e
+        cp      10
+        jp      z,D10U0         ; BC/AF already saved; shared /10 epilogue
+        or      a
         jr      nz,dms_rs0
         ; C leaves division by zero undefined, but every integer helper uses
         ; this deterministic fallback: all-ones quotient, original dividend
@@ -2567,8 +2572,9 @@ dms_rs1:
 
         ; cap reached: quotient >= 40, finish with the bounded divider.
         pop     hl              ; restore dividend (DE still = divisor)
-        call    D16U            ; HL = quotient, DE = remainder
-        jr      dms_rs_done
+        ; Divisor is nonzero and not 10; BC/AF are already saved.
+        ; Share D16U's body and epilogue without repeating its dispatch.
+        jp      D16U0           ; HL = quotient, DE = remainder
 
 dms_rs2:
         add     hl,de           ; undo failed subtract; HL = remainder
@@ -3518,6 +3524,41 @@ Q1PNL:
         ret
 
 
+        public  __d10u
+__d10u:
+        ; Unsigned 16-bit /10: HL = quotient, DE = remainder (0..9).
+        ; Preserve BC, AF, IX and IY, like __udivmod and D16U.
+        ; Their /10 dispatches enter D10U0 with BC/AF already saved.
+        push    bc
+        push    af
+D10U0:
+        ; The top three dividend bits are < 10, so seed the remainder
+        ; with them and process only the remaining thirteen bits.  Each
+        ; step leaves A in 0..9; doubling it plus carry fits in a byte.
+        ld      a,h
+        rlca
+        rlca
+        rlca
+        and     7
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        ld      b,13
+D10UL:
+        add     hl,hl           ; next dividend bit -> carry; quotient bit 0 clear
+        rla                     ; A = 2 * remainder + next bit (0..19)
+        cp      10
+        jr      c,D10UN
+        sub     10
+        inc     l               ; set quotient bit without changing remainder
+D10UN:
+        djnz    D10UL
+        ld      e,a
+        ld      d,0
+        pop     af
+        pop     bc
+        ret
+
         public  __q2u
         public  __r2u
         public  __q2s
@@ -3535,7 +3576,12 @@ D16U:
         push    bc
         push    af
         ld      a,d
-        or      e
+        or      a
+        jr      nz,D16U0
+        ld      a,e
+        cp      10
+        jp      z,D10U0         ; also covers __q2s/__r2s and __r2u
+        or      a
         jr      nz,D16U0
         ld      d,h
         ld      e,l
@@ -4593,31 +4639,18 @@ pfsl2:
         pop     bc
         ret
 
-; pf_div10: constant-time unsigned divide of HL by 10.
+; pf_div10: bounded unsigned divide of HL by 10.
 ; In:  HL = dividend
 ; Out: HL = quotient, A = remainder (0..9)
 ; Preserves DE and IX.  BC is saved/restored.
 ;
-; Fixed 16-step shift-subtract divider specialised for divisor 10.  Unlike
-; __udivmod (repeated subtraction, O(quotient)) this is bounded, so printing an
-; N-digit number is O(N*16) instead of O(value) -- e.g. ~44x faster for
-; values in the tens of thousands.
+; Share the bounded 13-step integer /10 path with ordinary division and
+; decimal digit loops.  The wrapper retains printf's DE/A result contract.
 pf_div10:
-        push    bc
-        ld      bc,1000h        ; B = 16 (loop counter), C = 0 (remainder)
-pf_d10_lp:
-        add     hl,hl           ; HL <<= 1, MSB -> carry
-        ld      a,c
-        adc     a,a             ; A = (rem<<1) | bit, range 0..19
-        cp      10
-        jr      c,pf_d10_no
-        sub     10
-        inc     l               ; set quotient bit 0 (clear after add hl,hl)
-pf_d10_no:
-        ld      c,a             ; save remainder
-        djnz    pf_d10_lp
-        ld      a,c             ; A = remainder (0..9)
-        pop     bc
+        push    de
+        call    __d10u
+        ld      a,e
+        pop     de
         ret
 
 ; pf_build_u: convert HL (unsigned 16-bit) to decimal text in pf_decbuf.
