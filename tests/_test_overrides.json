@@ -2,7 +2,7 @@
   "apps": [
     { "name": "tdvbyte", "run_timeout": 300 },
     { "name": "ttt", "args": "10" },
-    { "name": "pint", "args": "e.pas", "stack_size": 768, "fixtures": ["E.PAS"],
+    { "name": "pint", "args": "e.pas", "stack_size": 1024, "fixtures": ["E.PAS"],
       "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.pas", "fixtures": ["TTT.PAS"] },
@@ -26,7 +26,7 @@
         { "suffix": "ttt", "args": "ttt.ada", "fixtures": ["TTT.ADA"] },
         { "suffix": "sieve", "args": "sieve.ada", "fixtures": ["SIEVE.ADA"] }
       ] },
-    { "name": "bint", "args": "e.bas", "fixtures": ["E.BAS"],
+    { "name": "bint", "args": "e.bas", "stack_size": 768, "fixtures": ["E.BAS"],
       "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.bas", "fixtures": ["TTT.BAS"] },
@@ -185,7 +185,7 @@
     { "name": "trw2", "host": true },
     { "name": "trwold", "host": true },
     { "name": "tbig", "host": true },
-    { "name": "ttrig", "host": true },
+    { "name": "ttrig", "host": true, "stack_size": 768 },
     { "name": "ptrig", "ignore": true },
     { "name": "tallocx", "host": true },
     { "name": "tmalloch", "host": true },
