@@ -14,6 +14,7 @@ host compiler is involved; inputs that would be undefined are skipped.
   typed-expr-fuzz.py --seeds 1-200 --mode tree   nested expression trees instead
   typed-expr-fuzz.py --seeds 1-200 --mode store  stored values of updates instead
   typed-expr-fuzz.py --seeds 1-200 --mode prog   small programs with aliases and calls
+  typed-expr-fuzz.py --seeds 1-200 --mode scope  prog plus blocks, switch, goto, byte access
   typed-expr-fuzz.py --seeds 7 --keep         keep seed 7's program and outputs
   typed-expr-fuzz.py --generate 7 prog.c prog.expected
 
@@ -664,6 +665,9 @@ class ProgCase:
 
     def statement(self, rng, depth):
         kind = rng.choice(PROG_STATEMENTS if depth else PROG_STATEMENTS[:7])
+        return self.make_statement(kind, rng, depth)
+
+    def make_statement(self, kind, rng, depth):
         if kind == 'ptr':
             kind = 'assign' if not self.ptrs else rng.choice(['assign', 'compound'])
             lv = ('deref', rng.randrange(len(self.ptrs))) if self.ptrs else self.target(rng)
@@ -917,6 +921,188 @@ class ProgCase:
             out.append('    show(%d, t%d(%s));' % (n * 10 + k, n, ', '.join(args)))
 
 
+class ScopeCase(ProgCase):
+    """A ProgCase whose statements also open blocks declaring a temporary `t`
+    of a random type (shadowing an outer `t` when nested), switch on a value
+    into cases that each declare their own `t` and may fall through, loop
+    with do/while, skip statements with a forward goto, and read or write
+    single bytes of a wider variable through an unsigned char pointer."""
+
+    def __init__(self, n, rng):
+        self.scope = []           # types of the temporaries in scope
+        self.temps = []           # their values while the model runs
+        self.labels = 0
+        super().__init__(n, rng)
+
+    def statement(self, rng, depth):
+        kinds = PROG_STATEMENTS[:7] + ['bytes']
+        if depth:
+            kinds += PROG_STATEMENTS[7:] + ['block'] * 2 + ['switch', 'dowhile', 'skip']
+        elif len(self.scope) < 2:
+            kinds += ['block']
+        kind = rng.choice(kinds)
+        if kind == 'block':
+            return self.block(rng)
+        if kind == 'switch':
+            selector = ('cast', 'int', ('binary', '&', self.expr(rng, rng.randint(0, 2)),
+                                        ('const', 3, 'int')))
+            return ('switch', selector,
+                    [(self.block(rng), rng.random() < 0.7) for _ in range(4)])
+        if kind == 'dowhile':
+            return ('dowhile', rng.randint(1, 3),
+                    [self.statement(rng, 0) for _ in range(rng.randint(1, 2))])
+        if kind == 'skip':
+            self.labels += 1
+            return ('skip', self.labels, self.expr(rng, rng.randint(0, 2)),
+                    [self.statement(rng, 0) for _ in range(rng.randint(1, 2))])
+        if kind == 'bytes':
+            k = rng.randrange(len(self.types))
+            return ('bytes', k, rng.randrange(bits(self.types[k]) // 8),
+                    self.expr(rng, rng.randint(0, 2)))
+        return self.make_statement(kind, rng, depth)
+
+    def block(self, rng):
+        """{ T t = init; body } with the new t visible only in the body."""
+        t = rng.choice(NAMES)
+        hidden, self.scope = self.scope, []
+        init = self.expr(rng, rng.randint(0, 2))    # C scopes t from its declarator
+        self.scope = hidden + [t]
+        body = [self.statement(rng, 0) for _ in range(rng.randint(1, 3))]
+        if rng.random() < 0.7:
+            body.append(('assign', ('var', rng.randrange(len(self.types))),
+                         ('binary', rng.choice(['+', '-', '^', '|']), ('temp', t),
+                          self.expr(rng, rng.randint(0, 1)))))
+        self.scope = hidden
+        return ('block', t, init, body)
+
+    def target(self, rng):
+        if self.scope and rng.random() < 0.3:
+            return ('temp', self.scope[-1])
+        return super().target(rng)
+
+    def expr(self, rng, depth):
+        if (depth == 0 or rng.random() < 0.2) and rng.random() < 0.1:
+            k = rng.randrange(len(self.types))
+            return ('byte', k, rng.randrange(bits(self.types[k]) // 8))
+        return super().expr(rng, depth)
+
+    def type_of(self, node):
+        if node[0] == 'temp':
+            return node[1]
+        if node[0] == 'byte':
+            return 'unsigned char'
+        return super().type_of(node)
+
+    def evaluate(self, node, env):
+        if node[0] == 'temp':
+            return self.temps[-1], node[1]
+        if node[0] == 'byte':
+            k = node[1]
+            return (wrap(env[k], 'unsigned long') >> (8 * node[2])) & 255, 'unsigned char'
+        return super().evaluate(node, env)
+
+    def store(self, env, lv, value):
+        if lv[0] == 'temp':
+            self.temps[-1] = wrap(value, lv[1])
+        else:
+            k = self.var_of(lv)
+            env[k] = wrap(value, self.types[k])
+
+    def load(self, env, lv):
+        if lv[0] == 'temp':
+            return self.temps[-1], lv[1]
+        k = self.var_of(lv)
+        return env[k], self.types[k]
+
+    def execute(self, stmt, env):
+        kind = stmt[0]
+        if kind == 'assign':
+            self.store(env, stmt[1], self.evaluate(stmt[2], env)[0])
+        elif kind == 'compound':
+            b, tb = self.evaluate(stmt[3], env)
+            a, ta = self.load(env, stmt[2])
+            self.store(env, stmt[2], binop(stmt[1], a, ta, b, tb)[0])
+        elif kind == 'incdec':
+            a, ta = self.load(env, stmt[2])
+            pt = promote(ta)
+            v = wrap(a, pt) + (1 if '+' in stmt[1] else -1)
+            if signed(pt) and not lo(pt) <= v <= hi(pt):
+                raise Undefined
+            self.store(env, stmt[2], v)
+        elif kind == 'block':
+            self.temps.append(wrap(self.evaluate(stmt[2], env)[0], stmt[1]))
+            for inner in stmt[3]:
+                self.execute(inner, env)
+            self.temps.pop()
+        elif kind == 'switch':
+            first = self.evaluate(stmt[1], env)[0]
+            for body, ends_with_break in stmt[2][first:]:
+                self.execute(body, env)
+                if ends_with_break:
+                    break
+        elif kind == 'dowhile':
+            for _ in range(stmt[1]):
+                for inner in stmt[2]:
+                    self.execute(inner, env)
+        elif kind == 'skip':
+            if not self.evaluate(stmt[2], env)[0]:
+                for inner in stmt[3]:
+                    self.execute(inner, env)
+        elif kind == 'bytes':
+            k, shift = stmt[1], 8 * stmt[2]
+            v = wrap(env[k], 'unsigned long') & ~(255 << shift)
+            v |= wrap(self.evaluate(stmt[3], env)[0], 'unsigned char') << shift
+            env[k] = wrap(v, self.types[k])
+        else:
+            super().execute(stmt, env)
+
+    def expected(self, values):
+        self.temps = []
+        return super().expected(values)
+
+    def text(self, node):
+        if node[0] == 'temp':
+            return 't'
+        if node[0] == 'byte':
+            return '((unsigned char *)&%s)[%d]' % (self.name(node[1]), node[2])
+        return super().text(node)
+
+    def statement_text(self, stmt, indent, out):
+        pad = ' ' * indent
+        kind = stmt[0]
+        if kind == 'block':
+            out.append('%s{' % pad)
+            out.append('%s    %s t = %s;' % (pad, stmt[1], self.text(stmt[2])))
+            for inner in stmt[3]:
+                self.statement_text(inner, indent + 4, out)
+            out.append('%s}' % pad)
+        elif kind == 'switch':
+            out.append('%sswitch (%s) {' % (pad, self.text(stmt[1])))
+            for label, (body, ends_with_break) in enumerate(stmt[2]):
+                out.append('%s%s:' % (pad, 'default' if label == 3 else 'case %d' % label))
+                self.statement_text(body, indent + 4, out)
+                if ends_with_break:
+                    out.append('%s    break;' % pad)
+            out.append('%s}' % pad)
+        elif kind == 'dowhile':
+            out.append('%sj = %d;' % (pad, stmt[1]))
+            out.append('%sdo {' % pad)
+            for inner in stmt[2]:
+                self.statement_text(inner, indent + 4, out)
+            out.append('%s} while (--j > 0);' % pad)
+        elif kind == 'skip':
+            out.append('%sif (%s)' % (pad, self.text(stmt[2])))
+            out.append('%s    goto skip%d;' % (pad, stmt[1]))
+            for inner in stmt[3]:
+                self.statement_text(inner, indent, out)
+            out.append('%sskip%d: ;' % (pad, stmt[1]))
+        elif kind == 'bytes':
+            out.append('%s((unsigned char *)&%s)[%d] = (unsigned char)(%s);' % (
+                pad, self.name(stmt[1]), stmt[2], self.text(stmt[3])))
+        else:
+            super().statement_text(stmt, indent, out)
+
+
 HEADER = '''/* generated by typed-expr-fuzz.py, seed %d */
 #include <stdio.h>
 
@@ -946,6 +1132,8 @@ def generate(seed, count, mode='binary'):
             kind = StoreCase
         elif mode == 'prog':
             kind = ProgCase
+        elif mode == 'scope':
+            kind = ScopeCase
         else:
             kind = Case if mode == 'binary' or (mode == 'mixed' and rng.random() < 0.5) \
                 else TreeCase
@@ -995,7 +1183,7 @@ def run_seed(seed, args):
         log = result.stdout + result.stderr
         (work / ('build-%s.log' % build.name)).write_text(log)
         if result.returncode != 0:
-            if 'program too large' in log:
+            if 'program too large' in log or 'segment too large' in log:
                 # Not a compiler fault: the program outgrew the 64K address space.
                 failure = 'SKIP %s too large to link' % build.name
                 break
@@ -1003,8 +1191,12 @@ def run_seed(seed, args):
             failure = 'COMPILE-FAIL ' + (lines[0].split('error ', 1)[-1] if lines else
                                          'build failed (%s)' % build.name)
             break
-        run = subprocess.run([args.emulator, 'T.COM'], cwd=build, stdin=subprocess.DEVNULL,
-                             capture_output=True, text=True, timeout=args.timeout)
+        try:
+            run = subprocess.run([args.emulator, 'T.COM'], cwd=build, stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True, timeout=args.timeout)
+        except subprocess.TimeoutExpired:
+            failure = 'HANG running %s (over %d s)' % (build.name, args.timeout)
+            break
         output = run.stdout.replace('\r', '')
         (work / ('out-%s' % build.name)).write_text(output)
         if 'too large to fit in memory' in output or 'TPA too small' in output:
@@ -1033,8 +1225,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--seeds', default='1-100', help='seeds to run, e.g. 1-100,250')
-    parser.add_argument('--count', type=int, default=40, help='cases per program')
-    parser.add_argument('--mode', choices=('binary', 'tree', 'mixed', 'store', 'prog'), default='binary',
+    parser.add_argument('--count', type=int,
+                        help='cases per program (40, or 12 for scope, whose cases are larger)')
+    parser.add_argument('--mode', choices=('binary', 'tree', 'mixed', 'store', 'prog', 'scope'), default='binary',
                         help='one binary operation per case, nested expression trees, both, '
                              'or updates of lvalues (compound assignment, ++, --)')
     parser.add_argument('--jobs', type=int, default=os.cpu_count() or 1)
@@ -1049,6 +1242,8 @@ def main():
     parser.add_argument('--generate', nargs=3, metavar=('SEED', 'C', 'EXPECTED'),
                         help='only write one program and its expected output')
     args = parser.parse_args()
+    if args.count is None:
+        args.count = 12 if args.mode == 'scope' else 40
     if args.generate:
         source, expected = generate(int(args.generate[0]), args.count, args.mode)
         Path(args.generate[1]).write_text(source)

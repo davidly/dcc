@@ -51,8 +51,13 @@ nested-block local. `--mode prog` generates small programs instead: several
 variables of mixed type and storage, some also reached through pointers, a
 run of assignments, compound assignments, `++`/`--`, calls inside
 expressions, a call that changes a global, short loops and `if`/`else`,
-and a hash of every variable as the result. A build that runs past
-`--build-timeout` seconds is reported as a hang, and a program too large
+and a hash of every variable as the result. `--mode scope` adds statements
+that open blocks declaring a temporary `t` of a random type (shadowing an
+outer `t` when nested), `switch` cases that each declare their own `t` and
+may fall through, `do`/`while` loops, forward `goto`s, and byte reads and
+writes of wider variables through an `unsigned char` pointer; its programs
+have 12 functions. A build or run that goes past `--build-timeout` or
+`--timeout` seconds is reported as a hang, and a program too large
 to link or to fit in the emulator's memory (usually the unoptimized
 build) as skipped.
 
@@ -61,6 +66,7 @@ python3 scripts/typed-expr-fuzz.py --seeds 1-500
 python3 scripts/typed-expr-fuzz.py --seeds 1-500 --mode tree
 python3 scripts/typed-expr-fuzz.py --seeds 1-500 --mode store
 python3 scripts/typed-expr-fuzz.py --seeds 1-500 --mode prog
+python3 scripts/typed-expr-fuzz.py --seeds 1-500 --mode scope
 python3 scripts/typed-expr-fuzz.py --seeds 1-200 --env DCC_MIR_SELECT_CANDIDATE=homed-lazy
 python3 scripts/typed-expr-fuzz.py --generate 7 prog.c prog.expected
 ```
