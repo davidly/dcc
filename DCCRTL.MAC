@@ -2545,12 +2545,7 @@ __udivmod:
         push    bc
         push    af
         ld      a,d
-        or      a
-        jr      nz,dms_rs0
-        ld      a,e
-        cp      10
-        jp      z,D10U0         ; BC/AF already saved; shared /10 epilogue
-        or      a
+        or      e
         jr      nz,dms_rs0
         ; C leaves division by zero undefined, but every integer helper uses
         ; this deterministic fallback: all-ones quotient, original dividend
@@ -2558,32 +2553,93 @@ __udivmod:
         ld      d,h
         ld      e,l
         ld      hl,0ffffh
-        jr      dms_rs_done
+        jp      dms_rs_done
 
 dms_rs0:
-        push    hl              ; save dividend for the fallback path
-        ld      b,40            ; B = remaining attempts (quotient cap)
-
-dms_rs1:
+        ; Large /10 inputs benefit immediately from the specialised path.
+        ; For small quotients, unroll the first eight subtractions so that
+        ; avoiding the saved dividend and loop setup pays for this dispatch.
+        ld      a,d
         or      a
-        sbc     hl,de
-        jr      c,dms_rs2       ; underflow -> quotient = 40 - B
-        djnz    dms_rs1         ; cap not reached -> keep subtracting
+        jp      nz,dms_small
+        ld      a,e
+        cp      10
+        jr      nz,dms_small
+        ld      a,h
+        or      a
+        jp      nz,D10U0
+        ; A byte dividend needs at most 25 cheap byte subtractions.
+        ; This also avoids making 0..9 / 10 pay for a fixed bit loop.
+        ld      a,l
+        ld      l,d             ; D = 0, E = 10
+dms_ten8:
+        sub     e
+        jr      c,dms_ten8_done
+        inc     l
+        jr      dms_ten8
+dms_ten8_done:
+        add     a,e
+        ld      e,a             ; D and H are already zero
+        jp      dms_rs_done
 
-        ; cap reached: quotient >= 40, finish with the bounded divider.
-        pop     hl              ; restore dividend (DE still = divisor)
-        ; Divisor is nonzero and not 10; BC/AF are already saved.
-        ; Share D16U's body and epilogue without repeating its dispatch.
-        jp      D16U0           ; HL = quotient, DE = remainder
+dms_small:
+        xor     a               ; quotient so far; carry clear
+        sbc     hl,de
+        jp      c,dms_small_done
+        inc     a
+        sbc     hl,de
+        jp      c,dms_small_done
+        inc     a
+        sbc     hl,de
+        jp      c,dms_small_done
+        inc     a
+        sbc     hl,de
+        jp      c,dms_small_done
+        inc     a
+        sbc     hl,de
+        jp      c,dms_small_done
+        inc     a
+        sbc     hl,de
+        jp      c,dms_small_done
+        inc     a
+        sbc     hl,de
+        jp      c,dms_small_done
+        inc     a
+        sbc     hl,de
+        jp      c,dms_small_done
+        inc     a
+        push    hl              ; original dividend minus eight divisors
+        ld      b,32            ; remaining attempts to reach the cap of 40
+dms_rs1:
+        sbc     hl,de           ; INC A / DJNZ preserve carry after success
+        jr      c,dms_rs2
+        djnz    dms_rs1
+        pop     hl
+        add     hl,de
+        add     hl,de
+        add     hl,de
+        add     hl,de
+        add     hl,de
+        add     hl,de
+        add     hl,de
+        add     hl,de           ; reconstruct original dividend
+        ld      a,d
+        or      a
+        jp      nz,D16U0
+        ld      a,e
+        cp      10
+        jp      z,D10U0
+        jp      D8U0
 
 dms_rs2:
-        add     hl,de           ; undo failed subtract; HL = remainder
-        ex      de,hl           ; DE = remainder
         ld      a,40
-        sub     b               ; A = quotient (cap - remaining)
+        sub     b
+        pop     bc              ; discard saved partial dividend
+dms_small_done:
+        add     hl,de           ; undo failed subtraction
+        ex      de,hl
         ld      h,0
-        ld      l,a             ; HL = quotient
-        pop     bc              ; discard saved dividend
+        ld      l,a             ; quotient
 
 dms_rs_done:
         pop     af
@@ -3570,9 +3626,8 @@ __q2u:
 D16U:
         ; Input:  HL = dividend, DE = divisor
         ; Output: HL = quotient, DE = remainder
-        ; Uses alternate AF as the 16-iteration counter.  The old version
-        ; stored the counter in memory every bit, which is costly in hot
-        ; constant-modulo code such as rand() % C.
+        ; A holds the iteration counter; BC shifts the dividend/quotient.
+        ; BC and AF are saved on entry; alternate registers are untouched.
         push    bc
         push    af
         ld      a,d
@@ -3582,45 +3637,57 @@ D16U:
         cp      10
         jp      z,D10U0         ; also covers __q2s/__r2s and __r2u
         or      a
-        jr      nz,D16U0
+        jr      nz,D8U0
         ld      d,h
         ld      e,l
         ld      hl,0ffffh
         jr      D16UD
+D8U0:
+        ; Nonzero byte divisor: the remainder fits in A.  A ninth bit
+        ; from RLA forces subtraction; SUB wraps it back into 0..E-1.
+        ; This saves more than the dispatch costs for every byte divisor.
+        xor     a
+        ld      b,16
+D8UL:
+        add     hl,hl
+        rla
+        jr      c,D8US
+        cp      e
+        jr      c,D8UN
+D8US:
+        sub     e
+        inc     l
+D8UN:
+        djnz    D8UL
+        ld      e,a
+        ld      d,0
+        jr      D16UD
 D16U0:
-        ld      bc,0            ; BC = partial remainder
-        ex      af,af'
-        ld      a,16            ; alternate A = loop counter
-        ex      af,af'
+        ; Delay each quotient bit until the next shift.  After a failed
+        ; subtraction ADD restores the remainder and sets carry; after a
+        ; successful subtraction carry is clear.  CCF therefore produces
+        ; the next quotient bit without a second subtraction.
+        ld      b,h
+        ld      c,l             ; BC = shifting dividend / quotient
+        ld      hl,0            ; HL = partial remainder
+        ld      a,16
+        or      a
 D16U1:
-        add     hl,hl           ; shift next dividend bit into carry;
-        rl      c               ; BC = (BC << 1) | carry
+        rl      c
         rl      b
-
-        ; if BC >= DE, BC -= DE and set current quotient bit.
-        ld      a,c
-        sub     e
-        ld      a,b
-        sbc     a,d
-        jr      c,D16U2
-
-        ld      a,c
-        sub     e
-        ld      c,a
-        ld      a,b
-        sbc     a,d
-        ld      b,a
-        inc     l               ; low bit is known clear after add hl,hl
+        adc     hl,hl           ; next dividend bit; no 17th bit is possible
+        sbc     hl,de           ; partial dividend prefix fits in 16 bits
+        jr      nc,D16U2
+        add     hl,de
 D16U2:
-        ex      af,af'          ; decrement alternate counter
-        dec     a
-        jr      z,D16U3
-        ex      af,af'
-        jr      D16U1
-D16U3:
-        ex      af,af'          ; restore primary AF before returning
-        ld      d,b             ; DE = remainder
-        ld      e,c
+        ccf
+        dec     a               ; preserves the pending quotient bit
+        jr      nz,D16U1
+        rl      c
+        rl      b               ; insert the final quotient bit
+        ex      de,hl
+        ld      h,b
+        ld      l,c
 D16UD:
         pop     af
         pop     bc
@@ -4644,14 +4711,27 @@ pfsl2:
 ; Out: HL = quotient, A = remainder (0..9)
 ; Preserves DE and IX.  BC is saved/restored.
 ;
-; Share the bounded 13-step integer /10 path with ordinary division and
-; decimal digit loops.  The wrapper retains printf's DE/A result contract.
+; Keep the remainder in A throughout the loop, avoiding two register
+; transfers per bit.  Keep this block the original size: changing the
+; following data addresses can add page carries in unrelated array loops.
 pf_div10:
-        push    de
-        call    __d10u
-        ld      a,e
-        pop     de
+        push    bc
+        xor     a
+        add     hl,hl
+        rla                     ; seed with the top dividend bit (< 10)
+        ld      b,15
+pf_d10_lp:
+        add     hl,hl
+        rla
+        cp      10
+        jr      c,pf_d10_no
+        sub     10
+        inc     l
+pf_d10_no:
+        djnz    pf_d10_lp
+        pop     bc
         ret
+        ds      1               ; retain the original 20-byte block footprint
 
 ; pf_build_u: convert HL (unsigned 16-bit) to decimal text in pf_decbuf.
 ; Digits are built once into the buffer (high end downward) so the caller can
