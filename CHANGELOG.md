@@ -1,5 +1,20 @@
 # Changelog
 
+## Full-range square root (2026-11-16)
+
+`sqrtf` now reduces positive finite arguments to `[1, 4)` before Newton
+iteration and restores the scale afterward. This fixes both large arguments
+(`sqrtf(1e4f) = 100`, `sqrtf(1e8f) = 10000`) and tiny arguments, including
+subnormals, and restores `asinf`/`acosf` accuracy near ±1. Raw-bit
+classification and a byte iteration counter offset the range-reduction cost.
+The unchanged `tsqrtsp` test uses 44% fewer cycles with the same COM size.
+`tsqrtrg` adds 1,323 checks across every normal exponent, subnormal powers
+and significands, special values, and inverse-trig endpoints, with a new
+performance baseline. All existing performance baselines remain unchanged.
+The full and extended suites, diagnostics, and peephole fixtures passed in
+both optimization modes with and without stack checking; the standard run
+reported zero cycle-count or COM-size regressions.
+
 ## 16-bit div/mod fusion across switch cases (2026-11-16)
 
 Div/mod fusion now requires both operations to be in the same basic block.

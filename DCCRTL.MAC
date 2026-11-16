@@ -17677,94 +17677,95 @@ _sqrtf:
         add     hl,sp
         ld      sp,hl
 
-        ; C99 7.12.7.5 domain/special-value handling, checked before the
-        ; Newton's-method loop below (which assumes x is a positive
-        ; finite value and has no self-correction for anything else -
-        ; left alone, sqrtf(-1) silently returned 0 instead of NaN, and
-        ; sqrtf(+Inf) fed Inf/Inf into the iteration's own division and
-        ; landed on NaN instead of +Inf, taking 8 wasted iterations to
-        ; get the wrong answer). Uses the already-tested __fnan/__finf/
-        ; __fzro predicates directly (DE:HL in, no ix frame) rather than
-        ; the heavier push/call/pop __fge comparison this replaced.
+        ; Classify the raw bits once, preserving DE:HL for identity cases
+        ; and C for range reduction. No arithmetic on NaN/Inf/zero.
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        call    __fnan
-        ld      a,h
+        ld      a,e
+        add     a,a
+        ld      a,d
+        rla
+        ld      c,a             ; complete biased exponent
+        cp      255
+        jr      z,FMSSPECIAL
+        or      a
+        jr      nz,FMSFINITE
+        ld      a,e             ; exponent zero: zero or subnormal
+        or      h
         or      l
-        jp      nz,FMSNAN       ; x is NaN: propagate
-
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __finf
-        ld      a,h
-        or      l
-        jr      z,FMSNOTINF
-        ld      d,(ix+7)
+        jp      z,FMSRET        ; preserve either signed zero
+FMSFINITE:
         bit     7,d
-        jp      nz,FMSDOM       ; x is -Inf: domain error -> NaN
-        jp      FMSID           ; x is +Inf: sqrt(+Inf) = +Inf, unchanged
-FMSNOTINF:
-
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        call    __fzro
-        ld      a,h
-        or      l
-        jr      nz,FMSID        ; x is +0.0 or -0.0: unchanged (keeps sign)
-
-        ld      d,(ix+7)
-        bit     7,d
-        jp      z,FMSPOS        ; x > 0 and finite: the ordinary case
+        jr      z,FMSPOS
 FMSDOM:
-        call    __medom
+        call    __medom         ; negative nonzero, including -Inf
 FMSNAN:
         ld      d,7fh
         ld      e,0c0h
         ld      hl,0
         jp      FMSRET
-FMSID:
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        jp      FMSRET
+FMSSPECIAL:
+        ld      a,e
+        and     7fh
+        or      h
+        or      l
+        jr      nz,FMSNAN       ; canonical quiet NaN, without errno
+        bit     7,d
+        jr      nz,FMSDOM
+        jp      FMSRET          ; sqrt(+Inf) = +Inf
 
 FMSPOS:
-        ; g = x
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
+        ; x = m * 2^(2*q), with 1 <= m < 4. Starting from g=x and
+        ; taking only eight Newton steps fails for large AND small x.
+        ; Reduce first so division and the final square stay in range;
+        ; sqrt(x) = sqrt(m) * 2^q, whose result is always normal.
+        ; Locals: g at -4..-1, q at -5, iteration budget at -6,
+        ; correction product at -10..-7. The argument slot holds m.
+        ld      a,c             ; biased exponent, raw bits still live
+        ld      b,0
+        or      a
+        jr      nz,FMSNORM
+        ; A nonzero subnormal has effective biased exponent 1. Normalize
+        ; its integer significand without using the float helpers, which
+        ; still treat subnormal multiply/divide operands as zero.
+        inc     c
+FMSSUB:
+        add     hl,hl
+        rl      e
+        dec     bc
+        bit     7,e
+        jr      z,FMSSUB
+FMSNORM:
+        ; Signed unbiased exponent (-149..127), then floor(exponent/2).
+        ld      a,c
+        sub     127
+        ld      c,a
+        ld      a,b
+        sbc     a,0
+        ld      b,a
+        sra     b
+        rr      c               ; carry = odd exponent, including negatives
+        ld      (ix-5),c         ; q is in -75..63
+        jr      c,FMSODD
+        ld      d,3fh           ; m exponent 127: [1,2)
+        set     7,e
+        jr      FMSINIT
+FMSODD:
+        ld      d,40h           ; m exponent 128: [2,4)
+        res     7,e
+FMSINIT:
+        ld      (ix+4),l
+        ld      (ix+5),h
+        ld      (ix+6),e
+        ld      (ix+7),d
         ld      (ix-4),l
         ld      (ix-3),h
         ld      (ix-2),e
         ld      (ix-1),d
-        ld      hl,0              ; i = 0
-        ld      (ix-6),l
-        ld      (ix-5),h
+        ld      (ix-6),8
 FMSLP:
-        ld      l,(ix-6)
-        ld      h,(ix-5)
-        push    hl
-        ld      hl,8
-        ex      de,hl
-        pop     hl
-        ld      a,h
-        xor     80h
-        ld      h,a
-        ld      a,d
-        xor     80h
-        ld      d,a
-        or      a
-        sbc     hl,de
-        jp      nc,FMSDONE
-
         ; g = (g + x / g) * 0.5f
         ld      l,(ix-4)
         ld      h,(ix-3)
@@ -17813,10 +17814,8 @@ FMSUPD:
         ld      (ix-2),e
         ld      (ix-1),d
 
-        inc     (ix-6)
+        dec     (ix-6)
         jp      nz,FMSLP
-        inc     (ix-5)
-        jp      FMSLP
 
 FMSDONE:
         ; One final correction: the simple division/multiply helpers truncate,
@@ -17874,6 +17873,8 @@ FMSLD:
         ld      h,(ix-3)
         ld      e,(ix-2)
         ld      d,(ix-1)
+        ld      b,(ix-5)
+        call    __fscale_pow2    ; exact: every nonzero finite sqrt is normal
 FMSRET:
         ld      sp,ix
         pop     ix

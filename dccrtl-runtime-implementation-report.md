@@ -127,8 +127,9 @@ support do not become a universal runtime cost.
 
 ## Deliberate limitations
 
-- Subnormal multiply, divide, and square root remain deferred because correct
-  prototypes added excessive linked code.
+- Subnormal multiply and divide remain deferred because correct prototypes
+  added excessive linked code. Square root now normalizes subnormal inputs
+  and reduces all finite positive arguments to `[1, 4)` before iteration.
 - Defensive NULL `%s` formatting remains deferred because it taxes every valid
   `%s` call.
 - Large finite trig arguments still use the documented compact range policy
