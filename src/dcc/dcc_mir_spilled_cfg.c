@@ -30469,6 +30469,35 @@ static int mir_value_is_selfstore_wide_increment_result(int value)
                &store_index, &offset);
 }
 
+/* Does memory still hold `left`'s value at `store`, so an in-place update
+ * of memory computes `left OP k`?  Not if anything between writes the
+ * location, stores through a pointer or calls, nor, for a loaded value, if
+ * another path joins in between: `t = x; x--; x = t + 127;` once added 127
+ * to the decremented x.  A PHI or PARAM is in memory when it starts; the
+ * matchers' own rules keep that so up to its block. */
+static int mir_selfstore_source_still_in_memory(
+    const struct MirInsn *left, int store)
+{
+    int first = (int)(left - mir.insns);
+    int instruction;
+
+    if (first < 0 || first >= store)
+        return 0;
+    for (instruction = first + 1; instruction < store; ++instruction) {
+        const struct MirInsn *between = &mir.insns[instruction];
+
+        if (between->opcode == MIR_STORE_INDIRECT ||
+            between->opcode == MIR_COPY_AGGREGATE ||
+            between->opcode == MIR_CALL ||
+            between->opcode == MIR_CALL_AGGREGATE ||
+            (between->opcode == MIR_STORE &&
+             mir_same_scalar_memory_location(left, between)) ||
+            (left->opcode == MIR_LOAD && between->opcode == MIR_LABEL))
+            return 0;
+    }
+    return 1;
+}
+
 /* The original 16-bit self-store matcher described by Item 31 above. */
 static int mir_binary_is_selfstore_incdec(int index, int *store_index)
 {
@@ -30526,7 +30555,8 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
         found_store = scan;
         ++uses;
     }
-    if (uses != 1)
+    if (uses != 1 ||
+        !mir_selfstore_source_still_in_memory(left_definition, found_store))
         return 0;
     *store_index = found_store;
     return 1;
@@ -30628,7 +30658,8 @@ static int mir_binary_is_selfstore_small_adjust(
         found_store = scan;
         ++uses;
     }
-    if (uses != 1)
+    if (uses != 1 ||
+        !mir_selfstore_source_still_in_memory(left_definition, found_store))
         return 0;
     if (store_index != NULL)
         *store_index = found_store;
