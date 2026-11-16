@@ -1746,6 +1746,9 @@ int mir_emit_cast(MirStream *out, int source_type, int target_type)
                 nonzero_label, end_label, nonzero_label, end_label);
         return 1;
     }
+    /* An untyped value is an int (a nested-block local's update). */
+    if (source_type == 0 && target_type != 0 && type_size(target_type) == 1)
+        source_type = TYPE_INT;
     if (source_type == 0 || target_type == 0 || source_type == target_type)
         return 1;
     if (type_is_float(target_type) && !type_is_float(source_type)) {

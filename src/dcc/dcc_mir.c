@@ -2568,6 +2568,13 @@ static int mir_compound_rhs_deferred(const struct AstNode *rhs)
         return 0;
     if (rhs->deferred_types)
         return 1;
+    /* So does a value read through one (`g %= *p`) or derived from one by
+     * a unary operator (`g %= ~k`). */
+    while (rhs->kind == AST_INDEX ||
+           (rhs->kind == AST_UNARY &&
+            (rhs->op == '*' || rhs->op == '-' || rhs->op == '~' ||
+             rhs->op == '+')))
+        rhs = rhs->a;
     /* A closed block's local no longer resolves; its load is typed later. */
     return rhs->kind == AST_IDENT && mir_ident_symbol(rhs) == NULL;
 }
@@ -9823,8 +9830,12 @@ scoped_type_repair_done:
             insn->dst = -1;
             continue;
         }
-        if (insn->opcode == MIR_STORE_INDIRECT && insn->type != pointee_type)
+        if (insn->opcode == MIR_STORE_INDIRECT && insn->type != pointee_type) {
             mir_retarget_store_conversion(insn, pointee_type);
+            /* So does the conversion owed to a source still untyped. */
+            if (insn->deferred_conversion_type != 0)
+                insn->deferred_conversion_type = pointee_type;
+        }
         insn->type = pointee_type;
         insn->memory_size = type_size(pointee_type);
     }
@@ -11165,6 +11176,39 @@ static int mir_is_profiled_boolean_reachable_join(void)
     return calls == 10;
 }
 
+/* Whether a load of a typed object, about to be replaced by an untyped
+ * stored value, must keep the load's type: a byte load narrows what the
+ * store truncated from an arithmetic result, and a word one feeds a
+ * widening, explicit or an argument's. */
+static int mir_untyped_value_widened_as(int value, const struct MirInsn *load)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int i;
+
+    if (definition == NULL || definition->type != 0 || load->type == 0 ||
+        type_ptr_depth(load->type) != 0 || type_is_float(load->type) ||
+        type_is_struct_object(load->type) ||
+        (type_size(load->type) != 1 && type_size(load->type) != 2))
+        return 0;
+    if (type_size(load->type) == 1)
+        return definition->opcode == MIR_BINARY &&
+               definition->immediate != '<' &&
+               definition->immediate != '>' &&
+               definition->immediate != TOK_LE &&
+               definition->immediate != TOK_GE &&
+               definition->immediate != TOK_EQ &&
+               definition->immediate != TOK_NE;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].src1 == load->dst &&
+            (mir.insns[i].opcode == MIR_ARG ||
+             (mir.insns[i].opcode == MIR_UNARY &&
+              mir.insns[i].immediate == 0 &&
+              (type_size(mir.insns[i].type) > 2 ||
+               type_is_float(mir.insns[i].type)))))
+            return 1;
+    return 0;
+}
+
 static int mir_object_value_is_defined_at_or_after(int value, int instruction)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -11406,6 +11450,18 @@ static int mir_promote_objects(void)
                     mir_value_is_untyped_boolean(reaching, 0))
                     source->type = insn->type;
 
+                if (mir_untyped_value_widened_as(reaching, insn)) {
+                    /* The stored value was built untyped (a nested-block
+                     * local's update); a widening needs the load's type. */
+                    insn->opcode = MIR_UNARY;
+                    insn->src1 = reaching;
+                    insn->immediate = 0;
+                    insn->object = -1;
+                    insn->memory_size = 0;
+                    mir_invalidate_use_cache();
+                    ++promoted;
+                    continue;
+                }
                 if (source != NULL && source->type != insn->type &&
                     (size == 2 || size == 4) &&
                     type_size(source->type) == size &&
