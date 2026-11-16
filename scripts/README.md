@@ -52,7 +52,9 @@ variables of mixed type and storage, some also reached through pointers, a
 run of assignments, compound assignments, `++`/`--`, calls inside
 expressions, a call that changes a global, short loops and `if`/`else`,
 and a hash of every variable as the result. A build that runs past
-`--build-timeout` seconds is reported as a hang.
+`--build-timeout` seconds is reported as a hang, and a program too large
+to link or to fit in the emulator's memory (usually the unoptimized
+build) as skipped.
 
 ```sh
 python3 scripts/typed-expr-fuzz.py --seeds 1-500

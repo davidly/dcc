@@ -995,6 +995,10 @@ def run_seed(seed, args):
         log = result.stdout + result.stderr
         (work / ('build-%s.log' % build.name)).write_text(log)
         if result.returncode != 0:
+            if 'program too large' in log:
+                # Not a compiler fault: the program outgrew the 64K address space.
+                failure = 'SKIP %s too large to link' % build.name
+                break
             lines = [line for line in log.splitlines() if 'error DCC' in line]
             failure = 'COMPILE-FAIL ' + (lines[0].split('error ', 1)[-1] if lines else
                                          'build failed (%s)' % build.name)
@@ -1003,12 +1007,16 @@ def run_seed(seed, args):
                              capture_output=True, text=True, timeout=args.timeout)
         output = run.stdout.replace('\r', '')
         (work / ('out-%s' % build.name)).write_text(output)
+        if 'too large to fit in memory' in output or 'TPA too small' in output:
+            # Not a compiler fault: the unoptimized program outgrew the TPA.
+            failure = 'SKIP %s too large to run' % build.name
+            break
         if output != expected:
             wrong = sum(1 for want, got in zip(expected.splitlines(), output.splitlines())
                         if want != got)
             failure = 'MISMATCH %s, %d values' % (build.name, wrong or 1)
             break
-    if failure is None and not args.keep:
+    if (failure is None or failure.startswith('SKIP')) and not args.keep:
         shutil.rmtree(work, ignore_errors=True)
     return failure or 'ok'
 
@@ -1048,12 +1056,18 @@ def main():
         return 0
     seeds = parse_seeds(args.seeds)
     failures = 0
+    skipped = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         for seed, outcome in zip(seeds, pool.map(lambda s: run_seed(s, args), seeds)):
-            if outcome != 'ok':
+            if outcome.startswith('SKIP'):
+                skipped += 1
+                print('seed %d: %s' % (seed, outcome))
+            elif outcome != 'ok':
                 failures += 1
                 print('seed %d: %s (%s)' % (seed, outcome, args.work / str(seed)))
-    print('%d of %d programs passed' % (len(seeds) - failures, len(seeds)))
+    print('%d of %d programs passed%s' % (
+        len(seeds) - failures - skipped, len(seeds) - skipped,
+        ' (%d too large, skipped)' % skipped if skipped else ''))
     return 1 if failures else 0
 
 
