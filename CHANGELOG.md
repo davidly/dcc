@@ -1,5 +1,17 @@
 # Changelog
 
+## Heap allocation performance (2026-11-16)
+
+`malloc` now starts at a conservative first-free hint, skipping the known
+allocated prefix while retaining first-fit order. Free, coalescing, splitting,
+heap trimming, and in-place realloc update the hint. Programs without heap
+allocation pay no startup cost. An isolated 1,000 × `malloc(16)` benchmark
+dropped from 86,856,931 to 1,108,931 Z80 cycles (78× faster); 500 allocations
+take 575,931 cycles. Fragmented heaps still require a first-fit search, and
+small allocation/free workloads can pay extra bookkeeping and code-size costs.
+`tmallseq` covers sequential allocation, early-hole reuse, retained small
+holes, coalescing, realloc absorption, shrink tails, and heap-top growth.
+
 ## Clang-oracle differential campaign (2026-11-13 → 2026-11-16)
 
 A differential fuzzing campaign against Apple clang, started after the
