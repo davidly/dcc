@@ -92,6 +92,19 @@ class DccRtlStripBlockTests(unittest.TestCase):
         self.assertIn("__ugget:", rtl)
         self.assertIn("_read:", rtl)
 
+    def test_fgets_keeps_shared_cache_loader_without_read_wrapper(self):
+        rtl = self.strip_root("_fgets")
+        for label in ("__rdload:", "__rdsto:", "__rdck:", "__dma:",
+                      "__ugget:", "__gchr:"):
+            self.assertIn(label, rtl)
+        self.assertNotIn("_read:", rtl)
+
+        rtl = self.strip_root("_read")
+        self.assertIn("__rdload:", rtl)
+        self.assertIn("__rdsto:", rtl)
+        self.assertNotIn("_fgets:", rtl)
+        self.assertNotIn("__fgets_start:", rtl)
+
     def test_multibyte_state_stays_in_owning_blocks(self):
         rtl = self.strip_root("_mblen")
         self.assertNotIn("__mbs_n:", rtl)

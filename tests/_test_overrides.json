@@ -69,6 +69,7 @@
     { "name": "tdivzero", "host": true },
     { "name": "terrwid", "host": true },
     { "name": "tfedge", "host": true },
+    { "name": "tfgscan", "host": true, "host-skip-reason": "Checks CP/M text Ctrl-Z EOF, stream positions after pushback, and record EOF semantics." },
     { "name": "tfiob5", "host": true },
     { "name": "tfmode", "host": true },
     { "name": "tfseekr", "host": true },

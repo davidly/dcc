@@ -7148,7 +7148,7 @@ _errno:
         public  __setrr
         public  __chunk
         public  __advio
-        public  __rdhit
+        public  __rdload
         public  __rdsto
         public  __zerdm
         public  __einval
@@ -7603,43 +7603,16 @@ rd_direct_ok:
         jr      rdloop
 
 rd_dma:
-        call    __rdhit         ; is this record already resident in __dma?
-        jr      z,rd_copy       ; cache hit: skip BDOS set-DMA + random read
-        ; Miss: the random read below overwrites __dma even when it fails with
-        ; EOF/error, so invalidate the cache now and only re-validate on a
-        ; successful read.  Otherwise a later read of the previously cached
-        ; record would falsely hit on the clobbered buffer.
-        xor     a
-        ld      (__rdcv),a
-        ld      de,__dma
-        ld      c,26            ; set DMA
-        call    5
-        ld      a,(__slot)
-        call    __fcbp
-        ex      de,hl
-        ld      c,33            ; random read
-        call    5
-        or      a
-        jr      z,rd_dma_ok
+        call    __rdload        ; cache hit or successful BDOS random read
+        jr      z,rd_copy
         cp      1               ; unwritten data: EOF/hole
         jr      z,rdeof
         cp      4               ; unwritten extent: EOF/hole
         jr      z,rdeof
         jr      rdioerr
-rd_dma_ok:
-        call    __rdsto         ; __dma now caches this (slot, record)
 
 rd_copy:
-        ; copy __chunk bytes from __dma+remainder to user buffer
-        ld      a,(__remdr)
-        ld      h,0
-        ld      l,a
-        ld      de,__dma
-        add     hl,de           ; HL = source
-        ld      de,(__rwbuf)    ; DE = dest
-        ld      a,(__chnk)
-        ld      c,a
-        ld      b,0
+        ; __rdload returns source, destination and chunk count ready to copy.
         ldir
         call    __advio
         jp      rdloop
@@ -8086,6 +8059,8 @@ __chkfd:
         jr      nz,cfbad
 __chkfdl:
         ld      a,(ix+4)
+; Entry with an 8-bit fd already in A (the caller checks its high byte).
+__chkfda:
         sub     FIRSTFD
         cp      MAXFD-FIRSTFD
         jr      nc,cfbad
@@ -8101,10 +8076,12 @@ cfbad:
         ret
 
 ; ---- Read sector cache helpers ----
-; __rdhit: after __setrr has loaded the FCB random record for __slot, test
-; whether the shared __dma buffer already holds that exact (slot, record).
-; Returns Z=1 on hit, Z=0 on miss.  Corrupts AF, BC, DE, HL.
-__rdhit:
+; __rdload: after __setrr/__chunk, ensure __dma holds this (slot, record).
+; __rwbuf supplies the destination, as for __advio.
+; Returns Z=1 on success, HL=source, DE=destination, BC=chunk count.
+; Returns NZ/A=BDOS status on failure.
+; Corrupts AF, BC, DE, HL. Shared by _read and _fgets.
+__rdload:
         ld      a,(__rdcv)
         or      a
         jr      z,rdh_miss              ; cache empty
@@ -8115,36 +8092,61 @@ __rdhit:
         call    __fcbp
         ld      de,33
         add     hl,de                   ; HL -> FCB random-record bytes
-        ld      de,__rdck+1
-        ld      b,3
-rdh_cmp:
-        ld      a,(de)
-        cp      (hl)
+        ; __setrr rejects any nonzero r2, so the two record bytes suffice.
+        ld      de,(__rdck+1)
+        ld      a,(hl)
+        cp      e
         jr      nz,rdh_miss
-        inc     de
         inc     hl
-        djnz    rdh_cmp
+        ld      a,(hl)
+        cp      d
+        jr      nz,rdh_miss
         xor     a                       ; Z=1: hit
+rdh_ready:
+        ld      a,(__remdr)
+        ld      h,0
+        ld      l,a
+        ld      de,__dma
+        add     hl,de                   ; preserves Z
+        ld      de,(__rwbuf)
+        ld      a,(__chnk)
+        ld      c,a
+        ld      b,0
         ret
 rdh_miss:
-        ld      a,1
-        or      a                       ; Z=0: miss
-        ret
+        ; Even an unsuccessful read may overwrite DMA. Invalidate first,
+        ; and publish the new key only after a successful random read.
+        xor     a
+        ld      (__rdcv),a
+        ld      de,__dma
+        ld      c,26
+        call    5
+        ld      a,(__slot)
+        call    __fcbp
+        ex      de,hl
+        ld      c,33
+        call    5
+        or      a
+        ret     nz
+        ; Fall through to the key publisher; EQU retains that stripped block.
+rdload_store equ __rdsto
 
-; __rdsto: record that __dma now holds (slot, current FCB random record).
-; Corrupts AF, BC, DE, HL.
+; __rdsto: publish (slot, current record), then return through rdh_ready
+; with the same registers/flags as a cache hit. Corrupts AF, BC, DE, HL.
 __rdsto:
         ld      a,(__slot)
         ld      (__rdck),a
         call    __fcbp
         ld      de,33
         add     hl,de                   ; HL -> FCB random-record bytes
-        ld      de,__rdck+1
-        ld      bc,3
-        ldir
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ld      (__rdck+1),de
         ld      a,1
         ld      (__rdcv),a
-        ret
+        xor     a                       ; __rdload success
+        jr      rdh_ready
 
 ; A = slot 0..NFILES-1, returns HL = encoded __fduse slot
 __usep:
@@ -8442,61 +8444,35 @@ __setrr:
         inc     hl
         ld      b,(hl)          ; offset byte 2
         inc     hl
-        ld      c,(hl)          ; offset byte 3
+        ld      a,(hl)          ; offset byte 3
+        or      a
+        jr      nz,setrr_big
 
         ld      a,e
         and     7fh
         ld      (__remdr),a
 
-        ld      a,c             ; offset byte 3 always contributes to r2
-        or      a
-        jr      nz,setrr_big
         bit     7,b             ; offset byte 2 bit 7 is r2 bit 0
         jr      nz,setrr_big
 
-        ; r0 = (byte0 >> 7) | (byte1 << 1)
+        ; r1:r0 = (byte2:byte1 << 1) | (byte0 >> 7).
+        ld      h,b
+        ld      l,d
         ld      a,e
-        rlca
-        and     1
-        ld      l,a
-        ld      a,d
-        add     a,a
-        or      l
-        ld      l,a             ; L = r0
-
-        ; r1 = (byte1 >> 7) | (byte2 << 1)
-        ld      a,d
-        rlca
-        and     1
-        ld      h,a
-        ld      a,b
-        add     a,a
-        or      h
-        ld      h,a             ; H = r1
-
-        ; r2 = (byte2 >> 7) | (byte3 << 1)
-        ld      a,b
-        rlca
-        and     1
-        ld      e,a
-        ld      a,c
-        add     a,a
-        or      e
-        ld      e,a             ; E = r2
+        rlca                            ; carry = byte0 bit 7
+        adc     hl,hl
 
         push    hl              ; save r0/r1
-        push    de              ; save r2 in E
         ld      a,(__slot)
         call    __fcbp
         ld      de,33
         add     hl,de
-        pop     de
         pop     bc              ; C = r0, B = r1
         ld      (hl),c
         inc     hl
         ld      (hl),b
         inc     hl
-        ld      (hl),e
+        ld      (hl),0          ; range checks above guarantee r2 == 0
         or      a               ; success: explicitly clear carry
         ret
 setrr_big:
@@ -8507,29 +8483,16 @@ setrr_big:
 ; The important rule is that when remaining is less than 128, __chnk must
 ; be remaining, even at a record boundary.
 __chunk:
-        ; e = min(remaining, 128)
+        ; E = room in this record (1..128), already a sufficient cap.
+        ld      a,(__remdr)
+        xor     7fh
+        inc     a                       ; 128 - remainder
+        ld      e,a
         ld      hl,(__rwrem)
         ld      a,h
         or      a
-        jr      nz,ch_more128
+        jr      nz,ch_store
         ld      a,l
-        cp      129
-        jr      nc,ch_more128
-        ld      e,a             ; remaining is 1..128
-        jr      ch_have_count
-
-ch_more128:
-        ld      e,128
-
-ch_have_count:
-        ; room = 128 - remainder.  If remainder is 0, room is 128,
-        ; so the 128-byte cap already fits.
-        ld      a,(__remdr)
-        or      a
-        jr      z,ch_store
-        ld      c,a
-        ld      a,128
-        sub     c               ; room is 1..127
         cp      e
         jr      nc,ch_store
         ld      e,a
@@ -8955,7 +8918,7 @@ __rnfcb:        ds      32
 ; the shared __dma buffer, so consecutive small reads of the same record
 ; (e.g. fgets reading one byte at a time) skip the BDOS random read entirely.
 __rdcv:         db      0       ; 1 = __dma holds the record identified by __rdck
-__rdck:         ds      4       ; key: slot, then FCB random-record bytes r0,r1,r2
+__rdck:         ds      3       ; key: slot, then CP/M 2.2 record bytes r0,r1
 
 __fdeof:        ds      NFILES  ; EOF flag per slot (index = fd - FIRSTFD)
 __fderr:        ds      NFILES  ; error flag per slot
@@ -11358,171 +11321,194 @@ tolo_done:
         ret
 
 ; ---- _fgets(char *buf, int size, FILE *fp) ----
-; fp < 3 (stdin/stdout/stderr)  read from console via BDOS fn 1.
-; fp >= 3 (real file)  read char-by-char using _read.
+; stdin reads through __gchr; real files scan the shared read-sector cache.
+; Commit only bytes consumed through LF/text Ctrl-Z/the buffer limit, so
+; subsequent fgetc/fread/ftell see exactly the same position as byte reads.
 ; Returns HL = buf on success, HL = 0 at EOF or if size <= 0.
-; Args: buf @ IX+4/5,  size @ IX+6/7,  fp @ IX+8/9.
+; Arguments are unpacked once; no IX frame is needed.
         public  _fgets
 _fgets:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        pop     af                      ; return address
+        pop     de                      ; buffer
+        pop     bc                      ; size
+        pop     hl                      ; fd
+        push    hl
+        push    bc
+        push    de
+        push    af
+        ld      (__fgets_start),de
 
         ; if size <= 0 return NULL immediately
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        bit     7,h
+        bit     7,b
         jp      nz,fgets_null
-        ld      a,h
-        or      l
+        ld      a,b
+        or      c
         jp      z,fgets_null
 
-        ; Check an already-reported EOF before attempting another read.
-        ld      a,(ix+9)
+        dec     bc
+        ld      (__rwrem),bc
+        ld      (__rwbuf),de
+
+        ld      a,h
         or      a
-        jr      nz,fgf_setup            ; let _read reject a wide descriptor
-        ld      a,(ix+8)
+        jp      nz,fgf_bad
+        ld      a,l
         or      a
-        jr      nz,fgf_real_check
+        jr      nz,fgf_file
         ld      a,(__ceof)
         or      a
         jp      nz,fgets_null
-        jr      fgf_setup
-fgf_real_check:
-        cp      FIRSTFD
-        jr      c,fgf_setup             ; stdout/stderr: let _read reject
-        cp      MAXFD
-        jr      nc,fgf_setup            ; fd out of range: skip the __fdeof
-                                         ; slot lookup below (would index past
-                                         ; the array) - _read's own fd check
-                                         ; rejects this below with EBADF.
-
-        ; Check EOF flag for this slot
-        sub     FIRSTFD                 ; A = slot
-        ld      h,0
-        ld      l,a
-        ld      de,__fdeof
+        jp      fgf_console
+fgf_file:
+        call    __chkfda
+        jp      c,fgf_bad
+        ld      c,a                     ; access mode; HL points at __fduse
+        ld      de,__fdeof-__fduse
         add     hl,de
-        ld      a,(hl)
-        or      a
+        bit     0,(hl)
         jp      nz,fgets_null           ; already at EOF
-
-fgf_setup:
-        ; Set up: rem = size-1, ptr = buf, start = buf
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        dec     hl
-        ld      (__fgets_rem),hl
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      (__fgets_ptr),hl
-        ld      (__fgets_start),hl
-
-fgf_loop:
-        ld      hl,(__fgets_rem)
+        ld      hl,(__rwrem)
         ld      a,h
         or      l
-        jp      z,fgets_term            ; buffer full
-
-        ; Real-file fread/fgets consume the guaranteed pushback byte before
-        ; low-level I/O. stdin pushback is owned by _read/__gchr.
-        ld      a,(ix+9)
-        or      a
-        jr      nz,fgf_no_pb
-        ld      c,(ix+8)
+        jp      z,fgets_term
+        bit     0,c
+        jr      nz,fgf_mode
+        call    __rwerr                  ; a valid, non-readable stream
+        jp      fgf_bad
+fgf_mode:
+        ; Match LF in binary mode, Ctrl-Z in text mode. LF is also tested
+        ; independently in the copy loop; pushed Ctrl-Z bypasses this scan.
         ld      a,c
-        cp      FIRSTFD
-        jr      c,fgf_no_pb
+        and     8
+        add     a,a
+        xor     1ah
+        ld      (__fgets_mark),a
+        ld      a,(__slot)
+        add     a,FIRSTFD
+        ld      c,a
         call    __ugget
-        jr      c,fgf_no_pb
-        jr      fgf_store               ; pushed Ctrl-Z is guaranteed input
+        jr      c,fgf_record
+        call    fgf_put                  ; pushback does not advance the file
+        jp      z,fgets_term
 
-fgf_no_pb:
-        ; _read(fp, &__fgets_ch, 1)
-        ld      hl,1
-        push    hl                      ; count=1
-        ld      hl,__fgets_ch
-        push    hl                      ; buf
-        ld      l,(ix+8)
-        ld      h,(ix+9)
-        push    hl                      ; fp
-        call    _read
-        pop     bc                      ; discard fp
-        pop     bc                      ; discard buffer
-        pop     bc                      ; discard count
-
-        ; Treat anything but exactly 1 byte read as EOF, including a -1
-        ; (0FFFFh) error return (e.g. EBADF) - h!=0 catches that case before
-        ; __fgets_ch, which _read never touched, could be read as if valid.
+fgf_record:
+        ld      hl,(__rwrem)
         ld      a,h
-        or      a
-        jr      nz,fgf_eof
-        ld      a,l
+        or      l
+        jp      z,fgets_term
+        call    __setrr
+        jr      c,fgf_file_eof           ; CP/M 2.2 record limit
+        call    __chunk
+        call    __rdload
+        jr      z,fgf_cached
         cp      1
-        jr      nz,fgf_eof              ; read 0 bytes  EOF
-
-fgf_have_ch:
-        ld      a,(__fgets_ch)
-        cp      1ah                     ; Ctrl-Z = CP/M EOF marker
-        jr      nz,fgf_store
-        ld      a,(ix+8)
-        sub     FIRSTFD
+        jr      z,fgf_file_eof
+        cp      4
+        jr      z,fgf_file_eof
+        call    __rwerr
+        jp      fgf_eof
+fgf_cached:
+        ld      b,c                     ; __rdload prepared the cache span
+        ld      a,(__fgets_mark)
+        ld      c,a
+fgf_copy:
+        ld      a,(hl)
+        inc     hl
+        cp      c
+        jr      z,fgf_marker
+        ld      (de),a
+        inc     de
+        cp      0ah
+        jr      z,fgf_stopped
+        djnz    fgf_copy
+        xor     a                       ; a full chunk, without a delimiter
+        jr      fgf_commit
+fgf_marker:
+        cp      0ah
+        jr      nz,fgf_stopped
+        ld      (de),a
+        inc     de
+fgf_stopped:
+        dec     b
+fgf_commit:
+        ; B = bytes left, DE = actual output end (excludes text Ctrl-Z).
+        ; The offset includes Ctrl-Z even though the output does not.
+        push    af
+        ld      a,(__chnk)
+        sub     b
+        ld      (__chnk),a
+        push    de
+        call    __advio
+        pop     hl
+        ld      (__rwbuf),hl
+        pop     af
+        cp      0ah
+        jr      z,fgets_term
+        cp      1ah
+        jr      nz,fgf_record
+fgf_file_eof:
+        ld      a,(__slot)
         ld      l,a
         ld      h,0
-        ld      de,__fduse
-        add     hl,de
-        bit     3,(hl)                  ; binary stream: Ctrl-Z is ordinary data
-        jr      nz,fgf_binary_ctrlz
-        ld      h,0
-        ld      l,a
         ld      de,__fdeof
         add     hl,de
         ld      (hl),1
         jr      fgf_eof
-fgf_binary_ctrlz:
-        ld      a,1ah
 
-        ; store char
-fgf_store:
-        ld      hl,(__fgets_ptr)
+fgf_console:
+        ld      hl,(__rwrem)
+        ld      a,h
+        or      l
+        jr      z,fgets_term
+        call    __gchr
+        ld      a,h
+        or      a
+        jr      nz,fgf_eof
+        ld      a,l
+        call    fgf_put
+        jr      nz,fgf_console
+        jr      fgets_term
+
+; Store a console/pushback byte. Return Z on newline.
+fgf_put:
+        ld      hl,(__rwbuf)
         ld      (hl),a
         inc     hl
-        ld      (__fgets_ptr),hl
-        ld      hl,(__fgets_rem)
+        ld      (__rwbuf),hl
+        ld      hl,(__rwrem)
         dec     hl
-        ld      (__fgets_rem),hl
-        cp      0ah                     ; LF  end of line
-        jp      z,fgets_term
-        jr      fgf_loop
+        ld      (__rwrem),hl
+        cp      0ah
+        ret
+
+fgf_bad:
+        ; size == 1 succeeds without attempting I/O, including on bad fds.
+        ld      hl,(__rwrem)
+        ld      a,h
+        or      l
+        jr      z,fgets_term
+        call    __ebadf
+        jr      fgets_null
 
 fgf_eof:
-        ; _read owns EOF/error classification for both console and files.
-        ; if no chars were stored  return NULL
-        ld      hl,(__fgets_ptr)
+        ld      hl,(__rwbuf)
         ld      de,(__fgets_start)
         or      a
         sbc     hl,de
-        jp      z,fgets_null            ; ptr == start  nothing read
-        ; else: NUL-terminate and return buf
-        jr      fgets_term
+        jr      z,fgets_null            ; nothing stored: leave buffer alone
 
 fgets_term:
-        ld      hl,(__fgets_ptr)
+        ld      hl,(__rwbuf)
         ld      (hl),0
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        pop     ix
+        ld      hl,(__fgets_start)
         ret
 
 fgets_null:
         ld      hl,0
-        pop     ix
         ret
 
-__fgets_ptr:    dw      0
-__fgets_rem:    dw      0
-__fgets_ch:     db      0
 __fgets_start:  dw      0
+__fgets_mark:   db      0
 
 ; ---- _gets(char *buf) ----
 ; Reads a line from stdin/console. Equivalent to fgets(buf, 32767, stdin)
