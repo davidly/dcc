@@ -32,6 +32,34 @@ CYCLE_COUNT = re.compile(r"(?m)^\s*Z80\s+cycles:\s*([\d,]+)")
 COMMANDS: dict[str, str] = {}
 
 
+def colour_enabled(mode: str) -> bool:
+    """Enable Windows console ANSI processing before auto-detecting colours."""
+    if mode == "never":
+        return False
+    if not sys.stdout.isatty():
+        return mode == "always"
+    if os.name == "nt":
+        try:
+            import ctypes
+            import msvcrt
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.GetConsoleMode.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+            kernel32.GetConsoleMode.restype = wintypes.BOOL
+            kernel32.SetConsoleMode.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+            kernel32.SetConsoleMode.restype = wintypes.BOOL
+            handle = msvcrt.get_osfhandle(sys.stdout.fileno())
+            console_mode = wintypes.DWORD()
+            # Preserve existing flags; ENABLE_VIRTUAL_TERMINAL_PROCESSING = 4.
+            if not kernel32.GetConsoleMode(handle, ctypes.byref(console_mode)):
+                return mode == "always"
+            if not kernel32.SetConsoleMode(handle, console_mode.value | 4):
+                return mode == "always"
+        except (AttributeError, ImportError, OSError, ValueError):
+            return mode == "always"
+    return True
+
 def out(text="", colour=None):
     """PowerShell-like Write-Host colours, while keeping redirected logs plain."""
     if COLOUR and colour:
@@ -673,7 +701,7 @@ def main():
                         help="ANSI colour mode (default: auto)")
     args = parser.parse_args()
     global COLOUR
-    COLOUR = args.color == "always" or (args.color == "auto" and sys.stdout.isatty())
+    COLOUR = colour_enabled(args.color)
     args.failures_only = not args.verbose
     if args.timeout < 0:
         parser.error("--timeout must be zero (no timeout) or a positive integer")
