@@ -30493,7 +30493,6 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
     const struct MirInsn *left_definition;
     const struct MirInsn *right_definition;
     int memory_type, memory_storage, memory_offset;
-    int store_type, store_storage, store_offset;
     int uses = 0;
     int found_store = -1;
     int scan;
@@ -30521,6 +30520,11 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
          memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN) ||
         type_ptr_depth(memory_type) > 0 || type_size(memory_type) != 2)
         return 0;
+    /* A PHI is in its object's memory only when this is its sole use
+     * (mir_phi_is_word_selfstore_source); otherwise it has its own home. */
+    if (left_definition->opcode == MIR_PHI &&
+        mir_value_use_count(insn->src1) != 1)
+        return 0;
     for (scan = 0; scan < mir.count; ++scan) {
         const struct MirInsn *use = &mir.insns[scan];
         if (use->src1 != insn->dst && use->src2 != insn->dst)
@@ -30531,10 +30535,10 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
             left_definition->object >= 0 &&
             use->object == left_definition->object)
             continue;
+        /* Globals share storage and offset; the object or name tells them
+         * apart (`o = g + 1` is not `++g`). */
         if (use->opcode != MIR_STORE || use->src1 != insn->dst ||
-            !mir_scalar_memory_location(use, &store_type, &store_storage,
-                                        &store_offset) ||
-            store_storage != memory_storage || store_offset != memory_offset)
+            !mir_same_scalar_memory_location(left_definition, use))
             return 0;
         found_store = scan;
         ++uses;
@@ -30623,6 +30627,9 @@ static int mir_binary_is_selfstore_small_adjust(
          memory_storage != SC_GLOBAL &&
          memory_storage != SC_EXTERN) ||
         type_size(memory_type) != 2)
+        return 0;
+    if (left_definition->opcode == MIR_PHI &&
+        mir_value_use_count(insn->src1) != 1)
         return 0;
     for (scan = 0; scan < mir.count; ++scan) {
         const struct MirInsn *use = &mir.insns[scan];

@@ -11209,6 +11209,50 @@ static int mir_untyped_value_widened_as(int value, const struct MirInsn *load)
     return 0;
 }
 
+/* The extended value a forwarded negative narrow constant must have when
+ * the load it replaces is used only as an operand of a 4-byte operation,
+ * which lowering could not convert for when the object was a nested-block
+ * local (`{ int k = -1; a &= k; }`); 0 otherwise. Other constants already
+ * read the same in either width and keep the forwarded shape. */
+static int mir_forwarded_constant_widened(const struct MirInsn *load,
+                                          const struct MirInsn *constant,
+                                          long *widened, int *operation_type)
+{
+    const struct MirInsn *use;
+    int use_index;
+    unsigned long bits;
+    int bytes;
+
+    if (constant == NULL || constant->opcode != MIR_CONST ||
+        constant->type == 0 || type_is_float(constant->type) ||
+        type_ptr_depth(constant->type) != 0 ||
+        mir_value_use_count(load->dst) != 1)
+        return 0;
+    bytes = type_size(constant->type);
+    if (bytes != 1 && bytes != 2)
+        return 0;
+    use_index = mir_next_use(load->dst, -1);
+    if (use_index < 0)
+        return 0;
+    use = &mir.insns[use_index];
+    if (use->opcode != MIR_BINARY ||
+        type_size(use->secondary_offset) != 4 ||
+        type_ptr_depth(use->secondary_offset) != 0 ||
+        type_is_float(use->secondary_offset) ||
+        (use->src2 == load->dst &&
+         (use->immediate == TOK_SHL || use->immediate == TOK_SHR)))
+        return 0;
+    bits = (unsigned long)constant->immediate &
+           (bytes == 1 ? 0xffUL : 0xffffUL);
+    if ((constant->type & TYPE_UNSIGNED) != 0 ||
+        (bits & (bytes == 1 ? 0x80UL : 0x8000UL)) == 0)
+        return 0;
+    bits |= ~(bytes == 1 ? 0xffUL : 0xffffUL);
+    *widened = (long)(bits & 0xffffffffUL);
+    *operation_type = use->secondary_offset;
+    return 1;
+}
+
 static int mir_object_value_is_defined_at_or_after(int value, int instruction)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -11437,6 +11481,8 @@ static int mir_promote_objects(void)
             {
                 struct MirInsn *source = mir_mutable_definition(reaching);
                 int size = type_size(insn->type);
+                long widened_constant;
+                int widened_type;
                 unsigned long sign_bit = size == 2
                     ? 0x8000UL : 0x80000000UL;
 
@@ -11450,6 +11496,20 @@ static int mir_promote_objects(void)
                     mir_value_is_untyped_boolean(reaching, 0))
                     source->type = insn->type;
 
+                if (mir_forwarded_constant_widened(
+                        insn, source, &widened_constant,
+                        &widened_type)) {
+                    insn->opcode = MIR_CONST;
+                    insn->type = widened_type;
+                    insn->immediate = widened_constant;
+                    insn->src1 = -1;
+                    insn->object = -1;
+                    insn->memory_size = 0;
+                    insn->name[0] = 0;
+                    mir_invalidate_use_cache();
+                    ++promoted;
+                    continue;
+                }
                 if (mir_untyped_value_widened_as(reaching, insn)) {
                     /* The stored value was built untyped (a nested-block
                      * local's update); a widening needs the load's type. */

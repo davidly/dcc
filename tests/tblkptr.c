@@ -9,7 +9,8 @@
  * update in long, a store through a nested-block pointer must convert to
  * its pointee, and an updated word local passed to a long parameter keeps
  * its signedness. A char read from a string literal by `0["..."]` once
- * kept the next character in its high byte.
+ * kept the next character in its high byte. A negative constant stored to
+ * a nested-block local and read by a long operation must be sign-extended.
  */
 
 #include <stdio.h>
@@ -74,6 +75,12 @@ static long store_pass_word_inc(unsigned a) { { long k1 = 0; unsigned k = a; lon
 
 static long char_from_literal(void) { char c; c = 0["hello"]; return c; }
 
+/* Negative constants in nested-block locals read by long operations. */
+static long and_assigned_constant(long a, int b) { { int k = b; k = -1; a &= k; return a; } }
+static long and_initialized_constant(long a) { { int k = -1; a &= k; return a; } }
+static long and_constant_operand(long a, int b) { { int k = b; k = -1; a = a & k; return a; } }
+static unsigned long and_short_constant(unsigned long a, short b) { { short k = b; k = (signed char)-128; a &= k; return a; } }
+
 int main(void)
 {
     check("store_ternary", (long)store_ternary(20L, 32768L), 0x8000L);
@@ -107,6 +114,10 @@ int main(void)
     check("pass_word_inc", pass_word_inc(0xffe9u), 0xffeaL);
     check("store_pass_word_inc", store_pass_word_inc(0xffe9u), 0xffeaL);
     check("char_from_literal", char_from_literal(), 104L);
+    check("and_assigned_constant", and_assigned_constant(0x7ffffffeL, 5), 0x7ffffffeL);
+    check("and_initialized_constant", and_initialized_constant(0x7ffffffeL), 0x7ffffffeL);
+    check("and_constant_operand", and_constant_operand(0x7ffffffeL, 5), 0x7ffffffeL);
+    check("and_short_constant", (long)and_short_constant(0xfffffffeUL, -32768), (long)0xffffff80UL);
     if (fails == 0)
         printf("tblkptr passed\n");
     return fails;
