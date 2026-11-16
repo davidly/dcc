@@ -47,13 +47,18 @@ casts and `?:` over three typed operands), and `--mode mixed` both.
 `--mode store` checks the values of stores instead: `=` then a compound
 assignment, a compound assignment's own value, and pre/post `++`/`--`, on a
 global, array element, struct member, pointer target, static, local or
-nested-block local. A build that runs past `--build-timeout` seconds is
-reported as a hang.
+nested-block local. `--mode prog` generates small programs instead: several
+variables of mixed type and storage, some also reached through pointers, a
+run of assignments, compound assignments, `++`/`--`, calls inside
+expressions, a call that changes a global, short loops and `if`/`else`,
+and a hash of every variable as the result. A build that runs past
+`--build-timeout` seconds is reported as a hang.
 
 ```sh
 python3 scripts/typed-expr-fuzz.py --seeds 1-500
 python3 scripts/typed-expr-fuzz.py --seeds 1-500 --mode tree
 python3 scripts/typed-expr-fuzz.py --seeds 1-500 --mode store
+python3 scripts/typed-expr-fuzz.py --seeds 1-500 --mode prog
 python3 scripts/typed-expr-fuzz.py --seeds 1-200 --env DCC_MIR_SELECT_CANDIDATE=homed-lazy
 python3 scripts/typed-expr-fuzz.py --generate 7 prog.c prog.expected
 ```

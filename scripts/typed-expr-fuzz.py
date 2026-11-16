@@ -13,6 +13,7 @@ host compiler is involved; inputs that would be undefined are skipped.
   typed-expr-fuzz.py --seeds 1-200            fuzz 200 programs, peep and nopeep
   typed-expr-fuzz.py --seeds 1-200 --mode tree   nested expression trees instead
   typed-expr-fuzz.py --seeds 1-200 --mode store  stored values of updates instead
+  typed-expr-fuzz.py --seeds 1-200 --mode prog   small programs with aliases and calls
   typed-expr-fuzz.py --seeds 7 --keep         keep seed 7's program and outputs
   typed-expr-fuzz.py --generate 7 prog.c prog.expected
 
@@ -623,6 +624,299 @@ class TreeCase:
         return self.expected(self.inputs[k])
 
 
+PROG_STORES = ['param', 'local', 'block', 'global', 'static', 'array', 'member']
+PROG_STATEMENTS = ['assign'] * 3 + ['compound'] * 3 + ['incdec', 'ptr', 'bump', 'loop', 'if']
+
+
+class ProgCase:
+    """A straight-line program over several typed variables of mixed storage,
+    some reached through pointers as well, whose statements assign, update,
+    call and branch; the function returns a hash of every variable. Calls in
+    expressions and a call that changes a global keep values live across
+    calls and test that memory is reread after a store through an alias."""
+
+    def __init__(self, n, rng):
+        self.n = n
+        count = rng.randint(4, 7)
+        self.types = [rng.choice(NAMES) for _ in range(count)]
+        self.stores = [rng.choice(PROG_STORES) for _ in range(count)]
+        self.ptrs = rng.sample(range(count), rng.randint(0, 2))
+        globals_ = [k for k, s in enumerate(self.stores) if s in ('global', 'member')]
+        self.bumped = rng.choice(globals_) if globals_ else None
+        self.body = [self.statement(rng, 1) for _ in range(rng.randint(4, 9))]
+        self.inputs = []
+        for _ in range(200):
+            if len(self.inputs) == INPUTS:
+                break
+            values = tuple(interesting(t, rng) if rng.random() < 0.5
+                           else wrap(rng.randint(-40, 40), t) for t in self.types)
+            try:
+                self.expected(values)
+            except Undefined:
+                continue
+            self.inputs.append(values)
+
+    def target(self, rng):
+        """An lvalue: a variable or a pointer's target."""
+        if self.ptrs and rng.random() < 0.25:
+            return ('deref', rng.randrange(len(self.ptrs)))
+        return ('var', rng.randrange(len(self.types)))
+
+    def statement(self, rng, depth):
+        kind = rng.choice(PROG_STATEMENTS if depth else PROG_STATEMENTS[:7])
+        if kind == 'ptr':
+            kind = 'assign' if not self.ptrs else rng.choice(['assign', 'compound'])
+            lv = ('deref', rng.randrange(len(self.ptrs))) if self.ptrs else self.target(rng)
+        else:
+            lv = self.target(rng)
+        if kind == 'assign':
+            return ('assign', lv, self.expr(rng, rng.randint(0, 2)))
+        if kind == 'compound':
+            op = rng.choice(COMPOUND_OPS)
+            rhs = ('const', rng.randint(0, 9), 'int') if op in ('<<', '>>') \
+                else self.expr(rng, rng.randint(0, 1))
+            return ('compound', op, lv, rhs)
+        if kind == 'incdec':
+            return ('incdec', rng.choice(['++x', '--x', 'x++', 'x--']), lv)
+        if kind == 'bump':
+            if self.bumped is None:
+                return ('incdec', '++x', lv)
+            return ('bump',)
+        if kind == 'loop':
+            return ('loop', rng.randint(1, 3),
+                    [self.statement(rng, 0) for _ in range(rng.randint(1, 2))])
+        return ('if', self.expr(rng, rng.randint(0, 2)), self.statement(rng, 0),
+                self.statement(rng, 0))
+
+    def expr(self, rng, depth):
+        if depth == 0 or rng.random() < 0.2:
+            r = rng.random()
+            if r < 0.6:
+                return self.target(rng)
+            t = rng.choice(NAMES)
+            return ('const', interesting(t, rng), t)
+        kind = rng.choice(['binary'] * 5 + ['unary', 'cast', 'ternary', 'call'])
+        if kind == 'binary':
+            op = rng.choice(OPS)
+            right = self.expr(rng, depth - 1)
+            if op in ('<<', '>>'):
+                right = ('cast', 'int', ('cast', 'unsigned char', right)) if rng.random() < 0.5 \
+                    else ('const', rng.randint(0, 9), rng.choice(SHIFT_COUNT_TYPES))
+            return ('binary', op, self.expr(rng, depth - 1), right)
+        if kind == 'unary':
+            return ('unary', rng.choice('-~!'), self.expr(rng, depth - 1))
+        if kind == 'cast':
+            return ('cast', rng.choice(NAMES), self.expr(rng, depth - 1))
+        if kind == 'call':
+            return ('call', self.expr(rng, depth - 1))
+        return ('ternary', self.expr(rng, depth - 1), self.expr(rng, depth - 1),
+                self.expr(rng, depth - 1))
+
+    def var_of(self, lv):
+        return lv[1] if lv[0] == 'var' else self.ptrs[lv[1]]
+
+    def type_of(self, node):
+        kind = node[0]
+        if kind in ('var', 'deref'):
+            return self.types[self.var_of(node)]
+        if kind == 'const':
+            return node[2]
+        if kind == 'call':
+            return 'long'
+        if kind == 'binary':
+            op, ta, tb = node[1], self.type_of(node[2]), self.type_of(node[3])
+            if op in ('<<', '>>'):
+                return promote(ta)
+            if op in COMPARISONS + ('&&', '||'):
+                return 'int'
+            return common(ta, tb)
+        if kind == 'unary':
+            return 'int' if node[1] == '!' else promote(self.type_of(node[2]))
+        if kind == 'cast':
+            return node[1]
+        return common(self.type_of(node[2]), self.type_of(node[3]))
+
+    def evaluate(self, node, env):
+        kind = node[0]
+        if kind in ('var', 'deref'):
+            k = self.var_of(node)
+            return env[k], self.types[k]
+        if kind == 'const':
+            return wrap(node[1], node[2]), node[2]
+        if kind == 'call':
+            v, _ = self.evaluate(node[1], env)
+            return wrap(v, 'long'), 'long'
+        if kind == 'binary':
+            op = node[1]
+            a, ta = self.evaluate(node[2], env)
+            if op in ('&&', '||') and (a != 0) == (op == '||'):
+                return int(op == '||'), 'int'
+            b, tb = self.evaluate(node[3], env)
+            return binop(op, a, ta, b, tb)
+        if kind == 'unary':
+            v, t = self.evaluate(node[2], env)
+            if node[1] == '!':
+                return int(v == 0), 'int'
+            pt = promote(t)
+            v = wrap(v, pt)
+            if node[1] == '~':
+                return wrap(~v, pt), pt
+            if signed(pt) and not lo(pt) <= -v <= hi(pt):
+                raise Undefined
+            return wrap(-v, pt), pt
+        if kind == 'cast':
+            v, _ = self.evaluate(node[2], env)
+            return wrap(v, node[1]), node[1]
+        c, _ = self.evaluate(node[1], env)
+        rt = self.type_of(node)
+        v, _ = self.evaluate(node[2] if c else node[3], env)
+        return wrap(v, rt), rt
+
+    def update(self, env, k, op, b, tb):
+        t = self.types[k]
+        v, _ = binop(op, env[k], t, b, tb)
+        env[k] = wrap(v, t)
+
+    def execute(self, stmt, env):
+        kind = stmt[0]
+        if kind == 'assign':
+            v, _ = self.evaluate(stmt[2], env)
+            env[self.var_of(stmt[1])] = wrap(v, self.types[self.var_of(stmt[1])])
+        elif kind == 'compound':
+            b, tb = self.evaluate(stmt[3], env)
+            self.update(env, self.var_of(stmt[2]), stmt[1], b, tb)
+        elif kind == 'incdec':
+            k = self.var_of(stmt[2])
+            pt = promote(self.types[k])
+            v = wrap(env[k], pt) + (1 if '+' in stmt[1] else -1)
+            if signed(pt) and not lo(pt) <= v <= hi(pt):
+                raise Undefined
+            env[k] = wrap(v, self.types[k])
+        elif kind == 'bump':
+            self.update(env, self.bumped, '+', 3, 'int')
+        elif kind == 'loop':
+            for _ in range(stmt[1]):
+                for inner in stmt[2]:
+                    self.execute(inner, env)
+        else:
+            c, _ = self.evaluate(stmt[1], env)
+            self.execute(stmt[2] if c else stmt[3], env)
+
+    def expected(self, values):
+        env = [wrap(v, t) for v, t in zip(values, self.types)]
+        for stmt in self.body:
+            self.execute(stmt, env)
+        h = 0
+        for v in env:
+            h = wrap(h * 31 + wrap(v, 'unsigned long'), 'unsigned long')
+        return h
+
+    def expected_for(self, k):
+        return self.expected(self.inputs[k])
+
+    def name(self, k):
+        n = self.n
+        return {'param': 'a%d' % k, 'local': 'l%d' % k, 'block': 'k%d' % k,
+                'global': 'g%d_%d' % (n, k), 'static': 's%d' % k,
+                'array': 'r%d_%d[i]' % (n, k), 'member': 'm%d.f%d' % (n, k)}[self.stores[k]]
+
+    def text(self, node):
+        kind = node[0]
+        if kind == 'var':
+            return self.name(node[1])
+        if kind == 'deref':
+            return '(*p%d)' % node[1]
+        if kind == 'const':
+            return literal(node[1], node[2])
+        if kind == 'call':
+            return 'pass%d(%s)' % (self.n, self.text(node[1]))
+        if kind == 'binary':
+            return '(%s %s %s)' % (self.text(node[2]), node[1], self.text(node[3]))
+        if kind == 'unary':
+            return '(%s(%s))' % (node[1], self.text(node[2]))
+        if kind == 'cast':
+            return '((%s)(%s))' % (node[1], self.text(node[2]))
+        return '((%s) ? (%s) : (%s))' % (self.text(node[1]), self.text(node[2]),
+                                         self.text(node[3]))
+
+    def statement_text(self, stmt, indent, out):
+        pad = ' ' * indent
+        kind = stmt[0]
+        if kind == 'assign':
+            out.append('%s%s = %s;' % (pad, self.text(stmt[1]), self.text(stmt[2])))
+        elif kind == 'compound':
+            out.append('%s%s %s= %s;' % (pad, self.text(stmt[2]), stmt[1], self.text(stmt[3])))
+        elif kind == 'incdec':
+            out.append('%s%s;' % (pad, stmt[1].replace('x', self.text(stmt[2]))))
+        elif kind == 'bump':
+            out.append('%sbump%d();' % (pad, self.n))
+        elif kind == 'loop':
+            out.append('%sfor (j = 0; j < %d; ++j) {' % (pad, stmt[1]))
+            for inner in stmt[2]:
+                self.statement_text(inner, indent + 4, out)
+            out.append('%s}' % pad)
+        else:
+            out.append('%sif (%s) {' % (pad, self.text(stmt[1])))
+            self.statement_text(stmt[2], indent + 4, out)
+            out.append('%s} else {' % pad)
+            self.statement_text(stmt[3], indent + 4, out)
+            out.append('%s}' % pad)
+
+    def emit_take(self, out):
+        n = self.n
+        for k, (s, t) in enumerate(zip(self.stores, self.types)):
+            if s == 'global':
+                out.append('%s g%d_%d;' % (t, n, k))
+            elif s == 'array':
+                out.append('%s r%d_%d[3];' % (t, n, k))
+        if 'member' in self.stores:
+            out.append('struct { char pad; %s } m%d;' % (' '.join(
+                '%s f%d;' % (t, k) for k, (s, t) in enumerate(zip(self.stores, self.types))
+                if s == 'member'), n))
+        out.append('static long pass%d(long v) { return v; }' % n)
+        if self.bumped is not None:
+            b = self.bumped
+            out.append('static void bump%d(void) { %s += 3; }' % (
+                n, 'g%d_%d' % (n, b) if self.stores[b] == 'global' else 'm%d.f%d' % (n, b)))
+
+    def emit(self, out):
+        n = self.n
+        params = ['%s a%d' % (t, k) for k, t in enumerate(self.types)] + ['int i']
+        out.append('unsigned long t%d(%s)' % (n, ', '.join(params)))
+        out.append('{')
+        for k, (s, t) in enumerate(zip(self.stores, self.types)):
+            if s == 'local':
+                out.append('    %s l%d;' % (t, k))
+            elif s == 'static':
+                out.append('    static %s s%d;' % (t, k))
+        for k, s in enumerate(self.stores):
+            if s not in ('param', 'block'):
+                out.append('    %s = a%d;' % (self.name(k), k))
+        out.append('    {')
+        for k, (s, t) in enumerate(zip(self.stores, self.types)):
+            if s == 'block':
+                out.append('        %s k%d = a%d;' % (t, k, k))
+        for j, k in enumerate(self.ptrs):
+            out.append('        %s *p%d = &%s;' % (self.types[k], j, self.name(k)))
+        out.append('        int j;')
+        out.append('        unsigned long h;')
+        for stmt in self.body:
+            self.statement_text(stmt, 8, out)
+        out.append('        h = 0;')
+        for k in range(len(self.types)):
+            out.append('        h = h * 31 + (unsigned long)%s;' % self.name(k))
+        out.append('        return h;')
+        out.append('    }')
+        out.append('}')
+        out.append('')
+
+    def emit_calls(self, out):
+        n = self.n
+        for k, values in enumerate(self.inputs):
+            args = [literal(v, t) for v, t in zip(values, self.types)] + [str(k % 3)]
+            out.append('    show(%d, t%d(%s));' % (n * 10 + k, n, ', '.join(args)))
+
+
 HEADER = '''/* generated by typed-expr-fuzz.py, seed %d */
 #include <stdio.h>
 
@@ -650,6 +944,8 @@ def generate(seed, count, mode='binary'):
     while len(cases) < count:
         if mode == 'store':
             kind = StoreCase
+        elif mode == 'prog':
+            kind = ProgCase
         else:
             kind = Case if mode == 'binary' or (mode == 'mixed' and rng.random() < 0.5) \
                 else TreeCase
@@ -730,7 +1026,7 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--seeds', default='1-100', help='seeds to run, e.g. 1-100,250')
     parser.add_argument('--count', type=int, default=40, help='cases per program')
-    parser.add_argument('--mode', choices=('binary', 'tree', 'mixed', 'store'), default='binary',
+    parser.add_argument('--mode', choices=('binary', 'tree', 'mixed', 'store', 'prog'), default='binary',
                         help='one binary operation per case, nested expression trees, both, '
                              'or updates of lvalues (compound assignment, ++, --)')
     parser.add_argument('--jobs', type=int, default=os.cpu_count() or 1)
