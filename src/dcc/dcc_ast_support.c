@@ -208,13 +208,8 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
             return 1;
         if (ast_node_is_const(n) && ast_long_arith_supported(n))
             return 1;
-        if (ast_node_is_const(n) && ast_mixed_long_rhs_arith_supported(n)) {
-            long rhs;
-            if ((n->op == '/' || n->op == '%') &&
-                ast_unary_long_const_fold(n->b, &rhs) && rhs == 0)
-                return 0;
+        if (ast_node_is_const(n) && ast_mixed_long_rhs_arith_supported(n))
             return 1;
-        }
         if (ast_node_is_const(n) && is_shift_op(n->op) &&
             ast_value_is_long_word(n->a))
             return ast_value_is_plain_int(n->b) || ast_value_is_long_word(n->b);
