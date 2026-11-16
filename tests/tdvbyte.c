@@ -1,6 +1,7 @@
 /* Exhaustive division check.  The oracle increments quotient and remainder
  * counters rather than using the division or modulo operators being tested. */
 #include <stdio.h>
+#include <stdlib.h>
 
 unsigned int input, remainder, divisor;
 int preserved = 1;
@@ -60,14 +61,24 @@ d10bad:
         ret
 #endasm
 
-int main(void)
+int main(int argc, char **argv)
 {
     static const unsigned int words[] = {
         256, 257, 511, 512, 1000, 32767, 32768, 32769, 40000, 65534, 65535
     };
-    unsigned int q, r, i;
-    for (i = 1; i <= 266; ++i) {
+    unsigned int q, r, i, batch = 0, batches = 1, tested = 0;
+    /* Batch k checks divisor indices k+1, k+1+n, ... . Together the
+     * batches partition all 266 divisors; every selected divisor still
+     * checks all 65,536 numerators and both helpers. No args runs it all. */
+    if (argc != 1) {
+        if (argc != 3) return 1;
+        batch = atoi(argv[1]);
+        batches = atoi(argv[2]);
+        if (!batches || batches > 266 || batch >= batches) return 1;
+    }
+    for (i = batch + 1; i <= 266; i += batches) {
         divisor = i <= 255 ? i : words[i - 256];
+        ++tested;
         q = r = input = 0;
         do {
             if (fused() != q || remainder != r ||
@@ -81,6 +92,6 @@ int main(void)
             }
         } while (++input != 0);
     }
-    puts("division: 17432576 inputs, 2 helpers OK");
+    printf("division: %lu inputs, 2 helpers OK\n", (unsigned long)tested * 65536UL);
     return 0;
 }

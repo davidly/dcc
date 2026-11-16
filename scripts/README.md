@@ -31,6 +31,21 @@ The `tfilero` test also requires ntvcm's read-only open fallback (upstream
 commit [`59c0b63`](https://github.com/davidly/ntvcm/commit/59c0b63d5cb1a14b6ee342df9440dee29e67a79f)
 or newer); update and rebuild older emulator installations if read-only opens fail.
 
+The exhaustive `tdvbyte` test is built once per mode and runs in seven
+divisor batches, checking all 17,432,576 inputs and both division helpers.
+The PowerShell runner uses the same batching. Each batch has its own output
+check; cycle counts are summed for the single app's performance baseline and
+report, while the COM size is recorded once. Batch workers share the normal
+concurrency limit with other apps, and expensive batched apps start first.
+`--serial` / `-Serial` runs the same batches sequentially. Running `tdvbyte`
+without arguments still performs the entire exhaustive check in one process.
+
+The `run_batches` override is for read-only test COMs accepting zero-based
+`batch count` arguments. All batches must print the same expected summary in
+`tests/baselines/<app>_batch.txt`. Fixtures that tests modify cannot be shared
+this way. The configured batch count stays fixed across hosts and concurrency
+settings so summed cycle baselines remain comparable.
+
 ## `typed-expr-fuzz.py`
 
 Differential fuzzer for integer expression code generation. Each generated

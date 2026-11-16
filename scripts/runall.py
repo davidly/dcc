@@ -267,6 +267,7 @@ class WorkItem:
     fn: object
     values: tuple
     name: str
+    slots: int = 1
 
 
 @dataclass
@@ -338,6 +339,28 @@ def app_timeout_args(args, override):
     return argparse.Namespace(**(vars(args) | {"timeout": timeout}))
 
 
+def batch_workers(limit, modes, count):
+    """Reserve child slots without exceeding the suite-wide process limit."""
+    return max(1, min(count, limit // modes))
+
+
+def check_batches(name, directory, baseline, count, workers, args):
+    # Only read-only COMs may use this contract: every numeric batch k/N
+    # writes the same expected summary and runs in an independent emulator.
+    def one(index):
+        ok, lines, metrics = check_run(name, directory, baseline, f"{index} {count}", "", args,
+                                       expected_code=0)
+        return ok, [f"    [batch {index+1}/{count}] {line.strip()}" for line in lines], metrics
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(one, range(count)))
+    cycles = [m["cycles"] for _, _, m in results if m]
+    metrics = {"cycles": sum(cycles) if len(cycles) == count and None not in cycles else None,
+               "size": (directory / (name.upper()+".COM")).stat().st_size}
+    if is_ntvcm(args.emulator) and metrics["cycles"] is None:
+        return False, ["    ERROR: missing cycle count in a batch"], metrics
+    return all(ok for ok, _, _ in results), [line for _, lines, _ in results for line in lines], metrics
+
+
 def app_job(name, mode, overrides, sources, baselines, root, args):
     began, lines = time.monotonic(), []
     override = overrides.get(name, {})
@@ -347,7 +370,9 @@ def app_job(name, mode, overrides, sources, baselines, root, args):
     scenarios = list(override.get("extra_scenarios", []))
     required = [baselines[args.baseline_dir / f"{name}.txt"]]
     required += [baselines[args.baseline_dir / f"{name}_{s['suffix']}.txt"] for s in scenarios]
-    missing_baselines = [x.path for x in required if x.expected is None]
+    batches = override.get("run_batches", 0)
+    batch_baseline = baselines.get(args.baseline_dir / f"{name}_batch.txt") if batches else None
+    missing_baselines = [x.path for x in required + ([batch_baseline] if batches else []) if x.expected is None]
     if missing_baselines:
         return Result(f"{name}:{'fast' if mode == 'peep' else mode}", False,
                       time.monotonic()-began,
@@ -365,7 +390,11 @@ def app_job(name, mode, overrides, sources, baselines, root, args):
         lines.append(f"  Building {name} ({shown})... FAILED")
         lines += ["    BUILD> " + x for x in output.splitlines()[:20]]
         return Result(f"{name}:{shown}", False, time.monotonic()-began, lines)
-    ok, report, metrics = check_run(name, directory, required[0], override.get("args", ""), override.get("stdin", ""), args)
+    if batches:
+        ok, report, metrics = check_batches(name, directory, batch_baseline, batches,
+                                           args.batch_workers, args)
+    else:
+        ok, report, metrics = check_run(name, directory, required[0], override.get("args", ""), override.get("stdin", ""), args)
     lines += report
     for scenario, baseline in zip(scenarios, required[1:]):
         good, report, _ = check_run(name, directory, baseline, scenario.get("args", ""), scenario.get("stdin", ""), args,
@@ -433,21 +462,22 @@ def narrow_job(name, overrides, sources, root, args):
 
 def execute(items, workers, failures_only, fail_fast=False, fail_fast_check=None):
     """Run a bounded work queue so fail-fast never submits the whole suite."""
-    results, next_item, stopped = [], 0, False
+    results, next_item, stopped, occupied = [], 0, False, 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         pending = {}
 
         def submit_one():
-            nonlocal next_item
+            nonlocal next_item, occupied
             item = items[next_item]; next_item += 1
             pending[pool.submit(item.fn, *item.values)] = item
+            occupied += item.slots
 
-        while next_item < len(items) and len(pending) < workers:
+        while next_item < len(items) and occupied + items[next_item].slots <= workers:
             submit_one()
         while pending:
             done, _ = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
             for future in done:
-                pending.pop(future)
+                occupied -= pending.pop(future).slots
                 result = future.result(); results.append(result)
                 n = len(results)
                 if not result.passed or not failures_only:
@@ -459,7 +489,7 @@ def execute(items, workers, failures_only, fail_fast=False, fail_fast_check=None
                         why = reason or f"correctness failure in {result.name}"
                         out(f"  FAIL-FAST: {why}; no new work will be started", "yellow")
                     stopped = True
-            while not stopped and next_item < len(items) and len(pending) < workers:
+            while not stopped and next_item < len(items) and occupied + items[next_item].slots <= workers:
                 submit_one()
     return Execution(results, [item.name for item in items[next_item:]])
 
@@ -705,13 +735,21 @@ def main():
         override = overrides.get(app, {})
         fixture_specs += list(override.get("fixtures", []))
         baseline_paths.append(args.baseline_dir / f"{app}.txt")
+        if override.get("run_batches"):
+            baseline_paths.append(args.baseline_dir / f"{app}_batch.txt")
         for scenario in override.get("extra_scenarios", []):
             fixture_specs += list(scenario.get("fixtures", []))
             baseline_paths.append(args.baseline_dir / f"{app}_{scenario['suffix']}.txt")
     sources = fixture_sources(fixture_specs)
     baselines = {path: load_baseline(path) for path in set(baseline_paths)}
+    batched = [app for app in apps if overrides.get(app, {}).get("run_batches")]
+    args.batch_workers = batch_workers(args.throttle_limit, max(1, len(batched)*len(modes)),
+                                      max([1] + [overrides[app]["run_batches"] for app in batched]))
+    # Start expensive batched apps first, so other work overlaps their runs.
+    apps.sort(key=lambda app: app not in batched)
     main_items = [WorkItem(app_job, (app, mode, overrides, sources, baselines, runroot, args),
-                           f"{app}:{'fast' if mode == 'peep' else mode}")
+                           f"{app}:{'fast' if mode == 'peep' else mode}",
+                           args.batch_workers if app in batched else 1)
                   for app in apps for mode in modes]
     extended_items = []
     if args.extended:

@@ -450,6 +450,7 @@ if (-not (Test-Path $appOverridesPath)) {
         if ($app.args) { $appOverrides[$app.name]['args'] = $app.args }
         if ($app.stdin) { $appOverrides[$app.name]['stdin'] = $app.stdin }
         if ($app.run_timeout) { $appOverrides[$app.name]['run_timeout'] = [int]$app.run_timeout }
+        if ($app.run_batches) { $appOverrides[$app.name]['run_batches'] = [int]$app.run_batches }
         if ($app.stack_size) { $appOverrides[$app.name]['stack_size'] = $app.stack_size }
         if ($app.dcc_args) { $appOverrides[$app.name]['dcc_args'] = $app.dcc_args }
         if ($null -ne $app.dcc_floatio) { $appOverrides[$app.name]['dcc_floatio'] = $app.dcc_floatio }
@@ -948,33 +949,17 @@ function Copy-FixtureUpper {
 # (optional) expected baseline. Shared by Invoke-AppTest's primary run and
 # each of its extra scenario runs (see Get-AppExtraScenarios) so a single COM
 # can be exercised against multiple fixtures without rebuilding.
-function Invoke-ComRunAndCompare {
-    param(
-        [string]$BuildDir,
-        [string]$ComFileName,
-        [string]$Emulator,
-        [string[]]$EmulatorRunArgs,
-        [string]$RunArgs,
-        [string]$RunStdin,
-        [bool]$HasBaseline,
-        [string]$Expected,
-        [System.Collections.IDictionary]$Placeholders,
-        [string]$BaselinePath,
-        [string]$DiffPrefix,
-        [System.Collections.Generic.List[string]]$Lines,
-        [int]$RunTimeout
-    )
-
-    Push-Location $BuildDir
+function Start-ComRun {
+    param([string]$BuildDir, [string]$ComFileName, [string]$Emulator,
+          [string[]]$EmulatorRunArgs, [string]$RunArgs, [string]$RunStdin)
     $runSw = [System.Diagnostics.Stopwatch]::StartNew()
-    $runFailed = $false
-    $runTimedOut = $false
+    $process = $null
     try {
         $appArgs = if ($RunArgs) { @($RunArgs -split '\s+') } else { @() }
         $nativeArgs = @($EmulatorRunArgs) + @($ComFileName) + $appArgs
         $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
         $startInfo.FileName = $Emulator
-        $startInfo.WorkingDirectory = (Get-Location).Path
+        $startInfo.WorkingDirectory = [System.IO.Path]::GetFullPath($BuildDir)
         $startInfo.UseShellExecute = $false
         $startInfo.RedirectStandardInput = $true
         $startInfo.RedirectStandardOutput = $true
@@ -1015,13 +1000,57 @@ function Invoke-ComRunAndCompare {
             # judge the run by its exit code and captured output.
             try { $process.StandardInput.Dispose() } catch { }
         }
-        if (-not $process.WaitForExit($RunTimeout * 1000)) {
+        return [pscustomobject]@{ Process=$process; Stdout=$stdoutTask; Stderr=$stderrTask; Watch=$runSw }
+    } catch {
+        if ($process) {
+            try { Stop-ProcessTree -Process $process } catch { }
+            $process.Dispose()
+        }
+        throw
+    }
+}
+
+function Invoke-ComRunAndCompare {
+    param(
+        [string]$BuildDir,
+        [string]$ComFileName,
+        [string]$Emulator,
+        [string[]]$EmulatorRunArgs,
+        [string]$RunArgs,
+        [string]$RunStdin,
+        [bool]$HasBaseline,
+        [string]$Expected,
+        [System.Collections.IDictionary]$Placeholders,
+        [string]$BaselinePath,
+        [string]$DiffPrefix,
+        [System.Collections.Generic.List[string]]$Lines,
+        [int]$RunTimeout,
+        [object]$PreparedRun = $null,
+        [switch]$RequireZeroExit
+    )
+
+    Push-Location $BuildDir
+    $runSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $process = $null
+    $runFailed = $false
+    $runTimedOut = $false
+    try {
+        $activeRun = if ($PreparedRun) { $PreparedRun } else {
+            Start-ComRun -BuildDir (Get-Location).Path -ComFileName $ComFileName -Emulator $Emulator `
+                -EmulatorRunArgs $EmulatorRunArgs -RunArgs $RunArgs -RunStdin $RunStdin
+        }
+        $runSw = $activeRun.Watch
+        $process = $activeRun.Process
+        $stdoutTask = $activeRun.Stdout
+        $stderrTask = $activeRun.Stderr
+        if (-not $process.WaitForExit([Math]::Max(1, $RunTimeout * 1000 - $runSw.ElapsedMilliseconds))) {
             Stop-ProcessTree -Process $process
             $process.WaitForExit()
             $Lines.Add("    ${DiffPrefix}ERROR running ${ComFileName}: timed out after ${RunTimeout}s")
             $runTimedOut = $true
         } elseif ($process.ExitCode -ne 0) {
             $Lines.Add("    ${DiffPrefix}Emulator exit code: $($process.ExitCode)")
+            if ($RequireZeroExit) { $runFailed = $true }
         }
         $output = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
@@ -1036,6 +1065,10 @@ function Invoke-ComRunAndCompare {
     }
     finally {
         $runSw.Stop()
+        if ($process) {
+            try { if (-not $process.HasExited) { Stop-ProcessTree -Process $process } } catch { }
+            if (-not $PreparedRun) { $process.Dispose() }
+        }
         Pop-Location
     }
 
@@ -1121,6 +1154,53 @@ function Invoke-ComRunAndCompare {
     return $result
 }
 
+# Read-only numeric batches share a single COM, never a mutable data file.
+# Each batch is checked independently. Only complete, validated measurements
+# are added, so a missing batch cannot silently pass the performance check.
+function Invoke-ComBatches {
+    param([string]$BuildDir, [string]$ComFileName, [string]$Emulator,
+          [string[]]$EmulatorRunArgs, [int]$Count, [int]$Workers,
+          [object]$Baseline, [System.Collections.IDictionary]$Placeholders,
+          [System.Collections.Generic.List[string]]$Lines, [int]$RunTimeout)
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $passed = $true; [long]$cycles = 0; $completeCycles = $true
+    for ($first = 0; $first -lt $Count; $first += $Workers) {
+        $active = [System.Collections.Generic.List[object]]::new()
+        try {
+            for ($batch = $first; $batch -lt [Math]::Min($Count, $first + $Workers); $batch++) {
+                $active.Add((Start-ComRun -BuildDir $BuildDir -ComFileName $ComFileName -Emulator $Emulator `
+                    -EmulatorRunArgs $EmulatorRunArgs -RunArgs "$batch $Count"))
+            }
+            for ($n = 0; $n -lt $active.Count; $n++) {
+                $one = Invoke-ComRunAndCompare -BuildDir $BuildDir -ComFileName $ComFileName `
+                    -Emulator $Emulator -EmulatorRunArgs $EmulatorRunArgs -PreparedRun $active[$n] `
+                    -HasBaseline $Baseline.HasBaseline -Expected $Baseline.Expected -BaselinePath $Baseline.Path `
+                    -Placeholders $Placeholders -Lines $Lines -DiffPrefix "[batch $($first+$n+1)/$Count] " `
+                    -RunTimeout $RunTimeout -RequireZeroExit
+                if (-not $one.Passed) { $passed = $false }
+                if ($one.Cycles -eq '') { $completeCycles = $false } else { $cycles += [long]$one.Cycles }
+            }
+        } catch {
+            $Lines.Add("    ERROR running batches: $_")
+            $passed = $false; $completeCycles = $false
+        } finally {
+            foreach ($run in $active) {
+                try { if (-not $run.Process.HasExited) { Stop-ProcessTree -Process $run.Process } } catch { }
+                $run.Process.Dispose()
+            }
+        }
+    }
+    if (($EmulatorRunArgs -contains '-p') -and -not $completeCycles) {
+        $Lines.Add('    ERROR: missing cycle count in a batch')
+        $passed = $false
+    }
+    # These overlap: timing breakdown uses batch wall time, not summed child
+    # runtimes. Cycle counts, unlike wall time, are summed for reports/baselines.
+    return [pscustomobject]@{ Passed=$passed; Ms=$watch.ElapsedMilliseconds;
+        Cycles=$(if ($completeCycles) { [string]$cycles } else { '' });
+        ClockHz=''; PsElapsedMs=$watch.ElapsedMilliseconds }
+}
+
 # Build, run, and verify a single app across the requested modes. Returns a
 # result object with a collected log (Lines) so callers can print output in a
 # deterministic, grouped order (important under parallel execution). This is
@@ -1148,7 +1228,10 @@ function Invoke-AppTest {
         [object[]]$Fixtures,
         [bool]$StageFixtures = $true,
         [object[]]$ExtraScenarios = @(),
-        [int]$RunTimeout
+        [int]$RunTimeout,
+        [int]$Batches = 0,
+        [int]$BatchWorkers = 1,
+        [object]$BatchBaselineData = $null
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -1221,11 +1304,17 @@ function Invoke-AppTest {
         }
         $comSize = ([System.IO.FileInfo]::new($comFile)).Length
 
+        if ($Batches) {
+            $primaryResult = Invoke-ComBatches -BuildDir $BuildDir -ComFileName "$upper.COM" `
+                -Emulator $Emulator -EmulatorRunArgs $EmulatorRunArgs -Count $Batches -Workers $BatchWorkers `
+                -Baseline $BatchBaselineData -Placeholders $Placeholders -Lines $lines -RunTimeout $RunTimeout
+        } else {
         $primaryResult = Invoke-ComRunAndCompare -BuildDir $BuildDir -ComFileName "$upper.COM" `
             -Emulator $Emulator -EmulatorRunArgs $EmulatorRunArgs -RunArgs $RunArgs -RunStdin $RunStdin `
             -HasBaseline $hasBaseline -Expected $expected -Placeholders $Placeholders `
             -BaselinePath "$BaselineDir/$AppName.txt" -DiffPrefix "" -Lines $lines `
             -RunTimeout $RunTimeout
+        }
 
         $modeMetrics[$buildMode] = [pscustomobject]@{
             Ms          = $primaryResult.Ms
@@ -1581,6 +1670,10 @@ foreach ($app in $testFiles) {
         }
     })
     $workItems.Add([pscustomobject]@{
+        Batches      = $(if ($appOverrides.ContainsKey($app)) { [int]$appOverrides[$app]['run_batches'] } else { 0 })
+        BatchBaselineData = $(if ($appOverrides.ContainsKey($app) -and $appOverrides[$app]['run_batches']) {
+            Get-NormalizedBaseline -Path "$BaselineDir/${app}_batch.txt"
+        } else { $null })
         App          = $app
         SourcePath   = Join-Path $testDir "$app.c"
         RunTimeout   = $appRunTimeout
@@ -1983,6 +2076,14 @@ function Merge-AppModeResults {
 $results = @()
 $totalToRun = $workItems.Count
 $mainSuiteSw = [System.Diagnostics.Stopwatch]::StartNew()
+$batchedItems = @($workItems | Where-Object { $_.Batches -gt 0 })
+$batchWorkers = if ($Parallel -and $batchedItems.Count) {
+    [Math]::Max(1, [Math]::Min(($batchedItems | Measure-Object -Property Batches -Maximum).Maximum,
+        [Math]::Floor($ThrottleLimit / ($batchedItems.Count * $modes.Count))))
+} else { 1 }
+$workSlots = [System.Threading.SemaphoreSlim]::new($ThrottleLimit, $ThrottleLimit)
+$workItems = @($workItems | Sort-Object -Stable @{Expression={ $_.Batches -gt 0 }; Descending=$true})
+
 
 # Precomputed once, up front, so -FailFast can run the identical per-app perf
 # comparison (Test-PerfRegressions, unchanged) as each result streams in,
@@ -1998,6 +2099,8 @@ if ($Parallel) {
     $tmbDef       = ${function:Test-MatchesBaseline}.ToString()
     $iatDef       = ${function:Invoke-AppTest}.ToString()
     $icrcDef      = ${function:Invoke-ComRunAndCompare}.ToString()
+    $scrDef = ${function:Start-ComRun}.ToString()
+    $icbDef = ${function:Invoke-ComBatches}.ToString()
     $cfuDef       = ${function:Copy-FixtureUpper}.ToString()
     $ctbsDef      = ${function:ConvertTo-BooleanSetting}.ToString()
     $gdmDef       = ${function:Get-DccMakeCommand}.ToString()
@@ -2033,6 +2136,7 @@ if ($Parallel) {
     foreach ($item in $workItems) {
         foreach ($buildModeKey in $modes) {
             $dispatchItems.Add([pscustomobject]@{
+                Batches = $item.Batches; BatchBaselineData = $item.BatchBaselineData
                 App = $item.App; Mode = $buildModeKey
                 SourcePath = $item.SourcePath
                 RunTimeout = $item.RunTimeout
@@ -2083,6 +2187,8 @@ if ($Parallel) {
         ${function:Invoke-DccMakeBuild}  = $using:idmbDef
         ${function:Invoke-ComRunAndCompare} = $using:icrcDef
         ${function:Invoke-AppTest}       = $using:iatDef
+        ${function:Start-ComRun} = $using:scrDef
+        ${function:Invoke-ComBatches} = $using:icbDef
 
         # Each mode of the same app gets its own build subdirectory only when
         # modes were actually split (multi-mode): two concurrent builds of
@@ -2095,6 +2201,13 @@ if ($Parallel) {
         } else {
             Join-Path $using:BuildDir $item.App
         }
+        # Reserve all child slots while this mode runs; ordinary jobs use
+        # one. Release them immediately, restoring the full pool to later work.
+        $slots = $using:workSlots
+        $weight = if ($item.Batches) { $using:batchWorkers } else { 1 }
+        $held = 0
+        try {
+            while ($held -lt $weight) { $slots.Wait(); $held++ }
         $r = Invoke-AppTest -AppName $item.App -Modes @($item.Mode) -BuildDir $appBuildDir `
             -BaselineDir $using:BaselineDir -BaselineData $item.BaselineData -SourcePath $item.SourcePath -Emulator $using:Emulator `
             -Placeholders $using:Placeholders -RunArgs $item.RunArgs `
@@ -2104,8 +2217,12 @@ if ($Parallel) {
             -UseEmulatedM80:$using:UseEmulatedM80 -UseEmulatedL80:$using:UseEmulatedL80 `
             -EmulatorRunArgs $using:runArgs `
             -Fixtures $item.Fixtures -StageFixtures $true `
-            -ExtraScenarios $item.ExtraScenarios -RunTimeout $item.RunTimeout
+            -ExtraScenarios $item.ExtraScenarios -RunTimeout $item.RunTimeout `
+            -Batches $item.Batches -BatchWorkers $using:batchWorkers -BatchBaselineData $item.BatchBaselineData
         Add-Member -InputObject $r -NotePropertyName DispatchMode -NotePropertyValue $item.Mode -PassThru
+        } finally {
+            if ($held) { [void]$slots.Release($held) }
+        }
     } | ForEach-Object {
         $result = $_
         $results += $result
@@ -2189,7 +2306,8 @@ else {
             -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 `
             -EmulatorRunArgs $emulatorRunArgs `
             -Fixtures $item.Fixtures -StageFixtures $true `
-            -ExtraScenarios $item.ExtraScenarios -RunTimeout $item.RunTimeout
+            -ExtraScenarios $item.ExtraScenarios -RunTimeout $item.RunTimeout `
+            -Batches $item.Batches -BatchWorkers $batchWorkers -BatchBaselineData $item.BatchBaselineData
         if ((-not $FailuresOnly) -or (-not $result.Passed)) {
             Show-AppResult $result
         }
