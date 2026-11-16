@@ -156,6 +156,7 @@ struct MirInsn {
 
 struct MirObject {
     char name[64];
+    char bound_name[64];    /* block local it last stood for */
     int storage;
     int type;
     int offset;
@@ -321,6 +322,10 @@ struct MirFunction {
     int debug_object_state_count;
     struct MirObject objects[256];
     int object_count;
+    /* The object lowering chose for each nested-block local's name. */
+    char block_binding_names[256][64];
+    int block_binding_objects[256];
+    int block_binding_count;
     int has_declared_register_object;
     char declared_names[MAX_LOCALS][64];
     int declared_types[MAX_LOCALS];

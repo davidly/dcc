@@ -1019,6 +1019,38 @@ static void mir_filter_address_taken_scalar_objects(void)
     }
 }
 
+/* A block-local object stays with the variable it was found for while that
+ * variable is in scope: block-scoped names are matched across objects (a
+ * support probe numbers blocks apart from lowering), and an inner `t` must
+ * not take the object of an enclosing `t` of the same type. */
+static int mir_object_bound_elsewhere(int object, const char *name)
+{
+    const char *bound = mir.objects[object].bound_name;
+
+    return bound[0] != 0 && strcmp(bound, name) != 0 &&
+           find_local(bound) != NULL;
+}
+
+static void mir_bind_block_object(int object, const char *name)
+{
+    int binding;
+
+    if (scan_mode || strstr(name, "#b") == NULL)
+        return;
+    mir_copy_name(mir.objects[object].bound_name, name);
+    for (binding = 0; binding < mir.block_binding_count; ++binding)
+        if (strcmp(mir.block_binding_names[binding], name) == 0) {
+            mir.block_binding_objects[binding] = object;
+            return;
+        }
+    if (mir.block_binding_count <
+        (int)(sizeof(mir.block_binding_objects) /
+              sizeof(mir.block_binding_objects[0]))) {
+        mir_copy_name(mir.block_binding_names[mir.block_binding_count], name);
+        mir.block_binding_objects[mir.block_binding_count++] = object;
+    }
+}
+
 static int mir_find_object(const char *name)
 {
     const char *suffix;
@@ -1042,12 +1074,18 @@ static int mir_find_object(const char *name)
             declared_storage = mir.declared_storage[declaration];
             break;
         }
+    /* The object lowering bound to this variable, even once its scope has
+     * closed and a later block's variable has taken the object over. */
+    for (object = 0; object < mir.block_binding_count; ++object)
+        if (strcmp(mir.block_binding_names[object], name) == 0)
+            return mir.block_binding_objects[object];
     /* The support gate numbers blocks apart from lowering, so a probe of
      * another block may have left an object under this very name: in a
      * switch, case 1's `c#b3#0` can be the default case's `int c`.  Take
      * a same-named object only if it has the declared type. */
     for (object = 0; object < mir.object_count; ++object)
         if (strcmp(mir.objects[object].name, name) == 0 &&
+            !mir_object_bound_elsewhere(object, name) &&
             (declaration < 0 ||
              (mir.objects[object].type == declared_type &&
               mir.objects[object].storage == declared_storage)))
@@ -1062,7 +1100,8 @@ static int mir_find_object(const char *name)
             strncmp(mir.objects[object].name, name, source_length) == 0 &&
             mir.objects[object].type == declared_type &&
             mir.objects[object].storage == declared_storage &&
-            find_local(mir.objects[object].name) == NULL) {
+            find_local(mir.objects[object].name) == NULL &&
+            !mir_object_bound_elsewhere(object, name)) {
             return object;
         }
     }
@@ -1094,7 +1133,8 @@ static int mir_get_object(const struct Sym *sym, const char *name)
                     strncmp(mir.objects[candidate].name, name, source_length) == 0 &&
                     mir.objects[candidate].type == sym->type &&
                     mir.objects[candidate].storage == sym->storage &&
-                    find_local(mir.objects[candidate].name) == NULL) {
+                    find_local(mir.objects[candidate].name) == NULL &&
+                    !mir_object_bound_elsewhere(candidate, name)) {
                     index = candidate;
                     break;
                 }
@@ -1119,6 +1159,7 @@ static int mir_get_object(const struct Sym *sym, const char *name)
             mir.objects[index].storage = sym->storage;
             mir.objects[index].offset = sym->offset;
         }
+        mir_bind_block_object(index, name);
         return index;
     }
     if (mir.object_count >= (int)(sizeof(mir.objects) / sizeof(mir.objects[0])))
@@ -1132,6 +1173,7 @@ static int mir_get_object(const struct Sym *sym, const char *name)
     object->offset = sym->offset;
     object->entry_value = -1;
     object->is_register = sym->is_register;
+    mir_bind_block_object(index, name);
     return index;
 }
 
@@ -4821,6 +4863,7 @@ void mir_begin_function(const char *name, const char *assembly_name,
     mir.flow_replay_active = 0;
     mir.label_replay_active = 0;
     mir.object_count = 0;
+    mir.block_binding_count = 0;
     mir.has_declared_register_object = 0;
     mir.region_count = 0;
     mir.regional_segment_count = 0;
@@ -11331,6 +11374,50 @@ static int mir_untyped_value_widened_as(int value, const struct MirInsn *load)
     return 0;
 }
 
+/* The 4-byte operation type a forwarded 1- or 2-byte load must be widened
+ * to when it is used only as an operand of such operations, which lowering
+ * could not convert for when the object was a nested-block local, and the
+ * forwarded value reinterprets the sign of what it converts: widening reads
+ * through such a conversion, so `{ int t = 255; t *= 256u; g = t | 255UL; }`
+ * zero-extended the unsigned product instead of sign-extending t; 0
+ * otherwise. */
+static int mir_forwarded_load_widened_type(const struct MirInsn *load,
+                                           const struct MirInsn *source)
+{
+    const struct MirInsn *converted;
+    int operation_type = 0;
+    int use_index;
+
+    if (source == NULL || source->opcode != MIR_UNARY ||
+        source->immediate != 0 || source->type == 0 ||
+        type_ptr_depth(source->type) != 0 || type_is_float(source->type) ||
+        type_ptr_depth(load->type) != 0 || type_is_float(load->type) ||
+        (type_size(load->type) != 1 && type_size(load->type) != 2))
+        return 0;
+    converted = mir_definition(source->src1);
+    if (converted == NULL || converted->type == 0 ||
+        type_ptr_depth(converted->type) != 0 ||
+        type_is_float(converted->type) ||
+        type_size(converted->type) != type_size(source->type) ||
+        (converted->type & TYPE_UNSIGNED) == (source->type & TYPE_UNSIGNED))
+        return 0;
+    for (use_index = mir_next_use(load->dst, -1); use_index >= 0;
+         use_index = mir_next_use(load->dst, use_index)) {
+        const struct MirInsn *use = &mir.insns[use_index];
+
+        if (use->opcode != MIR_BINARY ||
+            type_size(use->secondary_offset) != 4 ||
+            type_ptr_depth(use->secondary_offset) != 0 ||
+            type_is_float(use->secondary_offset) ||
+            (use->src2 == load->dst &&
+             (use->immediate == TOK_SHL || use->immediate == TOK_SHR)) ||
+            (operation_type != 0 && use->secondary_offset != operation_type))
+            return 0;
+        operation_type = use->secondary_offset;
+    }
+    return operation_type;
+}
+
 /* The extended value a forwarded negative narrow constant must have when
  * the load it replaces is used only as an operand of a 4-byte operation,
  * which lowering could not convert for when the object was a nested-block
@@ -11625,6 +11712,37 @@ static int mir_promote_objects(void)
                     insn->type = widened_type;
                     insn->immediate = widened_constant;
                     insn->src1 = -1;
+                    insn->object = -1;
+                    insn->memory_size = 0;
+                    insn->name[0] = 0;
+                    mir_invalidate_use_cache();
+                    ++promoted;
+                    continue;
+                }
+                /* A nested-block local's update (`--t`) was built untyped;
+                 * C computed it in the promoted type of what it is stored
+                 * to. Say so, or a widening of its forwarded value reads
+                 * it as unsigned (`4294967249UL < t` with short t == -1). */
+                if (source != NULL && source->opcode == MIR_BINARY &&
+                    source->type == 0 && size == 2 &&
+                    type_ptr_depth(insn->type) == 0 &&
+                    !type_is_float(insn->type) &&
+                    source->immediate != '<' && source->immediate != '>' &&
+                    source->immediate != TOK_LE &&
+                    source->immediate != TOK_GE &&
+                    source->immediate != TOK_EQ &&
+                    source->immediate != TOK_NE) {
+                    struct MirInsn *untyped = mir_mutable_definition(reaching);
+
+                    if (untyped != NULL)
+                        untyped->type = promote_int_type(insn->type);
+                }
+                widened_type = mir_forwarded_load_widened_type(insn, source);
+                if (widened_type != 0) {
+                    insn->opcode = MIR_UNARY;
+                    insn->type = widened_type;
+                    insn->src1 = reaching;
+                    insn->immediate = 0;
                     insn->object = -1;
                     insn->memory_size = 0;
                     insn->name[0] = 0;
