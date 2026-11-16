@@ -3939,6 +3939,22 @@ they were reported. Their reproducers now pass.
 - **BUG-005:** `{ uint16_t b = 1; s.m3 /= b; }` with a 32-bit member `m3` and
   a nested-block divisor zeroed the member's high word.
 
+## Oversized module diagnostics (fixed)
+
+A module exceeding the REL format's 65,535-byte segment limit previously
+assembled with `No Fatal error(s)`: the REL writer truncated its segment
+length to 16 bits. The linker then reported an out-of-bounds code record,
+rather than identifying the size limit. This was reproduced with a CSEG
+containing `DS 65535` followed by one byte.
+
+`m80c` now rejects overflowing byte/word emission, `DS` (including `/M`),
+and `ORG` before writing a wrapped REL file. It reports the offending
+segment and source line and removes stale REL output. `l80c` reports the
+image size, origin, and excess bytes when combined modules exceed the
+address space. Low-origin relocation-bootstrap limits are checked before
+creating a COM file. Boundary regressions cover both code and data segments,
+exactly fitting images, and one-byte overflows.
+
 ## Not yet confirmed
 
 - **`a1` is 5.7 times slower with the regional emitter forced.** With
@@ -3949,10 +3965,3 @@ they were reported. Their reproducers now pass.
   The `6502fun` scenario runs well inside 30 s. That variable is
   diagnostic-only, so this is latent at most, and it has not been
   investigated further.
-- **A module larger than 64K is not diagnosed as such.** Without `dccpeep`,
-  a 1,100-line generated program whose code passes 64K assembles with
-  `No Fatal error(s)` and then fails in the linker with
-  `l80c: module T: code range 2853..2854 out of bounds (segment size 2853)`:
-  the assembler's location counter appears to wrap. With `dccpeep` the same
-  program gets the clear `program too large: extends past 0xFFFF`. This is a
-  confusing message for a real limit, not wrong code, and is not reported.

@@ -780,7 +780,11 @@ int main(int argc, char **argv) {
     }
     total_len = running - origin;
     if (total_len <= 0) die("empty program");
-    if (origin + total_len > MAXORIGIN) die("program too large: extends past 0xFFFF");
+    if (total_len > MAXORIGIN - origin)
+        die("program too large: %ld-byte image at 0x%04lX extends past "
+            "0xFFFF by %ld byte(s) (maximum %ld bytes at this origin)",
+            total_len, origin, total_len - (MAXORIGIN - origin),
+            MAXORIGIN - origin);
 
     start_address = origin;
     for (i = 0; i < g_nmodules; i++) {
@@ -963,6 +967,12 @@ int main(int argc, char **argv) {
        directly to memory and a leading JP reaches origins above the three-byte
        entry slot. Below 0100H, a compact loader after the payload copies it
        down before transferring control. */
+    /* Validate the load image before creating/truncating an output file.
+       Origins below 0100H also need an entry JP and a 22-byte copy loader. */
+    if (origin < 0x100 && total_len > 0xff00L - 25)
+        die("program too large for a CP/M relocation bootstrap: "
+            "%ld-byte image plus 25-byte loader exceeds %ld bytes",
+            total_len, 0xff00L);
     suffix_path(outpath, sizeof(outpath), outname, ".COM");
     outf = fopen(outpath, "wb");
     if (!outf) die("cannot create %s", outpath);
@@ -990,9 +1000,6 @@ int main(int argc, char **argv) {
         U8 bootstrap[BOOTSTRAP_SIZE];
 
         output_len = 3 + total_len + BOOTSTRAP_SIZE;
-        if (output_len > 0xff00)
-            die("program too large for a CP/M relocation bootstrap");
-
         bootstrap[0] = 0x21; /* LD HL,source */
         bootstrap[1] = (U8)(source & 0xff);
         bootstrap[2] = (U8)((source >> 8) & 0xff);

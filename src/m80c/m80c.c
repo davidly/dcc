@@ -125,6 +125,7 @@ struct Asm {
     char pending_static_name[MAXNAME]; /* set by record_static_name(), consumed by the next define_label() */
     int want_rel, want_prn, want_sym, z80, list_hex, init_ds;
     int pass, errors, warnings;
+    int oversized_segments;
     FILE *fp, *lst;
     long lineno;
     long lc_code, lc_data, lc_abs;
@@ -282,6 +283,23 @@ static void seterr(Asm *a,const char *m) {
         strncpy(a->last_err,m,ERRMSG_MAX-1);
         a->last_err[ERRMSG_MAX-1]=0;
     }
+}
+/* REL segment sizes and location counters are unsigned 16-bit fields.
+ * Reject an unrepresentable extent before allocating a gap or truncating
+ * it in rel_value. Check both passes, but diagnose each segment only once
+ * in pass two, when the listing can identify the offending source line. */
+static int segment_room(Asm *a,long at,long width) {
+    int bit=1<<a->seg;
+    if(at>=0 && width>=0 && at<=65535L && width<=65535L-at) return 1;
+    if(a->pass==2 && !(a->oversized_segments&bit)) {
+        char message[ERRMSG_MAX];
+        sprintf(message,"%s segment too large: exceeds 65535-byte REL limit",
+                a->seg==SEG_DATA?"data":a->seg==SEG_CODE?"code":"absolute");
+        seterr(a,message);
+        fprintf(stderr,"%s:%ld: %s\n",a->src,a->lineno,message);
+    }
+    a->oversized_segments|=bit;
+    return 0;
 }
 static const char *ps;
 static void skipsp(void) {
@@ -517,6 +535,7 @@ static Expr eval(Asm *a,const char *s) {
 }
 static void emitb(Asm *a,int b) {
     long *lc=cur_lc_ptr(a);
+    if(!segment_room(a,*lc,1)) return;
     if(a->pass==2) {
         if(a->seg==SEG_DATA) vec_put(&a->data,*lc,(U8)b);
         else vec_put(&a->code,*lc,(U8)b);
@@ -1475,6 +1494,7 @@ static void do_ds(Asm *a,char *args) {
         seterr(a,"negative storage size");
         return;
     }
+    if(!segment_room(a,oldlc,e.v)) return;
     if(a->init_ds) for(i=0;i<e.v;i++) emitb(a,0);
     else {
         reserve_gap(a,oldlc,e.v);
@@ -1505,6 +1525,7 @@ static void pseudo(Asm *a,char *label,char *op,char *args) {
             seterr(a,"negative origin");
             return;
         }
+        if(!segment_room(a,e.v,0)) return;
         if(e.v>oldlc) reserve_gap(a,oldlc,e.v-oldlc);
         *cur_lc_ptr(a)=e.v;
         return;
@@ -1722,6 +1743,7 @@ static int assemble_pass(Asm *a,int pass) {
     a->pass=pass;
     a->lineno=0;
     a->lc_code=a->lc_data=a->lc_abs=0;
+    a->oversized_segments=0;
     a->seg=SEG_CODE;
     a->cond_sp=0;
     a->skipping=0;
@@ -2201,6 +2223,13 @@ int main(int argc,char **argv) {
     parse_cmd(&a,argc,argv);
     if(!assemble_pass(&a,1)) return 1;
     if(!assemble_pass(&a,2)) return 1;
+    if(a.oversized_segments) {
+        /* Do not leave either a wrapped object or an older successful
+         * object that could subsequently be linked by mistake. */
+        if(a.want_rel) remove(a.rel);
+        fprintf(stderr,"%d error(s)\n",a.errors);
+        return 1;
+    }
     write_rel(&a);
     write_sym(&a);
     write_debug(&a);

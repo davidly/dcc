@@ -189,6 +189,39 @@ class L80cCorrectnessTests(unittest.TestCase):
         image = (self.workspace / "ENTRY101.COM").read_bytes()
         self.assertEqual(image[:2], bytes([0x00, 0xC9]))
 
+    def test_combined_segments_at_address_space_boundary(self):
+        self.assemble("CODE", "\tCSEG\n\tDS 32768\n\tEND\n")
+        for extra in (0, 1):
+            with self.subTest(extra=extra):
+                self.assemble("DATA", f"\tDSEG\n\tDS {32512 + extra}\n\tEND\n")
+                output = "FIT" if extra == 0 else "BIG"
+                result = self.link("/P:100,CODE,DATA", "-o", output)
+                image = self.workspace / (output + ".COM")
+                if extra == 0:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(image.stat().st_size, 65280)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("65281-byte image at 0x0100", result.stderr)
+                    self.assertIn("extends past 0xFFFF by 1 byte", result.stderr)
+                    self.assertIn("maximum 65280 bytes", result.stderr)
+                    self.assertFalse(image.exists())
+
+    def test_relocation_bootstrap_size_checked_before_creating_output(self):
+        for extra in (0, 1):
+            with self.subTest(extra=extra):
+                self.assemble("BOOT", f"\tCSEG\n\tDS {65255 + extra}\n\tEND\n")
+                output = "BOOTFIT" if extra == 0 else "BOOTBIG"
+                result = self.link("/P:0,BOOT", "-o", output)
+                image = self.workspace / (output + ".COM")
+                if extra == 0:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(image.stat().st_size, 65280)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("program too large for a CP/M relocation bootstrap", result.stderr)
+                    self.assertFalse(image.exists())
+
     def test_invalid_origin_is_rejected(self):
         self.assemble("BADORG", "\tCSEG\n\tRET\n\tEND\n")
         result = self.link("/P:nothex,BADORG")

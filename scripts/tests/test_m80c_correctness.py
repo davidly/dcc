@@ -72,6 +72,41 @@ class M80cCorrectnessTests(unittest.TestCase):
         listing = (self.workspace / (name + ".PRN")).read_text()
         self.assertIn(message, listing)
 
+    def test_largest_representable_rel_segments_are_accepted(self):
+        for segment in ("CSEG", "DSEG"):
+            with self.subTest(segment=segment):
+                result = self.assemble(
+                    "LIMIT", f"\t{segment}\n\tDS 65534\n\tDB 1\n\tORG 0\n\tDB 2\n\tEND\n"
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue((self.workspace / "LIMIT.REL").is_file())
+
+    def test_oversized_segments_are_rejected_before_rel_truncation(self):
+        for segment in ("CSEG", "DSEG"):
+            for body in ("DS 65536", "ORG 65536", "DS 65535\n\tDB 1",
+                         "DS 65534\n\tDW 0", "DS 2147483647"):
+                with self.subTest(segment=segment, body=body):
+                    # A failed rebuild must not leave an older linkable object.
+                    rel = self.workspace / "TOOBIG.REL"
+                    rel.write_bytes(b"previous object")
+                    result = self.assemble(
+                        "TOOBIG", f"\t{segment}\n\t{body}\n\tEND\n"
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    expected = ("code" if segment == "CSEG" else "data")
+                    self.assertIn(expected + " segment too large", result.stderr)
+                    self.assertIn("65535-byte REL limit", result.stderr)
+                    self.assertNotIn("No Fatal error(s)", result.stdout)
+                    self.assertFalse(rel.exists())
+
+    def test_initialized_storage_obeys_the_same_segment_limit(self):
+        result = self.assemble(
+            "BIGINIT", "\tCSEG\n\tDS 65536\n\tEND\n", mode="/Z /M"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("code segment too large", result.stderr)
+        self.assertFalse((self.workspace / "BIGINIT.REL").exists())
+
     def test_undefined_symbol_is_an_error(self):
         self.assert_assembly_error(
             "UNDEF",
