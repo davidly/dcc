@@ -1,0 +1,59 @@
+; A global word stays cached in BC across a store only if that store cannot reach it: not through a pointer once its address escapes, nor at an overlapping offset.
+cseg
+
+_pointer_store:
+ld hl,_m+6
+ld (ix-2),l
+ld (ix-1),h
+ld hl,(_m+6)
+push hl
+ld l,(ix-2)
+ld h,(ix-1)
+ld e,(ix+4)
+ld d,(ix+5)
+ld (hl),e
+inc hl
+ld (hl),d
+pop de
+ld hl,(_m+6)
+add hl,de
+ex de,hl
+ld hl,(_m+6)
+add hl,de
+ret
+
+_byte_store:
+ld hl,(_q)
+push hl
+ld a,(ix+4)
+ld (_q+1),a
+pop de
+ld hl,(_q)
+add hl,de
+ex de,hl
+ld hl,(_q)
+add hl,de
+ret
+
+_private_pointer:
+ld hl,(_q)
+push hl
+ld l,(ix+6)
+ld h,(ix+7)
+ld e,(ix+4)
+ld d,(ix+5)
+ld (hl),e
+inc hl
+ld (hl),d
+pop de
+ld hl,(_q)
+add hl,de
+ex de,hl
+ld hl,(_q)
+add hl,de
+ret
+
+dseg
+_m: ds 9
+_q: ds 2
+end

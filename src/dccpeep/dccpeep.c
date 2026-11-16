@@ -5666,6 +5666,94 @@ static int global_write_count_in_file(const char *name)
  * the write itself, mirroring dcc_global_scan.c's own
  * global_text_written_in_function check for its narrower C-source-level
  * version of the same proof. */
+/* Can a pointer reach global `base`?  Only if its address is used outside a
+ * "(base...)" memory operand, or another module may take it. */
+static int global_address_may_escape(const char *base, size_t base_len)
+{
+    char clean[MAX_LINE];
+    int i;
+
+    for (i = 0; i < nlines; i++) {
+        const char *mention;
+        int declaration;
+
+        strip_peep_comment_copy(clean, lines[i]);
+        declaration = strncmp(clean, "public", 6) == 0 ||
+                      strncmp(clean, "extrn", 5) == 0;
+        for (mention = strstr(clean, base); mention != NULL;
+             mention = strstr(mention + 1, base)) {
+            const char *before = mention;
+            char after = mention[base_len];
+
+            if ((mention > clean && (isalnum((unsigned char)mention[-1]) ||
+                                     mention[-1] == '_')) ||
+                isalnum((unsigned char)after) || after == '_')
+                continue;
+            if (declaration) {
+                if (!peep_context.options.closed_program)
+                    return 1;
+                continue;
+            }
+            if (mention == clean)       /* its label or equ */
+                continue;
+            while (before > clean && before[-1] == ' ')
+                --before;
+            if (before == clean || before[-1] != '(')
+                return 1;
+        }
+    }
+    return 0;
+}
+
+/* Can the global word `name` (SYM or SYM+N) change in [start,end) other than
+ * by "ld (name),hl" (symbol_written_in_range)?  A store through a pointer can
+ * reach it if its address escapes, and a byte or word store at a nearby
+ * offset of the same symbol can overlap it: `p = &m.f5; *p -= ...` wrote
+ * m.f5 between two "ld hl,(_m+6)". */
+static int global_word_may_change_in_range(const char *name, int start,
+                                           int end)
+{
+    int escapes = -1;
+    char base[128];
+    size_t base_len = 0;
+    int i;
+
+    while (name[base_len] && name[base_len] != '+' && name[base_len] != '-' &&
+           base_len + 1 < sizeof(base)) {
+        base[base_len] = name[base_len];
+        ++base_len;
+    }
+    base[base_len] = 0;
+    for (i = start; i < end && i < nlines; i++) {
+        const PeepLineInfo *info = peep_line_info(i);
+        const char *mention;
+
+        if (info == NULL)
+            continue;
+        if ((info->effects.memory_written &
+             (PEEP_MEM_INDIRECT | PEEP_MEM_OPAQUE)) != 0 ||
+            (info->effects.unknown &&
+             (info->left.kind == PEEP_OPERAND_INDIRECT ||
+              info->right.kind == PEEP_OPERAND_INDIRECT))) {
+            if (escapes < 0)
+                escapes = global_address_may_escape(base, base_len);
+            if (escapes)
+                return 1;
+        }
+        if ((info->effects.memory_written & PEEP_MEM_GLOBAL) == 0)
+            continue;
+        for (mention = strstr(lines[i], base); mention != NULL;
+             mention = strstr(mention + 1, base)) {
+            char before = mention == lines[i] ? ' ' : mention[-1];
+            char after = mention[base_len];
+            if (!(isalnum((unsigned char)before) || before == '_') &&
+                !(isalnum((unsigned char)after) || after == '_'))
+                return 1;
+        }
+    }
+    return 0;
+}
+
 static int symbol_written_in_range(const char *name, int start, int end)
 {
     int i;
@@ -5974,6 +6062,7 @@ static int pass_cache_global_word_reload(void)
          * otherwise-unrelated tests before this threshold was raised). */
         if (best_count >= 3 && global_write_count_in_file(best_sym) <= 1 &&
             !symbol_written_in_range(best_sym, segstart, i) &&
+            !global_word_may_change_in_range(best_sym, segstart, i) &&
             !bc_regalloc_claimed_in_range(segstart, i + 1)) {
             noc = 0;
             for (j = segstart; j < i; j++) {
@@ -6496,12 +6585,10 @@ static int deferred_global_hl_dead_after_push(int push_line)
  * Declines (leaves the push/pop alone) on:
  *   - any use of the original HL value other than the removed push,
  *     including uses after a matching pop into another register pair,
- *   - anything that writes NAME in between (symbol_written_in_range, the
- *     same whole-word-store text match pass_cache_global_word_reload
- *     already relies on for the identical reason: a write through an
- *     aliased pointer, rather than literal "(NAME),hl" text, isn't visible
- *     to a text-level scan - the same accepted-risk class as that pass,
- *     not a new one here),
+ *   - anything that may write NAME in between: a whole-word store
+ *     (symbol_written_in_range), a store at an overlapping offset, or a
+ *     store through a pointer once NAME's address escapes
+ *     (global_word_may_change_in_range),
  *   - any call (opaque - could write NAME, and this file has no way to
  *     know what an arbitrary callee does),
  *   - any label, jp/jr/djnz, ret, or "sp"/"(sp)" mention - reusing exactly
@@ -6574,7 +6661,8 @@ static int pass_defer_global_push_reload(void)
 
         if (pop_line < 0 || decline_af_or_frame_reg(pop_reg))
             continue;
-        if (symbol_written_in_range(sym, i + 2, pop_line))
+        if (symbol_written_in_range(sym, i + 2, pop_line) ||
+            global_word_may_change_in_range(sym, i + 2, pop_line))
             continue;
         /* The push carries only one use of the load; resident HL may still
          * supply another operand even after the matching pop. */
