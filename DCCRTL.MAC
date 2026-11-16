@@ -24376,11 +24376,13 @@ cal_year_done:
         sbc     hl,de
         ld      (CDZ0005+10),hl
 
-        ld      hl,(CDZ0005+14)
-        push    hl              ; preserve tm_yday while finding the month
+        ; Keep the month countdown in BC, leaving tm_yday intact.  The
+        ; month-length helper clobbers BC, so save the countdown with its args.
+        ld      bc,(CDZ0005+14)
         ld      hl,0
         ld      (CDZ0005+8),hl
 cal_month_loop:
+        push    bc              ; remaining days within the year
         push    hl              ; month
         ld      hl,(CDZ0005+10)
         ld      de,1900
@@ -24390,11 +24392,12 @@ cal_month_loop:
         pop     bc
         pop     bc
         ex      de,hl           ; DE = month length
-        ld      hl,(CDZ0005+14)
+        pop     hl              ; remaining days
         or      a
         sbc     hl,de
         jr      c,cal_month_done
-        ld      (CDZ0005+14),hl
+        ld      b,h
+        ld      c,l
         ld      hl,(CDZ0005+8)
         inc     hl
         ld      (CDZ0005+8),hl
@@ -24403,8 +24406,6 @@ cal_month_done:
         add     hl,de
         inc     hl
         ld      (CDZ0005+6),hl
-        pop     hl
-        ld      (CDZ0005+14),hl
         ld      hl,0
         ld      (CDZ0005+16),hl
         ld      hl,CDZ0005
