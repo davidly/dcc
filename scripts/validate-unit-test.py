@@ -9,6 +9,7 @@ Relative paths are rooted at the checkout, regardless of the caller's cwd.
 """
 import argparse
 import concurrent.futures
+import filecmp
 import importlib.util
 import json
 import os
@@ -177,10 +178,24 @@ def validate_app(name, compiler, fixtures, build, baselines, timeout, override, 
             for filename in dict.fromkeys((fixture_name,fixture_name.upper(),fixture_name.lower())):
                 shutil.copyfile(fixture, work/filename)
         exe = work/(name+('.exe' if system == 'Windows' else ''))
-        if exe.exists():
-            exe.unlink()
-        command = compile_command(compiler,source,exe,override,root,system)
-        code,timed,output = runall.run(command,root,60,env=compiler['env'])
+        if system == 'Darwin' and exe.is_file():
+            # A newly linked executable has a substantial first-launch cost on
+            # macOS. Always rebuild, but preserve the already-run file when the
+            # result is byte-identical. Keep the basename for Mach-O signing.
+            with tempfile.TemporaryDirectory(prefix='.compile-', dir=str(work)) as folder:
+                candidate = Path(folder)/exe.name
+                command = compile_command(compiler,source,candidate,override,root,system)
+                code,timed,output = runall.run(command,root,60,env=compiler['env'])
+                if not code and not timed:
+                    if not candidate.is_file():
+                        return result('Failed', ['COMPILE FAILED: no executable produced'])
+                    if not filecmp.cmp(exe,candidate,shallow=False):
+                        candidate.replace(exe)
+        else:
+            if exe.exists():
+                exe.unlink()
+            command = compile_command(compiler,source,exe,override,root,system)
+            code,timed,output = runall.run(command,root,60,env=compiler['env'])
         if code or timed or not exe.is_file():
             return result('Failed', ['COMPILE FAILED']+output.splitlines()[:5])
         code,timed,output = runall.run([str(exe)]+str(override.get('args') or '').split(),work,timeout,

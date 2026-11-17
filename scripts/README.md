@@ -429,6 +429,13 @@ Windows, native ARM64 MSVC on Windows ARM64, clang on macOS, and gcc on Linux.
 On Unix-like hosts, pass `-CC` or set `CC` when you intentionally want a
 different compiler.
 
+On macOS, host validation recompiles every selected app but preserves the
+existing executable when the new binary is byte-identical. This avoids the
+substantial first-launch cost for newly linked executables on repeated runs.
+Every app still executes and its output is compared with the baseline; changed
+binaries replace the previous executable, and failed builds fail validation.
+Keep `build/host-validate` between runs to benefit from this optimization.
+
 ### Linux 32-bit GCC support for baseline validation
 
 32-bit/multilib support is only useful for `validate-unit-test.py`; it is not

@@ -120,6 +120,43 @@ class HostValidationTests(unittest.TestCase):
                                       'source.c':root/'tests/source.c'})
             self.assertEqual(validator.fixture_files(root,[]),{})
 
+    def test_macos_rebuild_preserves_only_identical_executables(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            (root/'tests').mkdir()
+            (root/'tests/a.c').write_text('int main(void) { return 0; }')
+            baselines=root/'baselines';baselines.mkdir();(baselines/'a.txt').write_text('ok\n')
+            work=root/'build/a';work.mkdir(parents=True)
+            exe=work/'a';exe.write_bytes(b'original')
+            original_inode=exe.stat().st_ino
+            compiler={'kind':'unix','command':'clang','env':{},'flags':[]}
+            def validate(binary, compile_code=0):
+                calls=[]
+                def run(cmd,cwd,timeout,stdin='',env=None):
+                    calls.append(cmd)
+                    if len(calls)==1:
+                        candidate=Path(cmd[cmd.index('-o')+1])
+                        self.assertEqual(candidate.name,exe.name)
+                        self.assertNotEqual(candidate,exe)
+                        if binary is not None:
+                            candidate.write_bytes(binary)
+                        return compile_code,False,''
+                    self.assertEqual(cmd,[str(exe)])
+                    return 0,False,'ok\n'
+                with mock.patch.object(validator.runall,'run',side_effect=run):
+                    result=validator.validate_app('a',compiler,{},root/'build',baselines,2,{},root,'Darwin')
+                self.assertEqual(list(work.iterdir()),[exe])
+                return result,calls
+            self.assertEqual(validate(b'original')[0][1],'Passed')
+            self.assertEqual(exe.stat().st_ino,original_inode)
+            self.assertEqual(validate(b'changed')[0][1],'Passed')
+            self.assertEqual(exe.read_bytes(),b'changed')
+            for binary,code in ((b'broken',1),(None,0)):
+                result,calls=validate(binary,code)
+                self.assertEqual(result[1],'Failed')
+                self.assertEqual(len(calls),1)
+                self.assertEqual(exe.read_bytes(),b'changed')
+
     def test_missing_sources_and_bad_arguments_fail(self):
         with mock.patch.object(validator,'ROOT',Path('/nonexistent')):
             self.assertEqual(validator.main(['--app','absent','--build-dir',tempfile.gettempdir()]),1)
