@@ -22,7 +22,9 @@ class Driver(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='dcc ma ')
         self.addCleanup(temporary.cleanup)
-        self.folder = Path(temporary.name)
+        # Resolve macOS /var aliases and Windows short temp-directory names,
+        # just as the build driver does when resolving package assets.
+        self.folder = Path(temporary.name).resolve()
         previous = Path.cwd()
         os.chdir(self.folder)
         self.addCleanup(os.chdir,previous)
@@ -62,9 +64,10 @@ class Driver(unittest.TestCase):
 
     def test_source_selection_and_explicit_source(self):
         Path('hello.c').write_text('local')
-        self.assertEqual(ma.find_source(ma.parse_args(['hello'])),Path('tests/hello.c'))
-        self.assertEqual(ma.find_source(ma.parse_args(['HELLO.C'])),Path('tests/hello.c'))
-        self.assertEqual(ma.find_source(ma.parse_args(['hello','-SourcePath','hello.c'])),Path('hello.c'))
+        self.assertTrue(ma.find_source(ma.parse_args(['hello'])).samefile('tests/hello.c'))
+        # Case-insensitive filesystems may retain the caller's spelling.
+        self.assertTrue(ma.find_source(ma.parse_args(['HELLO.C'])).samefile('tests/hello.c'))
+        self.assertTrue(ma.find_source(ma.parse_args(['hello','-SourcePath','hello.c'])).samefile('hello.c'))
 
     def test_missing_source_and_runtime_fail_before_running(self):
         with self.assertRaises(ma.BuildError):
