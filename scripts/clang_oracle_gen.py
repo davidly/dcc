@@ -325,6 +325,24 @@ def clone(e):
     return E(e.op, [clone(k) for k in e.k], e.a, e.t, e.id)
 
 
+def host_size_t(e):
+    """True when the host types `e` as 64-bit `size_t` because of a `sizeof`
+    in it that no cast narrows, as in `sizeof(x) >> n` or `-sizeof(x)`."""
+    if e.op == 'sizeof':
+        return True
+    if e.op == 'un':
+        return e.a != '!' and host_size_t(e.k[0])
+    if e.op == 'bin':
+        if e.a in CMP or e.a in LOGIC:
+            return False
+        if e.a in SHIFT:
+            return host_size_t(e.k[0])
+        return host_size_t(e.k[0]) or host_size_t(e.k[1])
+    if e.op == 'cond':
+        return host_size_t(e.k[1]) or host_size_t(e.k[2])
+    return False
+
+
 def is_bitfield(e):
     return e.op == 'fld' and e.a.bf
 
@@ -1523,9 +1541,9 @@ class Gen:
         operands = list(k[1:]) if op == 'cond' else list(k)
         if not all(is_int(ty(x)) for x in operands):
             return k
-        if len(operands) == 2 and any(x.op == 'sizeof' for x in operands) \
+        if len(operands) == 2 and any(host_size_t(x) for x in operands) \
                 and any(promote(ty(x)).bits == 32 for x in operands):
-            k = [E('cast', [x], t=U16) if x.op == 'sizeof' else x for x in k]
+            k = [E('cast', [x], t=U16) if host_size_t(x) else x for x in k]
         return k
 
     def pick(self, weighted):
