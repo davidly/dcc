@@ -1,0 +1,37 @@
+; A boolean's zero test folds into the branches that made it only when nothing after the test reads HL; bit 7,h still does.
+	cseg
+
+_const_live:
+	ld hl,1
+	bit 7,h
+	jp nz,L1
+	ld hl,1
+	ret
+L1:
+	ld hl,0
+	ret
+
+_const_dead:
+	ld hl,7
+	ret
+	ld hl,0
+	ret
+
+_suffix_live:
+	ld hl,0 ; peep: bool_from_cmp
+	jr nc,L6 ; peep: jp_to_jr
+	inc l
+L6:
+	ld a,h
+	or l
+	jp z,L7
+	bit 7,h
+	jp z,L8
+L7:
+	ld hl,1
+	ret
+L8:
+	ld hl,0
+	ret
+
+	end

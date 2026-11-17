@@ -71,6 +71,60 @@ static void replace_block_with_5(int i,
     delete_n(i + 5, oldn - 5);
 }
 
+/* Whether code reached from `line` (exclusive) can read any of `regs` before
+ * writing all of them, following both sides of each branch for a few
+ * straight-line steps. A return reads HL (its value); a call to a C function
+ * takes its arguments on the stack and clobbers the scratch pairs, but a
+ * runtime helper may take them in registers. Unknown code reads them. */
+static int regs_read_after(int line, unsigned regs, int depth)
+{
+    char clean[MAX_LINE];
+    char target[128];
+    char cond[16];
+    int func_start;
+    int func_end;
+    int j;
+    int steps = 0;
+
+    if (depth > 4)
+        return 1;
+    find_function_bounds_any(line, &func_start, &func_end);
+    for (j = line + 1; j < func_end && steps < 32; ++j) {
+        const PeepLineInfo *info;
+
+        strip_peep_comment_copy(clean, lines[j]);
+        if (clean[0] == 0 || is_blank_or_comment(lines[j]) || starts_label(clean))
+            continue;
+        ++steps;
+        if (strncmp(clean, "ret", 3) == 0)
+            return (regs & PEEP_REG_HL) != 0 || clean[3] != 0;
+        if (strncmp(clean, "call ", 5) == 0)
+            return !(clean[5] == '_' && clean[6] != '_');
+        if (peep_parse_jp_uncond_label(clean, target)) {
+            int label = find_label_line_in_range(target, func_start, func_end);
+
+            if (label < 0)
+                return 1;
+            return regs_read_after(label, regs, depth + 1);
+        }
+        if (peep_parse_any_cond_jump(clean, cond, target)) {
+            int label = find_label_line_in_range(target, func_start, func_end);
+
+            if (label < 0 || regs_read_after(label, regs, depth + 1))
+                return 1;
+            continue;
+        }
+        info = peep_line_info(j);
+        if (info == NULL || info->effects.unknown ||
+            info->effects.control_flow || (info->effects.reads & regs))
+            return 1;
+        regs &= ~info->effects.writes;
+        if (regs == 0)
+            return 0;
+    }
+    return 1;
+}
+
 static int try_fold_bool_branch(int i)
 {
     char t1[128];
@@ -107,8 +161,10 @@ static int try_fold_bool_branch(int i)
     if (!eq(i + 8, "or l"))
         return 0;
     /* The folds delete the test after Lend and the "ld hl,1" after the true
-     * label, so no jump from outside the window may reach either label. */
-    if (label_reference_count(e) != 1)
+     * label, so no jump from outside the window may reach either label, and
+     * nothing after the test may read the boolean. */
+    if (label_reference_count(e) != 1 ||
+        regs_read_after(i + 9, PEEP_REG_HL, 0))
         return 0;
 
     /* Two-way true test, used for <= and >= materialization. */
@@ -693,7 +749,8 @@ static int try_and1_bool_at(int i)
         eq(i + 9, "ld a,h") &&
         eq(i + 10, "or l") &&
         (strncmp(lines[i + 11], "jp z,", 5) == 0 ||
-         strncmp(lines[i + 11], "jp nz,", 6) == 0)) {
+         strncmp(lines[i + 11], "jp nz,", 6) == 0) &&
+        !regs_read_after(i + 11, PEEP_REG_HL | PEEP_REG_DE, 0)) {
 
         replace1_tagged(i, "ld a,(ix+8)", "and1_bool");
         replace1(i + 1, "and 1");
@@ -775,6 +832,9 @@ static int try_bool_suffix_at(int i)
             eq(i + 6, "or l") &&
             (peep_parse_jp_cond_label(lines[i + 7], "z", ldest) ||
              peep_parse_jp_cond_label(lines[i + 7], "nz", ldest)) &&
+            /* Nothing may read the boolean after its test (`bit 7,h` for
+             * a signed `b <= 0`). */
+            !regs_read_after(i + 7, PEEP_REG_HL, 0) &&
             /* The middle label needs no check: its jumps pass through the
              * middle constant load too. */
             bool_suffix_other_refs(i, lab_end, ldest,
@@ -840,7 +900,11 @@ static int try_const_bool_at(int i)
             int is_one;
             int is_jp_z;
             int taken;
+            int keep_hl;
 
+            /* The constant may still be read after the test
+             * (`bit 7,h`); keep it when HL is live. */
+            keep_hl = regs_read_after(i + 3, PEEP_REG_HL, 0);
             is_one = eq(i, "ld hl,1");
             is_jp_z = strncmp(lines[i + 3], "jp z,", 5) == 0;
 
@@ -848,7 +912,14 @@ static int try_const_bool_at(int i)
 
             if (taken) {
                 sprintf(newline, "jp %s", tgt);
-                replace1_tagged(i, newline, "const_bool_taken");
+                if (keep_hl) {
+                    replace1_tagged(i + 1, newline, "const_bool_taken");
+                    delete_n(i + 2, 2);
+                } else {
+                    replace1_tagged(i, newline, "const_bool_taken");
+                    delete_n(i + 1, 3);
+                }
+            } else if (keep_hl) {
                 delete_n(i + 1, 3);
             } else {
                 delete_n(i, 4);
@@ -899,9 +970,10 @@ static int try_cp_hl_bool_at(int i)
             eq(i + 8, "or l") &&
             (peep_parse_jp_cond_label(lines[i + 9], "z", ldest) ||
              peep_parse_jp_cond_label(lines[i + 9], "nz", ldest)) &&
-            /* Both labels are deleted. */
+            /* Both labels are deleted, and so is the boolean. */
             label_reference_count(ltrue) == 1 &&
-            label_reference_count(lend) == 1) {
+            label_reference_count(lend) == 1 &&
+            !regs_read_after(i + 9, PEEP_REG_HL, 0)) {
 
             first_is_z = strncmp(lines[i + 1], "jp z,", 5) == 0;
             final_is_z = strncmp(lines[i + 9], "jp z,", 5) == 0;
