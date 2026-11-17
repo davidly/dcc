@@ -4,6 +4,7 @@
 Baselines are never rewritten. Uses MSVC on Windows, clang on macOS, gcc on
 Linux, with CC/--cc overrides on Unix. Probes GCC -m32 on Linux. Honors host
 exclusions, per-app host-cflags, arguments, stdin and baseline placeholders.
+Compiles and runs apps concurrently, staging only each app's declared fixtures.
 Relative paths are rooted at the checkout, regardless of the caller's cwd.
 """
 import argparse
@@ -61,7 +62,8 @@ def parse_args(argv=None):
     p.add_argument('--app', '-App')
     p.add_argument('--timeout', '--run-timeout', '-RunTimeout', type=positive, default=10)
     p.add_argument('--serial', '-Serial', action='store_true')
-    p.add_argument('--jobs', '--throttle-limit', '-ThrottleLimit', type=positive, default=os.cpu_count() or 1)
+    p.add_argument('--jobs', '--throttle-limit', '-ThrottleLimit', type=positive, default=os.cpu_count() or 1,
+                   help='concurrent apps (default: logical CPU count)')
     p.add_argument('-Help', action='help', help=argparse.SUPPRESS)
     return p.parse_args(argv)
 
@@ -139,9 +141,20 @@ def compile_command(compiler, source, exe, override, root, system):
     return [compiler['command']] + flags + compiler['flags'] + ['-include',prelude,str(source),'-o',str(exe),'-lm']
 
 
-def fixture_files(root):
-    return [p for p in (root/'tests').iterdir()
-            if p.is_file() and not p.name.startswith('.') and p.suffix.lower() not in ('.c','.json','.md')]
+def fixture_files(root, specs):
+    """Index declared inputs only, including C sources used by interpreters."""
+    wanted = {str(item if isinstance(item, str) else item['name']).lower()
+              for item in specs if isinstance(item, str) or not item.get('source')}
+    sources = {}
+    for folder in (root/'tests', root):
+        if not wanted:
+            break
+        for path in folder.iterdir():
+            key = path.name.lower()
+            if key in wanted and path.is_file():
+                sources[key] = path
+                wanted.remove(key)
+    return sources
 
 
 def validate_app(name, compiler, fixtures, build, baselines, timeout, override, root, system):
@@ -155,8 +168,13 @@ def validate_app(name, compiler, fixtures, build, baselines, timeout, override, 
             return result('Skipped', ['SKIP: '+reason])
         work = build/name
         work.mkdir(parents=True, exist_ok=True)
-        for fixture in fixtures:
-            for filename in dict.fromkeys((fixture.name,fixture.name.upper(),fixture.name.lower())):
+        for item in override.get('fixtures', []):
+            fixture_name = item if isinstance(item, str) else item['name']
+            explicit = item.get('source') if isinstance(item, dict) else None
+            fixture = root/explicit if explicit else fixtures.get(fixture_name.lower())
+            if fixture is None or not fixture.is_file():
+                return result('Failed', ['ERROR: fixture not found: '+fixture_name])
+            for filename in dict.fromkeys((fixture_name,fixture_name.upper(),fixture_name.lower())):
                 shutil.copyfile(fixture, work/filename)
         exe = work/(name+('.exe' if system == 'Windows' else ''))
         if exe.exists():
@@ -203,12 +221,15 @@ def main(argv=None):
                 counts[skip] += 1
             else:
                 selected.append(name)
-        fixtures = fixture_files(ROOT)
+        fixtures = fixture_files(ROOT, [item for name in selected
+                                       for item in overrides.get(name, {}).get('fixtures', [])])
+        workers = min(len(selected) or 1, 1 if args.serial else args.jobs)
+        print('Parallel workers: {}'.format(workers), flush=True)
         started = time.monotonic()
         def one(name):
             return validate_app(name,compiler,fixtures,build,baselines,args.timeout,
                                 overrides.get(name,{}),ROOT,system)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1 if args.serial else args.jobs) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
             pending = [pool.submit(one,name) for name in selected]
             for future in concurrent.futures.as_completed(pending):
                 name,status,elapsed,lines = future.result()

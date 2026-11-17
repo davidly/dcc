@@ -76,7 +76,7 @@ class HostValidationTests(unittest.TestCase):
             fixture=root/'tests/fixture.dat';fixture.write_text('data')
             baselines=root/'baselines';baselines.mkdir();(baselines/'a.txt').write_text('ok\n')
             compiler={'kind':'unix','command':'gcc','env':{'CUSTOM':'value'},'flags':[]}
-            def validate(outputs):
+            def validate(outputs, specs=None):
                 calls=[]
                 def run(cmd,cwd,timeout,stdin='',env=None):
                     calls.append((cmd,cwd,timeout,stdin,env))
@@ -84,8 +84,8 @@ class HostValidationTests(unittest.TestCase):
                         Path(cmd[cmd.index('-o')+1]).write_text('fake executable')
                     return outputs[len(calls)-1]
                 with mock.patch.object(validator.runall,'run',side_effect=run):
-                    result=validator.validate_app('a',compiler,[fixture],root/'build',baselines,2,
-                        {'args':'one two','stdin':'input'},root,'Linux')
+                    result=validator.validate_app('a',compiler,{'fixture.dat':fixture},root/'build',baselines,2,
+                        {'args':'one two','stdin':'input','fixtures':['fixture.dat'] if specs is None else specs},root,'Linux')
                 return result,calls
             result,calls=validate([(0,False,''),(3,False,'ok\r\n')])
             self.assertEqual(result[1],'Passed') # Preserve warning-only nonzero host exits.
@@ -98,8 +98,27 @@ class HostValidationTests(unittest.TestCase):
                 result,calls=validate(outputs)
                 self.assertEqual(result[1],'Failed')
                 self.assertEqual(len(calls),count)
+            explicit=[{'name':'renamed.dat','source':'tests/fixture.dat'}]
+            self.assertEqual(validate([(0,False,''),(0,False,'ok')],explicit)[0][1],'Passed')
+            self.assertEqual((root/'build/a/RENAMED.DAT').read_text(),'data')
+            missing,calls=validate([],['absent.dat'])
+            self.assertEqual(missing[1],'Failed')
+            self.assertIn('fixture not found: absent.dat',missing[3][0])
+            self.assertEqual(calls,[])
             (baselines/'a.txt').unlink()
             self.assertEqual(validate([(0,False,''),(0,False,'ok')])[0][1],'Failed')
+
+    def test_only_declared_fixtures_are_indexed_with_tests_precedence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'tests').mkdir()
+            for name in ('input.dat','unused.dat','source.c'):
+                (root/'tests'/name).write_text(name)
+            (root/'INPUT.DAT').write_text('shadow')
+            sources=validator.fixture_files(root,['INPUT.DAT',{'name':'source.c'},
+                {'name':'alias.dat','source':'tests/input.dat'}])
+            self.assertEqual(sources,{'input.dat':root/'tests/input.dat',
+                                      'source.c':root/'tests/source.c'})
+            self.assertEqual(validator.fixture_files(root,[]),{})
 
     def test_missing_sources_and_bad_arguments_fail(self):
         with mock.patch.object(validator,'ROOT',Path('/nonexistent')):
