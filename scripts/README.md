@@ -82,6 +82,26 @@ Child environment overrides leave the caller's environment unchanged.
 Named assembly outputs use LF line endings on every host, so strict assembly
 SHA-256 baselines compare the same bytes on Windows, macOS, and Linux.
 
+## `run-diagnostics.py`
+
+Python 3.7+ compiler diagnostic runner, shared with `runall.py`. It compares
+normalized source paths and line endings against the checked-in baselines.
+`warn-*.c` tests require a successful compilation; other tests require failure.
+Timeouts, launch failures, and crashes cannot pass validation or update baselines.
+
+```sh
+python scripts/run-diagnostics.py --jobs 8
+python scripts/run-diagnostics.py --serial
+python scripts/run-diagnostics.py --update
+```
+
+`--dcc`, `--test-dir`, `--baseline-dir`, `--build-dir`, `--update`, `--serial`,
+and `--throttle-limit` retain their previous single-dash aliases. `--jobs`
+sets the worker limit (default: logical CPU count); `--timeout` sets the
+per-compiler deadline (default: 60 seconds). Relative paths start at the repo
+root. Baseline updates are explicit and write UTF-8 without a BOM, using LF.
+The separate PowerShell and shell implementations are retired.
+
 ## `runall.py`
 
 Native Python 3 runner for the standard build, emulator, baseline, fixture,

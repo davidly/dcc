@@ -526,28 +526,18 @@ def execute(items, workers, failures_only, fail_fast=False, fail_fast_check=None
 
 
 def diagnostics(build_root: Path, workers: int):
-    """Native equivalent of run-diagnostics.ps1's compile/output assertions."""
-    dcc = os.environ.get("DCC") or command("dcc")
-    tests = sorted((ROOT / "tests/diagnostics").glob("*.c"))
-    def one(source):
-        code, _, output = run([dcc, str(source), "-o", str(build_root / f"{source.stem}.MAC")], ROOT, 60)
-        actual = output.replace("\r\n", "\n").replace("\r", "\n")
-        actual = actual.replace(str(source.resolve()), "<source>").replace(str(source), "<source>")
-        if actual and not actual.endswith("\n"):
-            actual += "\n"
-        expected_path = ROOT / "tests/diagnostics/baselines" / f"{source.stem}.txt"
-        if not expected_path.is_file():
-            return False
-        expected = expected_path.read_text().replace("\r\n", "\n").replace("\r", "\n")
-        if expected and not expected.endswith("\n"):
-            expected += "\n"
-        wants_success = source.stem.startswith("warn-")
-        return (code == 0) == wants_success and actual == expected
-    if not tests:
+    """Use the same diagnostic assertions as the standalone Python runner."""
+    try:
+        try:
+            from .diagnostics import run_suite
+        except ImportError:
+            from diagnostics import run_suite
+        results = run_suite(os.environ.get("DCC") or command("dcc"),
+                            ROOT / "tests/diagnostics", ROOT / "tests/diagnostics/baselines",
+                            build_root, workers, run, root=ROOT)
+        return all(result.passed for result in results)
+    except (OSError, RuntimeError):
         return False
-    build_root.mkdir(parents=True, exist_ok=True)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        return all(list(pool.map(one, tests)))
 
 
 def dccpeep_fixtures(workers: int, fixture_dir=None, peep=None):

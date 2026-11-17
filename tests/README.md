@@ -115,13 +115,18 @@ programs that are expected to fail during `dcc` compilation. The runner captures
 compiler output, normalizes the tested source path to `<source>`, and compares
 against `tests/diagnostics/baselines/<name>.txt`.
 
-```pwsh
+```sh
 # Verify diagnostic baselines
-pwsh ./scripts/run-diagnostics.ps1
+python scripts/run-diagnostics.py
 
 # Refresh baselines after an intentional diagnostic wording change
-pwsh ./scripts/run-diagnostics.ps1 -Update
+python scripts/run-diagnostics.py --update
 ```
+
+The standalone runner and `runall.py` share the same Python 3.7+ validation
+code. Warning tests (`warn-*.c`) must compile successfully; other tests must
+fail compilation. Timeouts and compiler crashes fail validation and cannot be
+recorded as updated baselines. Use `--jobs N` or `--serial` to control parallelism.
 
 Use small single-purpose inputs here: each file should exercise one diagnostic
 path and fail before assembly or emulator stages are needed.
