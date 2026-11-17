@@ -3059,11 +3059,11 @@ int mir_emit_homed_binary_instruction(MirStream *out,
         preserve_hl = !preserve_hl_de &&
             mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
             !(mir.allocation_colors[left] == MIR_COLOR_HL &&
-              !mir_value_has_use_after(left, instruction));
+              !mir_value_live_out_of_instruction(left, instruction));
         preserve_de = !preserve_hl_de &&
             mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&
             !(mir.allocation_colors[right] == MIR_COLOR_DE &&
-              !mir_value_has_use_after(right, instruction));
+              !mir_value_live_out_of_instruction(right, instruction));
         right_definition = mir_definition(right);
         comparison_unsigned = mir_type_uses_unsigned_comparison(
             insn->secondary_offset);

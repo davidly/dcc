@@ -15838,6 +15838,21 @@ void mir_emit_virtual_load(MirStream *out, int value)
         mir_stream_printf(out, "\tld hl,%ld\n", definition->immediate & 0xffffL);
         return;
     }
+    /* A narrow store of a wide constant (`r[i] = t + 6239` with long t)
+     * reads its low word; a rematerialized wide constant has no slot. */
+    if (definition != NULL && definition->opcode == MIR_CONST &&
+        type_size(definition->type) == 4 &&
+        !type_is_float(definition->type) &&
+        mir.backend_slots != NULL && mir.backend_slots[value] < 0 &&
+        mir_emit_instruction_index >= 0 &&
+        mir_emit_instruction_index < mir.count &&
+        (mir.insns[mir_emit_instruction_index].opcode == MIR_STORE ||
+         mir.insns[mir_emit_instruction_index].opcode ==
+             MIR_STORE_INDIRECT) &&
+        mir.insns[mir_emit_instruction_index].memory_size <= 2) {
+        mir_stream_printf(out, "\tld hl,%ld\n", definition->immediate & 0xffffL);
+        return;
+    }
     if (mir_string_address_is_rematerializable(value)) {
         mir_stream_printf(out, "\tld hl,S%ld\n", definition->immediate);
         return;
