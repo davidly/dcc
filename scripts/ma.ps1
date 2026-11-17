@@ -15,7 +15,7 @@ and PowerShell 7+, and handles the complete build pipeline:
   6. Link app + RTLMIN with L80
 
 The build logic lives in the Invoke-MaBuild function so other scripts (e.g.
-runall.ps1) can dot-source this file once and call Invoke-MaBuild in-process,
+other PowerShell tools can dot-source this file once and call Invoke-MaBuild in-process,
 avoiding a fresh PowerShell process per build. When run directly as a script, the
 parameters below are forwarded to Invoke-MaBuild.
 

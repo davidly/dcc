@@ -807,12 +807,11 @@ Invoke-ProofTaskGroup @(
         Name = $phaseNames[7]
         Commands = @([pscustomobject]@{
             Name = "run strict stack release suite"
-            Command = $pwsh
+            Command = $python
             Arguments = @(
-                "-NoLogo", "-NoProfile", "-File", "scripts/runall.ps1",
-                "-Mode", "full", "-Extended",
-                "-RunTimeout", "$RunTimeout", "-FailuresOnly",
-                "-ThrottleLimit", "$releaseJobs")
+                "scripts/runall.py", "--mode", "full", "--extended",
+                "--timeout", "$RunTimeout", "--failures-only",
+                "--throttle-limit", "$releaseJobs")
             Environment = $strictMir
         })
     },
@@ -821,12 +820,11 @@ Invoke-ProofTaskGroup @(
         Name = $phaseNames[8]
         Commands = @([pscustomobject]@{
             Name = "run strict no-stack release suite"
-            Command = $pwsh
+            Command = $python
             Arguments = @(
-                "-NoLogo", "-NoProfile", "-File", "scripts/runall.ps1",
-                "-Mode", "full", "-Extended", "-NoStackCheck",
-                "-RunTimeout", "$RunTimeout", "-FailuresOnly",
-                "-ThrottleLimit", "$releaseJobs")
+                "scripts/runall.py", "--mode", "full", "--extended", "--no-stack-check",
+                "--timeout", "$RunTimeout", "--failures-only",
+                "--throttle-limit", "$releaseJobs")
             Environment = $strictMir
         })
     }

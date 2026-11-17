@@ -457,8 +457,8 @@ def compare_rows(
         app_list = ",".join(sorted(runtime_apps))
         print("\nFocused validation")
         print(
-            "  pwsh ./scripts/runall.ps1 "
-            f"-Apps {app_list} -Mode full -RunTimeout 20"
+            "  python3 ./scripts/runall.py "
+            f"--apps {app_list} --mode full --timeout 20"
         )
     return runtime_apps, len(missing_selected)
 
@@ -500,7 +500,7 @@ def main() -> int:
             # Each worker writes to its own assembly file: compiles run
             # concurrently (subprocess.run releases the GIL while the child
             # process runs, so a thread pool scales across cores same as
-            # runall.ps1's parallel app suite), and a shared output path
+            # runall.py's parallel app suite), and a shared output path
             # would let two in-flight compiles clobber each other's .mac.
             worker_assembly = directory_path / f"census-{index}.mac"
             app_rows, app_matrix_rows, app_cost_rows, error = compile_source(
@@ -547,7 +547,7 @@ def main() -> int:
                     matrix_rows.extend(app_matrix_rows)
                     cost_rows.extend(app_cost_rows)
                 # Completion order (not dispatch order) with -j>1, matching
-                # runall.ps1's own parallel status-line convention.
+                # runall.py's own parallel status-line convention.
                 print(f"\r[{done:3d}/{len(sources)}] {source.stem:12s}", end="", flush=True)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

@@ -138,39 +138,39 @@ cd "$repo_root"
 python3 "$repo_root/scripts/test-compiler-entrypoints.py" \
     --compiler "$DCC" --host "$build_dir/cmake/mir-verify-test" \
     --workspace "$build_dir/compiler-entrypoints"
-"$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -ThrottleLimit "$jobs"
-"$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -NoStackCheck -ThrottleLimit "$jobs"
-"$pwsh_cmd" -NoProfile -File scripts/runall-extended.ps1 -C11 -Mode full -ThrottleLimit "$jobs"
+python3 scripts/runall.py --mode full --throttle-limit "$jobs"
+python3 scripts/runall.py --mode full --no-stack-check --throttle-limit "$jobs"
+python3 scripts/runall.py --mode full --extended --throttle-limit "$jobs"
 # Exercise the apps affected by the regional regressions against baselines.
 regional_apps=tgcdphi,tfracphi,tiyreg,tdmfuse,tlimbsh,tvolopt,tnestfor,tflddecl,tinlinfb,tszswap,too,targs,tdblnot,tsvbmod,tvlaparm,tisnan,tcalb11,tctxflt
-DCC_MIR_PREFER_REGIONAL=1 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
-    -Apps "$regional_apps" -Mode full -NoStackCheck -NoPerfCheck \
-    -ThrottleLimit "$jobs"
+DCC_MIR_PREFER_REGIONAL=1 python3 scripts/runall.py \
+    --apps "$regional_apps" --mode full --no-stack-check --no-perf-check \
+    --throttle-limit "$jobs"
 # A lazy wide parameter loads nothing, so homed-lazy must not take it as
 # already in HL:DE when a comparison follows it (tlongsub's if_lt).
-DCC_MIR_SELECT_CANDIDATE=homed-lazy "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
-    -Apps tlongsub -Mode full -NoStackCheck -NoPerfCheck \
-    -ThrottleLimit "$jobs"
+DCC_MIR_SELECT_CANDIDATE=homed-lazy python3 scripts/runall.py \
+    --apps tlongsub --mode full --no-stack-check --no-perf-check \
+    --throttle-limit "$jobs"
 # A constant argument suffix must not be pushed after a nested call's
 # argument the call-argument cache has already staged (texpfsp's main).
-DCC_MIR_SELECT_CANDIDATE=spilled-all "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
-    -Apps texpfsp -Mode full -NoStackCheck -NoPerfCheck \
-    -ThrottleLimit "$jobs"
+DCC_MIR_SELECT_CANDIDATE=spilled-all python3 scripts/runall.py \
+    --apps texpfsp --mode full --no-stack-check --no-perf-check \
+    --throttle-limit "$jobs"
 # A constant return suffix whose branch the boolean-PHI fold removes must
 # still produce its 0/1 result (tctxflt's truth_and and truth_or).
-DCC_MIR_SELECT_CANDIDATE=spilled-boolean-phi-branch "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
-    -Apps tctxflt -Mode full -NoStackCheck -NoPerfCheck \
-    -ThrottleLimit "$jobs"
+DCC_MIR_SELECT_CANDIDATE=spilled-boolean-phi-branch python3 scripts/runall.py \
+    --apps tctxflt --mode full --no-stack-check --no-perf-check \
+    --throttle-limit "$jobs"
 # A spilled `!!` over a value just widened to long must not read its slot
 # unwritten (tdblnotw).
-DCC_MIR_SELECT_CANDIDATE=spilled-baseline "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
-    -Apps tdblnotw -Mode full -NoStackCheck -NoPerfCheck \
-    -ThrottleLimit "$jobs"
+DCC_MIR_SELECT_CANDIDATE=spilled-baseline python3 scripts/runall.py \
+    --apps tdblnotw --mode full --no-stack-check --no-perf-check \
+    --throttle-limit "$jobs"
 # A homed wide compare that saves a live register must not push it between a
 # stacked left operand and the right one (tregwide).
-DCC_MIR_PREFER_REGIONAL=1 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 \
-    -Apps tregwide -Mode full -NoStackCheck -NoPerfCheck \
-    -ThrottleLimit "$jobs"
+DCC_MIR_PREFER_REGIONAL=1 python3 scripts/runall.py \
+    --apps tregwide --mode full --no-stack-check --no-perf-check \
+    --throttle-limit "$jobs"
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
     -Jobs "$clobber_jobs" -BuildTimeout "$clobber_build_timeout" \
     -ExecutionManifest "$report_dir/mir-clobber-executions.json"

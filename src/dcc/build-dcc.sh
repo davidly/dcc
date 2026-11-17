@@ -27,7 +27,7 @@ if [ -z "$CC" ]; then
 fi
 # -O3 -flto=auto measured ~3.8% faster dcc-compile throughput than -O2 on
 # gcc/Linux (non-overlapping across 3 interleaved A/B rounds via
-# scripts/runall.ps1 -TimingBreakdown), with build time itself unaffected
+# scripts/runall.py -TimingBreakdown), with build time itself unaffected
 # (=auto lets LTRANS parallelize across cores - plain -flto without a job
 # count falls back to serial LTRANS, which measured ~7x slower to build).
 #

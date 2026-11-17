@@ -168,7 +168,7 @@ def mutation_survives(
 def runtime_controls(root, jobs):
     run(
         [
-            "pwsh",
+            "python3",
             str(root / "scripts" / "run-mir-clobber-tests.ps1"),
             "-Cases",
             "scanner-proof,sliding-wave7",
@@ -185,15 +185,15 @@ def runtime_controls(root, jobs):
     )
     run(
         [
-            "pwsh",
-            str(root / "scripts" / "runall.ps1"),
-            "-Apps",
+            "python3",
+            str(root / "scripts" / "runall.py"),
+            "--apps",
             "thoistbc",
-            "-Mode",
+            "--mode",
             "full",
-            "-RunTimeout",
+            "--timeout",
             "30",
-            "-FailuresOnly",
+            "--failures-only",
         ],
         root,
         env,
@@ -201,16 +201,16 @@ def runtime_controls(root, jobs):
     )
     run(
         [
-            "pwsh",
-            str(root / "scripts" / "runall.ps1"),
-            "-Apps",
+            "python3",
+            str(root / "scripts" / "runall.py"),
+            "--apps",
             "thoistbc",
-            "-Mode",
+            "--mode",
             "full",
-            "-NoStackCheck",
-            "-RunTimeout",
+            "--no-stack-check",
+            "--timeout",
             "30",
-            "-FailuresOnly",
+            "--failures-only",
         ],
         root,
         env,

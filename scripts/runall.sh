@@ -429,7 +429,7 @@ copy_fixtures() {
             fi
             cp -f -- "$source" "$dest" || return 1
             # Git does not preserve read-only permissions; apply them to
-            # the staged copy, matching runall.ps1 on Unix hosts.
+            # the staged copy, matching runall.py on Unix hosts.
             if [ "$fixture_readonly" = true ]; then
                 chmod a-w "$dest" || return 1
             fi
@@ -535,7 +535,7 @@ run_one_app() {
 
     # ma.sh (this script's build helper) invokes dcc directly, a single-file
     # compiler with no concept of extra positional .c files as additional
-    # -module inputs to link in - unlike dccmake, which runall.ps1 drives
+    # -module inputs to link in - unlike dccmake, which runall.py drives
     # instead. An app whose dcc_args references another .c file (e.g. calc's
     # "tests/calc1024.c tests/calcdoub.c") is a multi-file app that can only
     # build correctly through dccmake, so skip it here rather than failing
@@ -548,7 +548,7 @@ run_one_app() {
     done
     if [ -n "$multi_file_arg" ]; then
         echo "SKIP  $app (multi-file app: dcc_args references $multi_file_arg," \
-             "which ma.sh cannot link in - build via dccmake or runall.ps1 instead)"
+             "which ma.sh cannot link in - build via dccmake or runall.py instead)"
         printf 'SKIP\n' >"$result_file"
         return 0
     fi

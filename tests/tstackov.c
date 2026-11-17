@@ -2,7 +2,7 @@
  * tstackov.c - exercises the lightweight stack-overflow guard (dcc
  * -fstack-check).  #pragma stack_check(on) below turns the guard on for the
  * rest of this file, regardless of how the harness/build script that compiles
- * it is otherwise configured (e.g. runall.ps1 -Report, which builds every app
+ * it is otherwise configured (e.g. runall.py -Report, which builds every app
  * without the guard by default) - a source-level, self-contained request
  * instead of a build-script convention every tool has to know about.
  *

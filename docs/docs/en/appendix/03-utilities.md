@@ -370,117 +370,83 @@ in 0..8, recursive callers add one, and the terminal value 8 cannot reach a
 recursive call. Unproven ranges retain exact `cp 8` equality tests; only
 proven ranges may use a bit-3 test.
 
-## Test Suite Runner (`runall.ps1`)
+## Test Suite Runner (`runall.py`)
 
-Builds and runs the test suite against per-app baselines in `tests/baselines/`.
-It uses `dccmake` for builds and `tests/_test_overrides.json` for test-specific
-runtime arguments, stack sizes, and optional DCC C Compiler build flags.
+Builds and runs the main test suite against per-app baselines in
+`tests/baselines/`. It uses `dccmake` and `tests/_test_overrides.json` for
+test-specific runtime arguments, stack sizes, and compiler flags.
 
-Runs in parallel by default:
+The runner executes apps in parallel by default. Each app builds in an isolated
+per-run directory that is removed when the run finishes; pass `--keep-build` to
+retain it. On Linux, build artifacts use `/dev/shm/dcc-runall` when available.
+The stack-overflow guard is on by default. Cycle counts and `.COM` sizes are
+checked against `tests/perf_baselines.csv` unless `--no-perf-check` is passed.
+Use `--update-perf-baseline` after an intentional measured change. `--report`
+appends historical measurements to a CSV and disables the stack check.
 
-- Each app builds in its own directory below a per-invocation
-  `<build-root>/run-<pid>/` folder, so concurrent builds do not clobber shared
-  artifacts.
-- The per-invocation folder is removed automatically on exit; pass `-KeepBuild`
-  to retain it. On Linux, the build root defaults to `/dev/shm/dcc-runall` when
-  available; elsewhere it defaults to `build`.
-- Failures print as each app completes. PASS lines are suppressed by default;
-  pass `-FailuresOnly:$false` to show every result.
-- Use `-Serial` to fall back to sequential builds in the shared `build/`
-  directory.
-- Pass `-Extended` to also run the imported c-testsuite single-exec corpus
-  (via `runall-extended.ps1`) after the main suite.
-- The lightweight stack-overflow guard (`-fstack-check`) is **on by default**;
-  pass `-NoStackCheck` to build without it.
-- Z80 cycle counts and `.COM` sizes are checked against
-  `tests/perf_baselines.csv` by default, with no separate benchmark pass. Use
-  `-NoPerfCheck` to skip this check or `-UpdatePerfBaseline` after an intentional
-  measured change.
-- Pass `-Report` to append cycles, `.COM` sizes, and clock-normalized times to a
-  historical CSV report. Report mode implies `-NoStackCheck`.
+### Usage
 
-### Test Runner Usage
-
-```pwsh
-./scripts/runall.ps1 [options]
+```sh
+python3 ./scripts/runall.py [options]
 ```
 
-With no options, the suite runs in parallel, enables `-fstack-check`, and uses
-`-Mode fast`. Use `-Mode full` to run builds with and without `dccpeep`.
+The default mode is `fast`, which runs optimized builds. Use `--mode full` to
+run both optimized and unoptimized builds.
 
-### Test Runner Examples
+### Examples
 
-```pwsh
-./scripts/runall.ps1                       # quick optimized-only default
-./scripts/runall.ps1 -Help                 # show help and exit
-./scripts/runall.ps1 -Serial               # sequential fallback
-./scripts/runall.ps1 -NoStackCheck         # build without the stack guard
-./scripts/runall.ps1 -ThrottleLimit 8      # cap concurrency
-./scripts/runall.ps1 -Emulator altair
-./scripts/runall.ps1 -Mode fast            # optimized build only
-./scripts/runall.ps1 -Mode nopeep          # build without dccpeep only
-./scripts/runall.ps1 -Apps tprintf,tlong   # selected apps only
-./scripts/runall.ps1 -FailFast             # stop dispatching after a failure
-./scripts/runall.ps1 -FailuresOnly:$false  # include PASS lines
-./scripts/runall.ps1 -Extended             # also run extended c-testsuite
-./scripts/runall.ps1 -KeepBuild            # keep the per-run build folder
-./scripts/runall.ps1 -Report               # also append build/perf_results.csv
-./scripts/runall.ps1 -Mode full -UpdatePerfBaseline
+```sh
+python3 ./scripts/runall.py --help
+python3 ./scripts/runall.py --serial
+python3 ./scripts/runall.py --no-stack-check
+python3 ./scripts/runall.py --throttle-limit 8
+python3 ./scripts/runall.py --emulator altair
+python3 ./scripts/runall.py --mode fast
+python3 ./scripts/runall.py --mode nopeep
+python3 ./scripts/runall.py --apps tprintf,tlong
+python3 ./scripts/runall.py --fail-fast
+python3 ./scripts/runall.py --verbose
+python3 ./scripts/runall.py --extended
+python3 ./scripts/runall.py --keep-build
+python3 ./scripts/runall.py --report
+python3 ./scripts/runall.py --mode full --update-perf-baseline
 ```
 
-### Build Modes
+### Build modes
 
-The `-Mode` parameter selects which optimization pass(es) to build and verify.
-**The default is `fast`.**
+- **`fast`** — optimized, with `dccpeep`.
+- **`nopeep`** — without `dccpeep`; compiler MIR optimizations and runtime
+  stripping still run.
+- **`full`** — builds and verifies each app in both modes against the same
+  baseline.
 
-- **`fast`** — optimized: runs the `dccpeep` peephole optimizer after compiling.
-  This produces the optimized CP/M Z80 binary.
-- **`nopeep`** — skips `dccpeep`. Compiler MIR optimizations and application
-  stripping still run; this is not an `-O0` build.
-- **`full`** — builds and verifies each app **twice**, once in each mode,
-  against the same baseline. This catches optimizer bugs that change a program's
-  output.
+### Options
 
-### Test Runner Parameters
-
-| Parameter | Default | Purpose |
-| --------- | ------- | ------- |
-| `-Emulator` | `ntvcm` | Emulator command for running .COM files |
-| `-NoStackCheck` | (off) | Disable `-fstack-check` (the guard is ON by default) |
-| `-UseEmulatedM80` | (off) | Assemble with M80.COM under `ntvcm` instead of native [`m80c`](#native-assembler-m80c) |
-| `-UseEmulatedL80` | (off) | Link with L80.COM under `ntvcm` instead of native [`l80c`](#native-linker-l80c) |
-| `-BuildDir` | `build` | Build directory for artifacts |
-| `-NoRamDisk` | (off) | On Linux, disable the automatic `/dev/shm/dcc-runall` build root |
-| `-BaselineDir` | `tests/baselines` | Directory of per-app `<app>.txt` baselines |
-| `-Mode` | `fast` | Build mode: `fast` (with dccpeep), `nopeep` (without dccpeep), or `full` (both) |
-| `-Apps` | all tests | Comma-separated app names to run |
-| `-RunTimeout` | `60` | Per-build and per-emulator-run timeout in seconds |
-| `-Help` | (off) | Show help text and exit without building or running tests |
-| `-Extended` | (off) | Also run the extended c-testsuite corpus after the main suite |
-| `-Serial` | (off) | Run sequentially instead of the default parallel mode |
-| `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
-| `-KeepBuild` | (off) | Keep the per-invocation run folder instead of removing it on exit (parallel mode) |
-| `-FailFast` | (off) | Stop dispatching new apps after the first correctness or performance failure |
-| `-FailuresOnly` | on | Suppress PASS lines; pass `-FailuresOnly:$false` for full output |
-| `-Report` | (off) | Append cycle, normalized-time, and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
-| `-ReportFile` | `build/perf_results.csv` | CSV path used by `-Report` |
-| `-ReportClockHz` | `400000000` | Nominal clock used to derive report milliseconds from Z80 cycles; does not throttle execution |
-| `-NoPerfCheck` | (off) | Skip the default cycle-count and `.COM` size regression check |
-| `-UpdatePerfBaseline` | (off) | Update checked performance columns for the modes built by this run |
-| `-PerfBaselineFile` | `tests/perf_baselines.csv` | Checked cycle-count and `.COM` size baseline |
-| `-NarrowDiff` | (off) | Compare normal and `-fno-narrow` runs to detect narrowing behavior changes |
-| `-TimingBreakdown` | (off) | Print suite-phase and aggregate build-pipeline timing percentages |
-
-### Output
-
-Reports:
-
-- Total apps discovered
-- Passed/failed/skipped counts
-- Per-app build and execution status (live in parallel mode)
-- Output verification against baseline
-- Optional CSV performance report when `-Report` is passed
-- Exit code 0 on success, 1 on failure
+| Option | Default | Purpose |
+| ------ | ------- | ------- |
+| `--emulator` | `ntvcm` | Emulator command for `.COM` files |
+| `--no-stack-check` | off | Disable the default `-fstack-check` guard |
+| `--emulated-m80` / `--emulated-l80` | off | Use M80.COM or L80.COM under `ntvcm` |
+| `--build-dir` | `build` | Build directory |
+| `--no-ram-disk` | off | Disable automatic Linux `/dev/shm` build storage |
+| `--baseline-dir` | `tests/baselines` | Per-app baseline directory |
+| `--mode` | `fast` | `fast`, `nopeep`, or `full` |
+| `--apps` | all tests | Comma-separated app names |
+| `--timeout` | `60` | Per-build and per-run timeout in seconds |
+| `--extended` | off | Also run the extended c-testsuite corpus |
+| `--serial` | off | Run sequentially |
+| `--throttle-limit` | CPU count | Maximum concurrent apps |
+| `--keep-build` | off | Retain per-run build artifacts |
+| `--fail-fast` | off | Stop dispatching after a failure |
+| `--verbose` | off | Include PASS lines |
+| `--report` | off | Append historical metrics; implies `--no-stack-check` |
+| `--report-file` | `build/perf_results.csv` | Historical report path |
+| `--report-clock-hz` | `400000000` | Clock used for normalized report times |
+| `--no-perf-check` | off | Skip checked cycle and size baselines |
+| `--update-perf-baseline` | off | Update performance baseline values |
+| `--perf-baseline-file` | `tests/perf_baselines.csv` | Checked performance baseline |
+| `--narrow-diff` | off | Compare normal and `-fno-narrow` runs |
+| `--timing-breakdown` | off | Print suite-phase and aggregate timing |
 
 ## MIR Verifier and Loop Regressions
 
@@ -615,7 +581,7 @@ The script prints the selected compiler line near the start of the run. When the
 
 ## Test Overrides (`tests/_test_overrides.json`)
 
-Per-test run configuration used by `runall.ps1`.
+Per-test run configuration used by `runall.py`.
 It lives in the `tests/` folder (alongside the test sources it configures) and
 is named with a leading underscore so it sorts to the top of the directory.
 
@@ -714,9 +680,9 @@ To change a test's run behavior, edit `tests/_test_overrides.json` and re-run
 the suite. See also `tests/README.md` in the repository for how tests,
 baselines, and this file relate.
 
-## Performance Reporting (`runall.ps1 -Report`)
+## Performance Reporting (`runall.py --report`)
 
-`runall.ps1 -Report` appends historical performance data during the normal
+`runall.py --report` appends historical performance data during the normal
 verified suite; it does not add a separate benchmark pass. Every `ntvcm` run
 already uses `-p -s:0`, so execution remains unthrottled while the runner records
 the emulator's host-independent Z80 cycle count and the `.COM` size.
@@ -726,10 +692,10 @@ derived as `cycles / ReportClockHz * 1000`, using a default nominal clock of
 400 MHz; `ReportClockHz` never changes emulator speed. Set it to `0` to leave
 the derived millisecond fields empty while retaining cycles and sizes.
 
-```pwsh
-./scripts/runall.ps1 -Report
-./scripts/runall.ps1 -Report -ReportFile results.csv
-./scripts/runall.ps1 -Report -ReportClockHz 0
+```sh
+python3 ./scripts/runall.py --report
+python3 ./scripts/runall.py --report --report-file results.csv
+python3 ./scripts/runall.py --report --report-clock-hz 400000000
 ```
 
 Results are written to `build/perf_results.csv` by default. **Results append

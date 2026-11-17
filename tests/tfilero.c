@@ -1,4 +1,4 @@
-/* runall.ps1 stages READONLY.TXT with host read-only permissions.
+/* runall.py stages READONLY.TXT with host read-only permissions.
  * Do not create/chmod it here: the CP/M test must exercise host permissions.
  * BDOS open has no access mode: ntvcm falls back to a read-only host handle.
  * Read/write opens may succeed; actual writes must fail without changing data.

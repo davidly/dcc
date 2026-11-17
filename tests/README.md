@@ -45,7 +45,7 @@ The relationship is **by file name**:
 | `tests/ttt.c`          | `tests/baselines/ttt.txt`         |
 | `tests/cobint.c`       | `tests/baselines/cobint.txt`      |
 
-The test runner (`scripts/runall.ps1`) builds each main-suite `*.c` file, runs
+The test runner (`scripts/runall.py`) builds each main-suite `*.c` file, runs
 it, and compares the captured stdout against the like-named file in
 `baselines/`.
 Because matching is keyed on the **app name** (not position in a list), the
@@ -68,41 +68,40 @@ fixture that happens to work.
 
 ## Running the suite
 
-From the repo root, with PowerShell 7+:
+From the repo root with Python 3:
 
-```pwsh
+```sh
 # Build + run every test, verify against tests/baselines/ (parallel by default)
-pwsh ./scripts/runall.ps1
+python3 ./scripts/runall.py
 
 # Also run the extended c-testsuite corpus after the main suite
-pwsh ./scripts/runall.ps1 -Extended
+python3 ./scripts/runall.py --extended
 
 # Sequential fallback (one app at a time in the shared build/ dir)
-pwsh ./scripts/runall.ps1 -Serial
+python3 ./scripts/runall.py --serial
 
 # Build only one optimization pass (default builds both)
-pwsh ./scripts/runall.ps1 -Mode peep     # optimized (dccpeep) only
-pwsh ./scripts/runall.ps1 -Mode nopeep   # unoptimized only
+python3 ./scripts/runall.py --mode fast     # optimized (dccpeep) only
+python3 ./scripts/runall.py --mode nopeep   # unoptimized only
 
 # Build without the stack-overflow guard (on by default)
-pwsh ./scripts/runall.ps1 -NoStackCheck
+python3 ./scripts/runall.py --no-stack-check
 
 # Keep the per-invocation build/run-<pid>/ folder instead of removing it on exit
-pwsh ./scripts/runall.ps1 -KeepBuild
+python3 ./scripts/runall.py --keep-build
 ```
 
-By default the suite builds each app in **both** optimization modes \u2014 `peep`
+With `--mode full`, the suite builds each app in **both** optimization modes \u2014 `peep`
 (optimized, via the dccpeep peephole optimizer) and `nopeep` (unoptimized) \u2014
-and verifies both against the same baseline, so a default run does two builds
-per app. Use `-Mode peep` or `-Mode nopeep` to build just one.
+and verifies both against the same baseline, so the full run does two builds per app. The default `fast` mode builds only the optimized version; use `--mode nopeep` for the unoptimized version.
 
 By default the suite runs **in parallel** (each app builds in its own
 `build/<app>/` subdirectory), which is much faster on multi-core machines. Each
 parallel invocation is isolated under a `build/run-<pid>/` folder that is
-removed automatically on exit (pass `-KeepBuild` to keep it for debugging). Pass
-`-Serial` to build sequentially in the shared `build/` directory. The
+removed automatically on exit (pass `--keep-build` to keep it for debugging). Pass
+`--serial` to build sequentially in the shared `build/` directory. The
 lightweight stack-overflow guard (`-fstack-check`) is on by default; use
-`-NoStackCheck` to disable it.
+`--no-stack-check` to disable it.
 
 A test **passes** when its program builds, runs, and its stdout matches the
 corresponding `baselines/<name>.txt` byte-for-byte (line endings normalized to
@@ -168,9 +167,9 @@ pwsh ./scripts/runall-extended.ps1 -C89 -RunTimeout 30
 pwsh ./scripts/runall-extended.ps1 -C89 -SkipFile tests/_extended_test_overrides.json
 ```
 
-The runner defaults to `-Mode fast` and parallel execution, matching the main
-`runall.ps1` runner's current default behavior. Use `-Mode nopeep`, `-Mode full`,
-or `-Serial` when you need a different pass or easier debugging.
+The runner defaults to `--mode fast` and parallel execution, matching the main
+`runall.py` runner's behavior. Use `--mode nopeep`, `--mode full`,
+or `--serial` when you need a different pass or easier debugging.
 
 ## Placeholders for volatile output
 
@@ -198,7 +197,7 @@ test tstdc completed with great success
 ```
 
 A baseline with no placeholder tokens is compared as an exact string. The token
-definitions are global (in `scripts/runall.ps1`); add a new one there if you
+definitions are global (in `scripts/runall.py`); add a new one there if you
 need to mask another kind of volatile value.
 
 ## Adding a new test
@@ -210,7 +209,7 @@ need to mask another kind of volatile value.
    `tests/baselines/<name>.txt` (exact stdout, LF line endings, no extra
    trailing content). If any output is volatile (dates, times, paths), replace
    those parts with the placeholder tokens described above.
-4. Run `pwsh ./scripts/runall.ps1` and confirm the new test reports
+4. Run `python3 ./scripts/runall.py` and confirm the new test reports
    "Output matches baseline".
 
 ## Regenerating baselines from the legacy file
