@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise every retained constant do-while exact-schedule layout."""
 
+import sys
 import argparse
 import concurrent.futures
 import os
@@ -178,8 +179,8 @@ def mutation_survives(
 def runtime_controls(root, jobs):
     run(
         [
-            "pwsh",
-            str(root / "scripts" / "run-mir-clobber-tests.ps1"),
+            sys.executable,
+            str(root / "scripts" / "run-mir-clobber-tests.py"),
             "-Cases",
             "do-while-wave5,gdo",
             "-Jobs",

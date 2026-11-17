@@ -57,9 +57,10 @@ mutation kill. Unix signal exits appear as negative Python return codes.
 `process_supervision.py` uses Unix sessions and Windows kill-on-close Job Objects,
 registers explicitly nested sessions, and bounds inherited-pipe draining.
 `test-mir-matcher-restoration.py` and `test-mir-paired-byte-restoration.py` retain
-the positive and negative matcher controls. Their PowerShell entry points and
-the old mutation worker/module are retired. The PowerShell process-supervision
-module remains for the clobber runner until that runner is ported.
+the positive and negative matcher controls. Their PowerShell entry points,
+the old mutation worker/module, and the old PowerShell process-supervision
+helpers are retired. Clobber workers use the
+same Python process supervisor.
 
 ## Native compiler proof probes
 
@@ -110,8 +111,7 @@ or newer); update and rebuild older emulator installations if read-only opens fa
 
 The exhaustive `tdvbyte` test is built once per mode and runs in seven
 divisor batches, checking all 17,432,576 inputs and both division helpers.
-The PowerShell runner uses the same batching. Each batch has its own output
-check; cycle counts are summed for the single app's performance baseline and
+Each batch has its own output check; cycle counts are summed for the single app's performance baseline and
 report, while the COM size is recorded once. Batch workers share the normal
 concurrency limit with other apps, and expensive batched apps start first.
 `--serial` / `-Serial` runs the same batches sequentially. Running `tdvbyte`
@@ -370,7 +370,7 @@ DCC_MIR_SELECT_CANDIDATE=spilled-rhs-forward \
 Candidate names are the `candidate` values in `--cost-policy-output`; no
 legacy stream is involved.
 
-## `run-mir-lifetime-tests.ps1`
+## `run-mir-lifetime-tests.py`
 
 Runs the physical-lifetime candidates that require diagnostic forcing in both
 peep/nopeep and stack/no-stack modes. It verifies that `regional_address`
@@ -380,10 +380,10 @@ It also requires the same-ABI signed-byte scanner near-match to reach and
 decline the bounded-decimal schedule's argument-conversion guard.
 
 ```sh
-pwsh ./scripts/run-mir-lifetime-tests.ps1
+python scripts/run-mir-lifetime-tests.py
 ```
 
-## `run-mir-clobber-tests.ps1`
+## `run-mir-clobber-tests.py`
 
 Runs the MIR emission-clobber and exact-schedule near-match regressions in
 peep/nopeep and stack/no-stack modes. It covers argument-staging register
@@ -393,8 +393,26 @@ The IY coverage includes separately peepholed caller/callee modules, so
 callee-save preservation is tested across assembly-file boundaries.
 
 ```sh
-pwsh ./scripts/run-mir-clobber-tests.ps1
+python scripts/run-mir-clobber-tests.py
 ```
+
+The runner uses Python 3.7+ and the shared `process_supervision.py` helper.
+Historical built-in cases and forced configurations live in
+`mir-clobber-builtins.json`; additional campaigns remain in `mir-clobber-cases/`.
+Case aliases keep their original membership. Every worker's completed manifest
+must match its expected leaves, and the parent checks their exact union.
+
+```sh
+python scripts/run-mir-clobber-tests.py --jobs 8 --cases domloop,semantics
+python scripts/run-mir-clobber-tests.py --list-executions build/clobber-expected.json
+python scripts/run-mir-clobber-tests.py --jobs 8 --execution-manifest build/clobber-executed.json
+```
+
+`--cases`, `--fuzz-seeds`, `--run-timeout`, `--build-timeout`, `--jobs`,
+`--shard-index`, `--shard-count`, `--list-executions`, and
+`--execution-manifest` also accept their previous single-dash spellings.
+Listing requires no compiler, emulator, or generator. Failed runs retain their
+source files, build/run logs, and shard artifacts under `build/`.
 
 ## `publish-package.ps1`
 
@@ -414,8 +432,8 @@ publish from a dirty worktree unless `-AllowDirty` is passed.
 
 ## Host compilers to install
 
-The PowerShell scripts are intended to work on Windows, macOS, and Linux. For
-the dcc host tools themselves, use the normal native compiler for each platform:
+The Python build and test drivers support Python 3.7+ on Windows, macOS,
+and Linux. Use the normal native compiler for each platform:
 
 | Platform | Recommended compiler | Install notes |
 | -------- | -------------------- | ------------- |
@@ -689,12 +707,12 @@ sh scripts/compiler-coverage.sh
 
 The text summary is written to
 `build/compiler-coverage/report/summary.txt`, and the browsable report starts
-at `build/compiler-coverage/report/html/index.html`. Set `CC`, `PWSH`,
+at `build/compiler-coverage/report/html/index.html`. Set `CC`,
 `LLVM_COV`, or `LLVM_PROFDATA` to override tool discovery.
 Coverage clobber builds have a separate 300-second timeout because
 instrumentation and cache verification can exceed the ordinary 60-second
 build budget. Set `DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT` to override it. Standalone
-`run-mir-clobber-tests.ps1` accepts `-BuildTimeout` (default 60); `--timeout`
+`run-mir-clobber-tests.py` accepts `--build-timeout` (default 60); `--timeout`
 continues to control target execution independently.
 
 ## `prepush.py`
@@ -708,8 +726,8 @@ python scripts/prepush.py
 It runs the build-diagnostic regression checks, native compiler baseline validation
 (`validate-unit-test.py`), then the comprehensive MIR proof suite described below.
 The entry points and native proof probes use Python 3.7+. The final coverage
-workflow still invokes the PowerShell clobber runner, so a complete pre-push run
-currently requires PowerShell 7 and sh. `--list` needs only Python.
+workflow uses the Python clobber runner and still requires sh and matching LLVM
+coverage tools. PowerShell is not required. `--list` needs only Python.
 Native validation honors the host-only exclusions in `tests/_test_overrides.json`
 and uses `-Jobs` and `--timeout` for its worker and timeout limits.
 The MIR proof suite includes strict `--mode full -Extended`
@@ -748,8 +766,8 @@ bounded preparation/release groups, and the `receipt.json` phase timestamps.
 `--list` works without PowerShell or other build tools. `--jobs`,
 `--mutation-jobs`, `--mutation-build-jobs`, `--timeout`, `--output-directory`,
 `--require-complete`, and `--all` have the original PowerShell-style aliases.
-The final coverage workflow still requires sh and PowerShell for its clobber
-runner; the aggregate entry point itself does not launch PowerShell.
+The final coverage workflow still requires sh and matching LLVM tools; its
+clobber suite and Python campaign callers do not launch PowerShell.
 
 The runner uses all detected processors by default and retains each run below
 a unique `build/mir-proof-suite-*` directory. Use `-List` to inspect the

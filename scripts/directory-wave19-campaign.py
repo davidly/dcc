@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the retained directory-enumeration exact schedule."""
 
+import sys
 import argparse
 import concurrent.futures
 import os
@@ -205,8 +206,8 @@ def mutation_survives(root, compiler, flags, source, job):
 def runtime_controls(root, dccmake, jobs):
     run(
         [
-            "pwsh",
-            str(root / "scripts" / "run-mir-clobber-tests.ps1"),
+            sys.executable,
+            str(root / "scripts" / "run-mir-clobber-tests.py"),
             "-Cases",
             "directory-wave3,directory-wave9",
             "-Jobs",

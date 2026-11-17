@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exhaustively audit the retained non-local exact schedules."""
 
+import sys
 import argparse
 import collections
 import concurrent.futures
@@ -228,8 +229,8 @@ def abi_mutation_survives(
 def runtime_controls(root, jobs):
     run(
         [
-            "pwsh",
-            str(root / "scripts" / "run-mir-clobber-tests.ps1"),
+            sys.executable,
+            str(root / "scripts" / "run-mir-clobber-tests.py"),
             "-Cases",
             "nonlocal-wave28,nonlocal-wave28-debug",
             "-Jobs",

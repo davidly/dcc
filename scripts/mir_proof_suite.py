@@ -117,8 +117,8 @@ def coverage_error(summary,compiler,cov=None,profdata=None,major=None):
 
 
 def preflight(environment):
-    # The remaining coverage/clobber dependencies still require sh and pwsh.
-    for command in (sys.executable,'cmake','ctest','sh','ntvcm',environment.get('PWSH') or 'pwsh'):
+    # Coverage collection still uses the portable shell driver.
+    for command in (sys.executable,'cmake','ctest','sh','ntvcm'):
         if not shutil.which(command):raise RuntimeError('Required command not found: '+command)
     compiler=environment.get('CC') or available_clang(environment)
     if not compiler or not shutil.which(compiler):coverage_error('Could not resolve a Clang compiler for the coverage phase.',compiler)

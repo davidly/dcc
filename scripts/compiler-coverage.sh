@@ -58,14 +58,9 @@ trap 'rmdir "$build_dir/.coverage-lock"' EXIT
 checkpoint="$repo_root/scripts/coverage-checkpoint.py"
 
 clang_cmd=${CC:-clang}
-pwsh_cmd=${PWSH:-pwsh}
 
 if ! command -v "$clang_cmd" >/dev/null 2>&1; then
     echo "compiler-coverage: clang compiler not found: $clang_cmd" >&2
-    exit 1
-fi
-if ! command -v "$pwsh_cmd" >/dev/null 2>&1; then
-    echo "compiler-coverage: PowerShell not found: $pwsh_cmd" >&2
     exit 1
 fi
 
@@ -94,7 +89,6 @@ python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd"
 if [ "$stage" = all ] || [ "$stage" = build ]; then
 python3 "$checkpoint" prepare --build-dir "$build_dir" \
     --tool "clang=$(command -v "$clang_cmd")" \
-    --tool "pwsh=$(command -v "$pwsh_cmd")" \
     --tool "llvm-cov=$(command -v "$llvm_cov")" \
     --tool "llvm-profdata=$(command -v "$llvm_profdata")" \
     --tool "dccmake=$repo_root/dccmake" --tool "dccpeep=$repo_root/dccpeep" \
@@ -171,9 +165,9 @@ DCC_MIR_SELECT_CANDIDATE=spilled-baseline python3 scripts/runall.py \
 DCC_MIR_PREFER_REGIONAL=1 python3 scripts/runall.py \
     --apps tregwide --mode full --no-stack-check --no-perf-check \
     --throttle-limit "$jobs"
-"$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
-    -Jobs "$clobber_jobs" -BuildTimeout "$clobber_build_timeout" \
-    -ExecutionManifest "$report_dir/mir-clobber-executions.json"
+python3 scripts/run-mir-clobber-tests.py \
+    --jobs "$clobber_jobs" --build-timeout "$clobber_build_timeout" \
+    --execution-manifest "$report_dir/mir-clobber-executions.json"
 python3 scripts/run-mir-lifetime-tests.py
 python3 scripts/test-mir-require-emit.py -Dcc "$DCC"
 python3 scripts/test-ast-dump.py -Dcc "$DCC"

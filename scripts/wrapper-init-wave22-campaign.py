@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exhaustively audit the retained fixed wrapper initializer schedule."""
 
+import sys
 import argparse
 import concurrent.futures
 import collections
@@ -208,8 +209,8 @@ def mutation_survives(
 def runtime_controls(root, jobs):
     run(
         [
-            "pwsh",
-            str(root / "scripts" / "run-mir-clobber-tests.ps1"),
+            sys.executable,
+            str(root / "scripts" / "run-mir-clobber-tests.py"),
             "-Cases",
             "wrapper-init-wave22,wrapper-init-wave22-debug",
             "-Jobs",

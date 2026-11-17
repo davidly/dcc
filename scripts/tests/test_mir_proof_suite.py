@@ -72,6 +72,16 @@ class ProofSuiteTests(unittest.TestCase):
             for text in ('Expected versus found:','CC: expected','LLVM_COV: expected','LLVM_PROFDATA: expected','export CC='):
                 self.assertIn(text,str(error.exception))
 
+    def test_preflight_no_longer_requires_powershell(self):
+        def which(command,**kwargs):
+            self.assertNotIn(command,('pwsh','powershell'))
+            return command
+        with patch.object(proof.shutil,'which',side_effect=which), \
+             patch.object(proof,'llvm_major',return_value=18):
+            self.assertEqual(proof.preflight({'CC':'clang-18','LLVM_COV':'llvm-cov-18',
+                                              'LLVM_PROFDATA':'llvm-profdata-18'}),
+                             ('clang-18','llvm-cov-18','llvm-profdata-18'))
+
     def test_isolated_builds_sanitizers_and_parallel_release_plan(self):
         output=Path('/artifact root');tasks=proof.preparation_tasks(output,8,'clang-18')
         self.assertEqual([t['phase'] for t in tasks],[2,2,2,3,4,5,6])

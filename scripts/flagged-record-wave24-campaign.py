@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exhaustively audit the retained flagged-record append schedule."""
 
+import sys
 import argparse
 import collections
 import concurrent.futures
@@ -242,8 +243,8 @@ def mutate(
 def runtime_controls(root, jobs):
     run(
         [
-            "pwsh",
-            str(root / "scripts" / "run-mir-clobber-tests.ps1"),
+            sys.executable,
+            str(root / "scripts" / "run-mir-clobber-tests.py"),
             "-Cases",
             "flagged-record-wave24,flagged-record-wave24-debug",
             "-Jobs",

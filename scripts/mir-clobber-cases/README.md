@@ -1,6 +1,6 @@
 # MIR clobber campaigns and execution inventory
 
-`run-mir-clobber-tests.ps1` loads every `*.json` file in this directory, in
+`run-mir-clobber-tests.py` loads every `*.json` file in this directory, in
 ordinal filename order. Files contain **data only**: a JSON array of case
 objects. Existing built-in cases, aliases, generated cases, and special
 forced-selector/VLA checks remain enabled by default.
@@ -56,14 +56,14 @@ properties and invalid types fail closed rather than silently dropping checks.
 
 ```sh
 # List exact target leaves without invoking any compiler, emulator, or generator:
-pwsh scripts/run-mir-clobber-tests.ps1 -ListExecutions build/clobber-expected.json
+python scripts/run-mir-clobber-tests.py -ListExecutions build/clobber-expected.json
 
-# Serial compatibility is the default; run bounded independent pwsh processes:
-pwsh scripts/run-mir-clobber-tests.ps1 -Jobs 8 \
+# Serial compatibility is the default; run bounded independent Python processes:
+python scripts/run-mir-clobber-tests.py -Jobs 8 \
   -ExecutionManifest build/clobber-executed.json
 
 # Reproducible zero-based external shard (do not combine with Jobs > 1):
-pwsh scripts/run-mir-clobber-tests.ps1 -Cases inlines,fatal \
+python scripts/run-mir-clobber-tests.py -Cases inlines,fatal \
   -ShardIndex 1 -ShardCount 4 -ExecutionManifest build/clobber-shard-1.json
 ```
 
@@ -74,13 +74,13 @@ selection and shard parameters, and exits without execution.
 
 Shards select ordinally sorted leaf indices modulo `ShardCount`. `-Jobs` defaults
 to 1 and permits 1–256 processes. Each child owns its process environment and
-unique repository-local build/fixture directory; no concurrent runspaces modify
+unique repository-local build/fixture directory; no concurrent workers modify
 shared environment variables. Parser and semantic-proof setup runs only on
 shard zero. Generated sources are created only by shards that need them.
 When `LLVM_PROFILE_FILE` is inherited, each child adds a parent-PID/shard suffix
 to its filename, preserving the directory, extension, and LLVM merge pattern.
 Profiles stay directly under the inherited raw directory for `*.profraw` merging.
-The shared `process-supervision.psm1` helper owns process-group/job cleanup.
+The shared `process_supervision.py` helper owns process-group/job cleanup.
 Shard watchdogs cover launch through output drain; the automatic budget includes
 shared setup plus each assigned leaf's build and emulator timeout. After a shard
 leader exits, pipes held open by descendants receive only a one-second drain

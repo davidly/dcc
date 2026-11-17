@@ -61,7 +61,7 @@ baseline approval, documented in its scoped exceptions below.
   `.github/skills/dcc-project/SKILL.md`).
 - A fix that flips a reproducer outside its cluster is information: record
   which, and move that bug into the cluster in this file.
-- Cluster pull requests are **not** gated on `pwsh ./scripts/prepush.ps1`.
+- Cluster pull requests are **not** gated on `python scripts/prepush.py`.
   That exhaustive proof suite (compiler mutants, sanitizers, instrumented
   coverage) takes five to six hours and is the maintainer's periodic manual
   check, run on `main` after a batch of clusters has merged. The gate for a
@@ -3243,7 +3243,7 @@ left to cluster M.
 #### Approved normal stack-check performance updates
 
 **Exactly 100 existing rows change** below, measured only for affected apps
-with `pwsh ./scripts/runall.ps1 -Apps <affected> -Mode full -UpdatePerfBaseline`
+with `python scripts/runall.py -Apps <affected> -Mode full -UpdatePerfBaseline`
 on the normal stack-check path. Every other existing row remains byte-identical.
 The new `tfdivr` row from the initial R1 implementation remains unchanged:
 20868763/20913550 cycles, 6016/6016 bytes (peep/nopeep).
@@ -4811,9 +4811,9 @@ Work on a new branch from `main`, one branch for this cluster only.
    move it to `tests/<name>.c` with its baseline, rewrite its header comment
    to describe the coverage, add a NEW row to `tests/perf_baselines.csv`
    measured on the normal stack-check runall path, and confirm with
-   `pwsh ./scripts/validate-unit-test.ps1 -App <name>`.
+   `python scripts/validate-unit-test.py -App <name>`.
 5. Run `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`. Do
-   NOT run `scripts/prepush.ps1`; it takes five to six hours and is the
+   NOT run `scripts/prepush.py`; it takes five to six hours and is the
    maintainer's periodic check on `main`, not a gate for this PR. If a test
    fails, confirm it fails identically on an unchanged `main` checkout
    before reporting it as pre-existing; never refresh its expectation here.

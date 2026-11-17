@@ -476,12 +476,12 @@ cmake --build build/mir-tests-sanitize --target mir-verify-test --parallel
 ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build/mir-tests-sanitize --output-on-failure
 ```
 
-Target execution tests use the built DCC toolchain, PowerShell 7, and `ntvcm`
+Target execution tests use the built DCC toolchain, Python 3.7+, and `ntvcm`
 on `PATH`:
 
-```pwsh
-pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases domloop
-pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases semantics
+```sh
+python scripts/run-mir-clobber-tests.py -Cases domloop
+python scripts/run-mir-clobber-tests.py -Cases semantics
 ```
 
 `domloop` checks zero-, one-, and multi-iteration loops, initialized and
@@ -521,13 +521,13 @@ host-only skip settings.
 
 ### Host Validator Usage
 
-```pwsh
+```sh
 python scripts/validate-unit-test.py [options]
 ```
 
 ### Host Validator Examples
 
-```pwsh
+```sh
 python scripts/validate-unit-test.py              # validate every runnable test
 python scripts/validate-unit-test.py -App tprintf # validate one test app
 python scripts/validate-unit-test.py -CC clang    # use clang on Linux/macOS
@@ -572,7 +572,7 @@ Common Linux packages:
 
 After installation, this should be enough to enable the extended path:
 
-```pwsh
+```sh
 python scripts/validate-unit-test.py
 ```
 

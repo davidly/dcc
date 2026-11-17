@@ -24,200 +24,43 @@ Setup flow:
 
 ## Install prerequisites
 
-Install the native compiler tools for your host platform before cloning and
-building DCC C Compiler or ntvcm.
-
-The full PowerShell build requires **PowerShell 7 or later** (`pwsh`), CMake,
-and a C++17 compiler for `dcc-debug-host` and its example adapter. The Visual
-Studio C++ workload below supplies CMake on Windows. Install it separately with
-`brew install cmake` on macOS or `sudo apt install cmake` on Ubuntu.
-
-Install the latest **stable** PowerShell release unless you have a reason to
-test a preview. Keep the package manager or installer that installed it as the
-owner of upgrades; do not combine a system package, a user-local archive, and
-a .NET global-tool installation on the same `PATH`.
+Building and testing DCC C Compiler requires **Python 3.7 or newer** and a
+native C compiler. The debugger host and example adapter also require CMake
+and a C++17 compiler. The same Python drivers run on Windows, macOS, Linux,
+and Raspberry Pi; PowerShell is not needed for normal builds or test suites.
 
 === "Windows"
 
-     1. Install Visual Studio Build Tools with the C++ workload. Install with
-         `winget`:
-
-        ```powershell
-        winget install --id Microsoft.VisualStudio.BuildTools -e --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --quiet --wait --norestart"
-        ```
-
-        You can also use the Visual Studio Installer and select **Desktop
-        development with C++**. The Windows build uses the Microsoft C/C++
-        compiler tools and CMake from that installation.
-
-    2. On Windows 11 or a Windows client with WinGet, install the stable
-       PowerShell package. This is Microsoft's recommended client install
-       path:
-
-        ```powershell
-        winget install --id Microsoft.PowerShell --source winget
-        pwsh --version
-        ```
-
-        WinGet currently selects the MSIX package. That is suitable for this
-        build, but it is per-user and does not support PowerShell remoting or
-        all-users profiles. For Windows Server, managed deployments, remoting,
-        or an all-users installation, use the MSI path in the
-        [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/install-powershell-on-windows)
-        instead. Use the architecture-matched package on Windows ARM64.
+    Install Python 3.7+ and put `python` on your `PATH`. Install Visual Studio
+    or Visual Studio Build Tools with **Desktop development with C++** and its
+    CMake component. For Windows ARM64, include the ARM64/ARM64EC build tools.
+    The Python builder locates MSVC and initializes its environment itself.
 
 === "macOS"
 
-    1. Install the Xcode Command Line Tools:
+    Install Xcode Command Line Tools with `xcode-select --install`, plus
+    Python 3.7+ and CMake. Verify `clang`, `python3`, and `cmake` are on `PATH`.
 
-        ```bash
-        xcode-select --install
-        ```
+=== "Ubuntu / Raspberry Pi OS"
 
-        This provides the clang and C++ compiler tools used by the macOS build
-        scripts.
+    Install the native build tools, Python, and CMake:
 
-    2. Install the architecture-matched, Microsoft-signed PKG from the
-       [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/install-powershell-on-macos).
-       This is Microsoft's preferred path for most macOS users. Choose the
-       `osx-arm64` package for Apple Silicon and `osx-x64` for Intel Macs.
-       Then open a new terminal and verify it:
+    ```sh
+    sudo apt update
+    sudo apt install build-essential python3 cmake
+    ```
 
-        ```bash
-        pwsh --version
-        ```
+    The Python drivers support the older Python versions available on
+    Raspberry Pi 4 systems; no PowerShell installation is required.
 
-        The PKG installs `pwsh` under `/usr/local/bin`. A Homebrew cask can be
-        appropriate when Homebrew centrally manages your developer tools, but
-        do not install both variants. Use the archive path only when you need
-        side-by-side versions or a custom install location; it requires manual
-        dependency and update management.
+Verify Python with `python --version` on Windows or `python3 --version` on
+Unix. Commands below use `python`; use `python3` where that is the installed
+command name. Full local proof/coverage runs additionally require sh,
+`ntvcm`, Clang, and matching `llvm-cov` / `llvm-profdata` tools.
 
-=== "Ubuntu"
-
-    1. Install gcc, g++, make, and the usual build tools:
-
-        ```bash
-        sudo apt install build-essential
-        ```
-
-    2. On a supported Ubuntu LTS release, install PowerShell from Microsoft's
-       package repository. This is the preferred Ubuntu method and lets APT
-       manage upgrades:
-
-        ```sh
-        sudo apt-get update
-        sudo apt-get install -y wget apt-transport-https software-properties-common
-        . /etc/os-release
-        wget -q "https://packages.microsoft.com/config/ubuntu/${VERSION_ID}/packages-microsoft-prod.deb"
-        sudo dpkg -i packages-microsoft-prod.deb
-        rm packages-microsoft-prod.deb
-        sudo apt-get update
-        sudo apt-get install -y powershell
-        pwsh --version
-        ```
-
-        The Microsoft repository also carries some .NET packages. If this host
-        uses Ubuntu's .NET packages, review Microsoft's
-        [package-source guidance](https://learn.microsoft.com/powershell/scripting/install/install-ubuntu#install-powershell-7-from-the-package-repository)
-        before adding it. Microsoft supports Ubuntu LTS releases; use the
-        [manual archive method](https://learn.microsoft.com/powershell/scripting/install/install-ubuntu#manually-download-and-install-powershell-7)
-        for interim or unsupported releases.
-
-=== "Ubuntu ARM64"
-
-    1. Install gcc, g++, make, and the usual build tools:
-
-        ```bash
-        sudo apt install build-essential curl
-        ```
-
-    2. Use the Ubuntu repository route above if it publishes a package for your
-       release and architecture. Otherwise, use the official `linux-arm64`
-       archive. This user-local approach avoids changing system package
-       sources. Set `version` to a stable release listed on the
-       [PowerShell releases page](https://github.com/PowerShell/PowerShell/releases),
-       and verify the archive against that release's published SHA-256 file
-       before extracting it:
-
-        ```sh
-        version=7.6.6
-        asset="powershell-${version}-linux-arm64.tar.gz"
-        install_dir="$HOME/.local/share/powershell/$version"
-        release_url="https://github.com/PowerShell/PowerShell/releases/download/v${version}"
-
-        mkdir -p "$install_dir" "$HOME/.local/bin"
-        curl -fLO "$release_url/$asset"
-        curl -fLO "$release_url/hashes.sha256"
-        grep -F " $asset" hashes.sha256 | sha256sum -c - || exit 1
-        tar -xzf "$asset" -C "$install_dir"
-        chmod +x "$install_dir/pwsh"
-        ln -sfn "$install_dir/pwsh" "$HOME/.local/bin/pwsh"
-        rm "$asset" hashes.sha256
-        ```
-
-        Make sure `~/.local/bin` is on your `PATH`, then verify both the
-        version and architecture:
-
-        ```sh
-        export PATH="$HOME/.local/bin:$PATH"
-        pwsh --version
-        file "$(readlink -f "$HOME/.local/bin/pwsh")"
-        ```
-
-        The `file` output should report `ARM aarch64`. Add `~/.local/bin` to
-        your shell startup file if it is not already present. Re-run the
-        checksum step for each upgrade, extract into a new versioned directory,
-        then move only the `pwsh` symlink.
-
-
-=== "Windows ARM64"
-
-    1. Install Visual Studio Build Tools with the C++ workload and native ARM64
-       compiler tools. Install with `winget`:
-
-        ```powershell
-        winget install --id Microsoft.VisualStudio.BuildTools -e --override "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 --includeRecommended --quiet --wait --norestart"
-        ```
-
-        You can also use the Visual Studio Installer and select **Desktop
-        development with C++**, then add the **MSVC ARM64/ARM64EC build tools**
-        component. The DCC C Compiler Windows build scripts use the native ARM64 MSVC
-        environment (`vcvarsarm64.bat`) when they run on Windows ARM64. CMake
-        is included with the recommended components.
-
-    2. Verify that the ARM64 MSVC tools were installed:
-
-        ```powershell
-        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-        $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
-        Test-Path "$installPath\VC\Auxiliary\Build\vcvarsarm64.bat"
-        ```
-
-        The final command should print `True`.
-
-    3. Install stable PowerShell 7 with WinGet, which selects the native
-       architecture automatically:
-
-        ```powershell
-        winget install --id Microsoft.PowerShell --source winget
-        pwsh --version
-        ```
-
-        For server, managed, remoting, or all-users installations, choose the
-        ARM64 MSI package from the
-        [Microsoft PowerShell install guide](https://learn.microsoft.com/powershell/scripting/install/install-powershell-on-windows)
-        instead of the per-user MSIX package.
-
-## Verify PowerShell
-
-Run this after any platform-specific installation. It confirms that the shell
-on `PATH` is PowerShell 7+, shows the executable being used, and starts without
-loading a profile that might mask a setup problem:
-
-```powershell
-pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion; $PSVersionTable.PSEdition; $PSVersionTable.OS; (Get-Command pwsh).Source'
-```
+Some release-packaging and specialized utility scripts still use PowerShell
+7. Install it only when running those remaining `.ps1` utilities; see
+[`scripts/README.md`](https://github.com/davidly/dcc/blob/main/scripts/README.md).
 
 ## Clone the repositories
 
@@ -229,7 +72,7 @@ pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion; $PSVersionTable.PSE
 
 ## Build DCC C Compiler
 
-The cross-platform PowerShell build script is in the `scripts` directory. It
+The cross-platform Python build driver is in the `scripts` directory. It
 builds `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, `l80c`,
 `dcc-debug-host`, and its example I/O adapter, using MSVC on Windows, clang on
 macOS, and gcc on Linux by default. Run it from the cloned `dcc` directory:

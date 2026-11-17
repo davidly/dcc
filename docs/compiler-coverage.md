@@ -136,7 +136,7 @@ The fresh integrated proof at `build/mir-proof-suite-20261002-195051-1893381/`
 passed all 11 phases with:
 
 ```sh
-pwsh ./scripts/run-mir-proof-suite.ps1 -All -MutationJobs 0 -MutationBuildJobs 4 -RunTimeout 60
+python scripts/run-mir-proof-suite.py -All -MutationJobs 0 -MutationBuildJobs 4 -RunTimeout 60
 ```
 
 That historical receipt used the PowerShell entry point. Its current equivalent
@@ -1556,7 +1556,7 @@ totals.
 
 Wave 1700 closes the remaining focused proof gap for
 `mir_match_scope_block_runner` without changing production code. The earlier
-`test-mir-scope-block-mutations.ps1` diagnostic covered four controls and 27
+`test-mir-scope-block-mutations.py` diagnostic covered four controls and 27
 selected mutations against `tforblk`, but did not isolate the schedule, run a
 runtime matrix, force a named generic candidate, or exhaustively mutate the
 fields consumed by the matcher. New `tests/mir-clobber/scopblk.c` isolates the
@@ -2401,7 +2401,7 @@ root so CTest's build-directory working directory cannot redirect host-verifier
 profiles into a nested, unmerged path.
 The main runner also passes `DCC` through to the diagnostics suite; do not
 replace that route with a hard-coded repository-root compiler or diagnostic
-AST rejection paths disappear from coverage. `test-ast-dump.ps1` separately
+AST rejection paths disappear from coverage. `test-ast-dump.py` separately
 exercises the opt-in AST diagnostic renderer with content assertions.
 
 ## Legacy-excluded AST/MIR report
