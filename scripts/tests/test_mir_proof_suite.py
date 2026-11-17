@@ -205,7 +205,7 @@ Write-Output 'LLVM peer discovery checks=18 failures=0'
             encoding="utf-8"
         )
 
-        self.assertIn("scripts/test-mir-fuzz-source.ps1", runner)
+        self.assertIn("scripts/test-mir-fuzz-source.py", runner)
         self.assertIn('Name = "MIR fuzz generator proof"', runner)
         self.assertIn('Join-Path $outputRoot "receipt.json"', runner)
         self.assertIn("ConvertTo-Json -Depth 6", runner)

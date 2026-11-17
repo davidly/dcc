@@ -394,10 +394,10 @@ The seeded `fuzz` case complements the fixed `qualgen` matrix:
 ```sh
 pwsh scripts/run-mir-clobber-tests.ps1 -Cases fuzz
 pwsh scripts/run-mir-clobber-tests.ps1 -Cases fuzz -FuzzSeeds 23117
-pwsh scripts/new-mir-fuzz-source.ps1 -OutputPath build/replay.c -Seed 23117 -Programs 1
-pwsh scripts/test-mir-fuzz-source.ps1
-pwsh scripts/run-mir-compiler-mutations.ps1
-pwsh scripts/run-mir-compiler-mutations.ps1 -Jobs 2 -BuildJobs 2 -OutputDirectory build/mir-mutations-parallel
+python scripts/new-mir-fuzz-source.py -OutputPath build/replay.c -Seed 23117 -Programs 1
+python scripts/test-mir-fuzz-source.py
+python scripts/run-mir-compiler-mutations.py
+python scripts/run-mir-compiler-mutations.py -Jobs 2 -BuildJobs 2 -OutputDirectory build/mir-mutations-parallel
 ```
 
 Three default seeds generate 12 functions each, mixing six arithmetic steps,

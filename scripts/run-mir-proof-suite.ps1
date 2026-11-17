@@ -619,10 +619,8 @@ Invoke-ProofTaskGroup @(
         Name = "MIR fuzz generator proof"
         Commands = @([pscustomobject]@{
             Name = "MIR fuzz generator proof"
-            Command = $pwsh
-            Arguments = @(
-                "-NoLogo", "-NoProfile", "-File",
-                "scripts/test-mir-fuzz-source.ps1")
+            Command = $python
+            Arguments = @("scripts/test-mir-fuzz-source.py")
             Environment = @{}
         })
     },
@@ -781,9 +779,8 @@ Invoke-ProofTaskGroup @(
 $script:phase = 6
 
 Start-ProofPhase $phaseNames[6]
-Invoke-ProofCommand "run isolated compiler mutants" $pwsh @(
-    "-NoLogo", "-NoProfile", "-File",
-    "scripts/run-mir-compiler-mutations.ps1",
+Invoke-ProofCommand "run isolated compiler mutants" $python @(
+    "scripts/run-mir-compiler-mutations.py",
     "-Jobs", "$MutationJobs",
     "-BuildJobs", "$MutationBuildJobs",
     "-OutputDirectory", $mutationOutput

@@ -29,6 +29,38 @@ and `-Jobs` are also accepted. `--verbose-commands` prints exact compiler and
 linker invocations. Use `--skip-debug-host` to build the six C tools without
 the debugger dependencies.
 
+## `run-mir-compiler-mutations.py`
+
+Python 3.7+ runner for the isolated compiler-mutation campaign. It builds and
+checks the healthy baseline first, then schedules mutants up to `--jobs` at a
+time. Each worker owns separate source, CMake, binary, profile and temp paths.
+The mutation anchors and required failure messages live in
+`mir-compiler-mutations.json`; no PowerShell is needed by this campaign.
+
+```sh
+python scripts/run-mir-compiler-mutations.py --jobs 2 --build-jobs 4
+python scripts/run-mir-compiler-mutations.py --names dominance,promotion-cache
+python scripts/new-mir-fuzz-source.py --output-path build/replay.c --seed 23117 --programs 1
+python scripts/test-mir-fuzz-source.py
+```
+
+`--output-directory` defaults to `build/mir-compiler-mutations`, relative to the
+repository. `--worker-timeout` bounds startup, builds, tests and pipe draining
+(default 2100 seconds); configure/build/probe deadlines remain 120/1800/60
+seconds. Legacy `-Jobs`, `-BuildJobs`, `-Names`, `-OutputDirectory`, and
+`-WorkerTimeout` spellings are accepted. The output directory is locked against
+simultaneous campaigns. `results.json`, per-worker logs and probe artifacts are
+retained; temporary source/build trees are removed. A crash, timeout, failed
+build, missing/truncated result or unrelated assertion is invalid, never a
+mutation kill. Unix signal exits appear as negative Python return codes.
+
+`process_supervision.py` uses Unix sessions and Windows kill-on-close Job Objects,
+registers explicitly nested sessions, and bounds inherited-pipe draining.
+`test-mir-matcher-restoration.py` and `test-mir-paired-byte-restoration.py` retain
+the positive and negative matcher controls. Their PowerShell entry points and
+the old mutation worker/module are retired. The PowerShell process-supervision
+module remains for the clobber runner until that runner is ported.
+
 ## `runall.py`
 
 Native Python 3 runner for the standard build, emulator, baseline, fixture,

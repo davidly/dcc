@@ -2833,8 +2833,11 @@ try {
         foreach ($seed in $FuzzSeeds) {
             $fuzzSource = Join-Path $tempRoot "fz$seed.c"
             if ($fuzzSource -in $selectedSources) {
-                & (Join-Path $PSScriptRoot "new-mir-fuzz-source.ps1") `
-                    -OutputPath $fuzzSource -Seed $seed
+                $python = if ($env:PYTHON) { $env:PYTHON } elseif (
+                    Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } else { "python" }
+                & $python (Join-Path $PSScriptRoot "new-mir-fuzz-source.py") `
+                    --output-path $fuzzSource --seed $seed
+                if ($LASTEXITCODE -ne 0) { throw "MIR fuzz source generation failed for seed $seed" }
             }
         }
         $collectExecutions = $false

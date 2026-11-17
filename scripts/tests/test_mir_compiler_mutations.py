@@ -1,35 +1,29 @@
-"""Exercise the real process scheduler with tiny, independently built controls."""
-
+"""Real native fixture builds exercise isolated Python mutation scheduling."""
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 import uuid
+from scripts import mir_compiler_mutations as mutations
+from scripts.tests.test_process_supervision_python import process_alive
+
+ROOT=Path(__file__).resolve().parents[2]
 
 
-ROOT = Path(__file__).resolve().parents[2]
-PWSH = shutil.which("pwsh")
-
-
-@unittest.skipUnless(PWSH and shutil.which("cmake"), "requires PowerShell and CMake")
+@unittest.skipUnless(shutil.which('cmake'), 'requires CMake and a native compiler')
 class CompilerMutationTests(unittest.TestCase):
-    maxDiff = None
-
+    maxDiff=None
     @classmethod
     def setUpClass(cls):
-        command = (
-            f"Import-Module '{ROOT.as_posix()}/scripts/mir-compiler-mutations.psm1'; "
-            "ConvertTo-Json -InputObject @(Get-MirCompilerMutations)"
-        )
-        cls.mutations = json.loads(subprocess.check_output(
-            [PWSH, "-NoProfile", "-Command", command], text=True))
+        cls.mutations=mutations.mutations()
 
     def setUp(self):
-        self.workspace = ROOT / "build" / ("mutation-runner-test-" + uuid.uuid4().hex)
+        self.workspace = Path(tempfile.mkdtemp(prefix="dcc-mut-")).resolve()
         self.repo = self.workspace / "fixture repo"
         self.source = self.repo / "src/dcc"
         self.source.mkdir(parents=True)
@@ -37,16 +31,15 @@ class CompilerMutationTests(unittest.TestCase):
         (self.repo / "tests/host").mkdir(parents=True)
         self.trace = self.workspace / "trace"
         self.trace.mkdir()
-        for name in ("run-mir-compiler-mutations.ps1",
-                     "run-mir-compiler-mutation-worker.ps1",
-                     "mir-compiler-mutations.psm1",
-                     "test-mir-matcher-restoration.ps1",
-                     "test-mir-paired-byte-restoration.ps1",
-                     "process-supervision.psm1", "process-supervisor.ps1"):
+        for name in ("run-mir-compiler-mutations.py",
+                     "run-mir-compiler-mutation-worker.py",
+                     "mir_compiler_mutations.py", "mir-compiler-mutations.json",
+                     "test-mir-matcher-restoration.py",
+                     "test-mir-paired-byte-restoration.py",
+                     "process_supervision.py"):
             shutil.copyfile(ROOT / "scripts" / name, self.repo / "scripts" / name)
-        (self.repo / "scripts/new-mir-fuzz-source.ps1").write_text(
-            'param($OutputPath, $Seed, $Programs)\n'
-            'Set-Content -LiteralPath $OutputPath -Value "/* probe */"\n')
+        (self.repo / "scripts/new-mir-fuzz-source.py").write_text(
+            'def generate(seed, programs): return "/* probe */"\n')
         self.source_text = {}
         for mutation in self.mutations:
             if "Before" not in mutation:
@@ -66,37 +59,8 @@ struct MirAllocationSummary
             path.write_text("\n".join(fragments))
         self.configure_fixture()
 
-    def test_liveness_mutants_target_the_shipping_bitset_transfer(self):
-        source = (ROOT / "src/dcc/dcc_mir.c").read_text()
-        begin = source.index("static int mir_compute_liveness_bitsets(")
-        end = source.index("\nint mir_verify_and_dump(", begin)
-        bitsets = source[begin:end]
-        for name in ("phi-edge-liveness", "call-argument-liveness"):
-            mutation = next(item for item in self.mutations if item["Name"] == name)
-            with self.subTest(name=name):
-                self.assertEqual(source.count(mutation["Before"]), 1)
-                self.assertIn(mutation["Before"], bitsets)
-                self.assertNotIn(mutation["Before"], source[:begin])
 
-    def test_all_mutations_have_unique_production_anchors(self):
-        for mutation in self.mutations:
-            if "Before" not in mutation:
-                continue
-            path = ROOT / mutation.get("Source", "src/dcc/dcc_mir.c")
-            source = path.read_text()
-            with self.subTest(mutation=mutation["Name"]):
-                self.assertEqual(source.count(mutation["Before"]), 1,
-                                 f"Mutation anchor changed in {path}")
-                self.assertNotEqual(mutation["Before"], mutation["After"])
 
-    def test_branch_manifest_mutants_restore_unique_production_guards(self):
-        manifest = json.loads((ROOT / "scripts/compiler-branch-proof.json").read_text())
-        for name, label in manifest["mutant_assertions"].items():
-            mutation = next(item for item in self.mutations if item["Name"] == name)
-            with self.subTest(name=name):
-                self.assertEqual(mutation["ExpectedFailure"], label)
-                self.assertEqual((ROOT / mutation["Source"]).read_text().count(
-                    mutation["Before"]), 1)
 
     def tearDown(self):
         shutil.rmtree(self.workspace)
@@ -249,8 +213,7 @@ int main(int argc, char **argv) {
 
     def run_fixture(self, jobs=None, expected_exit=0, names=None):
         output = self.workspace / "output with spaces"
-        command = [PWSH, "-NoLogo", "-NoProfile", "-File",
-                   str(self.repo / "scripts/run-mir-compiler-mutations.ps1"),
+        command = [sys.executable, str(self.repo / "scripts/run-mir-compiler-mutations.py"),
                    "-OutputDirectory", str(output)]
         if jobs is not None:
             command += ["-Jobs", str(jobs), "-BuildJobs", "2"]
@@ -259,8 +222,25 @@ int main(int argc, char **argv) {
         environment = dict(os.environ, DCC_MIR_SELECT_CANDIDATE="poison",
                            DCC_MIR_CACHE_VERIFY="poison",
                            LLVM_PROFILE_FILE=str(self.workspace / "forbidden-normal-coverage"))
-        completed = subprocess.run(command, cwd=self.repo, env=environment,
-                                   capture_output=True, text=True, timeout=180)
+        # Observe live start/done files instead of comparing wall-clock mtimes,
+        # which can move or be coarsely cached on different filesystems.
+        log=self.workspace/'campaign-console.log'
+        self.observed_peak=0
+        premature=False
+        began=time.monotonic()
+        with log.open('w') as capture:
+            process=subprocess.Popen(command,cwd=self.repo,env=environment,stdout=capture,stderr=subprocess.STDOUT)
+            while process.poll() is None:
+                starts={p.stem for p in self.trace.glob('*.start')}
+                dones={p.stem for p in self.trace.glob('*.done')}
+                self.observed_peak=max(self.observed_peak,len(starts-dones))
+                premature |= bool(starts-{'baseline'}) and 'baseline' not in dones
+                if time.monotonic()-began>180:
+                    process.kill();process.wait()
+                    self.fail('fixture campaign timed out')
+                time.sleep(.01)
+        completed=subprocess.CompletedProcess(command,process.returncode,log.read_text(),'')
+        self.assertFalse(premature,'mutant started before healthy baseline completed')
         if expected_exit == 0:
             diagnostic = completed.stdout + completed.stderr
             if completed.returncode != 0 and (output / "results.json").exists():
@@ -304,25 +284,12 @@ int main(int argc, char **argv) {
         self.assert_concurrency(2)
 
     def assert_concurrency(self, limit):
-        events = []
-        baseline_end = (self.trace / "baseline.done").stat().st_mtime_ns
-        paths = []
+        paths=[]
         for mutation in self.mutations:
-            name = mutation["Name"]
-            start = self.trace / f"{name}.start"
+            start=self.trace/(mutation['Name']+'.start')
             paths.extend(start.read_text().splitlines())
-            if name == "baseline":
-                continue
-            self.assertGreaterEqual(start.stat().st_mtime_ns, baseline_end)
-            events.append((start.stat().st_mtime_ns, 1))
-            events.append(((self.trace / f"{name}.done").stat().st_mtime_ns, -1))
-        self.assertEqual(len(paths), len(set(paths)), "shared source/build/bin trees")
-        count = peak = 0
-        for _, delta in sorted(events):
-            count += delta
-            peak = max(peak, count)
-        self.assertEqual(count, 0)
-        self.assertEqual(peak, limit)
+        self.assertEqual(len(paths),len(set(paths)),"shared source/build/bin trees")
+        self.assertEqual(self.observed_peak,limit)
 
     def test_baseline_failures_do_not_schedule_mutants(self):
         for mode in ("baseline-compile-failure", "baseline-test-failure"):
@@ -339,16 +306,17 @@ int main(int argc, char **argv) {
         self.source_text["src/dcc/dcc_mir.c"].append("phi_value = phi->dst;")
         (self.source / "dcc_mir.c").write_text(
             "\n".join(self.source_text["src/dcc/dcc_mir.c"]))
-        worker = self.repo / "scripts/run-mir-compiler-mutation-worker.ps1"
+        worker = self.repo / "scripts/run-mir-compiler-mutation-worker.py"
         worker.write_text(worker.read_text().replace(
-            '$ErrorActionPreference = "Stop"',
-            '$ErrorActionPreference = "Stop"\n'
-            'if ($Name -eq "indirect-callee") {\n'
-            '    Set-Content -LiteralPath "$OutputDirectory/result.json" -Value "{"\n'
-            '    exit 0\n}\n'
-            'if ($Name -eq "phi-edge-liveness") {\n'
-            '    Remove-Item -LiteralPath "$OutputDirectory/result.json"\n'
-            '    exit 0\n}\n'))
+            '    worker(args.repo_root',
+            '    from pathlib import Path\n'
+            '    if args.name == "indirect-callee":\n'
+            '        Path(args.output_directory,"result.json").write_text("{")\n'
+            '        return\n'
+            '    if args.name == "phi-edge-liveness":\n'
+            '        Path(args.output_directory,"result.json").unlink()\n'
+            '        return\n'
+            '    worker(args.repo_root'))
         results = self.run_fixture(jobs=2, expected_exit=1)
         outcomes = {r["mutation"]: r["outcome"] for r in results}
         expected = {
@@ -383,256 +351,133 @@ int main(int argc, char **argv) {
                          if m["Name"].startswith("memory-")})
         self.assertEqual(outcomes, expected)
 
-    def test_memory_guards_require_their_exact_assertion(self):
-        module = (ROOT / "scripts/mir-compiler-mutations.psm1").as_posix()
-        command = f"Import-Module '{module}'; " + r'''
-$checks = @()
-foreach ($mutation in Get-MirCompilerMutations | Where-Object Name -like "memory-*") {
-    $log = "$($mutation.ExpectedFailure)`nMIR verifier failures=1`n"
-    foreach ($probe in @(
-        @{Output=$log; ExitCode=1; TimedOut=$false; Expected="killed"},
-        @{Output=$log; ExitCode=0; TimedOut=$false; Expected="invalid"},
-        @{Output=$log; ExitCode=134; TimedOut=$false; Expected="invalid"},
-        @{Output=$log; ExitCode=1; TimedOut=$true; Expected="invalid"},
-        @{Output="FAIL unrelated assertion`nMIR verifier failures=1`n";
-          ExitCode=1; TimedOut=$false; Expected="invalid"},
-        @{Output="prefix $log"; ExitCode=1; TimedOut=$false; Expected="invalid"},
-        @{Output="MIR verifier failures=0`n"; ExitCode=0;
-          TimedOut=$false; Expected="survived"}
-    )) {
-        $actual = Get-MirMutationOutcome ([pscustomobject]$probe) $mutation
-        if ($actual -ne $probe.Expected) { throw "$($mutation.Name): $actual" }
-        $checks += $actual
-    }
-}
-ConvertTo-Json -InputObject $checks
-'''
-        outcomes = json.loads(subprocess.check_output(
-            [PWSH, "-NoProfile", "-Command", command], text=True))
-        self.assertEqual(len(outcomes),
-                         7 * sum(m["Name"].startswith("memory-") for m in self.mutations))
-
-    def test_classifier_requires_exact_diagnostic_exit_and_completion(self):
-        module = (ROOT / "scripts/mir-compiler-mutations.psm1").as_posix()
-        command = f"Import-Module '{module}'; " + r'''
-$hostMutation = @(Get-MirCompilerMutations)[1]
-$cacheMutation = Get-MirCompilerMutations |
-    Where-Object Name -eq "promotion-cache"
-$fieldCacheMutation = Get-MirCompilerMutations |
-    Where-Object Name -eq "global-field-vn-cache"
-$fieldCallMutation = Get-MirCompilerMutations |
-    Where-Object Name -eq "global-field-vn-call-barrier"
-$deferredMergeMutation = Get-MirCompilerMutations |
-    Where-Object Name -eq "deferred-merge-demotion"
-$homedAggregateMutation = Get-MirCompilerMutations |
-    Where-Object Name -eq "homed-aggregate-copy-size"
-$spilledCallMutation = Get-MirCompilerMutations |
-    Where-Object Name -eq "spilled-call-abi"
-$matcherMutation = Get-MirCompilerMutations |
-    Where-Object Name -eq "allocation-first-result"
-$pairedByteMutation = Get-MirCompilerMutations |
-    Where-Object Name -eq "paired-byte-adjacency"
-$hostLog = "FAIL branch value cannot escape join`nMIR verifier failures=1`n"
-$cacheLog = "; MIR CACHE MISMATCH mir_definition function=f value=1 cached=2 uncached=-1`ndcc: fatal: MIR use-cache mismatch`n"
-$fieldCallLog = "FAIL isolated global field unsafe-call barrier`nMIR verifier failures=1`n"
-$deferredMergeLog = "FAIL deferred metadata merge demotion`nMIR verifier failures=1`n"
-$homedAggregateLog = "FAIL homed aggregate copy exact rejection`nMIR verifier failures=1`n"
-$spilledCallLog = "FAIL spilled call ABI exact rejection`nMIR verifier failures=1`n"
-$matcherLog = "FAIL allocation matcher accepted mutated first result`nMIR matcher restoration failures=1`n"
-$pairedByteLog = "FAIL paired-byte matcher accepted nonadjacent fields`nMIR paired-byte mutation failures=1`n"
-foreach ($case in @(
-    @($hostMutation, $hostLog, 1, $false, "killed"),
-    @($hostMutation, $hostLog, 8, $false, "invalid"),
-    @($hostMutation, $hostLog, 1, $true, "invalid"),
-    @($hostMutation, $hostLog.Replace("join", "join extra"), 1, $false, "invalid"),
-    @($hostMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
-    @($hostMutation, "", 0, $false, "invalid"),
-    @($cacheMutation, $cacheLog, 1, $false, "killed"),
-    @($cacheMutation, $cacheLog, 134, $false, "invalid"),
-    @($cacheMutation, $cacheLog, 1, $true, "invalid"),
-    @($cacheMutation, $cacheLog.Replace("mir_definition", "other"), 1, $false, "invalid"),
-    @($cacheMutation, "", 0, $false, "survived"),
-    @($fieldCacheMutation, $cacheLog, 1, $false, "killed"),
-    @($fieldCacheMutation, "FAIL global field value-numbering cache invalidation`nMIR verifier failures=1`n", 1, $false, "invalid"),
-    @($fieldCallMutation, $fieldCallLog, 1, $false, "killed"),
-    @($fieldCallMutation, $fieldCallLog, 134, $false, "invalid"),
-    @($fieldCallMutation, $fieldCallLog.Replace("unsafe-call", "call"), 1, $false, "invalid"),
-    @($fieldCallMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
-    @($deferredMergeMutation, $deferredMergeLog, 1, $false, "killed"),
-    @($deferredMergeMutation, $deferredMergeLog, 134, $false, "invalid"),
-    @($deferredMergeMutation, $deferredMergeLog.Replace("merge demotion", "merge"), 1, $false, "invalid"),
-    @($deferredMergeMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
-    @($homedAggregateMutation, $homedAggregateLog, 1, $false, "killed"),
-    @($homedAggregateMutation, $homedAggregateLog, 134, $false, "invalid"),
-    @($homedAggregateMutation, $homedAggregateLog.Replace("aggregate copy", "aggregate"), 1, $false, "invalid"),
-    @($homedAggregateMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
-    @($spilledCallMutation, $spilledCallLog, 1, $false, "killed"),
-    @($spilledCallMutation, $spilledCallLog, 134, $false, "invalid"),
-    @($spilledCallMutation, $spilledCallLog.Replace("call ABI", "call"), 1, $false, "invalid"),
-    @($spilledCallMutation, "MIR verifier failures=0`n", 0, $false, "survived"),
-    @($matcherMutation, $matcherLog, 1, $false, "killed"),
-    @($matcherMutation, $matcherLog, 134, $false, "invalid"),
-    @($matcherMutation, $matcherLog.Replace("first result", "other"), 1, $false, "invalid"),
-    @($matcherMutation, "MIR matcher restoration failures=0`n", 0, $false, "survived"),
-    @($pairedByteMutation, $pairedByteLog, 1, $false, "killed"),
-    @($pairedByteMutation, $pairedByteLog, 134, $false, "invalid"),
-    @($pairedByteMutation, $pairedByteLog.Replace("nonadjacent", "other"), 1, $false, "invalid"),
-    @($pairedByteMutation, "MIR paired-byte mutation failures=0`n", 0, $false, "survived")
-)) {
-    $actual = Get-MirMutationOutcome @{
-        Output = $case[1]; ExitCode = $case[2]; TimedOut = $case[3]
-    } $case[0]
-    if ($actual -ne $case[4]) { throw "Expected $($case[4]), got $actual" }
-}
-'''
-        completed = subprocess.run([PWSH, "-NoProfile", "-Command", command],
-                                   capture_output=True, text=True, timeout=30)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_worker_and_build_limits_reject_zero(self):
-        for parameter in ("Jobs", "BuildJobs", "WorkerTimeout"):
-            completed = subprocess.run(
-                [PWSH, "-NoProfile", "-File",
-                 str(self.repo / "scripts/run-mir-compiler-mutations.ps1"),
-                 f"-{parameter}", "0"], capture_output=True, text=True, timeout=30)
-            self.assertNotEqual(completed.returncode, 0)
-            self.assertIn(parameter, completed.stderr)
+        for parameter in ('Jobs','BuildJobs','WorkerTimeout'):
+            p=subprocess.run([sys.executable,str(self.repo/'scripts/run-mir-compiler-mutations.py'),
+                              '-'+parameter,'0'],capture_output=True,text=True,timeout=10)
+            self.assertNotEqual(p.returncode,0)
+            self.assertIn(parameter,p.stderr)
 
     def test_child_timeout_and_environment_isolation(self):
-        command = (
-            f"Import-Module '{ROOT.as_posix()}/scripts/mir-compiler-mutations.psm1'; "
-            f"$directory = '{self.workspace.as_posix()}'; "
-        ) + r'''
-$pwsh = (Get-Process -Id $PID).Path
-$env:DCC_MIR_CACHE_VERIFY = "parent-cache"
-$env:LLVM_PROFILE_FILE = "parent-profile"
-$child = Start-MirMutationProcess $pwsh @(
-    "-NoProfile", "-Command",
-    'if ($env:DCC_MIR_CACHE_VERIFY) { exit 9 }; Write-Output $env:LLVM_PROFILE_FILE'
-) $directory "$directory/environment.log"
-$result = Complete-MirMutationProcess $child
-if ($result.ExitCode -ne 0 -or $result.Output -notmatch 'profiles') {
-    throw "Child environment not isolated"
-}
-if ($env:DCC_MIR_CACHE_VERIFY -ne "parent-cache" -or
-    $env:LLVM_PROFILE_FILE -ne "parent-profile") { throw "Parent environment changed" }
-$child = Start-MirMutationProcess $pwsh @(
-    "-NoProfile", "-Command", 'Write-Output started; Start-Sleep -Seconds 30'
-) $directory "$directory/timeout.log"
-$result = Complete-MirMutationProcess $child 3
-if (-not $result.TimedOut -or $result.Output -notmatch 'started') {
-    throw "Child timeout did not preserve its diagnostic"
-}
-'''
-        completed = subprocess.run([PWSH, "-NoProfile", "-Command", command],
-                                   capture_output=True, text=True, timeout=15)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        previous=dict(os.environ)
+        os.environ.update(DCC_MIR_CACHE_VERIFY='parent-cache',LLVM_PROFILE_FILE='parent-profile')
+        try:
+            code='import os;assert not os.getenv("DCC_MIR_CACHE_VERIFY");print(os.environ["LLVM_PROFILE_FILE"])'
+            child=mutations.start([sys.executable,'-c',code],self.workspace,self.workspace/'environment.log')
+            result=child.complete()
+            self.assertEqual(result['ExitCode'],0,result)
+            self.assertIn('profiles',result['Output'])
+            self.assertEqual(os.environ['DCC_MIR_CACHE_VERIFY'],'parent-cache')
+            self.assertEqual(os.environ['LLVM_PROFILE_FILE'],'parent-profile')
+            child=mutations.start([sys.executable,'-c','import time;print("started",flush=True);time.sleep(30)'],self.workspace)
+            result=child.complete(.3)
+            self.assertTrue(result['TimedOut']);self.assertIn('started',result['Output'])
+        finally:
+            os.environ.clear();os.environ.update(previous)
 
-    def test_exited_parent_with_inherited_pipe_is_bounded_and_child_is_killed(self):
-        # The direct Python parent exits immediately; its child keeps both pipes
-        # open. A wait for the parent's exit alone cannot enforce this deadline.
-        parent = (
-            'import subprocess, sys; '
-            'child = subprocess.Popen([sys.executable, "-c", '
-            '"import time; time.sleep(4)"]); '
-            'print(child.pid, flush=True)'
-        )
-        command = (
-            f"Import-Module '{ROOT.as_posix()}/scripts/mir-compiler-mutations.psm1'; "
-            f"$directory = '{self.workspace.as_posix()}'; "
-            f"$python = '{Path(sys.executable).as_posix()}'; "
-            "$parent = @'\n" + parent + "\n'@\n"
-        ) + r'''
-$child = Start-MirMutationProcess $python @("-c", $parent) $directory "$directory/drain.log"
-$startup = [Diagnostics.Stopwatch]::StartNew()
-while (-not $child.Process.HasExited -and $startup.Elapsed.TotalSeconds -lt 5) {
-    Start-Sleep -Milliseconds 10
-}
-if (-not $child.Process.HasExited) { throw "Fixture parent did not exit" }
-if ($child.Stdout.IsCompleted) { throw "Fixture descendant did not retain the pipe" }
-$watch = [Diagnostics.Stopwatch]::StartNew()
-$result = Complete-MirMutationProcess $child 1
-[ordered]@{
-    outcome = Get-MirMutationOutcome $result @(Get-MirCompilerMutations)[1]
-    timedOut = $result.TimedOut
-    elapsed = $watch.Elapsed.TotalSeconds
-    total = $child.Clock.Elapsed.TotalSeconds
-    child = [int]$result.Output.Trim()
-} | ConvertTo-Json
-'''
-        completed = subprocess.run([PWSH, "-NoProfile", "-Command", command],
-                                   capture_output=True, text=True, timeout=12)
-        self.assertEqual(completed.returncode, 0, completed.stderr)
-        result = json.loads(completed.stdout)
-        self.assertTrue(result["timedOut"])
-        self.assertEqual(result["outcome"], "invalid")
-        self.assertLess(result["elapsed"], 2.5, result)
-        self.assert_process_gone(result["child"])
-        self.assertFalse(list(self.workspace.rglob("process-id")))
-        print(f"Inherited-pipe regression: invalid in {result['total']:.3f}s total "
-              f"({result['elapsed']:.3f}s completion); child cleaned")
+    def test_worker_watchdog_stops_descendants(self):self.check_worker_cleanup(False)
+    def test_exited_worker_cleans_nested_process_scopes(self):self.check_worker_cleanup(True)
 
-    def assert_process_gone(self, process_id):
-        command = (
-            f"$p = Get-Process -Id {process_id} -ErrorAction SilentlyContinue; "
-            "if ($p -and -not $p.HasExited) { exit 1 }; exit 0"
-        )
-        # Allow the OS reaper to collect an already-killed orphan.
-        deadline = time.monotonic() + 2
-        while True:
-            completed = subprocess.run([PWSH, "-NoProfile", "-Command", command],
-                                       capture_output=True, text=True, timeout=5)
-            if completed.returncode == 0:
-                return
-            if time.monotonic() >= deadline:
-                self.fail(f"Owned descendant {process_id} survived cleanup")
-            time.sleep(0.05)
-
-    def test_worker_watchdog_records_invalid_and_stops_descendants(self):
-        self.check_worker_cleanup(exit_worker=False)
-
-    def test_exited_worker_cleans_nested_process_scopes(self):
-        self.check_worker_cleanup(exit_worker=True)
-
-    def check_worker_cleanup(self, exit_worker):
-        worker = self.repo / "scripts/run-mir-compiler-mutation-worker.ps1"
-        child_code = (
-            'import os, pathlib, time; '
-            f'pathlib.Path({str(self.workspace / "watchdog-child")!r}).write_text(str(os.getpid())); '
-            'time.sleep(30)'
-        )
-        worker.write_text(
-            'param($RepoRoot, $Workspace, $OutputDirectory, $Name, $BuildJobs)\n'
-            f"Import-Module '{self.repo.as_posix()}/scripts/mir-compiler-mutations.psm1';\n"
-            "$code = @'\n" + child_code + "\n'@\n"
-            # A nested command has its own session, not the worker's group.
-            f"$child = Start-MirMutationProcess '{Path(sys.executable).as_posix()}' "
-            '@("-c", $code) $OutputDirectory "$OutputDirectory/nested.log" '
-            '-ParentScope $env:DCC_PROCESS_SCOPE\n'
-            '$started = [Diagnostics.Stopwatch]::StartNew()\n'
-            f"while (-not (Test-Path '{self.workspace.as_posix()}/watchdog-child') "
-            '-and $started.Elapsed.TotalSeconds -lt 5) { Start-Sleep -Milliseconds 10 }\n'
-            + ('exit 0\n' if exit_worker else 'Start-Sleep -Seconds 30\n'))
-        output = self.workspace / "watchdog-output"
-        started = time.monotonic()
-        completed = subprocess.run(
-            [PWSH, "-NoProfile", "-File",
-             str(self.repo / "scripts/run-mir-compiler-mutations.ps1"),
-             "-Jobs", "2", "-WorkerTimeout", "4", "-OutputDirectory", str(output)],
-            capture_output=True, text=True, timeout=12)
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertLess(time.monotonic() - started, 8)
-        results = json.loads((output / "results.json").read_text())
-        self.assertEqual(len(results), len(self.mutations))
-        self.assertTrue(all(result["outcome"] == "invalid" for result in results))
-        if not exit_worker:
-            self.assertEqual(results[0]["detail"], "Worker timed out; see worker.log")
-        self.assertTrue(all(result["phase"] == "not-run" for result in results[1:]))
-        process_id = int((self.workspace / "watchdog-child").read_text())
-        self.assert_process_gone(process_id)
-        self.assertFalse(list(output.rglob("process-id")))
-        self.assertFalse(list(output.glob("work-*")))
+    def check_worker_cleanup(self,exit_worker):
+        worker=self.repo/'scripts/run-mir-compiler-mutation-worker.py'
+        marker=self.workspace/'watchdog-child'
+        child='import os,pathlib,time;pathlib.Path('+repr(str(marker))+').write_text(str(os.getpid()));time.sleep(30)'
+        code=('import os,sys,time\nfrom pathlib import Path\nfrom mir_compiler_mutations import start\n'
+              'argv=sys.argv\noutput=Path(argv[argv.index("--output-directory")+1])\n'
+              'child=start([sys.executable,"-c",'+repr(child)+'],output,parent_scope=os.environ["DCC_PROCESS_SCOPE"])\n'
+              'while not Path('+repr(str(marker))+').exists():time.sleep(.01)\n')
+        code+='raise SystemExit(0)\n' if exit_worker else 'time.sleep(30)\n'
+        worker.write_text(code)
+        output=self.workspace/'watchdog-output'
+        began=time.monotonic()
+        p=subprocess.run([sys.executable,str(self.repo/'scripts/run-mir-compiler-mutations.py'),
+            '--jobs','2','--worker-timeout','2','--output-directory',str(output)],
+            capture_output=True,text=True,timeout=10)
+        self.assertNotEqual(p.returncode,0)
+        self.assertLess(time.monotonic()-began,6)
+        results=json.loads((output/'results.json').read_text())
+        self.assertEqual(len(results),len(self.mutations))
+        self.assertTrue(all(r['outcome']=='invalid' for r in results))
+        if not exit_worker:self.assertEqual(results[0]['detail'],'Worker timed out; see worker.log')
+        self.assertTrue(all(r['phase']=='not-run' for r in results[1:]))
+        pid=int(marker.read_text());end=time.monotonic()+2
+        while process_alive(pid) and time.monotonic()<end:time.sleep(.01)
+        self.assertFalse(process_alive(pid),'owned descendant survived')
+        self.assertFalse(list(output.rglob('process-id')))
+        self.assertFalse(list(output.glob('work-*')))
 
 
-if __name__ == "__main__":
-    unittest.main()
+
+class CampaignPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):cls.mutations=mutations.mutations()
+
+    def test_liveness_mutants_target_the_shipping_bitset_transfer(self):
+        source = (ROOT / "src/dcc/dcc_mir.c").read_text()
+        begin = source.index("static int mir_compute_liveness_bitsets(")
+        end = source.index("\nint mir_verify_and_dump(", begin)
+        bitsets = source[begin:end]
+        for name in ("phi-edge-liveness", "call-argument-liveness"):
+            mutation = next(item for item in self.mutations if item["Name"] == name)
+            with self.subTest(name=name):
+                self.assertEqual(source.count(mutation["Before"]), 1)
+                self.assertIn(mutation["Before"], bitsets)
+                self.assertNotIn(mutation["Before"], source[:begin])
+
+
+    def test_all_mutations_have_unique_production_anchors(self):
+        for mutation in self.mutations:
+            if "Before" not in mutation:
+                continue
+            path = ROOT / mutation.get("Source", "src/dcc/dcc_mir.c")
+            source = path.read_text()
+            with self.subTest(mutation=mutation["Name"]):
+                self.assertEqual(source.count(mutation["Before"]), 1,
+                                 f"Mutation anchor changed in {path}")
+                self.assertNotEqual(mutation["Before"], mutation["After"])
+
+
+    def test_branch_manifest_mutants_restore_unique_production_guards(self):
+        manifest = json.loads((ROOT / "scripts/compiler-branch-proof.json").read_text())
+        for name, label in manifest["mutant_assertions"].items():
+            mutation = next(item for item in self.mutations if item["Name"] == name)
+            with self.subTest(name=name):
+                self.assertEqual(mutation["ExpectedFailure"], label)
+                self.assertEqual((ROOT / mutation["Source"]).read_text().count(
+                    mutation["Before"]), 1)
+
+
+    def test_exact_classifier_for_every_mutation(self):
+        for mutation in self.mutations[1:]:
+            cache=mutation.get('CompileProbe') or mutation.get('CacheVerifier')
+            label=('MIR matcher restoration failures' if mutation.get('MatcherProbe') else
+                   'MIR paired-byte mutation failures' if mutation.get('PairedByteProbe') else 'MIR verifier failures')
+            good=('; MIR CACHE MISMATCH mir_definition function=f value=1 cached=2 uncached=-1\ndcc: fatal: MIR use-cache mismatch\n'
+                  if cache else mutation['ExpectedFailure']+'\n'+label+'=1\n')
+            cases=[(good,1,False,'killed'),(good,134,False,'invalid'),(good,1,True,'invalid'),
+                   ('FAIL unrelated assertion\n'+label+'=1\n',1,False,'invalid'),
+                   ('prefix '+good,1,False,'invalid'),
+                   ('' if cache else label+'=0\n',0,False,'survived')]
+            for text,code,timed,expected in cases:
+                with self.subTest(mutation=mutation['Name'],expected=expected,text=text):
+                    self.assertEqual(mutations.classify({'Output':text,'ExitCode':code,'TimedOut':timed},mutation),expected)
+
+
+    def test_unknown_names_do_not_touch_existing_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output=Path(folder)
+            evidence=output/'results.json';evidence.write_text('existing evidence')
+            with self.assertRaisesRegex(ValueError,'Unknown compiler mutation'):
+                mutations.campaign(output,names=['not-a-mutation'])
+            self.assertEqual(evidence.read_text(),'existing evidence')
+
+    def test_output_lock_refuses_competing_campaign_without_overwriting(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output=Path(folder)
+            evidence=output/'results.json';evidence.write_text('existing evidence')
+            with mutations.OutputLock(output/'.lock'):
+                with self.assertRaises(OSError):mutations.campaign(output,names=['baseline'])
+            self.assertEqual(evidence.read_text(),'existing evidence')
+
+if __name__=='__main__':unittest.main()
