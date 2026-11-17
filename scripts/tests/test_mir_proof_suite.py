@@ -44,7 +44,8 @@ class ProofSuiteTests(unittest.TestCase):
         self.assertEqual(env['DCC'],'bad')
 
     def test_newest_versioned_clang_and_colocated_llvm_companions(self):
-        with tempfile.TemporaryDirectory() as folder:
+        # Tool discovery must not fall back to LLVM installations on the host.
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, PATH=folder):
             folder=Path(folder);ext='.exe' if os.name=='nt' else ''
             for name in ('clang','clang-9','clang-18','clang-21','clang-not-a-version'):
                 p=folder/(name+ext);p.touch();p.chmod(0o755)
