@@ -680,7 +680,7 @@ non-literal format conservatively resolves to the combined "lio" path — so
 under the then-default Linux PowerShell runner, **`_vpfio`, `_vsfio`, `_vffio`,
 `_vnfio`, `_vnlng` appear untested** (the other 11 of the 16 do appear
 exercised); a runner that emits explicit negative flags (e.g.
-`runall-x64os.ps1`) does exercise all 16.
+the one-off x64os runner, now retired) did exercise all 16.
 
 ### Correctness
 

@@ -7218,12 +7218,14 @@ static int mir_gnarly_print_call(
 
 static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
 {
+    /* The conditional char/unsigned-int join includes an unsigned word
+     * conversion and the no-op from its already-unsigned arm. */
     static const char expected_opcodes[] =
         "LCSCNSKCNSLNNPNCBFANINCBWLNCBSJLCNSLNNPNCBFANICWLNCBSJLAGAGCGKTGACIRGACIRGKKTGNU"
         "GNGKTGKGKCNSNCNSTGNGKCNSCNSNCBSNBNSTGNGKTGNGKTCIRNSTGNGKACICWACICWACICWACICWACIC"
         "WACIRNSTGNGKAKTNSTGDGKCNSCNSNCBSNCBSBNSTGNGNGNGKCNSCNSTGNNBGNNBGNNBGKTGACCBBRGAC"
         "IRGKCNSTGACNSNCBIRGKCNSANCBNSICWTGNGACIRGKANSDKTGTGKCNSTGNCGNGKTGCNGNCGKTGCGCGKG"
-        "KTGNCGNCGKNAMCWAMCWANSTGAMRGAMRGKNNNNNCSNCSTGCFDLJLDLLPGKNNANSTGDNCIRGKNCNSTNIRN"
+        "KTGNCGNCGKNAMCWAMCWANSTGAMRGAMRGKNNNNNCSNCSTGCFDULJLDNLLPGKNNANSTGDNCIRGKNCNSTNIRN"
         "STGNGKTRNSTGNGKTCIRUSTGNGKCNSNSNSTGNGNGNGKCNSCNSCNSLNNNPPPNNNNNBFNNNBBNSLNCBSNCB"
         "SJLTGNGKTGNCGKNCNSNCBFCLJLNCBFNCLJLCLLPLLPNSTGNGKTGCGCGCGCGKNCSNUNSTGNGKNNCNSTGN"
         "GKCE";
@@ -7233,9 +7235,9 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
         152, 154, 157, 159, 162, 182, 185, 189, 193, 208, 211,
         232, 233, 239, 244, 250, 254, 260, 265, 270, 277, 292,
         298, 305, 309, 314, 316, 324, 327, 333, 337, 358, 361,
-        365, 386, 392, 416, 426, 442, 445, 448, 474, 478, 491,
-        495, 499, 502, 507, 511, 515, 531, 533, 535, 537, 541,
-        554, 562
+        365, 388, 394, 418, 428, 444, 447, 450, 476, 480, 493,
+        497, 501, 504, 509, 513, 517, 533, 535, 537, 539, 543,
+        556, 564
     };
     static const int constant_values[82] = {
         10, 2, 0, 5, 1, 1, 0, 5, 0, 1, 5, 0, 4, 10, 5, 20,
@@ -7247,15 +7249,15 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
     };
     static const int binary_instructions[24] = {
         16, 23, 28, 41, 51, 109, 112, 190, 194, 196, 218, 222,
-        226, 234, 235, 255, 266, 463, 468, 469, 475, 479, 500, 508
+        226, 234, 235, 255, 266, 465, 470, 471, 477, 481, 502, 510
     };
     static const int binary_lefts[24] = {
         13, 13, 13, 38, 38, 101, 101, 182, 185, 182, 208, 208,
-        208, 232, 231, 250, 260, 455, 455, 457, 455, 456, 495, 495
+        208, 232, 231, 250, 260, 457, 457, 459, 457, 458, 497, 497
     };
     static const int binary_rights[24] = {
         15, 22, 27, 40, 50, 108, 104, 189, 193, 194, 211, 211,
-        211, 233, 234, 254, 265, 456, 456, 468, 474, 478, 499, 507
+        211, 233, 234, 254, 265, 458, 458, 470, 476, 480, 501, 509
     };
     static const int binary_operations[24] = {
         '<', '+', '+', '<', '+', '+', '+', '-', '-', '-', '&', '|',
@@ -7266,14 +7268,14 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
         0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0
     };
     static const int string_instructions[35] = {
-        342, 363, 382, 62, 76, 84, 96, 115, 120, 125, 131, 174,
+        342, 363, 384, 62, 76, 84, 96, 115, 120, 125, 131, 174,
         177, 199, 214, 229, 247, 272, 287, 289, 295, 303, 312,
-        321, 395, 401, 410, 421, 433, 483, 488, 524, 529, 547, 557
+        321, 397, 403, 412, 423, 435, 485, 490, 526, 531, 549, 559
     };
     static const int print_calls[32] = {
         74, 83, 88, 100, 119, 124, 135, 171, 181, 207, 228, 243,
-        259, 281, 291, 302, 311, 320, 329, 352, 376, 390, 405,
-        414, 425, 441, 487, 493, 528, 539, 551, 561
+        259, 281, 291, 302, 311, 320, 329, 352, 378, 392, 407,
+        416, 427, 443, 489, 495, 530, 541, 553, 563
     };
     static const int print_call_ids[32] = {
         2, 4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 20,
@@ -7295,24 +7297,24 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
         {287, 289, -1, -1, -1}, {295, 298, 292, -1, -1},
         {303, 305, 309, -1, -1}, {312, 318, -1, -1, -1},
         {321, 324, 327, -1, -1}, {342, 346, 350, -1, -1},
-        {363, 374, -1, -1, -1}, {382, 388, -1, -1, -1},
-        {401, 398, -1, -1, -1}, {410, 407, -1, -1, -1},
-        {421, 419, -1, -1, -1}, {433, 426, 426, 426, -1},
-        {483, 457, -1, -1, -1}, {488, 491, -1, -1, -1},
-        {524, 521, -1, -1, -1}, {529, 531, 533, 535, 537},
-        {547, 544, -1, -1, -1}, {557, 554, -1, -1, -1}
+        {363, 376, -1, -1, -1}, {384, 390, -1, -1, -1},
+        {403, 400, -1, -1, -1}, {412, 409, -1, -1, -1},
+        {423, 421, -1, -1, -1}, {435, 428, 428, 428, -1},
+        {485, 459, -1, -1, -1}, {490, 493, -1, -1, -1},
+        {526, 523, -1, -1, -1}, {531, 533, 535, 537, 539},
+        {549, 546, -1, -1, -1}, {559, 556, -1, -1, -1}
     };
     static const int arr_addresses[12] = {
         136, 141, 146, 151, 156, 161, 231,
-        238, 249, 263, 276, 379
+        238, 249, 263, 276, 381
     };
     static const int arr_indices[11] = {
         138, 143, 148, 153, 158, 163,
-        240, 256, 269, 278, 387
+        240, 256, 269, 278, 389
     };
     static const int arr_index_values[11] = {
         137, 142, 147, 152, 157, 162,
-        239, 255, 266, 277, 386
+        239, 255, 266, 277, 388
     };
     static const unsigned char arr_index_types[11] = {
         18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 16
@@ -7323,7 +7325,7 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
     int previous;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 564 || mir_cfg_block_count() != 22 ||
+    if (mir.count != 566 || mir_cfg_block_count() != 22 ||
         mir.has_vla || mir.local_bytes != 68 ||
         mir.object_count != 9 ||
         !mir_gnarly_word_type(mir.return_type, 0) ||
@@ -7359,39 +7361,45 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
 
     if (!mir_gnarly_runner_phi(13, 7, 28, 0, 25) ||
         !mir_gnarly_runner_phi(38, 32, 51, 31, 48) ||
-        !mir_gnarly_runner_phi(374, 367, 371, 368, 372) ||
-        !mir_gnarly_runner_phi(455, 445, 475, 373, 472) ||
-        !mir_gnarly_runner_phi(456, 448, 479, 373, 472) ||
-        !mir_gnarly_runner_phi(457, 442, 469, 373, 472) ||
-        !mir_gnarly_runner_phi(518, 511, 515, 512, 516) ||
-        !mir_gnarly_runner_phi(521, 502, 518, 503, 519) ||
+        (!mir_gnarly_phi(376, 368, 372, 369, 374) ||
+         !mir_gnarly_word_type(mir.insns[376].type, 1)) ||
+        !mir_gnarly_runner_phi(457, 447, 477, 375, 474) ||
+        !mir_gnarly_runner_phi(458, 450, 481, 375, 474) ||
+        !mir_gnarly_runner_phi(459, 444, 471, 375, 474) ||
+        !mir_gnarly_runner_phi(520, 513, 517, 514, 518) ||
+        !mir_gnarly_runner_phi(523, 504, 520, 505, 521) ||
         !mir_gnarly_branch(17, 16, 31) ||
         !mir_gnarly_branch(42, 41, 54) ||
-        !mir_gnarly_branch(366, 365, 370) ||
-        !mir_gnarly_branch(464, 463, 482) ||
-        !mir_gnarly_branch(501, 500, 505) ||
-        !mir_gnarly_branch(509, 508, 514) ||
+        !mir_gnarly_branch(366, 365, 371) ||
+        !mir_gnarly_branch(466, 465, 484) ||
+        !mir_gnarly_branch(503, 502, 507) ||
+        !mir_gnarly_branch(511, 510, 516) ||
         mir.insns[30].label != mir.insns[10].label ||
         mir.insns[53].label != mir.insns[35].label ||
-        mir.insns[369].label != mir.insns[373].label ||
-        mir.insns[481].label != mir.insns[451].label ||
-        mir.insns[504].label != mir.insns[520].label ||
-        mir.insns[513].label != mir.insns[517].label)
+        mir.insns[370].label != mir.insns[375].label ||
+        mir.insns[483].label != mir.insns[453].label ||
+        mir.insns[506].label != mir.insns[522].label ||
+        mir.insns[515].label != mir.insns[519].label)
         return mir_machine_reject(
             "gnarly-call-runner", "control-flow");
 
-    if (mir.insns[79].src1 != mir.insns[3].dst ||
+    if (!mir_gnarly_char_type(mir.insns[367].type) ||
+        mir.insns[368].src1 != mir.insns[367].dst ||
+        mir.insns[368].immediate != 0 ||
+        !mir_gnarly_word_type(mir.insns[368].type, 1) ||
+        !mir_gnarly_word_type(mir.insns[372].type, 1) ||
+        mir.insns[79].src1 != mir.insns[3].dst ||
         mir.insns[79].immediate != 0 ||
         type_ptr_depth(mir.insns[79].type) != 0 ||
         (mir.insns[79].type & 15) != TYPE_LONG ||
         (mir.insns[79].type & TYPE_UNSIGNED) == 0 ||
         type_size(mir.insns[79].type) != 4 ||
-        mir.insns[419].src1 != mir.insns[418].dst ||
-        mir.insns[419].immediate != 0 ||
-        !mir_gnarly_char_type(mir.insns[419].type) ||
-        mir.insns[544].src1 != mir.insns[541].dst ||
-        mir.insns[544].immediate != '+' ||
-        !mir_gnarly_word_type(mir.insns[544].type, 0))
+        mir.insns[421].src1 != mir.insns[420].dst ||
+        mir.insns[421].immediate != 0 ||
+        !mir_gnarly_char_type(mir.insns[421].type) ||
+        mir.insns[546].src1 != mir.insns[543].dst ||
+        mir.insns[546].immediate != '+' ||
+        !mir_gnarly_word_type(mir.insns[546].type, 0))
         return mir_machine_reject(
             "gnarly-call-runner", "conversions");
 
@@ -7410,8 +7418,8 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
                     "gnarly-call-runner", "distinct-strings");
     }
     if (mir.insns[167].immediate != plan->strings[6] ||
-        mir.insns[406].immediate != plan->strings[24] ||
-        mir.insns[415].immediate != plan->strings[24])
+        mir.insns[408].immediate != plan->strings[24] ||
+        mir.insns[417].immediate != plan->strings[24])
         return mir_machine_reject(
             "gnarly-call-runner", "reused-strings");
     for (item = 0; item < 32; ++item)
@@ -7567,7 +7575,7 @@ static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
         mir.insns[130].object != 6 ||
         mir.insns[210].object != 7 ||
         mir.insns[213].object != 8 ||
-        mir.insns[563].src1 != mir.insns[562].dst)
+        mir.insns[565].src1 != mir.insns[564].dst)
         return mir_machine_reject(
             "gnarly-call-runner", "objects-return");
     return 1;

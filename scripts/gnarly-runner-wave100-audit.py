@@ -46,7 +46,7 @@ SELECTED_HASH = re.compile(
     r"selected-hash=(?P<hash>[0-9a-f]{8})"
 )
 BASELINE_SHA256 = (
-    "f11a619c3e125a2ae6ab36c9ae1455348282991b9746eae65d00e7b811eedf63"
+    "8a69a267a7737bae574024fda7b6b2fd151afe397554570fd4846ac19db800bf"
 )
 BASELINE_SELECTED_HASH = "a855a26c"
 EXPECTED_RUNTIME = (
@@ -87,7 +87,7 @@ EXPECTED_RUNTIME = (
     "unary plus: 65",
     "bitnot: -16",
 )
-EXPECTED_MUTATION_OUTCOMES = Counter(rejected=22)
+EXPECTED_MUTATION_OUTCOMES = Counter(rejected=27)
 
 
 @dataclass(frozen=True)
@@ -138,6 +138,11 @@ MUTATION_CASES = (
     MutationCase("member-word-type", "332:type:17", "structure-copy"),
     MutationCase("member-byte-type", "336:type:18", "structure-copy"),
     MutationCase("object-identity", "2:identity:120", "objects-return"),
+    MutationCase("conditional-phi-type", "376:type:2", "control-flow"),
+    MutationCase("conditional-conversion-type", "368:type:2", "conversions"),
+    MutationCase("conditional-conversion-source", "368:src1:1", "conversions"),
+    MutationCase("conditional-char-type", "367:type:2", "conversions"),
+    MutationCase("conditional-unsigned-type", "372:type:2", "conversions"),
 )
 
 
@@ -371,8 +376,11 @@ def run_mutation(compiler, work_dir, case):
         raise RuntimeError(
             f"{case.name} forced fallback differs from ordinary fallback"
         )
-    ordinary_path.unlink(missing_ok=True)
-    forced_path.unlink(missing_ok=True)
+    for path in (ordinary_path, forced_path):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
     return (
         case.name,
         "mutation",

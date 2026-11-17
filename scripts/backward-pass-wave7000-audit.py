@@ -31,8 +31,8 @@ KB = S * D
 VB = 2 * S * D
 AB = 3 * S * D
 BASELINE_SHA256 = (
-    # Wide parameter-store repair removes a spurious assembler-name registration.
-    "e01b74025c2e44f5ee0fe797c4b5175fe2203fd35256338e2a3417040d9f8c00"
+    # Scalar helper code changed; the exact backward-pass stream remains e16e3e51.
+    "45cd5269ed5728ced51082cadbb050a246bde83116c2f922d8585b87cf5c1d43"
 )
 BASELINE_SELECTED_HASH = "e16e3e51"
 EXPECTED_CHECKSUM = 276938403
@@ -713,7 +713,10 @@ def run_mutation(compiler, work_dir, case):
     if selector != "scheduled-machine-cfg":
         require_generic(report, FUNCTION, case.name)
         outcome = "rejected"
-    output_path.unlink(missing_ok=True)
+    try:
+        output_path.unlink()
+    except FileNotFoundError:
+        pass
     return (
         case.name,
         "mutation",

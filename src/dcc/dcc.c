@@ -1797,7 +1797,9 @@ int main(int argc, char **argv)
     if (!strcmp(output_name, "-")) {
         g_emit_sink.stream = stdout;
     } else {
-        g_emit_sink.stream = fopen(output_name, "w");
+        /* Keep assembly bytes identical across hosts; text mode on Windows
+         * otherwise expands every LF and invalidates strict campaign hashes. */
+        g_emit_sink.stream = fopen(output_name, "wb");
         if (!g_emit_sink.stream) fatal("cannot open output");
     }
 

@@ -79,6 +79,8 @@ Use `python scripts/<name>.py --dcc /path/to/dcc` to choose a compiler.
 `run-mir-lifetime-tests.py --timeout N` controls application timeouts;
 `test-mir-require-emit.py --build-dir DIR` retains its diagnostic artifacts.
 Child environment overrides leave the caller's environment unchanged.
+Named assembly outputs use LF line endings on every host, so strict assembly
+SHA-256 baselines compare the same bytes on Windows, macOS, and Linux.
 
 ## `runall.py`
 

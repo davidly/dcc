@@ -68,7 +68,7 @@ class CompilerCoverageCampaignTests(unittest.TestCase):
             command[-2:],
             [
                 "--output-dir",
-                "/repo/build/flagged-record-wave24-audit",
+                str(Path("/repo/build") / "flagged-record-wave24-audit"),
             ],
         )
 

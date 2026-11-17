@@ -98,7 +98,7 @@
     "ExactTemplate": "compound-check-runner",
     "ExactFunction": "main",
     "RequireRejected": true,
-    "MachineMutation": "796:type:19",
+    "MachineMutation": "798:type:19",
     "MachineMutationFunction": "main"
   },
   {
@@ -242,7 +242,7 @@
     "ExactTemplate": "compound-check-runner",
     "ExactFunction": "main",
     "RequireRejected": true,
-    "MachineMutation": "965:type:4",
+    "MachineMutation": "967:type:4",
     "MachineMutationFunction": "main"
   },
   {
@@ -260,7 +260,7 @@
     "ExactTemplate": "compound-check-runner",
     "ExactFunction": "main",
     "RequireRejected": true,
-    "MachineMutation": "965:immediate:1",
+    "MachineMutation": "967:immediate:1",
     "MachineMutationFunction": "main"
   },
   {
@@ -278,7 +278,7 @@
     "ExactTemplate": "compound-check-runner",
     "ExactFunction": "main",
     "RequireRejected": true,
-    "MachineMutation": "966:type:4",
+    "MachineMutation": "968:type:4",
     "MachineMutationFunction": "main"
   },
   {
@@ -296,7 +296,7 @@
     "ExactTemplate": "compound-check-runner",
     "ExactFunction": "main",
     "RequireRejected": true,
-    "MachineMutation": "967:type:4",
+    "MachineMutation": "969:type:4",
     "MachineMutationFunction": "main"
   },
   {
@@ -314,7 +314,7 @@
     "ExactTemplate": "compound-check-runner",
     "ExactFunction": "main",
     "RequireRejected": true,
-    "MachineMutation": "969:type:18",
+    "MachineMutation": "971:type:18",
     "MachineMutationFunction": "main"
   },
   {
@@ -332,7 +332,7 @@
     "ExactTemplate": "compound-check-runner",
     "ExactFunction": "main",
     "RequireRejected": true,
-    "MachineMutation": "970:type:18",
+    "MachineMutation": "972:type:18",
     "MachineMutationFunction": "main"
   },
   {
@@ -350,7 +350,7 @@
     "ExactTemplate": "compound-check-runner",
     "ExactFunction": "main",
     "RequireRejected": true,
-    "MachineMutation": "971:type:18",
+    "MachineMutation": "973:type:18",
     "MachineMutationFunction": "main"
   }
 ]

@@ -365,7 +365,7 @@ def campaign_command(campaign, jobs, root, build_dir):
 def emit_log(path, failed):
     output = sys.stderr.buffer if failed else sys.stdout.buffer
     with path.open("rb") as source:
-        while chunk := source.read(65536):
+        for chunk in iter(lambda: source.read(65536), b""):
             output.write(chunk)
     output.flush()
 

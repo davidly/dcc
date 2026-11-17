@@ -97,6 +97,13 @@ class MirCampaignBaselineTests(unittest.TestCase):
                         results = list(pool.map(check, instructions))
                     self.assertTrue(all(row[4] == "rejected" for row in results), results)
 
+    def test_gnarly_and_backward_pass_keep_exact_selection_and_hashes(self):
+        # A whole-file assembly hash alone can accidentally bless a fallback.
+        for name in ('gnarly-runner-wave100-audit.py','backward-pass-wave7000-audit.py'):
+            with self.subTest(script=name), tempfile.TemporaryDirectory() as folder:
+                module=load_script(name)
+                module.baseline_compile(COMPILER,Path(folder))
+
     def test_campaign_assembly_baselines(self):
         scheduler = load_script("compiler-coverage-campaigns.py")
         controls = []
