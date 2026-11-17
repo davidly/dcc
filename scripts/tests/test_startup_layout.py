@@ -92,7 +92,7 @@ class StartupLayoutTests(unittest.TestCase):
         guard = [
             "exx",
             "ld hl,__hstart",
-            "ld de,__bsse",
+            "ld de,__bssb",
             "or a",
             "sbc hl,de",
             "exx",
@@ -104,6 +104,33 @@ class StartupLayoutTests(unittest.TestCase):
             if lines[index : index + len(guard)] == guard
         )
         self.assertLess(start, lines.index("ld de,__stack_size"))
+
+    @unittest.skipUnless((REPO_ROOT / "dccmake").is_file() and shutil.which("ntvcm"),
+                         "built dccmake and ntvcm are required")
+    def test_bss_wrap_without_argv_reports_out_of_ram(self):
+        # Without argv __hstart is __bsse, so only comparing it with __bssb
+        # sees the wrap; zeroing the wrapped BSS would overwrite the BDOS.
+        source = self.workspace / "BSSWRAP.C"
+        source.write_text(
+            "static unsigned char a[30000];\n"
+            "static unsigned char b[30000];\n"
+            "static unsigned char c[5500];\n"
+            "int main(void)\n"
+            "{\n"
+            "    a[0] = b[0] = c[0] = 1;\n"
+            "    return a[0] + b[0] + c[0];\n"
+            "}\n"
+        )
+        build = self.workspace / "bsswrap"
+        subprocess.run(
+            [str(REPO_ROOT / "dccmake"), "dcc-input=%s" % source, "dcc-output=T",
+             "dcc-build-dir=%s" % build, "ntvcm-tool=ntvcm"],
+            cwd=REPO_ROOT, check=True, capture_output=True, text=True, timeout=120,
+        )
+        result = subprocess.run(
+            ["ntvcm", "T.COM"], cwd=build, capture_output=True, text=True, timeout=30,
+        )
+        self.assertIn("TPA too small", result.stdout)
 
     def test_scratch_wrap_boundary(self):
         self.assertEqual((0xFEFB + 260) & 0xFFFF, 0xFFFF)

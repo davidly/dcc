@@ -48,8 +48,10 @@ start:
         ; (b) >= __hstart.
         ;
         ; Done with three runtime 16-bit subtractions, each guarded by its own
-        ; borrow test.  The first rejects __hstart < __bsse, which means the
-        ; compiler's 260-byte argv scratch addition wrapped.  The other two
+        ; borrow test.  The first rejects __hstart < __bssb, which means the
+        ; BSS or the compiler's 260-byte argv scratch addition wrapped past
+        ; 64K; zeroing a wrapped BSS would overwrite the BDOS, the BIOS jump
+        ; table and the page-zero vectors.  The other two
         ; replace the old compile-time `ld hl,__hstart+
         ; __stack_size` immediate: that sum is only 16 bits wide and WRAPS
         ; modulo 65536 whenever __hstart is high (e.g. a large BSS) plus a
@@ -69,9 +71,9 @@ start:
         ld      sp, hl          ; Custom stack is now active at top of TPA
         exx                     ; preserve the accepted stack top in alternate HL
         ld      hl,__hstart
-        ld      de,__bsse
+        ld      de,__bssb
         or      a
-        sbc     hl,de           ; carry iff argv scratch addition wrapped
+        sbc     hl,de           ; carry iff BSS or argv scratch wrapped past 64K
         exx
         jr      c,mem_low
 
