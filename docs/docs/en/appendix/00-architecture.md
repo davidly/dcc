@@ -506,7 +506,7 @@ Key design points:
   length limit. Marked user-assembly regions become opaque label barriers while
   optimization runs, then are restored byte-for-byte; address relaxation also
   refuses to estimate across them.
-- **Direct observability.** `scripts/run-dccpeep-tests.ps1` checks focused
+- **Direct observability.** `scripts/run-dccpeep-tests.py` checks focused
   default, `-Os`, and undocumented-opcode fixtures plus idempotence. Optional
   `-fstats` output reports convergence iterations, per-pass calls and changes,
   and inserted/deleted line totals to stderr without changing normal output.

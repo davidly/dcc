@@ -76,7 +76,7 @@ ctest --test-dir build/dcc_debug_host --output-on-failure
 The normal DCC build also builds `dcc-debug-host` and the example I/O adapter:
 
 ```sh
-pwsh ./scripts/build-dcc.ps1
+python scripts/build-dcc.py
 ```
 
 The build script publishes `dcc-debug-host` and the example adapter in the

@@ -1,13 +1,18 @@
 @echo off
 setlocal
-
-where pwsh >nul 2>nul
-if errorlevel 1 (
-	echo PowerShell 7 ^(pwsh^) is required to run scripts/build-dcc.ps1. 1>&2
-	exit /b 1
-)
-
-pwsh -NoProfile -File "%~dp0scripts\build-dcc.ps1" %*
-set "exit_code=%errorlevel%"
-exit /b %exit_code%
-
+if defined PYTHON goto custom_python
+where python >nul 2>nul
+if not errorlevel 1 goto python_on_path
+where py >nul 2>nul
+if errorlevel 1 goto missing_python
+py -3 "%~dp0scripts\build-dcc.py" %*
+exit /b %errorlevel%
+:python_on_path
+python "%~dp0scripts\build-dcc.py" %*
+exit /b %errorlevel%
+:custom_python
+"%PYTHON%" "%~dp0scripts\build-dcc.py" %*
+exit /b %errorlevel%
+:missing_python
+echo Python 3.7 or newer is required. Install Python or set PYTHON to its executable. 1>&2
+exit /b 1

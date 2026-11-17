@@ -210,7 +210,7 @@ The arrows above show the dominant direction, not a hard layering restriction.
 From the repository root:
 
 ```powershell
-pwsh ./scripts/build-dcc.ps1
+python scripts/build-dcc.py
 ```
 
 The canonical cross-platform build compiles every compiler module (`dcc.c`,

@@ -8,7 +8,7 @@ backend. It boots a real CP/M 2.2 system and presents GDB/MI to VS Code.
 Build the host and example adapter with the normal toolchain build:
 
 ```sh
-pwsh ./scripts/build-dcc.ps1
+python scripts/build-dcc.py
 ```
 
 Or build and test it directly:

@@ -16,11 +16,11 @@ DCCRTL.MAC is the dcc C Runtime Library. It's written in Z80 assembly for size a
 dccrtlstrip.c is an app that examines the code of your .c file and strips portions of the DCCRTL.MAC C runtime so only the parts needed are linked into the .COM file. It's not necessary to run this program for your app to work. But the resulting .COM file may be smaller if you do.
 
 The complete host toolchain builds and runs on Windows, Linux, and macOS with
-`pwsh ./scripts/build-dcc.ps1`. It builds `dcc`, `dccpeep`, `dccrtlstrip`,
+`python scripts/build-dcc.py`. It builds `dcc`, `dccpeep`, `dccrtlstrip`,
 `dccmake`, `m80c`, `l80c`, `dcc-debug-host`, and the example debugger I/O
-adapter. The host tools are too large to run on CP/M. On Linux platforms
-without a PowerShell package (RISC-V64 boards, Raspberry Pi OS, etc.),
-`sh m-posix.sh` builds the same tools using only `/bin/sh` and a C compiler.
+adapter. The host tools are too large to run on CP/M. `sh m.sh` on Unix and
+`m.bat` on Windows invoke the same Python builder. Python 3.7 and newer are
+supported, including the older Python installations on Raspberry Pi OS.
 
 Dcc has been built and had regression tests run on AMD64 (Linux and Windows), Arm64(Linux, Windows, MacOS), Arm32 (Linux), and RISC-V 64 (Linux).
 
@@ -84,7 +84,7 @@ The repo copy and the personal copy are independent files, so re-copy after edit
 
 ## How to build test apps and your apps
 
-ma.bat and ma.sh are scripts to build your app. Run "ma foo" (or "ma.sh foo" on Linux/MacOS) to compile foo.c, optimize it, strip the DCCRTL.MAC runtime so unused code isn't included, assemble the generated FOO.MAC file, and link to FOO.COM. Use the "nopeep" argument like "ma foo nopeep" to not run the dccpeep peephole optimizer.
+ma.bat and ma.sh launch the shared Python 3.7+ driver, scripts/ma.py, to build one app using the native dccmake pipeline. They do not require PowerShell or Bash. Run "ma foo" (or "ma.sh foo" on Linux/MacOS) to compile foo.c, optimize it, strip the DCCRTL.MAC runtime so unused code isn't included, assemble the generated FOO.MAC file, and link to FOO.COM. Use the "nopeep" argument like "ma foo nopeep" to not run the dccpeep peephole optimizer.
 
 Run `python3 scripts/runall.py --mode full` to build and run the regression suite in both optimized and unoptimized modes. The runner checks output against per-app baselines and checks cycle counts and binary sizes against the performance baselines.
 
@@ -106,7 +106,7 @@ Linux typically is configured to have case-sensitive filenames. CP/M files are u
     * -o output file name of optimized M80 assembly
 
 The aggregate-swap optimization recognizes both register-only and spilled
-first-copy sequences emitted by dcc. Run `pwsh scripts/run-dccpeep-tests.ps1`
+first-copy sequences emitted by dcc. Run `python scripts/run-dccpeep-tests.py`
 to check its matching guards and
 `python3 scripts/runall.py --apps tszswap --mode full` to exercise stable sorting
 of 13-byte records with unsigned 16-bit keys in both optimization modes.
@@ -157,12 +157,10 @@ Building `tests/ttime.c` yourself outside the regression suite? Build it with pe
 
 m80.com and l80.com are part of the M80 Assembler product from Microsoft. I didn't write them. They are included in this repo to ease development, but they can be found in dozens of locations on the internet.
 
-By default, dccmake/ma.sh/ma.ps1 assemble with `m80c`, a from-scratch, conservative
+By default, dccmake and the ma wrappers assemble with `m80c`, a from-scratch, conservative
 clone of M80 (see `src/m80c/m80c.c`) that runs natively on the host instead of
-under CP/M emulation - no ntvcm involved for that step. L80 is still real M80
-Assembler-product software and still runs under ntvcm, since only the assembler
-was reimplemented. Pass `dcc-use-emulated-m80=true` to dccmake, `-femulated-m80`
-directly to dccmake, `--emulated-m80`/`-EmulatedM80` to ma.sh/ma.ps1, or
+under CP/M emulation. Linking uses native `l80c` by default as well. Pass `dcc-use-emulated-m80=true` to dccmake, `-femulated-m80`
+directly to dccmake, `--emulated-m80`/`-EmulatedM80` to ma.sh/ma.bat, or
 `--emulated-m80` to the Python regression runner, to assemble with the real
 M80.COM under ntvcm instead (e.g. to cross-check output, or if m80c hasn't been
 built locally).
@@ -250,15 +248,27 @@ git clone https://github.com/davidly/ntvcm.git
 ### Building dcc
 
 dcc compiles on Windows, Linux, and macOS. The canonical build uses
-PowerShell 7 (`pwsh`) and CMake, and builds the complete host toolchain:
+Python 3.7 or newer, a native C/C++ toolchain, and CMake, and builds the complete host toolchain:
 
-```powershell
-pwsh ./scripts/build-dcc.ps1
+```sh
+# Linux and macOS
+sh m.sh
+# Windows
+m.bat
 ```
 
 This produces `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, and `l80c` in
 the repository root, together with `dcc-debug-host` and the platform-specific
 example I/O adapter library.
+
+The direct command is `python3 scripts/build-dcc.py` on Unix or
+`python scripts/build-dcc.py` on Windows. Use `--jobs 2` to limit memory/CPU
+use on smaller machines, `--no-static` for dynamically linked Linux tools,
+or `--skip-debug-host` to build just the six C tools without CMake/C++17.
+`--output-path` selects the intermediate directory; final tools stay in the
+repository root. `CC` and `CFLAGS` overrides are supported on Unix.
+Windows automatically locates the native MSVC x64/ARM64 toolchain, including
+Visual Studio Preview and its bundled CMake.
 
 
 
@@ -292,11 +302,11 @@ Once both projects are built, set up your environment as shown in the next secti
 ## Setting up your environment
 
 The build scripts (`ma.sh`, `ma.bat`) resolve each
-tool the same way: they use an environment variable if you set one, otherwise
-they look for the tool on your `PATH`. The relevant tools are `dcc`, `dccpeep`,
-`dccrtlstrip`, `m80c`, `ntvcm`, and the `l80` linker (and `m80`, only if you
-pass `-UseEmulatedM80`/`dcc-use-emulated-m80=true` to assemble with the real
-M80.COM instead of native `m80c`).
+tool using its environment override first, then the current directory,
+`DCC_HOME`, the driver's repository, and `PATH`. The native tools are `dccmake`,
+`dcc`, `dccpeep`, `dccrtlstrip`, `m80c`, and `l80c`. NTVCM and the CP/M M80/L80
+binaries are needed only with `--emulated-m80` or `--emulated-l80`.
+See [the single-app driver options](scripts/README.md#mapy).
 
 The simplest setup, especially when building C apps in a project *outside* the
 dcc repo, is to add the directories containing the built `dcc` and `ntvcm`

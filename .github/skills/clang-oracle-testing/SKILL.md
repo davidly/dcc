@@ -31,7 +31,7 @@ and a GitHub issue. Fixing is a separate task with its own acceptance test
 | `tests/known-bugs/` | Parked reproducers and host baselines; `README.md` has the promote-on-fix steps |
 
 Prerequisites: a built toolchain in the repository root
-(`pwsh ./scripts/build-dcc.ps1`), `clang`, `ntvcm` on `PATH`, Python 3.9+.
+(`python scripts/build-dcc.py`), `clang`, `ntvcm` on `PATH`, Python 3.9+.
 Scripts use `from __future__ import annotations` for 3.9.
 
 ## Campaign procedure

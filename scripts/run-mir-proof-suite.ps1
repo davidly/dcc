@@ -591,8 +591,8 @@ $mutationOutput = Join-Path $outputRoot "compiler-mutations"
 $coverageOutput = Join-Path $outputRoot "compiler-coverage"
 
 Start-ProofPhase $phaseNames[0]
-Invoke-ProofCommand "build canonical tools" $pwsh @(
-    "-NoLogo", "-NoProfile", "-File", "scripts/build-dcc.ps1"
+Invoke-ProofCommand "build canonical tools" $python @(
+    "scripts/build-dcc.py", "--jobs", "$Jobs"
 )
 Complete-ProofPhaseRecord 1
 
@@ -632,18 +632,15 @@ Invoke-ProofTaskGroup @(
         Commands = @(
             [pscustomobject]@{
                 Name = "MSVC toolchain-detection test"
-                Command = $pwsh
+                Command = $python
                 Arguments = @(
-                    "-NoLogo", "-NoProfile", "-File",
-                    "scripts/tests/test_msvc_toolchain_detection.ps1")
+                    "-m", "unittest", "scripts.tests.test_build_dcc")
                 Environment = @{}
             },
             [pscustomobject]@{
                 Name = "dccpeep tests"
-                Command = $pwsh
-                Arguments = @(
-                    "-NoLogo", "-NoProfile", "-File",
-                    "scripts/run-dccpeep-tests.ps1")
+                Command = $python
+                Arguments = @("scripts/run-dccpeep-tests.py")
                 Environment = @{}
             },
             [pscustomobject]@{

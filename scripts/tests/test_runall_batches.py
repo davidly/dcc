@@ -35,7 +35,7 @@ class Batches(unittest.TestCase):
         with patch.object(runall, 'check_run', side_effect=checked) as check:
             result = runall.check_batches('tdvbyte', self.directory, self.baseline,
                                          7, 2, self.args)
-        self.assertEqual(sorted(int(c.args[3].split()[0]) for c in check.call_args_list), list(range(7)))
+        self.assertEqual(sorted(int(c[0][3].split()[0]) for c in check.call_args_list), list(range(7)))
         return result
 
     def test_all_batches_and_summed_cycles(self):
@@ -95,7 +95,3 @@ class Batches(unittest.TestCase):
         self.assertEqual(result.not_started, [])
         self.assertEqual(peak, 3)
         self.assertEqual(active, 0)
-
-
-@unittest.skipUnless(shutil.which('pwsh'), 'PowerShell 7 is unavailable')
-class PowerShellBatches(unittest.TestCase):

@@ -198,7 +198,7 @@ Also check:
 - User docs do not mention hook internals except where intentionally linked from
   `docs/docs/README.md`.
 - If compiler help or mappings changed, rebuild all host tools with
-  `pwsh ./scripts/build-dcc.ps1`.
+  `python scripts/build-dcc.py`.
 
 ## Files To Update Together
 

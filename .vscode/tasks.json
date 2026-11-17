@@ -36,13 +36,16 @@
         {
             "label": "Build DCC debugger host",
             "type": "shell",
-            "command": "pwsh ./scripts/build-dcc.ps1",
+            "command": "${workspaceFolder}/m.sh",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
             "problemMatcher": [
                 "$gcc"
-            ]
+            ],
+            "windows": {
+                "command": "${workspaceFolder}\\m.bat"
+            }
         },
         {
             "label": "Prepare active DCC C file for debugging",

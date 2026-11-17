@@ -60,7 +60,7 @@ python3 scripts/run-known-bugs.py bug003     # one
 ```
 
 For each reproducer the script first proves the baseline: the program must
-build with the host compiler (the flags `validate-unit-test.ps1` uses), print
+build with the host compiler (the flags `validate-unit-test.py` uses), print
 exactly the baseline, and print the same under ASan and UBSan. It then builds
 and runs the program with dcc, with and without `dccpeep`, and reports
 `fails` with the reason, or `FIXED`.
@@ -85,7 +85,7 @@ regular test:
    `tests/baselines/<name>.txt`, with a name that says what it covers, and
    rewrite the header comment to describe the coverage instead of the defect.
 2. Add its row to `tests/perf_baselines.csv`.
-3. Confirm with `pwsh ./scripts/validate-unit-test.ps1 -App <name>` and
+3. Confirm with `python scripts/validate-unit-test.py -App <name>` and
    `python3 ./scripts/runall.py -apps <name> -mode=full`.
 4. Close the entry in `compiler-bugs.md`, and remove the bug's feature from
    `KNOWN_BUGS` in `scripts/clang_oracle_gen.py` so the fuzzer generates that

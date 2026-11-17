@@ -1,5 +1,5 @@
 /*
- * host-validate-prelude.h - force-included by scripts/validate-unit-test.ps1
+ * host-validate-prelude.h - force-included by scripts/validate-unit-test.py
  * into every host build (never by dcc itself, which already provides these
  * directly in its own RTL).
  *

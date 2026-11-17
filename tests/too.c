@@ -1,6 +1,6 @@
 /* too.c - "object-oriented C" stress test for the dcc compiler.
  *
- * Wired into the runall harness (runall.sh / runall.bat); also build/run
+ * Wired into the runall harness (scripts/runall.py); also build/run
  * standalone with:
  *     ./ma.sh too peep   &&  ntvcm TOO
  *     ./ma.sh too nopeep &&  ntvcm TOO

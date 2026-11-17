@@ -672,12 +672,12 @@ float-rounding limitation is explicitly already flagged in-file
 normal va-list offsets, `snprintf` n=0/1 capping, IX/IY preservation and
 stack balance in the supported paths were all verified correct.
 
-**Coverage of the 16 tooling-gap labels** (see the baseline check above):
+**Coverage of the 16 tooling-gap labels** (historical runner observation):
 the intent is full coverage via `tests/tpfio.c`, `tests/tplng.c`,
-`tests/tpflio.c` plus `tests/_test_overrides.json`, but `scripts/runall.sh`
-never translates a `false` override into an explicit `-fno-*io` flag, and a
+`tests/tpflio.c` plus `tests/_test_overrides.json`, but the retired shell runner
+never translated a `false` override into an explicit `-fno-*io` flag, and a
 non-literal format conservatively resolves to the combined "lio" path — so
-under the default Linux `runall.ps1` path, **`_vpfio`, `_vsfio`, `_vffio`,
+under the then-default Linux PowerShell runner, **`_vpfio`, `_vsfio`, `_vffio`,
 `_vnfio`, `_vnlng` appear untested** (the other 11 of the 16 do appear
 exercised); a runner that emits explicit negative flags (e.g.
 `runall-x64os.ps1`) does exercise all 16.

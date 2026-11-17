@@ -95,11 +95,11 @@ def command(name: str) -> str:
     return COMMANDS[name]
 
 
-def run(argv, cwd: Path, timeout: int, stdin: str = ""):
+def run(argv, cwd: Path, timeout: int, stdin: str = "", env=None):
     """Run a tool, capturing merged output; terminate its process tree on timeout."""
     try:
         popen_args = dict(cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT, text=True)
+                          stderr=subprocess.STDOUT, text=True, env=env)
         if os.name == "nt":
             # taskkill /T below terminates the complete descendant tree.  A
             # separate process group keeps the runner's control signals out
@@ -387,6 +387,11 @@ def check_batches(name, directory, baseline, count, workers, args):
     return all(ok for ok, _, _ in results), [line for _, lines, _ in results for line in lines], metrics
 
 
+def build_has_diagnostics(output):
+    """Reject assembler errors and MIR verifier diagnostics even after exit zero."""
+    return re.search(r"%Mult\. Def\.|%Phase error|%Undefined|^\s*; MIR \S+:", output, re.MULTILINE) is not None
+
+
 def app_job(name, mode, overrides, sources, baselines, root, args):
     began, lines = time.monotonic(), []
     override = overrides.get(name, {})
@@ -412,7 +417,7 @@ def app_job(name, mode, overrides, sources, baselines, root, args):
     # several checked-in baselines.
     code, timed, output = build(name, Path("tests") / f"{name}.c", directory, mode, override, args)
     shown = "fast" if mode == "peep" else mode
-    if timed or code or re.search(r"%Mult\. Def\.|%Phase error|%Undefined", output):
+    if timed or code or build_has_diagnostics(output):
         lines.append(f"  Building {name} ({shown})... FAILED")
         lines += ["    BUILD> " + x for x in output.splitlines()[:20]]
         return Result(f"{name}:{shown}", False, time.monotonic()-began, lines)
@@ -439,7 +444,7 @@ def extended_job(case, mode, overrides, baseline, root, args):
     directory = root / name / mode
     directory.mkdir(parents=True, exist_ok=True)
     code, timed, output = build(name, case, directory, mode, override, args)
-    if timed or code:
+    if timed or code or build_has_diagnostics(output):
         return Result(f"extended/{name}:{shown}", False, time.monotonic()-began,
                       [f"  Building {name} ({shown})... FAILED", *["    BUILD> "+x for x in output.splitlines()[:20]]])
     ok, report, _ = check_run(name, directory, baseline, "", "", args, perf=False,
@@ -545,9 +550,10 @@ def diagnostics(build_root: Path, workers: int):
         return all(list(pool.map(one, tests)))
 
 
-def dccpeep_fixtures(workers: int):
-    """Native equivalent of run-dccpeep-tests.ps1."""
-    fixture_dir, peep = ROOT / "tests/dccpeep", command("dccpeep")
+def dccpeep_fixtures(workers: int, fixture_dir=None, peep=None):
+    """Shared fixture, idempotence and negative controls for the Python runners."""
+    fixture_dir = fixture_dir if fixture_dir is not None else ROOT / "tests/dccpeep"
+    peep = peep or command("dccpeep")
     sources = sorted(fixture_dir.glob("*.in.mac"))
     if not sources:
         return False
@@ -568,6 +574,26 @@ def dccpeep_fixtures(workers: int):
             fixtures_ok = all(list(pool.map(one, sources)))
         if not fixtures_ok:
             return False
+        swap = fixture_dir / "aggregate-swap-spilled-ldir.in.mac"
+        if swap.is_file():
+            swap_text = swap.read_text()
+            for label, old, new in (
+                ("reload", "ld l,(ix-2)\nld h,(ix-1)", "ld l,(ix-6)\nld h,(ix-5)"),
+                ("spill", "ld h,b\nld (ix-2),l\nld (ix-1),h\nld hl,_temp\nex de,hl\nld l,(ix-2)\nld h,(ix-1)",
+                 "ld h,b\nld (ix-6),l\nld (ix-5),h\nld hl,_temp\nex de,hl\nld l,(ix-6)\nld h,(ix-5)"),
+                ("temporary", "ex de,hl\nld hl,_temp", "ex de,hl\nld hl,_other"),
+                ("size", "ld hl,_temp\nld bc,13", "ld hl,_temp\nld bc,12"),
+                ("pointer", "ldir\nld hl,(_left)", "ldir\nld hl,(_other)"),
+            ):
+                changed = swap_text.replace(old, new)
+                if changed == swap_text:
+                    return False  # Fixture drift must not silently drop a control.
+                source, output = temp / ("swap-"+label+".mac"), temp / ("swap-"+label+".out.mac")
+                source.write_text(changed)
+                if run([peep, str(source), str(output)], ROOT, 60)[0] or not output.is_file():
+                    return False
+                if "peep: aggregate_swap_ldir" in output.read_text():
+                    return False
         long_in, long_out = temp / "long.in.mac", temp / "long.out.mac"
         long_in.write_text("; " + "x" * 700 + "\nend\n")
         if run([peep, str(long_in), str(long_out)], ROOT, 60)[0] or not long_out.is_file():

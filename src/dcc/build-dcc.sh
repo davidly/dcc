@@ -10,7 +10,7 @@
 #   sh src/dcc/build-dcc.sh            # build ./dcc at the repo root
 #   sh src/dcc/build-dcc.sh -o out/dcc # build to a custom path
 #
-# The canonical `scripts/build-dcc.ps1` build owns the complete host toolchain;
+# The canonical `scripts/build-dcc.py` build owns the complete host toolchain;
 # this internal helper only builds the modular dcc front end.
 
 set -e
@@ -36,7 +36,7 @@ fi
 # added no measurable further improvement (heavily overlapping ranges)
 # while costing ~2x build time, so LTO is not enabled for clang here.
 #
-# MSVC keeps the -O2 baseline this script and build-dcc.ps1 have always
+# MSVC keeps the -O2 baseline this script and build-dcc.py have always
 # used - MSVC's /GL+/LTCG has a different cost/benefit tradeoff that
 # hasn't been measured on this project.
 case "$CC" in

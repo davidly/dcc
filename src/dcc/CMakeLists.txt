@@ -8,7 +8,7 @@
 #   cmake -S src/dcc -B build/dcc
 #   cmake --build build/dcc
 # By default the binary is placed at the repository root as `dcc`, matching the
-# toolchain conventions (ma.sh / runall.sh expect ./dcc).
+# toolchain conventions (ma.sh / scripts/runall.py expect ./dcc).
 
 cmake_minimum_required(VERSION 3.10)
 project(dcc C)
@@ -102,7 +102,7 @@ elseif(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
 endif()
 
 # Place the built binary at the repository root as ./dcc so the existing
-# ma.sh / runall.sh harness (which calls ./dcc) keeps working unchanged.
+# ma.sh / scripts/runall.py harness (which calls ./dcc) keeps working unchanged.
 set_target_properties(dcc PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${DCC_RUNTIME_OUTPUT_DIRECTORY})
 

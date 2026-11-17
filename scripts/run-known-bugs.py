@@ -8,7 +8,7 @@ currently fails them.
 
 For every reproducer this script:
 
-  1. builds it with the host compiler (the flags validate-unit-test.ps1 uses)
+  1. builds it with the host compiler (the flags validate-unit-test.py uses)
      and requires the output to equal the baseline, and requires a build with
      ASan and UBSan to agree, so the baseline is proven and the test defined;
   2. builds and runs it with dcc, with and without dccpeep, and reports

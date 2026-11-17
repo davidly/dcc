@@ -35,12 +35,13 @@ those iterations necessary, both handled correctly here:
      independent instructions of different byte-lengths before trusting it
      anywhere in this file.
 
-Usage:
+Usage (Python 3.7+):
+    dccprof.py NAME [--build-dir DIR] [--program-args ...]
     dccprof.py --app NAME --build-dir DIR --profile-csv FILE [--out-dir DIR]
 
 Designed for two audiences equally:
-  - scripts/dccprof.sh / dccprof.bat, which build + run an app under the
-    profiler and then call this tool to produce the final report.
+  - positional NAME builds and runs an app using ma.py and NTVCM before
+    producing the final report.
   - direct, ad-hoc invocation against an already-built app + an
     already-captured profile.csv, exactly the workflow used throughout this
     session's own performance investigations - point this at the same
@@ -609,7 +610,88 @@ def write_filtered_rtl_listing_html(out_path, correlated_lines, rtl_module_name,
 # ---------------------------------------------------------------------- #
 # Main.
 # ---------------------------------------------------------------------- #
-def main():
+def profile_app(argv):
+    """Build/profile an application; --app continues to select analysis-only mode."""
+    from pathlib import Path
+    import subprocess
+    try:
+        from . import ma
+    except ImportError:
+        import ma
+
+    parser = argparse.ArgumentParser(description=(
+        'Build an optimized app, profile it with NTVCM, and write annotated reports. '
+        'Use --app NAME --profile-csv FILE for analysis of an existing capture.'))
+    parser.add_argument('-Help', action='help', help=argparse.SUPPRESS)
+    parser.add_argument('name', help='app name or source path')
+    parser.add_argument('--source-path', '-SourcePath')
+    parser.add_argument('--build-dir', '-BuildDir')
+    parser.add_argument('--out-dir', '-OutDir')
+    parser.add_argument('--clock', '-Clock', default='0')
+    parser.add_argument('--program-args', '-ProgramArgs', nargs=argparse.REMAINDER, default=[])
+    # A literal -- also introduces app arguments, including options such as -n.
+    if '--' in argv:
+        split = argv.index('--')
+        args = parser.parse_args(argv[:split])
+        args.program_args += argv[split+1:]
+    else:
+        args = parser.parse_args(argv)
+    root = Path(__file__).resolve().parents[1]
+    lower = Path(args.name).stem.lower()
+    upper = lower.upper()
+    build = Path(args.build_dir or ('build/dccprof/' + lower))
+    out = Path(args.out_dir) if args.out_dir else build
+    # Match the old entry point: relative paths are rooted at the checkout.
+    build = build if build.is_absolute() else root/build
+    out = out if out.is_absolute() else root/out
+    home = Path(os.environ['DCC_HOME']).resolve() if os.environ.get('DCC_HOME') else None
+    try:
+        # Tool paths must be fixed before subprocesses change into build/.
+        assembler = ma.tool('m80c', os.environ, home)
+        emulator = ma.resolve_command(os.environ.get('NTVCM') or 'ntvcm')
+        command = [sys.executable, str(root/'scripts/ma.py'), args.name,
+                   'fast', '--build-dir', str(build)]
+        if args.source_path:
+            command += ['--source-path', args.source_path]
+        print('=== building {} (peep-optimized) into {} ==='.format(args.name, build), flush=True)
+        result = subprocess.run(command, cwd=str(root))
+        if result.returncode:
+            return result.returncode
+        print('=== regenerating RTLMIN.PRN ===', flush=True)
+        result = subprocess.run([assembler, '=RTLMIN.MAC', '/X', '/O', '/Z', '/L'], cwd=str(build))
+        if result.returncode:
+            return result.returncode
+        csv = build/(lower+'_profile.csv')
+        if csv.exists():
+            csv.unlink()
+        print('=== running {} under the profiler ==='.format(lower), flush=True)
+        result = subprocess.run([emulator, '-p', '-s:'+args.clock, '-g:'+csv.name,
+                                 upper+'.COM'] + args.program_args, cwd=str(build))
+        if result.returncode:
+            return result.returncode
+        if not csv.is_file() or not csv.stat().st_size:
+            print('ERROR: NTVCM did not produce a nonempty profile CSV at '+str(csv), file=sys.stderr)
+            return 1
+        out.mkdir(parents=True, exist_ok=True)
+        print('=== correlating profile against listings ===', flush=True)
+        result = subprocess.run([sys.executable, str(root/'scripts/dccprof.py'),
+                                 '--app', lower, '--build-dir', str(build),
+                                 '--profile-csv', str(csv), '--out-dir', str(out)], cwd=str(root))
+        if result.returncode:
+            return result.returncode
+        print('\ndone: open '+str(out/(lower+'_profile_summary.md')), flush=True)
+        return 0
+    except OSError as error:
+        print('ERROR: '+str(error), file=sys.stderr)
+        return 1
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    boundary = next((i for i, arg in enumerate(argv)
+                     if arg in ("--", "--program-args", "-ProgramArgs")), len(argv))
+    if not any(arg == "--app" or arg.startswith("--app=") for arg in argv[:boundary]):
+        return profile_app(argv)
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--app', required=True, help='application name, e.g. tbig')
@@ -619,7 +701,7 @@ def main():
                      help='path to the ntvcm -g:<file> profile CSV')
     ap.add_argument('--out-dir', default=None,
                      help='output directory for the report (default: build-dir)')
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     app_upper = args.app.upper()
     build_dir = args.build_dir
@@ -706,4 +788,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -15,9 +15,9 @@ Setup flow:
 
 - Install the host prerequisites for Windows, macOS, or Linux.
 - Clone the DCC C Compiler (`dcc`) and `ntvcm` repositories.
-- Build the DCC C Compiler host tools with `pwsh ./scripts/build-dcc.ps1`
-  (or `sh m-posix.sh` on Linux platforms without a PowerShell package, e.g.
-  RISC-V64 boards or Raspberry Pi OS).
+- Build the DCC C Compiler host tools with `sh m.sh` on Unix or `m.bat`
+  on Windows. Use `--skip-debug-host` to build just the C tools on minimal
+  systems; the builder supports Python 3.7 and newer.
 - Build the ntvcm emulator.
 - Add the DCC C Compiler and ntvcm directories to your `PATH`.
 - Verify the setup with a sample CP/M program.
@@ -235,7 +235,7 @@ builds `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, `l80c`,
 macOS, and gcc on Linux by default. Run it from the cloned `dcc` directory:
 
     cd dcc
-    pwsh ./scripts/build-dcc.ps1
+    python scripts/build-dcc.py
 
 
 ## Build ntvcm

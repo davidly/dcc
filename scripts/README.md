@@ -2,6 +2,33 @@
 
 Developer utility scripts for the `dcc` (CP/M-80 / Z80) toolchain.
 
+## `build-dcc.py`
+
+Python 3.7+ host builder used by `m.sh` and `m.bat`. It compiles all six C
+tools in one parallel wave, links them, and builds the CMake debugger host
+and example adapter. Compilation/link errors stop the build with a nonzero
+exit status. Build output is grouped in source order.
+
+```sh
+python3 scripts/build-dcc.py
+python3 scripts/build-dcc.py --jobs 4 --output-path "build/custom objects"
+python3 scripts/build-dcc.py --cc clang --no-static
+python3 scripts/build-dcc.py --skip-debug-host
+```
+
+On Windows use `python` or `m.bat`. MSVC x64/ARM64 setup, Preview installs,
+and Visual Studio's bundled CMake are detected automatically. Unix defaults
+to GCC on Linux and Clang on macOS; `CC` and `CFLAGS` are respected. C tools
+link statically on Linux unless `--no-static` is given. Objects, MSVC listings
+and PDBs stay under `--output-path`; final binaries go to the repository root.
+`PYTHON` selects the interpreter used by the shell/batch wrappers. `JOBS` sets
+the default parallelism; `--jobs` overrides it.
+
+The flag spellings `-OutputPath`, `-CC`, `-NoStatic`, `-VerboseCommands`,
+and `-Jobs` are also accepted. `--verbose-commands` prints exact compiler and
+linker invocations. Use `--skip-debug-host` to build the six C tools without
+the debugger dependencies.
+
 ## `runall.py`
 
 Native Python 3 runner for the standard build, emulator, baseline, fixture,
@@ -347,14 +374,14 @@ the dcc host tools themselves, use the normal native compiler for each platform:
 | macOS | Apple clang | Install Xcode Command Line Tools with `xcode-select --install`. |
 | Linux | GCC | Install your distribution's C/C++ build tools. |
 
-`build-dcc.ps1` and `validate-unit-test.ps1` follow those defaults: MSVC on
+`build-dcc.py` and `validate-unit-test.py` follow those defaults: MSVC on
 Windows, native ARM64 MSVC on Windows ARM64, clang on macOS, and gcc on Linux.
 On Unix-like hosts, pass `-CC` or set `CC` when you intentionally want a
 different compiler.
 
 ### Linux 32-bit GCC support for baseline validation
 
-32-bit/multilib support is only useful for `validate-unit-test.ps1`; it is not
+32-bit/multilib support is only useful for `validate-unit-test.py`; it is not
 needed to build `dcc`, `dccpeep`, or `dccrtlstrip`. The host tools should be
 built with the normal native compiler for the platform.
 
@@ -479,10 +506,10 @@ MAX=16384 scripts/stacksize.sh somedeepapp
 The sweep varies the reserve through the `DCC_STACK_SIZE` hook honored by
 `ma.sh`, and forces the guard on with `DCC_FORCE_STACK_CHECK=1`. Once you know
 the size, bake it in by building with `DCC_STACK_SIZE=<n> ./ma.sh <app>` or, for
-the regression suite, add it to the per-app `stack_size_for` table in
-`runall.sh` (and the matching block in `runall.bat`).
+the regression suite, set the app's `stack_size` in
+`tests/_test_overrides.json`, which is read by `runall.py`.
 
-## `dccprof.ps1` / `dccprof.py`
+## `dccprof.py`
 
 Builds an app (peep-optimized, the real shipped build), runs it under
 `ntvcm`'s per-PC execution-count profiler (`-g:<file>`), and correlates the
@@ -508,23 +535,22 @@ already-captured profile.
 
 ### Usage
 
-```pwsh
-pwsh ./scripts/dccprof.ps1 <app> [-SourcePath FILE] [-BuildDir DIR] [-OutDir DIR] [-Clock HZ] [-ProgramArgs ...]
+```sh
+python scripts/dccprof.py <app> [-SourcePath FILE] [-BuildDir DIR] [-OutDir DIR] [-Clock HZ] [-ProgramArgs ...]
 ```
 
-One cross-platform script (Windows/macOS/Linux, like `ma.ps1`/`runall.py`)
-rather than separate shell/batch wrappers - it delegates the build itself
-to `ma.ps1` and adds the profiling-specific steps on top: regenerating
+One Python 3.7+ script supports Windows, macOS, and Linux. It delegates
+the optimized build to `ma.py` and adds the profiling-specific steps: regenerating
 `RTLMIN.PRN` (a normal build only assembles it without the `/L` listing
 flag, since nothing else needs it), running the app under `ntvcm -g`, and
-invoking `dccprof.py`.
+generating the annotated reports.
 
 ### Examples
 
-```pwsh
-pwsh ./scripts/dccprof.ps1 tbig
-pwsh ./scripts/dccprof.ps1 tbig -ProgramArgs 20000
-pwsh ./scripts/dccprof.ps1 mm -BuildDir /tmp/profmm
+```sh
+python scripts/dccprof.py tbig
+python scripts/dccprof.py tbig -ProgramArgs 20000
+python scripts/dccprof.py mm -BuildDir /tmp/profmm
 ```
 
 ### Output
@@ -544,7 +570,7 @@ Written to `-OutDir` (default: same as `-BuildDir`):
 Open an annotated listing directly in any editor and use search / go-to-
 line to jump to a specific hot address or line called out in the summary.
 
-### Calling `dccprof.py` directly
+### Analyzing an existing profile
 
 Given an already-built app (its `.PRN`/`.SYM`/`.MAC`, plus a regenerated
 `RTLMIN.PRN`) and an already-captured profile CSV, skip the build+run
@@ -560,60 +586,38 @@ python3 scripts/dccprof.py --app tbig --build-dir build/dccprof/tbig --profile-c
 | -------- | ------- | ------- |
 | `M80C` | `m80c` | Native assembler used to regenerate `RTLMIN.PRN` |
 | `NTVCM` | `ntvcm` | Emulator command |
-| `PYTHON` | `python3` (falls back to `python`) | Python launcher used for `dccprof.py` |
 
-## `ma.ps1`
+The build and correlation subprocesses use the same Python interpreter as the
+entry point. `ma.py` tool and asset overrides also apply. Use `--` before app
+arguments (including flags), or `--program-args`/`-ProgramArgs`.
 
-Cross-platform build driver (Windows PowerShell 5.1 and PowerShell 7+ equivalent of `ma.sh`). Compiles a
-single test app with optional peephole optimization, strips runtime symbols,
-and links to produce a `.COM` executable. The complete pipeline:
+## `ma.py`
 
-1. Compile source with `dcc` using default compiler options unless build flags are requested through environment variables
-2. Optimize with `dccpeep` (optional, fast mode only)
-3. Assemble app.MAC with M80
-4. Strip DCCRTL runtime using dccrtlstrip
-5. Assemble stripped RTLMIN.MAC
-6. Link app + RTLMIN with L80
+Python 3.7+ single-app build driver, launched by root `ma.sh` and `ma.bat`.
+The `scripts/ma.sh` compatibility wrapper also launches it. Set `PYTHON` to
+select another interpreter. The driver uses native `dccmake` for compilation,
+peephole optimization, runtime stripping, assembly, and linking.
 
-### Usage
-
-```pwsh
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 <name> [full|fast|nopeep]
+```text
+python scripts/ma.py sieve
+python scripts/ma.py e nopeep
+python scripts/ma.py ttt full --build-dir build/ttt
+python scripts/ma.py e --emulated-m80 --emulated-l80
 ```
 
-- `<name>` — test app name (e.g., `triangle`, `sieve`, `ttt`)
-- `[mode]` — build mode: `full` (both builds, default), `fast` (optimized), or
-  `nopeep` (unoptimized)
+The default mode is `fast` (`peep` is an alias). `full` builds fast then
+nopeep, leaving the unoptimized artifact last. Sources are found in `tests/`
+then the current directory; use a path or `--source-path FILE` to select one.
+`--stack-size N` overrides `DCC_STACK_SIZE`. Float/long formatted I/O is
+inferred from the source or enabled with `DCC_FLOATIO=1`/`DCC_LONGIO=1`.
 
-### Examples
-
-```pwsh
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 triangle
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 sieve nopeep
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint --mode fast -BuildDir mybuild
-```
-
-### Parameters
-
-| Parameter | Default | Meaning |
-| --------- | ------- | ------- |
-| `-Name` | (required) | Test app name (without `.c` extension) |
-| `--mode` | `full` | Build mode: `full`, `fast`, or `nopeep` |
-| `-BuildDir` | `build` | Working directory for build artifacts |
-| `-Emulator` | `ntvcm` | Emulator command for running CP/M tools |
-
-### Environment Variables
-
-- `DCC_STACK_SIZE` — C stack reserve in bytes; when unset, `dcc` uses its default
-- `DCC_FORCE_STACK_CHECK` — Enable `-fstack-check` for all builds
-- `DCC_FLOATIO` — Set to `1` to pass `-ffloatio` and keep float `printf` runtime support
-- `DCC_LONGIO` — Set to `1` to pass `-flongio` and keep long integer `printf` runtime support
-- `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
-- `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
-- `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `L80` — Tool paths
-
-Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full option map, including which `dcc` options
-are owned by the helper pipeline.
+Tool overrides (`DCCMAKE`, `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `M80C`, `L80C`,
+`NTVCM`, `M80`, `L80`), asset paths (`DCC_HOME`, `DCC_LIB`, `DCC_INCLUDE`,
+`DCC_RUNTIME`), `DCC_ARGS`, `DCC_FORCE_STACK_CHECK`, and
+`DCC_STRIP_UNUSED=0` are supported. `NTVCM_ARGS` supplies whitespace-separated
+emulator flags for emulated assembly/linking. Standalone builds ignore a
+nearby `dccmake.txt`; invoke `dccmake` directly for project builds.
+Run `python scripts/ma.py --help` for all options.
 
 ## `compiler-coverage.sh`
 
@@ -636,16 +640,18 @@ build budget. Set `DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT` to override it. Standalon
 `run-mir-clobber-tests.ps1` accepts `-BuildTimeout` (default 60); `--timeout`
 continues to control target execution independently.
 
-## `prepush.ps1`
+## `prepush.py`
 
 Run the complete local pre-push gate with one command:
 
 ```sh
-pwsh scripts/prepush.ps1
+python scripts/prepush.py
 ```
 
 It runs the build-diagnostic regression checks, native compiler baseline validation
-(`validate-unit-test.ps1`), then the comprehensive MIR proof suite described below.
+(`validate-unit-test.py`), then the comprehensive MIR proof suite described below.
+The build-diagnostic and native-baseline gates use Python 3.7+. The MIR proof
+suite still uses PowerShell 7, so the complete pre-push gate still requires it.
 Native validation honors the host-only exclusions in `tests/_test_overrides.json`
 and uses `-Jobs` and `--timeout` for its worker and timeout limits.
 The MIR proof suite includes strict `--mode full -Extended`
@@ -665,7 +671,7 @@ these regressions are reported before the long coverage campaign.
 Automatic LLVM discovery prefers the newest installed `clang-N` over the
 unversioned `clang` command and resolves matching coverage tools. Set `CC`
 explicitly to choose a different toolchain (for example,
-`CC=clang-18 pwsh scripts/prepush.ps1` in a POSIX shell).
+`CC=clang-18 python scripts/prepush.py` in a POSIX shell).
 
 ## `run-mir-proof-suite.ps1`
 
@@ -757,7 +763,7 @@ baseline files under `tests/baselines/` (one `<app>.txt` per test). Used to
 ### Usage
 
 ```pwsh
-pwsh ./scripts/convert-baseline.ps1
+pwsh ./scripts/convert-baseline.ps1 -AppList (Get-Content legacy-app-order.txt)
 ```
 
 ### Parameters
@@ -766,9 +772,9 @@ pwsh ./scripts/convert-baseline.ps1
 | --------- | ------- | ------- |
 | `-InputFile` | `baseline_test_dcc.txt` | Legacy concatenated baseline |
 | `-OutputDir` | `tests/baselines` | Destination for per-app baseline files |
-| `-AppList` | (from `runall.sh`) | Ordered app list used as split boundaries |
+| `-AppList` | required | Complete original app order used as split boundaries |
 
-The converter slices the legacy file using the authoritative ordered app list
-(`APPLIST` in `runall.sh`) so that output lines beginning with `test ` (e.g.
+Supply the complete original app order in `legacy-app-order.txt`, one app
+name per line. The converter uses that order so output lines beginning with `test ` (e.g.
 `test tstdc completed with great success`) are not mistaken for section headers.
 The split reproduces the original baseline byte-for-byte.

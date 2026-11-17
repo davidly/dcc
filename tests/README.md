@@ -219,11 +219,11 @@ The baselines were originally derived from the single concatenated file
 fixed run order). To (re)generate the per-app `baselines/` files from it:
 
 ```pwsh
-pwsh ./scripts/convert-baseline.ps1
+pwsh ./scripts/convert-baseline.ps1 -AppList (Get-Content legacy-app-order.txt)
 ```
 
-That converter slices the legacy file using the authoritative ordered app list
-in `runall.sh` so that output lines which themselves begin with `test ` (e.g.
+Supply the complete original app order in `legacy-app-order.txt`, one app
+name per line. The converter uses that order so output lines beginning with `test ` (e.g.
 `test tstdc completed with great success`) are not mistaken for section
 headers. The split reproduces the original baseline byte-for-byte.
 

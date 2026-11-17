@@ -73,7 +73,7 @@ selected MIR candidates.
 Canonical all-tool build:
 
 ```pwsh
-pwsh ./scripts/build-dcc.ps1
+python scripts/build-dcc.py
 ```
 
 That build must produce `dcc-debug-host` and the example I/O adapter shared
@@ -143,7 +143,7 @@ DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
   --timeout 30 --failures-only
 ```
 
-The exhaustive `pwsh ./scripts/prepush.ps1` proof suite adds compiler mutants,
+The exhaustive `python scripts/prepush.py` proof suite adds compiler mutants,
 sanitizers, and instrumented coverage and can take about five hours. It is a
 periodic manual check run by the maintainer, not a required gate for every
 commit or push. Do not run it automatically or substitute it for the regular
@@ -225,8 +225,8 @@ profile count by 17 to obtain executions.
 Use:
 
 ```pwsh
-pwsh ./scripts/dccprof.ps1 app
-pwsh ./scripts/run-dccpeep-tests.ps1
+python scripts/dccprof.py app
+python scripts/run-dccpeep-tests.py
 ```
 
 Important rules:
@@ -272,7 +272,7 @@ cmake -S src/dcc -B build/cmake-sanitize -DCMAKE_BUILD_TYPE=Debug \
 cmake --build build/cmake-sanitize --parallel
 ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
   ./dcc -stack 512 -I . tests/app.c -o build/SANAPP.MAC
-pwsh ./scripts/build-dcc.ps1
+python scripts/build-dcc.py
 ```
 
 Run repository Python tool tests with:

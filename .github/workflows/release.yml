@@ -55,6 +55,11 @@ jobs:
           repository: davidly/ntvcm
           path: ntvcm
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Build ntvcm emulator on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -94,8 +99,8 @@ jobs:
           clang++ -O3 -fno-builtin -D NDEBUG -I . ntvcm.cxx x80.cxx -o ntvcm
 
       - name: Build dcc host tools
-        shell: pwsh
-        run: ./scripts/build-dcc.ps1
+        shell: bash
+        run: python scripts/build-dcc.py
 
       - name: Sign Windows binaries
         if: runner.os == 'Windows'

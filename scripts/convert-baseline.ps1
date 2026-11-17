@@ -24,12 +24,12 @@ file comparison reproduces the original diff-based verification.
   Directory to write per-app baseline files (default: "tests/baselines").
 
 .PARAMETER AppList
-  Optional explicit ordered app list. If omitted, the APPLIST is parsed from
-  runall.sh.
+  Required complete app list in the original run order. The current Python
+  runner discovers tests dynamically and cannot reconstruct this historical order.
 
 .EXAMPLE
-  pwsh ./scripts/convert-baseline.ps1
-  pwsh ./scripts/convert-baseline.ps1 -InputFile baseline_test_dcc.txt -OutputDir tests/baselines
+  pwsh ./scripts/convert-baseline.ps1 -AppList (Get-Content legacy-app-order.txt)
+  pwsh ./scripts/convert-baseline.ps1 -InputFile baseline_test_dcc.txt -OutputDir tests/baselines -AppList (Get-Content legacy-app-order.txt)
 
 .NOTES
   Output: one file per app, e.g. tests/baselines/sieve.txt, containing the exact
@@ -49,19 +49,11 @@ if (-not (Test-Path $InputFile)) {
     exit 1
 }
 
-# Resolve the ordered app list (authoritative split boundaries).
+# Historical split order must be supplied explicitly; discovery order in
+# the current runner is not the order of the legacy concatenated baseline.
 if (-not $AppList -or $AppList.Count -eq 0) {
-    if (-not (Test-Path "runall.sh")) {
-        Write-Error "runall.sh not found; provide -AppList explicitly."
-        exit 1
-    }
-    # Extract the APPLIST="..." block (may span multiple backslash-continued lines).
-    $raw = Get-Content -Path "runall.sh" -Raw
-    if ($raw -notmatch 'APPLIST="([^"]*)"') {
-        Write-Error "Could not parse APPLIST from runall.sh"
-        exit 1
-    }
-    $AppList = $matches[1] -split '\s+' | Where-Object { $_ -and $_ -ne '\' }
+    Write-Error "Provide -AppList in the complete original run order (for example, -AppList (Get-Content legacy-app-order.txt))."
+    exit 1
 }
 
 Write-Host "Using ordered app list of $($AppList.Count) apps" -ForegroundColor Cyan

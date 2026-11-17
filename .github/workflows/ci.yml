@@ -54,6 +54,11 @@ jobs:
           ./mmac.sh
         working-directory: ntvcm
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Build ntvcm emulator on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -75,60 +80,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Add tool directories to PATH
-        shell: pwsh
+        shell: python
         run: |
-          (Resolve-Path '.').ProviderPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          (Resolve-Path 'ntvcm').ProviderPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          import os
+          from pathlib import Path
+          with open(os.environ['GITHUB_PATH'], 'a') as output:
+              output.write(str(Path('.').resolve()) + '\n')
+              output.write(str(Path('ntvcm').resolve()) + '\n')
 
       - name: Build dcc host tools
-        shell: pwsh
-        run: ./scripts/build-dcc.ps1
+        shell: bash
+        run: python scripts/build-dcc.py
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - name: Test native build driver
+        shell: bash
+        run: python -m unittest scripts.tests.test_build_dcc scripts.tests.test_ma scripts.tests.test_dccprof scripts.tests.test_prepush scripts.tests.test_validate_unit_test scripts.tests.test_runall_build_diagnostics scripts.tests.test_runall_tool_fixtures scripts.tests.test_runall_batches
 
       - name: Run main regression suite in both optimization modes
         # tdvbyte exhaustively checks 17,432,576 inputs through two helpers.
         # Hosted runners can exceed 60s under parallel load.
         run: python scripts/runall.py --mode full --timeout 300
-
-  no-powershell-build:
-    name: Host build without PowerShell (m-posix.sh)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout dcc
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Checkout ntvcm emulator
-        uses: actions/checkout@v4
-        with:
-          repository: davidly/ntvcm
-          path: ntvcm
-
-      - name: Build ntvcm emulator
-        run: |
-          chmod +x ./m.sh
-          ./m.sh
-        working-directory: ntvcm
-
-      - name: Add tool directories to PATH
-        run: |
-          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
-          echo "$GITHUB_WORKSPACE/ntvcm" >> "$GITHUB_PATH"
-
-      # Ubuntu's /bin/sh is dash, as on Debian and Raspberry Pi OS.
-      # Exercise the build path used on platforms without PowerShell.
-      - name: Build dcc host tools with m-posix.sh
-        run: sh m-posix.sh
-
-      # Exercise ma.sh and fixture staging as well as the built tools.
-      # The standard regression job covers both optimization modes; this
-      # job checks the Python runner in fast mode.
-      - name: Run test suite with runall.py
-        run: python3 scripts/runall.py --mode fast

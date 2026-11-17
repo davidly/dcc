@@ -136,6 +136,7 @@ struct Config {
     char dccpeep[MAX_PATH_LEN];
     char dccrtlstrip[MAX_PATH_LEN];
     char ntvcm[MAX_PATH_LEN];
+    char ntvcm_args[MAX_LINE_LEN];
     char m80[MAX_PATH_LEN];
     char m80c[MAX_PATH_LEN];
     char l80[MAX_PATH_LEN];
@@ -643,6 +644,7 @@ static void init_config(struct Config *cfg)
     resolve_tool_path(cfg->dccpeep, sizeof(cfg->dccpeep), "DCCPEEP", LOCAL_DCCPEEP, "dccpeep");
     resolve_tool_path(cfg->dccrtlstrip, sizeof(cfg->dccrtlstrip), "DCCRTLSTRIP", LOCAL_DCCRTLSTRIP, "dccrtlstrip");
     resolve_tool_path(cfg->ntvcm, sizeof(cfg->ntvcm), "NTVCM", NULL, "ntvcm");
+    copy_text(cfg->ntvcm_args, sizeof(cfg->ntvcm_args), env_or_default("NTVCM_ARGS", NULL, ""));
     resolve_tool_path(cfg->m80, sizeof(cfg->m80), "M80", NULL, "m80");
     resolve_tool_path(cfg->m80c, sizeof(cfg->m80c), "M80C", LOCAL_M80C, "m80c");
     make_local_tool_path_absolute(cfg->m80c, sizeof(cfg->m80c));
@@ -963,6 +965,10 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         trim(cfg->ntvcm);
         return cfg->ntvcm[0] != 0;
     }
+    if (!strcmp(key, "ntvcm-args")) {
+        copy_text(cfg->ntvcm_args, sizeof(cfg->ntvcm_args), value);
+        return 1;
+    }
     if (!strcmp(key, "m80-command")) {
         copy_text(cfg->m80, sizeof(cfg->m80), value);
         trim(cfg->m80);
@@ -1077,6 +1083,7 @@ static void print_help(void)
     printf("       dccmake [key=value ...] [dcc-style-options]\n");
     printf("       dccmake --dcc-input main.c,module.c --dcc-output app\n");
     printf("\n");
+    printf("  Use --no-config for a standalone build without the project file.\n");
     printf("dccmake reads optional dccmake.txt in the current directory, then applies\n");
     printf("command-line settings as overrides. Command-line settings may be written as\n");
     printf("key=value, --key=value, --key value, or positional .c inputs. Common dcc-style options are also\n");
@@ -1229,6 +1236,7 @@ static void print_help(void)
     printf("  dccpeep-tool=dccpeep          peephole optimizer command\n");
     printf("  dccrtlstrip-tool=dccrtlstrip  runtime stripper command\n");
     printf("  ntvcm-tool=ntvcm              emulator command for M80/L80 (if either is emulated)\n");
+    printf("  ntvcm-args=FLAGS              whitespace-separated emulator flags (default: NTVCM_ARGS)\n");
     printf("  m80-command=m80               CP/M assembler command passed to ntvcm (emulated M80 only)\n");
     printf("  m80c-tool=m80c                native host assembler command (default, no ntvcm)\n");
     printf("  l80-command=l80               CP/M linker command passed to ntvcm (emulated L80 only)\n");
@@ -1272,6 +1280,8 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
             print_help();
             exit(0);
         }
+        if (!strcmp(arg, "--no-config"))
+            continue;
         if (!strcmp(arg, "-v") || !strcmp(arg, "--version")) {
             printf("dccmake 1.0\n");
             exit(0);
@@ -2285,6 +2295,27 @@ static int build_dcc_command(struct Config *cfg, int index, const char *input,
     return 1;
 }
 
+/* NTVCM_ARGS retains the legacy ma helpers' whitespace-separated flags.
+ * Each token still passes through cmd_arg, with no raw shell interpolation. */
+static int build_ntvcm_command(struct Config *cfg, char *cmd, size_t cmd_size)
+{
+    char args[MAX_LINE_LEN];
+    char *cursor, *start;
+    cmd_init(cmd, cmd_size);
+    if (!cmd_arg(cmd, cmd_size, cfg->ntvcm)) return 0;
+    copy_text(args, sizeof(args), cfg->ntvcm_args);
+    cursor = args;
+    while (*cursor) {
+        while (*cursor && isspace((unsigned char)*cursor)) cursor++;
+        if (!*cursor) break;
+        start = cursor;
+        while (*cursor && !isspace((unsigned char)*cursor)) cursor++;
+        if (*cursor) *cursor++ = 0;
+        if (!cmd_arg(cmd, cmd_size, start)) return 0;
+    }
+    return 1;
+}
+
 /* Builds the M80-style "obj,prn=source /X /O /Z /L" assembly command, either
  * for native m80c (default: runs directly, no emulator) or, when
  * cfg->use_emulated_m80 is set, for the real M80.COM under ntvcm (as
@@ -2294,7 +2325,7 @@ static int build_m80_command(struct Config *cfg, const char *mac_arg,
 {
     cmd_init(cmd, cmd_size);
     if (cfg->use_emulated_m80) {
-        if (!cmd_arg(cmd, cmd_size, cfg->ntvcm)) return 0;
+        if (!build_ntvcm_command(cfg, cmd, cmd_size)) return 0;
         if (!cmd_arg(cmd, cmd_size, cfg->m80)) return 0;
     } else {
         if (!cmd_arg(cmd, cmd_size, cfg->m80c)) return 0;
@@ -2612,7 +2643,7 @@ static int run_build(struct Config *cfg)
 
     cmd_init(cmd, sizeof(cmd));
     if (cfg->use_emulated_l80) {
-        if (!cmd_arg(cmd, sizeof(cmd), cfg->ntvcm)) return 0;
+        if (!build_ntvcm_command(cfg, cmd, sizeof(cmd))) return 0;
         if (!cmd_arg(cmd, sizeof(cmd), cfg->l80)) return 0;
     } else {
         if (!cmd_arg(cmd, sizeof(cmd), cfg->l80c)) return 0;
@@ -2745,16 +2776,18 @@ int main(int argc, char **argv)
 {
     struct Config cfg;
     char ancestors[MAX_PROJECT_DEPTH][MAX_PATH_LEN];
-    int i;
+    int i, no_config = 0;
 
     for (i = 1; i < argc; ++i) {
         if (is_help_option(argv[i])) {
             print_help();
             return 0;
         }
+        if (!strcmp(argv[i], "--no-config"))
+            no_config = 1;
     }
     init_config(&cfg);
-    if (!read_config_file(&cfg, "dccmake.txt"))
+    if (!no_config && !read_config_file(&cfg, "dccmake.txt"))
         return 1;
     if (!parse_args(&cfg, argc, argv))
         return 1;

@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-exec "$script_dir/scripts/ma.sh" "$@"
+#!/bin/sh
+set -eu
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+DCC_PYTHON=${PYTHON:-python3}
+exec "$DCC_PYTHON" "$SCRIPT_DIR/scripts/ma.py" "$@"

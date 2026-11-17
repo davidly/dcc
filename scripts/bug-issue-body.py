@@ -133,7 +133,7 @@ def body(name, entry, rows, commit):
         sys.exit('%s refers to %s, which have no issue yet' % (name, ', '.join(left)))
     upper = name.upper()
     parts = [entry, '', '## Reproduce', '',
-             'Compiler: `main` at `%s`, built with `pwsh ./scripts/build-dcc.ps1`. '
+             'Compiler: `main` at `%s`, built with `python scripts/build-dcc.py`. '
              'Emulator: ntvcm.' % commit, '',
              'Save as `%s.c` in the repository root:' % name, '', '```c', shown.rstrip(), '```', '',
              '```sh',

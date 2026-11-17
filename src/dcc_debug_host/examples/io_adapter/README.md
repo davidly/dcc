@@ -48,7 +48,7 @@ Callbacks must never return more bytes than `output_size`.
 From the DCC repository root:
 
 ```sh
-pwsh ./scripts/build-dcc.ps1
+python scripts/build-dcc.py
 ```
 
 The shared library and debugger host are published in the repository root.

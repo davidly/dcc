@@ -40,7 +40,7 @@ itself is generated automatically.
 Before configuring a project:
 
 1. [Build and configure the DCC toolchain](00-setup-toolchain.md). The normal
-  `scripts/build-dcc.ps1` build includes `dcc-debug-host`.
+  `scripts/build-dcc.py` build includes `dcc-debug-host`.
 2. Install the [Microsoft C/C++ extensions for VS Code](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpp-devtools){: target="_blank" }.
 3. Make `dccmake` available on `PATH`, or use its absolute path in the build
    task.
@@ -70,7 +70,7 @@ my-project/
 └── module.c
 ```
 
-Build DCC once with `scripts/build-dcc.ps1`, then set `DCC_DIR` in the
+Build DCC once with `scripts/build-dcc.py`, then set `DCC_DIR` in the
 environment inherited by VS Code to the DCC repository directory. For example,
 on macOS or Linux:
 
@@ -365,7 +365,8 @@ Build the debugger host and add it to the compound pre-launch task:
 {
   "label": "Build DCC debugger host",
   "type": "shell",
-  "command": "pwsh ./scripts/build-dcc.ps1",
+  "command": "${workspaceFolder}/m.sh",
+  "windows": { "command": "${workspaceFolder}\\m.bat" },
   "options": {
     "cwd": "${workspaceFolder}"
   },

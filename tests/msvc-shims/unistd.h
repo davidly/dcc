@@ -1,6 +1,6 @@
 /*
  * unistd.h - minimal MSVC compatibility shim, force-searched only by
- * scripts/validate-unit-test.ps1's MSVC host build (via /I), never by dcc
+ * scripts/validate-unit-test.py's MSVC host build (via /I), never by dcc
  * itself or by gcc/clang builds, which have a real <unistd.h>.
  *
  * dcc's RTL exposes a handful of POSIX <unistd.h> names directly (its tests

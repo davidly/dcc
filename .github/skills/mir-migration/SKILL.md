@@ -138,7 +138,7 @@ no-stack release gates.
 9. Use ASan/UBSan for CFG, liveness, allocation, recursive proof, or ownership
    changes.
 10. Run relevant regular unit tests and both strict full+extended regression
-    gates before pushing. The exhaustive `prepush.ps1` proof suite is a
+    gates before pushing. The exhaustive `prepush.py` proof suite is a
     periodic manual maintainer check, not an automatic commit/push gate.
 
 ## Selector and cost policy
@@ -211,7 +211,7 @@ DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
   --timeout 30 --failures-only
 ```
 
-The maintainer runs `pwsh ./scripts/prepush.ps1` manually periodically for the
+The maintainer runs `python scripts/prepush.py` manually periodically for the
 exhaustive proof, mutation, sanitizer, and coverage checks (about five hours).
 Do not require or launch that suite for every commit/push; run it only when
 explicitly requested. See `dcc-project` for the shared testing workflow.

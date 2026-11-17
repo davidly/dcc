@@ -496,7 +496,7 @@ runs in CI and can be invoked by omitting `-Cases`.
 See [verification, promotion, and allocation](00-architecture.md#verification-promotion-and-allocation)
 for the compiler pipeline these tests exercise.
 
-## Host Unit Test Validator (`validate-unit-test.ps1`)
+## Host Unit Test Validator (`validate-unit-test.py`)
 
 Compiles each `tests/*.c` program with a native host C compiler, runs the host
 executable, and compares stdout with `tests/baselines/<app>.txt`. This is a
@@ -504,7 +504,7 @@ read-only baseline check: it never rewrites baseline files. It is useful for
 checking that the unit-test sources and expected output still make sense on a
 normal C implementation before comparing them with the DCC C Compiler output.
 
-Host compiler selection follows `scripts/build-dcc.ps1`:
+Host compiler selection follows `scripts/build-dcc.py`:
 
 - Windows uses MSVC `cl.exe` after locating the Visual Studio C++ build tools.
   On Windows ARM64, it uses the native ARM64 MSVC tools.
@@ -522,17 +522,17 @@ host-only skip settings.
 ### Host Validator Usage
 
 ```pwsh
-./scripts/validate-unit-test.ps1 [options]
+python scripts/validate-unit-test.py [options]
 ```
 
 ### Host Validator Examples
 
 ```pwsh
-./scripts/validate-unit-test.ps1              # validate every runnable test
-./scripts/validate-unit-test.ps1 -App tprintf # validate one test app
-./scripts/validate-unit-test.ps1 -CC clang    # use clang on Linux/macOS
-./scripts/validate-unit-test.ps1 -Serial      # sequential fallback
-./scripts/validate-unit-test.ps1 -Help        # show help and exit
+python scripts/validate-unit-test.py              # validate every runnable test
+python scripts/validate-unit-test.py -App tprintf # validate one test app
+python scripts/validate-unit-test.py -CC clang    # use clang on Linux/macOS
+python scripts/validate-unit-test.py -Serial      # sequential fallback
+python scripts/validate-unit-test.py -Help        # show help and exit
 ```
 
 ### Host Validator Parameters
@@ -573,7 +573,7 @@ Common Linux packages:
 After installation, this should be enough to enable the extended path:
 
 ```pwsh
-./scripts/validate-unit-test.ps1
+python scripts/validate-unit-test.py
 ```
 
 The script prints the selected compiler line near the start of the run. When the

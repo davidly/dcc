@@ -9,7 +9,7 @@ The source project is under `src/dcc_debug_host`. The normal cross-platform
 DCC build includes the host and example I/O adapter:
 
 ```powershell
-pwsh ./scripts/build-dcc.ps1
+python scripts/build-dcc.py
 ```
 
 The script explicitly builds, verifies, and publishes both targets in the
