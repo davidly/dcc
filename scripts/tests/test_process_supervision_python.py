@@ -30,7 +30,7 @@ def process_alive(pid):
     except ProcessLookupError:return False
     if sys.platform.startswith('linux'):
         try:return Path('/proc/{}/stat'.format(pid)).read_text().rsplit(')',1)[1].split()[0]!='Z'
-        except FileNotFoundError:return False
+        except (FileNotFoundError,ProcessLookupError):return False # reaped after kill(0)
     result=subprocess.run(['/bin/ps','-p',str(pid),'-o','stat='],capture_output=True,text=True)
     return result.returncode==0 and not result.stdout.strip().startswith('Z')
 
