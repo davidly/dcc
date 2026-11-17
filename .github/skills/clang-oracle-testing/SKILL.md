@@ -38,7 +38,7 @@ Scripts use `from __future__ import annotations` for 3.9.
 
 1. **Baseline first.** `python3 scripts/run-known-bugs.py` must report every
    reproducer as `fails` (the count is in `compiler-bugs.md`), and
-   `python3 ./scripts/runall.py -mode=full -extended` must print `SUCCESS`.
+   `python3 ./scripts/runall.py --mode full --extended` must print `SUCCESS`.
    If either differs, stop and report; something other than the fuzzer
    changed.
 2. **Run a batch** of 300 seeds per generator with the production
@@ -155,7 +155,7 @@ A fix is accepted only when all of these hold:
    300-seed batch per affected generator with `--off known` is clean. This
    is what proves the facets listed under the entry are covered, not only
    the parked program.
-3. `python3 ./scripts/runall.py -mode=full -extended` is `SUCCESS`, and
+3. `python3 ./scripts/runall.py --mode full --extended` is `SUCCESS`, and
    no existing row of `tests/perf_baselines.csv` changes. Everything in
    `tests/` compiles correctly today, so a fix must not alter their emitted
    code; a changed row in either direction means the fix is wider than the

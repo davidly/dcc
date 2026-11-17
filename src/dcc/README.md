@@ -230,20 +230,20 @@ For one application, use the normal toolchain and its fixture-aware runner:
 
 ```sh
 ./dccmake tests/tlong.c dcc-output=TLONG dcc-peep=true
-pwsh ./scripts/runall.ps1 -Apps tlong -Mode full -RunTimeout 30
+python3 ./scripts/runall.py --apps tlong --mode full --timeout 30
 ```
 
 Run both strict full+extended release gates (requires `ntvcm` on `PATH`):
 
 ```sh
 DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
-  pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30 -FailuresOnly
+  python3 ./scripts/runall.py --mode full --extended --timeout 30 --failures-only
 DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
-  pwsh ./scripts/runall.ps1 -Mode full -Extended -NoStackCheck \
-  -RunTimeout 30 -FailuresOnly
+  python3 ./scripts/runall.py --mode full --extended --no-stack-check \
+  --timeout 30 --failures-only
 ```
 
-`-Mode full` covers peep and nopeep. Per-app stdout baselines, execution
+`--mode full` covers peep and nopeep. Per-app stdout baselines, execution
 overrides, and checked cycle/size baselines are in `tests/baselines/`,
 `tests/_test_overrides.json`, and `tests/perf_baselines.csv`. Do not move
 baselines to hide regressions. POSIX users can use the equivalent

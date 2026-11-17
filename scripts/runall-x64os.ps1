@@ -7,7 +7,7 @@ directly, once with each tool invoked through x64os - and verifies the two
 runs produce byte-identical output.
 
 .DESCRIPTION
-This is not a variant of runall.ps1's own app-behavior verification (it
+This is not a variant of runall.py app-behavior verification (it
 never links a final .COM or runs one under ntvcm/l80 - dccmake, l80 and
 ntvcm are intentionally not part of this pipeline). It exists to validate
 x64os (~/github/x64os) itself, using dcc's real-world test corpus as a
@@ -51,13 +51,13 @@ count or this script's exit code.
 
 .PARAMETER Serial
   Run apps sequentially instead of in parallel (default: parallel, like
-  runall.ps1).
+  runall.py).
 
 .PARAMETER ThrottleLimit
   Max concurrent apps in parallel mode (default: CPU core count).
 
 .PARAMETER NoStackCheck
-  Build without -fstack-check (default: on, matching runall.ps1's default).
+  Build without -fstack-check (default: on, matching runall.py's default).
   Doesn't affect x64os validation either way; kept for parity with a normal
   build.
 

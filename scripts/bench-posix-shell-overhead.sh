@@ -7,7 +7,7 @@
 #
 # Runs both shapes serially and under N-way parallel load (via xargs -P),
 # since a shell layer that's negligible serially could behave differently
-# under the contention the real test suite runs under (runall.ps1's default
+# under the contention the real test suite runs under (runall.py's default
 # throttle = processor count). Prints wall-clock totals for each so the
 # extra-shell-layer cost can be read directly rather than inferred.
 #

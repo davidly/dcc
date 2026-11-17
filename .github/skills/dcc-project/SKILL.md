@@ -112,22 +112,22 @@ On macOS use a Perl alarm wrapper when GNU `timeout` is unavailable.
 
 ## Regression runner
 
-```pwsh
-pwsh ./scripts/runall.ps1 -Apps tlong -Mode full -RunTimeout 30
-pwsh ./scripts/runall.ps1 -Mode fast -FailFast
-pwsh ./scripts/runall.ps1 -Mode full -Extended
-pwsh ./scripts/runall.ps1 -Mode full -Extended -NoStackCheck
+```sh
+python3 ./scripts/runall.py --apps tlong --mode full --timeout 30
+python3 ./scripts/runall.py --mode fast --fail-fast
+python3 ./scripts/runall.py --mode full --extended
+python3 ./scripts/runall.py --mode full --extended --no-stack-check
 ```
 
-`-Mode full` runs peep and nopeep. Parallel execution is isolated under
-per-run build directories and uses all cores by default; use `-Serial` only to
+`--mode full` runs peep and nopeep. Parallel execution is isolated under
+per-run build directories and uses all cores by default; use `--serial` only to
 diagnose ordering or resource issues.
 
 For MIR work, make focused and release runs strict:
 
 ```sh
 DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
-  pwsh ./scripts/runall.ps1 -Apps app1,app2 -Mode full
+  python3 ./scripts/runall.py --apps app1,app2 --mode full
 ```
 
 Before pushing compiler/runtime changes, run the regular unit tests relevant
@@ -137,10 +137,10 @@ applicable.
 
 ```sh
 DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
-  pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30 -FailuresOnly
+  python3 ./scripts/runall.py --mode full --extended --timeout 30 --failures-only
 DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
-  pwsh ./scripts/runall.ps1 -Mode full -Extended -NoStackCheck \
-  -RunTimeout 30 -FailuresOnly
+  python3 ./scripts/runall.py --mode full --extended --no-stack-check \
+  --timeout 30 --failures-only
 ```
 
 The exhaustive `pwsh ./scripts/prepush.ps1` proof suite adds compiler mutants,
@@ -154,10 +154,10 @@ unit and regression tests above; run it only when explicitly requested.
 - Expected stdout is `tests/baselines/<app>.txt`.
 - Per-app execution details belong in `tests/_test_overrides.json`.
 - New runnable apps require a `tests/perf_baselines.csv` row.
-- Measure checked baselines with the normal stack-check `runall.ps1` path.
+- Measure checked baselines with the normal stack-check `runall.py` path.
 - Update only rows whose workload intentionally changed; never move a baseline
   to hide a compiler or optimizer regression.
-- `-Report` is a separate no-stack historical report, not a checked baseline.
+- `--report` is a separate no-stack historical report, not a checked baseline.
 - Keep peep and nopeep both non-regressing.
 
 ## Debugger host and fixture lifecycle

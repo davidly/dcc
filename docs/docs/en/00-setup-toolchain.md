@@ -316,7 +316,7 @@ asserts compiled out, so the resulting `ntvcm` runs faster.
 ## Set up your environment
 
 Use `dccmake` to build application projects with the source-built tools.
-Use `scripts/runall.ps1` to build and verify the test suite.
+Use `scripts/runall.py` to build and verify the test suite.
 
 The tools use an environment variable if you set one; otherwise they look on
 your `PATH`. The relevant tools are:
@@ -508,7 +508,7 @@ DCC checkout directory:
 
 ```powershell
 cd C:\path\to\dcc
-pwsh ./scripts/runall.ps1 -Mode full -Extended
+python3 ./scripts/runall.py --mode full --extended
 ```
 
 The suite builds and runs the repository's tests with and without the peephole

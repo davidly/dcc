@@ -84,11 +84,15 @@ jobs:
         shell: pwsh
         run: ./scripts/build-dcc.ps1
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Run main regression suite in both optimization modes
-        shell: pwsh
         # tdvbyte exhaustively checks 17,432,576 inputs through two helpers.
-        # Hosted Linux/Windows runners can exceed 60s under parallel load.
-        run: ./scripts/runall.ps1 -Mode full -RunTimeout 300
+        # Hosted runners can exceed 60s under parallel load.
+        run: python scripts/runall.py --mode full --timeout 300
 
   no-powershell-build:
     name: Host build without PowerShell (m-posix.sh)
@@ -123,8 +127,8 @@ jobs:
       - name: Build dcc host tools with m-posix.sh
         run: sh m-posix.sh
 
-      # Exercise ma.sh and shell fixture staging as well as the built tools.
+      # Exercise ma.sh and fixture staging as well as the built tools.
       # The standard regression job covers both optimization modes; this
-      # job checks the independent shell runner in fast mode.
-      - name: Run test suite with runall.sh
-        run: bash scripts/runall.sh -mode fast
+      # job checks the Python runner in fast mode.
+      - name: Run test suite with runall.py
+        run: python3 scripts/runall.py --mode fast

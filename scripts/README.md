@@ -5,7 +5,7 @@ Developer utility scripts for the `dcc` (CP/M-80 / Z80) toolchain.
 ## `runall.py`
 
 Native Python 3 runner for the standard build, emulator, baseline, fixture,
-and extended-corpus path. It is the recommended runner on macOS and Linux:
+and extended-corpus path. It is the regression runner on Windows, macOS, and Linux:
 Python uses a substantially cheaper process-launch path than PowerShell on
 macOS, which matters because this suite starts thousands of short-lived tools.
 
@@ -206,7 +206,7 @@ python3 scripts/bug-issue-body.py bug054 --create
 ## `mir-migration-census.py`
 
 Measures generated MIR selection across `tests/*.c` and compares two snapshots
-to produce the smallest `runall.ps1 -Apps ...` validation command for a
+to produce the smallest `runall.py --apps ...` validation command for a
 compiler change.
 
 The script is read-only with respect to test and performance baselines. It
@@ -235,12 +235,12 @@ python3 scripts/mir-migration-census.py \
   --fail-on-regression
 
 # 4. Run the printed command, for example:
-pwsh ./scripts/runall.ps1 -Apps tret,tatexit -Mode full -RunTimeout 20
+python3 ./scripts/runall.py --apps tret,tatexit --mode full --timeout 20
 ```
 
 Use `--apps app1,app2` while developing a local change. Run the complete census
 only when the focused hypothesis succeeds. Reserve an unfiltered
-`runall.ps1 -Mode full` for a material coverage milestone instead of every
+`runall.py --mode full` for a material coverage milestone instead of every
 selector iteration.
 
 Apps marked `ignore` in `tests/_test_overrides.json` are skipped by default, so
@@ -287,7 +287,7 @@ For one generated-candidate runtime comparison, use the diagnostic controls:
 ```sh
 DCC_MIR_SELECT_FUNCTION=parse_move \
 DCC_MIR_SELECT_CANDIDATE=spilled-rhs-forward \
-  pwsh ./scripts/runall.ps1 -Apps tchess -Mode full
+  python3 ./scripts/runall.py --apps tchess --mode full
 ```
 
 Candidate names are the `candidate` values in `--cost-policy-output`; no
@@ -512,7 +512,7 @@ already-captured profile.
 pwsh ./scripts/dccprof.ps1 <app> [-SourcePath FILE] [-BuildDir DIR] [-OutDir DIR] [-Clock HZ] [-ProgramArgs ...]
 ```
 
-One cross-platform script (Windows/macOS/Linux, like `ma.ps1`/`runall.ps1`)
+One cross-platform script (Windows/macOS/Linux, like `ma.ps1`/`runall.py`)
 rather than separate shell/batch wrappers - it delegates the build itself
 to `ma.ps1` and adds the profiling-specific steps on top: regenerating
 `RTLMIN.PRN` (a normal build only assembles it without the `/L` listing
@@ -590,7 +590,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 <name> [full|fast|
 ```pwsh
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 triangle
 powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 sieve nopeep
-powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint -Mode fast -BuildDir mybuild
+powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint --mode fast -BuildDir mybuild
 ```
 
 ### Parameters
@@ -598,7 +598,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint -Mode fast 
 | Parameter | Default | Meaning |
 | --------- | ------- | ------- |
 | `-Name` | (required) | Test app name (without `.c` extension) |
-| `-Mode` | `full` | Build mode: `full`, `fast`, or `nopeep` |
+| `--mode` | `full` | Build mode: `full`, `fast`, or `nopeep` |
 | `-BuildDir` | `build` | Working directory for build artifacts |
 | `-Emulator` | `ntvcm` | Emulator command for running CP/M tools |
 
@@ -633,7 +633,7 @@ at `build/compiler-coverage/report/html/index.html`. Set `CC`, `PWSH`,
 Coverage clobber builds have a separate 300-second timeout because
 instrumentation and cache verification can exceed the ordinary 60-second
 build budget. Set `DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT` to override it. Standalone
-`run-mir-clobber-tests.ps1` accepts `-BuildTimeout` (default 60); `-RunTimeout`
+`run-mir-clobber-tests.ps1` accepts `-BuildTimeout` (default 60); `--timeout`
 continues to control target execution independently.
 
 ## `prepush.ps1`
@@ -647,14 +647,14 @@ pwsh scripts/prepush.ps1
 It runs the build-diagnostic regression checks, native compiler baseline validation
 (`validate-unit-test.ps1`), then the comprehensive MIR proof suite described below.
 Native validation honors the host-only exclusions in `tests/_test_overrides.json`
-and uses `-Jobs` and `-RunTimeout` for its worker and timeout limits.
-The MIR proof suite includes strict `-Mode full -Extended`
+and uses `-Jobs` and `--timeout` for its worker and timeout limits.
+The MIR proof suite includes strict `--mode full -Extended`
 release suites with and without stack checks, plus builds, script tests,
 audits, host and sanitizer tests, debugger tests, compiler mutants, and coverage.
 It stops on failure and returns a nonzero exit code. It does not commit or push.
 
 Use `-List` to inspect the gates. `-Jobs`, `-MutationJobs`, `-MutationBuildJobs`,
-`-RunTimeout` (default 60 seconds per target), `-OutputDirectory`, and
+`--timeout` (default 60 seconds per target), `-OutputDirectory`, and
 `-RequireComplete` are forwarded to the proof suite. Paths are resolved from
 the repository root, even when invoked from another directory. This is a long
 run and needs the proof suite's compiler, emulator, and coverage prerequisites.
@@ -693,118 +693,34 @@ cleared before execution; installation paths such as `DCC_HOME`,
 `DCC_INCLUDE`, `DCC_LIB`, and `DCC_RUNTIME` are preserved. The sanitizer build
 explicitly uses the same discovered or configured Clang toolchain as coverage.
 Run this proof suite periodically on a developer machine; GitHub CI intentionally
-runs only the standard cross-platform `runall.ps1 -Mode full` regression gate.
+runs only the standard cross-platform `runall.py --mode full` regression gate.
 
-## `runall.ps1`
+## `runall.py`
 
-Comprehensive test suite: builds and runs all main test applications with output
-verification against per-app baselines in `tests/baselines/`. Uses `dccmake` to
-build each app and `tests/_test_overrides.json` for test-specific runtime and
-build settings. Comparison is keyed by app name, so test discovery order does not matter.
-Pass `-Extended` to run the extended c-testsuite corpus after the main suite.
-See [`tests/README.md`](../tests/README.md) for the test/baseline relationship.
+Runs the standard application suite with baseline, fixture, diagnostic, and
+performance checks. Use Python 3 on Windows, macOS, and Linux.
 
-Both main and extended builds fail on MIR verifier diagnostics, including
-diagnostics from rejected optimization candidates whose compilation exits zero.
-Ordinary MIR reports remain permitted. The build-output policy also rejects
-assembler/linker multiple-definition, phase-error, and undefined-symbol warnings.
-Run `pwsh scripts/tests/test_runall_build_diagnostics.ps1` for focused checks of
-both runners with successful fake builds and injected diagnostics.
-
-**Runs in parallel by default** (each app builds in its own `build/<app>/`
-subdirectory so concurrent builds don't clobber shared artifacts). In parallel
-mode the whole run is isolated under a per-invocation `build/run-<pid>/` folder,
-which is **removed automatically on exit** so `build/` does not accumulate one
-folder per run; pass `-KeepBuild` to retain it (e.g. to inspect a failing
-build's artifacts). Use `-Serial` to fall back to sequential builds in the
-shared `build/` directory.
-The lightweight stack-overflow guard (`-fstack-check`) is **on by default**;
-pass `-NoStackCheck` to build without it.
-Pass `-Report` to append per-app run-time and `.COM` size measurements while
-the suite runs. Report mode implies `-NoStackCheck`; when using `ntvcm`, normal
-app runs use `-s:0` for full speed and report runs use a fixed 400 MHz clock by
-default for more comparable timings across host machines.
-
-### Usage
-
-```pwsh
-pwsh ./scripts/runall.ps1 [options]
+```sh
+python3 scripts/runall.py --mode full --extended
+python3 scripts/runall.py --apps app1,app2 --mode full
+python3 scripts/runall.py --mode full --no-stack-check --timeout 30 --failures-only
 ```
 
-Run with no options, the suite uses these defaults: **parallel** execution, the
-**stack-overflow guard on** (`-fstack-check`), and the **fast optimized-only**
-build mode. Use `-Mode full` when you want both fast and nopeep builds.
+Run `python3 scripts/runall.py --help` for the complete option list. It accepts
+`--mode` (`fast`, `nopeep`, or `full`), `--extended`, `--apps`, `--serial`,
+`--fail-fast`, `--throttle-limit`, `--timeout`, `--emulator`, `--build-dir`,
+`--baseline-dir`, `--keep-build`, `--no-stack-check`, `--emulated-m80`,
+`--emulated-l80`, `--narrow-diff`, `--report`, `--report-file`,
+`--report-clock-hz`, `--update-perf-baseline`, `--no-perf-check`, and
+`--timing-breakdown`.
 
-### Parameters
-
-| Parameter | Default | Meaning |
-| --------- | ------- | ------- |
-| `-Emulator` | `ntvcm` | Emulator command for running .COM files |
-| `-NoStackCheck` | (off) | Disable `-fstack-check` (the guard is ON by default) |
-| `-BuildDir` | `build` | Working directory for artifacts |
-| `-BaselineDir` | `tests/baselines` | Directory of per-app `<app>.txt` baselines |
-| `-Mode` | `fast` | Build mode: `fast` (optimized), `nopeep` (unoptimized), or `full` |
-| `-Help` | (off) | Show help text and exit without building or running tests |
-| `-Extended` | (off) | Also run the extended c-testsuite corpus after the main suite |
-| `-Serial` | (off) | Run sequentially instead of the default parallel mode |
-| `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
-| `-KeepBuild` | (off) | Keep the per-invocation `build/run-<pid>/` folder instead of removing it on exit (parallel mode) |
-| `-Report` | (off) | Append per-app execution time and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
-| `-ReportFile` | `build/perf_results.csv` | CSV path used by `-Report` |
-| `-ReportClockHz` | `400000000` | ntvcm clock speed used for measured report runs; set to `0` for full-speed report runs |
-
-### Build modes
-
-The `-Mode` parameter selects which optimization pass(es) to build and verify.
-**The default is `fast`.**
-
-- **`fast`** — optimized: runs the `dccpeep` peephole optimizer after compiling.
-- **`nopeep`** — unoptimized: skips `dccpeep`.
-- **`full`** — builds and verifies each app **twice**, once in each
-  mode, against the same baseline. A default run therefore performs two builds
-  per app when you select `-Mode full` (this catches optimizer bugs that change
-  a program's output).
-
-### Examples
-
-```pwsh
-pwsh ./scripts/runall.ps1                       # quick optimized-only default
-pwsh ./scripts/runall.ps1 -Help                 # show help and exit
-pwsh ./scripts/runall.ps1 -Serial               # sequential fallback
-pwsh ./scripts/runall.ps1 -NoStackCheck         # build without the stack guard
-pwsh ./scripts/runall.ps1 -ThrottleLimit 8      # cap concurrency
-pwsh ./scripts/runall.ps1 -Mode fast            # optimized build only
-pwsh ./scripts/runall.ps1 -Mode nopeep          # unoptimized build only
-pwsh ./scripts/runall.ps1 -Extended             # also run extended c-testsuite
-pwsh ./scripts/runall.ps1 -KeepBuild            # keep build/run-<pid>/ for debugging
-pwsh ./scripts/runall.ps1 -Report               # append build/perf_results.csv
-pwsh ./scripts/runall.ps1 -ReportClockHz 0 -Report  # full-speed report run
-```
-
-Parallel mode is markedly faster on multi-core machines. Each app builds in its
-own `build/<app>/` subdirectory so concurrent builds don't clobber shared
-artifacts, and a live `[ n/total] PASS/FAIL` status prints as each app
-completes. The run's `build/run-<pid>/` folder is removed on exit unless
-`-KeepBuild` is passed.
-
-### Output
-
-Reports:
-- Total apps discovered
-- Passed/failed/skipped counts
-- Per-app build and execution status (live in parallel mode)
-- Output verification against baseline (if available)
-- Optional CSV performance report when `-Report` is passed
-- Exit code 0 on full success, 1 if any test fails
-
-### Exit Status
-
-- `0` — All tests passed
-- `1` — One or more tests failed
+The runner reads `tests/_test_overrides.json`; fixture files are copied into the
+run directory before execution. Build artifacts are removed after a successful
+run unless `--keep-build` is passed.
 
 ## `stress-runall.ps1`
 
-Stress-tests the suite by running `runall.ps1` repeatedly, stopping on the first
+Stress-tests the suite by running `runall.py` repeatedly, stopping on the first
 failure. Useful for shaking out intermittent/flaky failures under parallel load.
 The failing iteration's full log is kept for inspection.
 
@@ -836,7 +752,7 @@ pwsh ./scripts/stress-runall.ps1 -ThrottleLimit 8 -KeepLogs
 
 Splits the legacy concatenated baseline `baseline_test_dcc.txt` into per-app
 baseline files under `tests/baselines/` (one `<app>.txt` per test). Used to
-(re)generate the baselines consumed by `runall.ps1`.
+(re)generate the baselines consumed by `runall.py`.
 
 ### Usage
 

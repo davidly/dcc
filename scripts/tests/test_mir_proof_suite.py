@@ -191,18 +191,14 @@ Write-Output 'LLVM peer discovery checks=18 failures=0'
         runner = (ROOT / "scripts/run-mir-proof-suite.ps1").read_text(
             encoding="utf-8"
         )
-        runall = (ROOT / "scripts/runall.ps1").read_text(encoding="utf-8")
-
         self.assertIn("function Convert-ToShellPath", runner)
         self.assertIn('cygpath -u -- "$1"', runner)
         self.assertIn(
             "DCC_COVERAGE_BUILD_DIR = Convert-ToShellPath $coverageOutput",
             runner,
         )
-        self.assertEqual(
-            runall.count('-BuildDir (Join-Path $BuildDir "diagnostics")'),
-            2,
-        )
+        python_runner = (ROOT / "scripts/runall.py").read_text(encoding="utf-8")
+        self.assertIn('runroot = build_base / f"run-{os.getpid()}"', python_runner)
 
     def test_fuzz_generator_and_receipt_are_part_of_the_aggregate_runner(self):
         runner = (ROOT / "scripts/run-mir-proof-suite.ps1").read_text(

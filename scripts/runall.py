@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Fast POSIX runner for the dcc application and extended test suites.
+"""Cross-platform Python runner for the dcc application and extended test suites.
 
-This is deliberately a native Python counterpart to runall.ps1.  It avoids
-PowerShell's expensive macOS child-process creation and per-item runspace
-setup while retaining the same build, verification, diagnostics, reporting,
-narrow-diff, and performance-baseline workflows.
+Runs the application and extended test suites with baseline, fixture,
+diagnostic, reporting, narrow-diff, and performance checks.
 """
 from __future__ import annotations
 
@@ -195,7 +193,7 @@ def bool_text(value) -> str:
 
 
 def words(value) -> list[str]:
-    """runall.ps1 splits override strings on whitespace, not shell syntax."""
+    """Override arguments are split on whitespace, not shell syntax."""
     return str(value or "").split()
 
 
@@ -268,7 +266,7 @@ PLACEHOLDERS = {
 
 
 def baseline_matches(expected: str, actual: str) -> bool:
-    """Match the same {{TOKEN}} baseline templates supported by runall.ps1."""
+    """Match {{TOKEN}} baseline templates in expected output."""
     if not re.search(r"\{\{[A-Z][A-Z0-9]*\}\}", expected): return expected == actual
     parts, last = [], 0
     for match in re.finditer(r"\{\{[A-Z][A-Z0-9]*\}\}", expected):
@@ -322,7 +320,7 @@ def build(name, source, directory, mode, override, args):
     cmd = [command("dccmake"), f"dcc-input={source}", f"dcc-output={name}",
            f"dcc-build-dir={directory}", f"dcc-peep={'true' if mode == 'peep' else 'false'}",
            f"ntvcm-tool={args.emulator}"]
-    # Keep the established runall.ps1 configuration: both extended printf
+    # Keep the established runner configuration: both extended printf
     # families are on unless a test explicitly opts out.  Leaving these
     # options absent uses dccmake's false defaults and changes linked I/O
     # routines, invalidating the shared performance baselines.
@@ -410,7 +408,7 @@ def app_job(name, mode, overrides, sources, baselines, root, args):
         return Result(f"{name}:{'fast' if mode == 'peep' else mode}", False,
                       time.monotonic()-began,
                       [f"    ERROR: fixture not found: {name}" for name in missing_fixtures])
-    # Keep this relative, exactly as runall.ps1 does: C's __FILE__ is part of
+    # Keep this relative, consistently: C's __FILE__ is part of
     # several checked-in baselines.
     code, timed, output = build(name, Path("tests") / f"{name}.c", directory, mode, override, args)
     shown = "fast" if mode == "peep" else mode
@@ -738,7 +736,7 @@ def main():
         parser.error("--throttle-limit must be a positive integer")
     if args.report_clock_hz <= 0:
         parser.error("--report-clock-hz must be a positive integer")
-    # Match runall.ps1: report measurements are normal builds, not
+    # Report measurements are normal builds, not
     # stack-guard builds, and therefore intentionally skip perf comparison.
     if args.report: args.no_stack_check = True
     args.baseline_dir = (ROOT / args.baseline_dir).resolve() if not Path(args.baseline_dir).is_absolute() else Path(args.baseline_dir)
@@ -904,7 +902,7 @@ def main():
         total = time.monotonic() - began
         corpus_label = "Main + extended corpus" if args.extended else "Main app suite"
         out(f"  {corpus_label:22} {main_elapsed:7.2f}s ({main_elapsed / total * 100:5.1f}%)")
-        out("  Detailed per-stage accounting is available from runall.ps1 -TimingBreakdown.", "gray")
+        out("  Detailed per-stage accounting is available from the detailed build diagnostics.", "gray")
     out("\n>>> SUCCESS: All tests passed <<<" if not failed_total else "\n>>> FAILURE: tests failed <<<", "green" if not failed_total else "red")
     if not args.keep_build: shutil.rmtree(runroot, ignore_errors=True)
     return failed_total != 0

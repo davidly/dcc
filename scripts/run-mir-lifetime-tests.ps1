@@ -5,10 +5,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
-$runall = Join-Path $PSScriptRoot "runall.ps1"
+$runall = Join-Path $PSScriptRoot "runall.py"
 $compilerName = if ($IsWindows) { "dcc.exe" } else { "dcc" }
 $compiler = Join-Path $repoRoot $compilerName
-$pwsh = (Get-Process -Id $PID).Path
+$python = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } else { "python" }
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "dcc-mir-lifetime-tests-" + [guid]::NewGuid())
 $environmentNames = @(
@@ -106,19 +106,18 @@ function Invoke-ForcedRuntime(
         Assert-ForcedCandidate `
             $App $Function $Candidate $StackSize $noStackCheck
         $arguments = @(
-            "-NoProfile",
-            "-File", $runall,
-            "-Apps", $App,
-            "-Mode", "full",
-            "-RunTimeout", $RunTimeout,
-            "-BuildDir", $buildDir,
-            "-NoRamDisk",
-            "-NoPerfCheck"
+            $runall,
+            "--apps", $App,
+            "--mode", "full",
+            "--timeout", $RunTimeout,
+            "--build-dir", $buildDir,
+            "--no-ram-disk",
+            "--no-perf-check"
         )
         if ($noStackCheck) {
-            $arguments += "-NoStackCheck"
+            $arguments += "--no-stack-check"
         }
-        & $pwsh @arguments
+        & $python @arguments
         if ($LASTEXITCODE -ne 0) {
             throw "$App.$Function failed with $Candidate ($configuration)"
         }

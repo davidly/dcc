@@ -3,8 +3,7 @@
 Each `bugNNN.c` here reproduces one open entry in
 [compiler-bugs.md](../../compiler-bugs.md) and is expected to **fail** with the
 current compiler: it is rejected, hangs, or prints the wrong output. They are
-kept out of `tests/*.c` so the regression suite (`scripts/runall.py`,
-`scripts/runall.ps1`) stays green; those runners only look at `tests/*.c`.
+kept out of `tests/*.c` so the regression suite (`scripts/runall.py`) stays green; those runners only look at `tests/*.c`.
 
 `baselines/bugNNN.txt` is the output the program should print. It is the host
 compiler's output, not dcc's.

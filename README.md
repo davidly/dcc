@@ -86,7 +86,7 @@ The repo copy and the personal copy are independent files, so re-copy after edit
 
 ma.bat and ma.sh are scripts to build your app. Run "ma foo" (or "ma.sh foo" on Linux/MacOS) to compile foo.c, optimize it, strip the DCCRTL.MAC runtime so unused code isn't included, assemble the generated FOO.MAC file, and link to FOO.COM. Use the "nopeep" argument like "ma foo nopeep" to not run the dccpeep peephole optimizer.
 
-runall.bat and runall.sh compile and run all 90+ test cases both optimized and unoptimized. The output of that run is compared with baseline_test_dcc.txt to check for regressions. It takes under two minutes to run on my two-year-old machine.
+Run `python3 scripts/runall.py --mode full` to build and run the regression suite in both optimized and unoptimized modes. The runner checks output against per-app baselines and checks cycle counts and binary sizes against the performance baselines.
 
 The test apps validate compiler correctness and performance. Some test apps are small and exercise a single compiler feature. Others are larger; tchess.c plays chess (not very well) and with the -c argument can play against itself. 
 
@@ -108,7 +108,7 @@ Linux typically is configured to have case-sensitive filenames. CP/M files are u
 The aggregate-swap optimization recognizes both register-only and spilled
 first-copy sequences emitted by dcc. Run `pwsh scripts/run-dccpeep-tests.ps1`
 to check its matching guards and
-`pwsh scripts/runall.ps1 -Apps tszswap -Mode full` to exercise stable sorting
+`python3 scripts/runall.py --apps tszswap --mode full` to exercise stable sorting
 of 13-byte records with unsigned 16-bit keys in both optimization modes.
 
 ### usage: dccrtlstrip [-k symbol ...] -r dccrtl.mac -o rtlmin.mac app.mac [app2.mac ...]
@@ -163,7 +163,7 @@ under CP/M emulation - no ntvcm involved for that step. L80 is still real M80
 Assembler-product software and still runs under ntvcm, since only the assembler
 was reimplemented. Pass `dcc-use-emulated-m80=true` to dccmake, `-femulated-m80`
 directly to dccmake, `--emulated-m80`/`-EmulatedM80` to ma.sh/ma.ps1, or
-`-UseEmulatedM80` to runall.ps1/runall-extended.ps1, to assemble with the real
+`--emulated-m80` to the Python regression runner, to assemble with the real
 M80.COM under ntvcm instead (e.g. to cross-check output, or if m80c hasn't been
 built locally).
 
@@ -291,7 +291,7 @@ Once both projects are built, set up your environment as shown in the next secti
 
 ## Setting up your environment
 
-The build scripts (`ma.sh`, `ma.bat`, `runall.sh`, `runall.bat`) resolve each
+The build scripts (`ma.sh`, `ma.bat`) resolve each
 tool the same way: they use an environment variable if you set one, otherwise
 they look for the tool on your `PATH`. The relevant tools are `dcc`, `dccpeep`,
 `dccrtlstrip`, `m80c`, `ntvcm`, and the `l80` linker (and `m80`, only if you
@@ -348,4 +348,4 @@ set PATH=%PATH%;C:\path\to\dcc;C:\path\to\ntvcm
 As with macOS/Linux, putting the dcc directory on `PATH` means `dcc`,
 `dccpeep`, and `dccrtlstrip` are found automatically; the `DCC`/`DCCPEEP`/
 `DCCRTLSTRIP` variables are only needed if you want to pin specific binaries.
-Then use `ma.bat` and `runall.bat` to build and test your apps.
+Use `ma.bat` to build an app, and `python3 scripts/runall.py` from the repository root to run the regression suite.

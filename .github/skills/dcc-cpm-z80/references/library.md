@@ -247,7 +247,7 @@ the printf-family long-I/O override.
 
 ntvcm's filename mapper **asserts on any on-disk extension longer than 3
 characters**, so delete stray `.DS_Store` files before directory-enumeration
-tests or a full `runall.sh` (VS Code / file search may hide them).
+tests or a full `python3 scripts/runall.py --mode full` (VS Code / file search may hide them).
 
 ### Stack-depth check
 
