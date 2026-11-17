@@ -96,12 +96,14 @@ static int32_t decremented_in_loop(void)
 
 int main(void)
 {
+    uint16_t result;
     printf("from parameter %u\n", (unsigned)from_parameter(300));
     printf("from global %u\n", (unsigned)from_global());
     printf("signed from unsigned %u\n", (unsigned)signed_from_unsigned());
     printf("decrement %u\n", (unsigned)decrement(300));
     printf("equality %u\n", (unsigned)equality(300));
-    printf("stored %u %u\n", (unsigned)stored(300), (unsigned)out);
+    result = stored(300);
+    printf("stored %u %u\n", (unsigned)result, (unsigned)out);
     printf("updated in loop %ld\n", (long)updated_in_loop());
     printf("decremented in loop %ld\n", (long)decremented_in_loop());
     return 0;

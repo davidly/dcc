@@ -46,13 +46,11 @@ class CompilerMutationTests(unittest.TestCase):
                 continue
             source = mutation.get("Source", "src/dcc/dcc_mir.c")
             self.source_text.setdefault(source, []).append(mutation["Before"])
-        self.source_text["src/dcc/dcc_mir.c"].append("""
-static int mir_promote_objects(void)
-mir_invalidate_use_cache();
-mir_invalidate_use_cache();
-mir_invalidate_use_cache();
-struct MirAllocationSummary
-""")
+        promotion = next(m for m in self.mutations if m["Name"] == "promotion-cache")
+        self.source_text["src/dcc/dcc_mir.c"].append(
+            "\nstatic int mir_promote_objects(void)\n" +
+            "mir_invalidate_use_cache();\n" * promotion["InvalidationCount"] +
+            "struct MirAllocationSummary\n")
         for relative, fragments in self.source_text.items():
             path = self.repo / relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -376,6 +374,16 @@ int main(int argc, char **argv) {
         finally:
             os.environ.clear();os.environ.update(previous)
 
+    def test_promotion_inventory_drift_is_invalid_not_a_kill(self):
+        source='src/dcc/dcc_mir.c'
+        self.source_text[source][-1]=self.source_text[source][-1].replace(
+            'struct MirAllocationSummary','mir_invalidate_use_cache();\nstruct MirAllocationSummary')
+        (self.repo/source).write_text('\n'.join(self.source_text[source]))
+        results=self.run_fixture(jobs=2,names=['promotion-cache'],expected_exit=1)
+        self.assertEqual([r['outcome'] for r in results],['passed','invalid'])
+        log=self.workspace/'output with spaces/promotion-cache/worker.log'
+        self.assertIn('Promotion invalidation mutation inventory changed',log.read_text())
+
     def test_worker_watchdog_stops_descendants(self):self.check_worker_cleanup(False)
     def test_exited_worker_cleans_nested_process_scopes(self):self.check_worker_cleanup(True)
 
@@ -471,6 +479,14 @@ class CampaignPolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Unknown compiler mutation'):
                 mutations.campaign(output,names=['not-a-mutation'])
             self.assertEqual(evidence.read_text(),'existing evidence')
+
+    def test_promotion_cache_mutation_pins_current_invalidation_inventory(self):
+        mutation=next(m for m in self.mutations if m['Name']=='promotion-cache')
+        source=(ROOT/'src/dcc/dcc_mir.c').read_text()
+        begin=source.index('static int mir_promote_objects(void)')
+        end=source.index('struct MirAllocationSummary',begin)
+        self.assertEqual(source[begin:end].count('mir_invalidate_use_cache();'),mutation['InvalidationCount'])
+        self.assertGreater(mutation['InvalidationCount'],0)
 
     def test_output_lock_refuses_competing_campaign_without_overwriting(self):
         with tempfile.TemporaryDirectory() as folder:

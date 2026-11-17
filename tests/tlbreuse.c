@@ -45,9 +45,12 @@ static int8_t fourth(void)
 
 int main(void)
 {
+    int8_t result;
     printf("first %u\n", (unsigned)first());
     printf("second %u\n", (unsigned)second());
-    printf("third %d %u\n", (int)third(), (unsigned)low);
-    printf("fourth %d %u\n", (int)fourth(), (unsigned)low);
+    result = third();
+    printf("third %d %u\n", (int)result, (unsigned)low);
+    result = fourth();
+    printf("fourth %d %u\n", (int)result, (unsigned)low);
     return 0;
 }

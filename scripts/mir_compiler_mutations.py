@@ -94,7 +94,8 @@ def worker(repo,workspace,output,name,build_jobs):
             end=text.find('struct MirAllocationSummary',begin)
             if end<=begin:raise RuntimeError('Promotion mutation end changed')
             body=text[begin:end]
-            if body.count('mir_invalidate_use_cache();')!=3:raise RuntimeError('Promotion invalidation mutation inventory changed')
+            if body.count('mir_invalidate_use_cache();')!=mutation['InvalidationCount']:
+                raise RuntimeError('Promotion invalidation mutation inventory changed')
             text=text[:begin]+body.replace('mir_invalidate_use_cache();','(void)0;')+text[end:]
         source.write_text(text)
         spec=importlib.util.spec_from_file_location('mir_fuzz_source',repo/'scripts/new-mir-fuzz-source.py')

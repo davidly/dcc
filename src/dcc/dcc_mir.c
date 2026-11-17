@@ -3305,11 +3305,29 @@ static int mir_lower_expr(const struct AstNode *node)
         return -1;
     if (mir_expr_depth == 0) {
         int target = mir_expr_root_target;
+        int owns_preflight =
+            !mir_ast_preflight_contains(mir_active_ast_preflight, node);
+
         mir_expr_root_target = 0;
+        /* sizeof refinement recursively walks children and resolves call
+         * prototypes. Validate structure first, including lists and cycles,
+         * then reuse this preflight while lowering the refined node types. */
+        if (owns_preflight) {
+            if (!mir_expr_ast_preflight(node, &preflight)) {
+                mir_ast_preflight_dispose(&preflight);
+                return mir_emit_opaque_expr(node);
+            }
+            saved_preflight = mir_active_ast_preflight;
+            mir_active_ast_preflight = &preflight;
+        }
         ast_sizeof_demote_expr(node, target);
         mir_expr_depth++;
         value = mir_lower_expr(node);
         mir_expr_depth--;
+        if (owns_preflight) {
+            mir_active_ast_preflight = saved_preflight;
+            mir_ast_preflight_dispose(&preflight);
+        }
         return value;
     }
     if (mir_ast_preflight_contains(mir_active_ast_preflight, node))

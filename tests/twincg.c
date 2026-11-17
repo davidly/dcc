@@ -88,10 +88,14 @@ int main(void)
 {
     int32_t r;
     uint32_t u;
-    printf("post-increment %ld %ld\n", (long)post_increment(), (long)g);
-    printf("add one %ld %ld\n", (long)add_one(), (long)g);
-    printf("assigned pre-increment %ld %ld\n", (long)assigned_pre_increment(), (long)g);
-    printf("after goto %ld %ld\n", (long)after_goto(), (long)g);
+    r = post_increment();
+    printf("post-increment %ld %ld\n", (long)r, (long)g);
+    r = add_one();
+    printf("add one %ld %ld\n", (long)r, (long)g);
+    r = assigned_pre_increment();
+    printf("assigned pre-increment %ld %ld\n", (long)r, (long)g);
+    r = after_goto();
+    printf("after goto %ld %ld\n", (long)r, (long)g);
     r = assigned_add();
     printf("assigned add %ld %ld\n", (long)r, (long)g);
     u = unsigned_wrap();

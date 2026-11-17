@@ -30,7 +30,7 @@ long add_high_word(long v)
 
 int main()
 {
-    check(widen_then_add_zero(-14), 0xfffffff2UL, __LINE__);
+    check(widen_then_add_zero(-14), (unsigned long)-14L, __LINE__);
     check((unsigned long)add_high_word(-1L), 0x0fffffffUL, __LINE__);
     if (fails == 0)
         printf("tzeroadc passed\n");

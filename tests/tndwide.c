@@ -48,8 +48,12 @@ static int32_t global_bound(void)
 
 int main(void)
 {
-    printf("signed %ld %u\n", (long)signed_counter(), (unsigned)passes);
-    printf("unsigned %ld %u\n", (long)unsigned_counter(), (unsigned)passes);
-    printf("global bound %ld %u\n", (long)global_bound(), (unsigned)passes);
+    int32_t result;
+    result = signed_counter();
+    printf("signed %ld %u\n", (long)result, (unsigned)passes);
+    result = unsigned_counter();
+    printf("unsigned %ld %u\n", (long)result, (unsigned)passes);
+    result = global_bound();
+    printf("global bound %ld %u\n", (long)result, (unsigned)passes);
     return 0;
 }

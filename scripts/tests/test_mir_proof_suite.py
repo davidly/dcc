@@ -80,6 +80,14 @@ class ProofSuiteTests(unittest.TestCase):
         outputs=[a for command in cmake for a in command if a.startswith('-DDCC_RUNTIME_OUTPUT_DIRECTORY=')]
         self.assertEqual(len(outputs),3)
         self.assertTrue(all(str(output) in a and a.endswith('bin') for a in outputs))
+        for item in tasks:
+            if item['phase'] < 3:continue
+            configuration='Release' if item['phase']==3 else 'Debug'
+            build=item['commands'][1]['argv']
+            self.assertEqual(build[build.index('--config')+1],configuration)
+            if item['phase']!=3:
+                test=item['commands'][2]['argv']
+                self.assertEqual(test[test.index('-C')+1],configuration)
         sanitized=next(t for t in tasks if t['phase']==5)
         self.assertIn('-DCMAKE_C_COMPILER=clang-18',sanitized['commands'][0]['argv'])
         self.assertIn('-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer',sanitized['commands'][0]['argv'])

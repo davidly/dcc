@@ -66,7 +66,8 @@
   },
   {
     "Name": "promotion-cache",
-    "CompileProbe": true
+    "CompileProbe": true,
+    "InvalidationCount": 7
   },
   {
     "Name": "global-field-vn-cache",

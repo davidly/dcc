@@ -28,7 +28,9 @@ static int32_t signed_local(void)
 
 int main(void)
 {
-    printf("unsigned %ld %u\n", (long)unsigned_local(), (unsigned)low);
+    int32_t result;
+    result = unsigned_local();
+    printf("unsigned %ld %u\n", (long)result, (unsigned)low);
     printf("signed %ld\n", (long)signed_local());
     return 0;
 }

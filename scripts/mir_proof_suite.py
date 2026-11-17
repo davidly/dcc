@@ -168,9 +168,10 @@ def preparation_tasks(output,jobs,compiler):
         directory=output/folder
         configure=['cmake','-S',source,'-B',directory]+options
         if phase in (3,4,5):configure+=['-DDCC_RUNTIME_OUTPUT_DIRECTORY='+str(directory/'bin')]
+        configuration='Release' if phase==3 else 'Debug'
         commands=[cmd('configure '+PHASES[phase-1],configure),
-                  cmd('build '+PHASES[phase-1],['cmake','--build',directory,'--parallel',threads])]
-        if run_tests:commands.append(cmd('run '+PHASES[phase-1],['ctest','--test-dir',directory,'--parallel',threads,'--output-on-failure'],env))
+                  cmd('build '+PHASES[phase-1],['cmake','--build',directory,'--config',configuration,'--parallel',threads])]
+        if run_tests:commands.append(cmd('run '+PHASES[phase-1],['ctest','--test-dir',directory,'-C',configuration,'--parallel',threads,'--output-on-failure'],env))
         tasks.append(task(phase,PHASES[phase-1],commands))
     return tasks
 
