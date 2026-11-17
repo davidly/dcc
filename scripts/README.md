@@ -61,6 +61,24 @@ the positive and negative matcher controls. Their PowerShell entry points and
 the old mutation worker/module are retired. The PowerShell process-supervision
 module remains for the clobber runner until that runner is ported.
 
+## Native compiler proof probes
+
+The following Python 3.7+ entry points share `mir_probes.py` and replace their
+PowerShell versions:
+
+- `test-ast-dump.py`: AST diagnostics and retired rollout-control isolation.
+- `test-mir-candidate-matrix.py`: all 12 candidate rows across eight probes.
+- `test-mir-pointer-condition-mutations.py`: all 85 source mutations.
+- `test-mir-scope-block-mutations.py`: four controls and 27 semantic mutations.
+- `test-mir-require-emit.py`: strict emission, diagnostics and oversized boundary.
+- `run-mir-lifetime-tests.py`: both forced candidates in both stack configurations,
+  running the application suite in both optimization modes.
+
+Use `python scripts/<name>.py --dcc /path/to/dcc` to choose a compiler.
+`run-mir-lifetime-tests.py --timeout N` controls application timeouts;
+`test-mir-require-emit.py --build-dir DIR` retains its diagnostic artifacts.
+Child environment overrides leave the caller's environment unchanged.
+
 ## `runall.py`
 
 Native Python 3 runner for the standard build, emulator, baseline, fixture,
@@ -682,8 +700,9 @@ python scripts/prepush.py
 
 It runs the build-diagnostic regression checks, native compiler baseline validation
 (`validate-unit-test.py`), then the comprehensive MIR proof suite described below.
-The build-diagnostic and native-baseline gates use Python 3.7+. The MIR proof
-suite still uses PowerShell 7, so the complete pre-push gate still requires it.
+The entry points and native proof probes use Python 3.7+. The final coverage
+workflow still invokes the PowerShell clobber runner, so a complete pre-push run
+currently requires PowerShell 7 and sh. `--list` needs only Python.
 Native validation honors the host-only exclusions in `tests/_test_overrides.json`
 and uses `-Jobs` and `--timeout` for its worker and timeout limits.
 The MIR proof suite includes strict `--mode full -Extended`
@@ -705,7 +724,7 @@ unversioned `clang` command and resolves matching coverage tools. Set `CC`
 explicitly to choose a different toolchain (for example,
 `CC=clang-18 python scripts/prepush.py` in a POSIX shell).
 
-## `run-mir-proof-suite.ps1`
+## `run-mir-proof-suite.py`
 
 Runs every maintained AST/MIR proof gate through one phase-gated command:
 canonical and independent builds, script/static audits, normal and sanitized
@@ -714,8 +733,16 @@ no-stack release suites, the extended MIR census, and the complete instrumented
 coverage workflow.
 
 ```sh
-pwsh ./scripts/run-mir-proof-suite.ps1
+python scripts/run-mir-proof-suite.py
 ```
+
+The Python 3.7+ runner preserves all 11 phases, LLVM companion version checks,
+bounded preparation/release groups, and the `receipt.json` phase timestamps.
+`--list` works without PowerShell or other build tools. `--jobs`,
+`--mutation-jobs`, `--mutation-build-jobs`, `--timeout`, `--output-directory`,
+`--require-complete`, and `--all` have the original PowerShell-style aliases.
+The final coverage workflow still requires sh and PowerShell for its clobber
+runner; the aggregate entry point itself does not launch PowerShell.
 
 The runner uses all detected processors by default and retains each run below
 a unique `build/mir-proof-suite-*` directory. Use `-List` to inspect the

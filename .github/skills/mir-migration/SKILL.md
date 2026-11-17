@@ -191,7 +191,7 @@ the fix.
 ## Tooling and release checks
 
 ```sh
-pwsh ./scripts/test-mir-require-emit.ps1
+python scripts/test-mir-require-emit.py
 DCC_MIR_REQUIRE_EMIT=1 python3 scripts/mir-extended-census.py \
   --mode both --require-complete --output build/mir-extended.tsv
 python3 scripts/rtl-iy-safety.py

@@ -110,11 +110,38 @@ class SupervisionTests(unittest.TestCase):
         other=self.start('import time;time.sleep(30)')
         other.stop();other.stop();self.gone(other.process.pid)
 
+    def test_interrupted_wait_kills_owned_process_before_removing_registration(self):
+        child=self.start('import time;print("interrupted-start",flush=True);time.sleep(30)',log=self.root/'interrupt.log')
+        self.wait(lambda:bool(child.stdout.chunks))
+        with patch.object(child,'ready',side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):child.complete()
+        self.gone(child.process.pid)
+        self.assertFalse(child.scope.exists())
+        self.assertIn('interrupted-start',(self.root/'interrupt.log').read_text())
+
     def test_empty_path_needs_no_setsid_perl_or_powershell(self):
         child=self.start('print(43)',environment={'PATH':str(self.root/'empty')})
         result=child.complete()
         self.assertEqual(result['ExitCode'],0,result)
         self.assertFalse(result['TimedOut']);self.assertEqual(result['Output'].strip(),'43')
+
+    def test_cancel_during_nested_startup_leaves_no_owned_processes(self):
+        child_code='import os,pathlib,time;pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(30)'
+        # Each nested launcher is still starting while the first target reports.
+        code=('import sys,os,time;sys.path.insert(0,'+repr(str(ROOT/'scripts'))+');'
+              'from process_supervision import Process;children=[]\n'
+              'for i in range(12):\n'
+              ' children.append(Process([sys.executable,"-c","import sys;"+'+repr(child_code)+','+
+              repr(str(self.root/'startup-'))+'+str(i)],'+repr(str(self.root))+',parent_scope=os.environ["DCC_PROCESS_SCOPE"]))\n'
+              ' time.sleep(.005)\n'
+              'time.sleep(30)\n')
+        leader=self.start(code)
+        self.wait(lambda:any(p.stat().st_size for p in self.root.glob('startup-*')))
+        leader.stop()
+        pids=[int(p.read_text()) for p in self.root.glob('startup-*') if p.read_text().strip()]
+        self.assertTrue(pids)
+        for pid in pids:self.gone(pid)
+        self.assertFalse(list(self.root.rglob('process-id')))
 
     def test_nested_independent_session_is_cleaned_after_worker_exit(self):
         marker=self.root/'grandchild'

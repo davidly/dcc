@@ -94,7 +94,7 @@ jobs:
 
       - name: Test native build driver
         shell: bash
-        run: python -m unittest scripts.tests.test_build_dcc scripts.tests.test_ma scripts.tests.test_dccprof scripts.tests.test_prepush scripts.tests.test_validate_unit_test scripts.tests.test_runall_build_diagnostics scripts.tests.test_runall_tool_fixtures scripts.tests.test_runall_batches scripts.tests.test_mir_fuzz_source scripts.tests.test_process_supervision_python scripts.tests.test_mir_compiler_mutations.CampaignPolicyTests
+        run: python -m unittest scripts.tests.test_build_dcc scripts.tests.test_ma scripts.tests.test_dccprof scripts.tests.test_prepush scripts.tests.test_validate_unit_test scripts.tests.test_runall_build_diagnostics scripts.tests.test_runall_tool_fixtures scripts.tests.test_runall_batches scripts.tests.test_mir_fuzz_source scripts.tests.test_process_supervision_python scripts.tests.test_mir_compiler_mutations.CampaignPolicyTests scripts.tests.test_mir_proof_suite scripts.tests.test_mir_probes
 
       - name: Run main regression suite in both optimization modes
         # tdvbyte exhaustively checks 17,432,576 inputs through two helpers.

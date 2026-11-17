@@ -139,6 +139,9 @@ passed all 11 phases with:
 pwsh ./scripts/run-mir-proof-suite.ps1 -All -MutationJobs 0 -MutationBuildJobs 4 -RunTimeout 60
 ```
 
+That historical receipt used the PowerShell entry point. Its current equivalent
+is `python scripts/run-mir-proof-suite.py` with the same option aliases.
+
 Native and HTML evidence under its `compiler-coverage/report/` agrees:
 
 | Metric | Whole compiler | Selected production AST/MIR |

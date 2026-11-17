@@ -195,7 +195,7 @@ def campaign(output,jobs=1,build_jobs=2,worker_timeout=2100,names=()):
                     command=start([sys.executable,str(ROOT/'scripts/run-mir-compiler-mutation-worker.py'),
                         '--repo-root',str(ROOT),'--workspace',str(workspace/case['Name']),
                         '--output-directory',str(directory),'--name',case['Name'],'--build-jobs',str(build_jobs)],
-                        directory,directory/'worker.log')
+                        directory,directory/'worker.log',parent_scope=os.environ.get('DCC_PROCESS_SCOPE'))
                     active.append((next_case,command,directory/'result.json'));next_case+=1
                 if not active:break
                 completed=[item for item in active if item[1].ready(worker_timeout)]

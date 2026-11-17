@@ -81,6 +81,8 @@ class Process:
     def __init__(self,argv,cwd,log=None,environment=None,remove_environment=(),parent_scope=None,drain_timeout=5):
         if not 0.01 <= drain_timeout <= 86400:raise ValueError('invalid drain timeout')
         cwd=Path(cwd).resolve()
+        self._ownership_lock=threading.RLock()
+        self._owned_stopped=False
         self.started=time.monotonic()
         self.completed=False
         self.result=None
@@ -108,10 +110,9 @@ class Process:
         request.write_text(json.dumps({'argv':list(map(str,argv)),'scope':str(self.scope),'job':job_name}))
         try:
             if os.name=='nt':self.job=windows_job(job_name,create=True)
-            options={'creationflags':subprocess.CREATE_NEW_PROCESS_GROUP} if os.name=='nt' else {'start_new_session':True}
+            options={'creationflags':subprocess.CREATE_NEW_PROCESS_GROUP} if os.name=='nt' else {}
             self.process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--launch',str(request)],
                 cwd=str(cwd),env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,**options)
-            (self.scope/'process-id').write_text(str(self.process.pid))
             self.stdout=Capture(self.process.stdout)
             self.stderr=Capture(self.process.stderr)
         except BaseException:
@@ -134,28 +135,42 @@ class Process:
         return self.elapsed>=timeout or (self.drain_deadline is not None and self.elapsed>=self.drain_deadline)
 
     def kill_owned(self):
-        if self.job:
-            k,handle=self.job
-            if not k.TerminateJobObject(handle,1):
-                import ctypes
-                raise ctypes.WinError(ctypes.get_last_error())
-        else:
-            # Kill the outer session first so it cannot schedule more nested work.
-            paths=[self.scope/'process-id']+list(self.scope.rglob('children/**/process-id'))
-            for path in paths:
-                try:
-                    pid=int(path.read_text())
-                    os.killpg(pid,signal.SIGKILL)
-                except FileNotFoundError:pass
+        with self._ownership_lock:
+            if self._owned_stopped:return
+            if self.job:
+                k,handle=self.job
+                if not k.TerminateJobObject(handle,1):
+                    import ctypes
+                    raise ctypes.WinError(ctypes.get_last_error())
+            else:
+                def terminate(pid):
+                    # A registered bootstrap may not have moved into its own
+                    # session yet. Kill both forms, including a transition race.
+                    for action in (os.killpg,os.kill,os.killpg):
+                        try:action(pid,signal.SIGKILL)
+                        except ProcessLookupError:pass
+                        except PermissionError:pass
+                terminate(self.process.pid)
+                def descendants(scope):
+                    # Stop each parent before listing its children, so it cannot
+                    # register new independent sessions behind the traversal.
+                    directory=scope/'children'
+                    if not directory.is_dir():return
+                    for child in list(directory.iterdir()):
+                        try:pid=int((child/'process-id').read_text())
+                        except (FileNotFoundError,ValueError):pass # bootstrap still shared its parent's group
+                        else:terminate(pid)
+                        descendants(child)
+                descendants(self.scope)
+            if self.process.poll() is None:
+                try:self.process.kill()
                 except ProcessLookupError:pass
-                except PermissionError:pass # A reused PID owned by another user is never ours.
-        if self.process.poll() is None:
-            try:self.process.kill()
-            except ProcessLookupError:pass
+            self._owned_stopped=True
 
     def close_job(self):
-        if self.job:
-            k,handle=self.job;k.CloseHandle(handle);self.job=None
+        with self._ownership_lock:
+            if self.job:
+                k,handle=self.job;k.CloseHandle(handle);self.job=None
 
     def remove_scope(self):
         import shutil
@@ -180,7 +195,17 @@ class Process:
                          'TimedOut':timed,'Output':text}
             return self.result
         finally:
-            self.close_job()
+            try:
+                self.kill_owned() # Also clean up if interrupted before normal completion.
+            finally:
+                self.close_job()
+            # An interrupted wait still needs a bounded reap/drain before closing.
+            deadline=time.monotonic()+1
+            try:self.process.wait(timeout=max(0,deadline-time.monotonic()))
+            except subprocess.TimeoutExpired:pass
+            for capture in (self.stdout,self.stderr):capture.done.wait(max(0,deadline-time.monotonic()))
+            if self.log and self.result is None:
+                with self.log.open('w',newline='') as log:log.write(self.stdout.text()+self.stderr.text())
             # Readers own their descriptors until EOF; never block on a held pipe.
             for capture in (self.stdout,self.stderr):
                 if capture.done.is_set():capture.stream.close()
@@ -198,6 +223,9 @@ def launch(request_path):
         if os.name=='nt':job=windows_job(request['job'])
         scope=Path(request['scope'])
         (scope/'process-id').write_text(str(os.getpid()))
+        # Registration must precede session separation: a cancelled parent can
+        # then find us, or kill us in its group before registration completes.
+        if os.name!='nt':os.setsid()
         (scope/'ready').touch()
         if os.name!='nt':
             os.execvpe(request['argv'][0],request['argv'],os.environ)

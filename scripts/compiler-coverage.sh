@@ -174,12 +174,12 @@ DCC_MIR_PREFER_REGIONAL=1 python3 scripts/runall.py \
 "$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1 \
     -Jobs "$clobber_jobs" -BuildTimeout "$clobber_build_timeout" \
     -ExecutionManifest "$report_dir/mir-clobber-executions.json"
-"$pwsh_cmd" -NoProfile -File scripts/run-mir-lifetime-tests.ps1
-"$pwsh_cmd" -NoProfile -File scripts/test-mir-require-emit.ps1 -Dcc "$DCC"
-"$pwsh_cmd" -NoProfile -File scripts/test-ast-dump.ps1 -Dcc "$DCC"
-"$pwsh_cmd" -NoProfile -File scripts/test-mir-candidate-matrix.ps1 -Dcc "$DCC"
-"$pwsh_cmd" -NoProfile -File scripts/test-mir-pointer-condition-mutations.ps1 -Dcc "$DCC"
-"$pwsh_cmd" -NoProfile -File scripts/test-mir-scope-block-mutations.ps1 -Dcc "$DCC"
+python3 scripts/run-mir-lifetime-tests.py
+python3 scripts/test-mir-require-emit.py -Dcc "$DCC"
+python3 scripts/test-ast-dump.py -Dcc "$DCC"
+python3 scripts/test-mir-candidate-matrix.py -Dcc "$DCC"
+python3 scripts/test-mir-pointer-condition-mutations.py -Dcc "$DCC"
+python3 scripts/test-mir-scope-block-mutations.py -Dcc "$DCC"
 # Retain one opt-in reference path until the new scheduler has a complete
 # immutable timing comparison.
 if [ "${DCC_COVERAGE_LEGACY_CAMPAIGNS:-0}" = 1 ]; then

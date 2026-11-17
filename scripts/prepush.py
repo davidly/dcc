@@ -2,14 +2,13 @@
 """Run the complete local pre-push gate (Python 3.7+).
 
 Stops at the first failed gate and returns its status; does not commit or push.
-The MIR proof subtools still require PowerShell 7. The diagnostic and host
-validation gates use Python. All validation coverage is retained.
+All entry points use Python. The final coverage/clobber subtools still require
+PowerShell 7 and sh until those dependencies are migrated. Coverage is retained.
 Use --list to inspect the gate inventory without running the validation.
 """
 import argparse
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 
@@ -37,18 +36,17 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def gate_commands(args, pwsh):
-    prefix = [pwsh, '-NoLogo', '-NoProfile', '-File']
-    proof = prefix + ['scripts/run-mir-proof-suite.ps1', '-Jobs', str(args.jobs),
-                       '-MutationJobs', str(args.mutation_jobs),
-                       '-MutationBuildJobs', str(args.mutation_build_jobs),
-                       '-RunTimeout', str(args.timeout)]
+def gate_commands(args):
+    proof = [sys.executable, 'scripts/run-mir-proof-suite.py', '--jobs', str(args.jobs),
+                       '--mutation-jobs', str(args.mutation_jobs),
+                       '--mutation-build-jobs', str(args.mutation_build_jobs),
+                       '--timeout', str(args.timeout)]
     if args.output_directory:
-        proof += ['-OutputDirectory', args.output_directory]
+        proof += ['--output-directory', args.output_directory]
     if args.require_complete:
-        proof.append('-RequireComplete')
+        proof.append('--require-complete')
     if args.list:
-        proof.append('-List')
+        proof.append('--list')
     return [
         ('Build-diagnostic regression checks', [sys.executable, '-m', 'unittest', 'scripts.tests.test_runall_build_diagnostics']),
         ('Native compiler baseline validation', [sys.executable, 'scripts/validate-unit-test.py',
@@ -59,15 +57,10 @@ def gate_commands(args, pwsh):
 
 def main(argv=None):
     args = parse_args(argv)
-    # Never silently omit the remaining PS-only proof gates.
-    pwsh = shutil.which('pwsh')
-    if not pwsh:
-        print('ERROR: PowerShell 7 (pwsh) is still required by the MIR proof subtools.', file=sys.stderr)
-        return 1
     try:
-        for label, command in gate_commands(args, pwsh):
+        for index, (label, command) in enumerate(gate_commands(args)):
             print(label if args.list else 'Running ' + label, flush=True)
-            if args.list and command[-1] != '-List':
+            if args.list and index < 2:
                 continue
             result = subprocess.run(command, cwd=str(ROOT))
             if result.returncode:
