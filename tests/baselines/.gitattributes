@@ -1,5 +1,5 @@
 # Baseline files store exact expected program output and are compared by the
-# test harness (scripts/runall.ps1). Lock them to LF on all platforms so a
+# test harness (scripts/runall.py). Lock them to LF on all platforms so a
 # Windows checkout with core.autocrlf=true does not rewrite them to CRLF and
 # cause spurious mismatches.
 *.txt -text eol=lf

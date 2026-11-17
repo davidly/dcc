@@ -1561,9 +1561,8 @@ static int parse_quoted_argv(char *buf, char **argv, int max_argv)
 }
 
 /* Bypasses cmd.exe entirely via _spawnvp (-> CreateProcess directly). system()
- * on Windows always shells out through "cmd.exe /c <cmd>", which
- * scripts/bench-pwsh-overhead.ps1 measured at ~7ms of pure shell-launch
- * overhead per call on native Windows - multiplied by the 6 run_cmd/
+ * on Windows always shells out through "cmd.exe /c <cmd>", adding measurable
+ * shell-launch overhead per call - multiplied by the 6 run_cmd/
  * run_cmd_in_dir calls in a single app build, across a few hundred apps in
  * the full suite, that's tens of seconds of overhead with no relation to
  * the actual work being done. _spawnvp needs a plain argv array rather than

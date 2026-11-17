@@ -518,7 +518,7 @@ extern int opt_no_narrow;   /* -fno-narrow: disable every int-array/scalar/for-c
                               * byte-narrowing pass (dcc_array_narrow.c), so a build can be
                               * diffed against a normal one to isolate a narrowing-introduced
                               * output difference from any other cause - see
-                              * scripts/runall.ps1 -NarrowDiff. */
+                              * scripts/runall.py -NarrowDiff. */
 extern int opt_debug;       /* -g: emit source-level debug annotations */
 extern int opt_debug_lines; /* -gline: optimized code with line/function annotations only */
 #define DEBUG_METADATA_ENABLED (opt_debug || opt_debug_lines)

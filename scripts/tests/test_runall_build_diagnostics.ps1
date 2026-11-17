@@ -1,11 +1,9 @@
 #Requires -Version 7
-# Exercise the actual serial/parallel worker functions with a successful fake
-# build and an existing COM file, so exit status/artifact checks cannot mask
-# a missing diagnostic check. No compiler or emulator is launched.
+# Exercise extended-suite build diagnostics with successful fake builds.
+# No compiler or emulator is launched.
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 foreach ($entry in @(
-    @('scripts/runall.ps1', 'Invoke-DccMakeBuild'),
     @('scripts/runall-extended.ps1', 'Invoke-ExtendedTest')
 )) {
     $tokens = $null
@@ -59,9 +57,6 @@ try {
             # These diagnostics are injected failure oracles, not actual
             # compiler errors. Hide Write-Host output from the worker while
             # retaining its return value and unexpected errors.
-            $actual = Invoke-DccMakeBuild -Name fixture -SourcePath $source -BuildDir $scratch -Mode $mode -Quiet 6>$null
-            if ($actual -ne $sample.Pass) { throw "Main suite accepted/rejected incorrectly: $mode $($sample.Text)" }
-            $checks++
         }
         $script:emulatorCalls = 0
         $result = Invoke-ExtendedTest -Case $case -Modes @('fast', 'nopeep') -BuildDir $scratch -RepoRoot $repoRoot -Emulator fake-emulator -RunTimeout 1

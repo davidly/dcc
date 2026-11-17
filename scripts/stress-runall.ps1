@@ -1,13 +1,13 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Stress-test the test suite by running runall.ps1 repeatedly, stopping on the
+Stress-test the test suite by running runall.py repeatedly, stopping on the
 first failure.
 
 .DESCRIPTION
-Runs scripts/runall.ps1 up to -Iterations times. Each iteration cleans the
+Runs scripts/runall.py up to -Iterations times. Each iteration cleans the
 per-app build directories first, then runs the suite (in parallel by default).
-The loop stops immediately when an iteration fails (runall.ps1 exits non-zero),
+The loop stops immediately when an iteration fails (runall.py exits non-zero),
 printing which iteration broke and the failing detail lines from its log.
 
 Useful for shaking out intermittent/flaky failures (e.g. CPU-bound tests under
@@ -52,13 +52,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Resolve repo root (parent of the scripts folder) and run from there so
-# runall.ps1 sees tests/, build/, DCCRTL.MAC, etc. at the expected paths.
+# The runner sees tests/, build/, DCCRTL.MAC, etc. at the expected paths.
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-$runall = Join-Path $PSScriptRoot "runall.ps1"
+$runall = Join-Path $PSScriptRoot "runall.py"
 if (-not (Test-Path $runall)) {
-    Write-Error "runall.ps1 not found at $runall"
+    Write-Error "runall.py not found at $runall"
     exit 1
 }
 
@@ -70,7 +70,7 @@ if (-not (Test-Path $LogDir)) {
 }
 
 $mode = if ($Serial) { "serial" } else { "parallel (throttle = $ThrottleLimit)" }
-Write-Host "Stress-testing runall.ps1: up to $Iterations iterations, $mode" -ForegroundColor Cyan
+Write-Host "Stress-testing runall.py: up to $Iterations iterations, $mode" -ForegroundColor Cyan
 Write-Host "Logs: $LogDir" -ForegroundColor DarkGray
 Write-Host ""
 
@@ -86,13 +86,15 @@ for ($i = 1; $i -le $Iterations; $i++) {
     $log = Join-Path $LogDir "stress_$i.log"
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    $runArgs = @($runall)
-    if (-not $Serial) {
-        $runArgs += @("-Parallel", "-ThrottleLimit", $ThrottleLimit)
+    $runArgs = @($runall, "--verbose")
+    if ($Serial) {
+        $runArgs += "--serial"
+    } else {
+        $runArgs += @("--throttle-limit", "$ThrottleLimit")
     }
 
     # Run the suite, capturing all output to the per-iteration log.
-    & pwsh -NoProfile -File @runArgs *> $log
+    & python @runArgs *> $log
     $rc = $LASTEXITCODE
     $sw.Stop()
     $elapsedStr = "{0:0.0}s" -f $sw.Elapsed.TotalSeconds

@@ -15,7 +15,7 @@
 #                     tier (usually the census delta's "Focused validation"
 #                     command's app list)
 #
-# Each tier uses runall.ps1's own -FailFast so a single bad app aborts that
+# Each tier uses runall.py's own --fail-fast so a single bad app aborts that
 # tier immediately rather than running the rest of a doomed suite.
 #
 # Example:
@@ -41,12 +41,12 @@ python3 scripts/mir-migration-census.py \
     --fail-on-regression
 
 echo "== focused -Mode full ($apps) =="
-pwsh ./scripts/runall.ps1 -Apps "$apps" -Mode full -FailFast -RunTimeout 20
+python3 ./scripts/runall.py --apps "$apps" --mode full --fail-fast --timeout 20
 
 echo "== wide -Mode fast safety net =="
-pwsh ./scripts/runall.ps1 -Mode fast -FailFast -RunTimeout 20
+python3 ./scripts/runall.py --mode fast --fail-fast --timeout 20
 
 echo "== full -Mode full -Extended safety net =="
-pwsh ./scripts/runall.ps1 -Mode full -Extended -FailFast -RunTimeout 20
+python3 ./scripts/runall.py --mode full --extended --fail-fast --timeout 20
 
 echo "== all tiers passed for '${label}' =="

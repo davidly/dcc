@@ -110,7 +110,7 @@ python3 scripts/mir-migration-census.py \
   --fail-on-regression --extra-args=-fstack-check
 ```
 
-The census prints the exact focused `runall.ps1` app list. Validate that entire
+The census prints the exact focused `runall.py` app list. Validate that entire
 list in stack and no-stack full mode.
 
 For current-vs-parent generated candidates:
@@ -132,7 +132,7 @@ no-stack release gates.
 3. Form one falsifiable hypothesis and name the affected app/function.
 4. Inspect MIR, candidate output, and linked runtime profile.
 5. Make the smallest reusable change.
-6. Rebuild and run the cheapest focused `-Mode full` discriminator.
+6. Rebuild and run the cheapest focused `--mode full` discriminator.
 7. Compare censuses with `--fail-on-regression`.
 8. Run every changed app in strict stack and no-stack full mode.
 9. Use ASan/UBSan for CFG, liveness, allocation, recursive proof, or ownership
@@ -204,11 +204,11 @@ and both strict full+extended regression runs:
 
 ```sh
 DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
-  pwsh ./scripts/runall.ps1 -Mode full -Extended \
-  -RunTimeout 30 -FailuresOnly
+  python3 ./scripts/runall.py --mode full --extended \
+  --timeout 30 --failures-only
 DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
-  pwsh ./scripts/runall.ps1 -Mode full -Extended -NoStackCheck \
-  -RunTimeout 30 -FailuresOnly
+  python3 ./scripts/runall.py --mode full --extended --no-stack-check \
+  --timeout 30 --failures-only
 ```
 
 The maintainer runs `pwsh ./scripts/prepush.ps1` manually periodically for the

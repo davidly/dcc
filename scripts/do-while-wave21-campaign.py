@@ -193,19 +193,19 @@ def runtime_controls(root, jobs):
         DCC_MIR_REQUIRE_COMPLETE="1",
         DCC_MIR_REQUIRE_EMIT="1",
     )
-    for stack_args in ((), ("-NoStackCheck",)):
+    for stack_args in ((), ("--no-stack-check",)):
         run(
             [
-                "pwsh",
-                str(root / "scripts" / "runall.ps1"),
-                "-Apps",
+                "python3",
+                str(root / "scripts" / "runall.py"),
+                "--apps",
                 "tdowhile",
-                "-Mode",
+                "--mode",
                 "full",
                 *stack_args,
-                "-RunTimeout",
+                "--timeout",
                 "30",
-                "-FailuresOnly",
+                "--failures-only",
             ],
             root,
             env,
