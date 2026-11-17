@@ -1,6 +1,7 @@
 /* Guarded constant-zero division and remainder retain runtime operations,
- * including an int constant divided by a long zero (`3 / 0L`), which was
- * once rejected as unsupported. */
+ * including an int constant divided by a long zero (`3 / 0L`) and a
+ * complemented or negated one stored to a byte local (`~(72UL / 0UL)`), which
+ * were once rejected as unsupported. */
 #include <stdint.h>
 #include <stdio.h>
 
@@ -36,11 +37,24 @@ static void mixed_long(void)
     }
 }
 
+static uint8_t unary_byte(void)
+{
+    uint8_t local = 3;
+    static uint8_t kept = 4;
+
+    if (never) {
+        local = ~(72UL / 0UL);
+        kept = -(72L % 0L);
+    }
+    return local + kept;
+}
+
 int main(void)
 {
     in_assignment();
     printf("%d %d\n", in_return(), out);
     mixed_long();
     printf("%ld %d %ld\n", (long)wide, byte, 30 / 7L + 30 % 7L);
+    printf("%d\n", unary_byte());
     return 0;
 }

@@ -170,8 +170,16 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
                     ast_const_float_fold(n, &fv))
                     return 1;
             }
-            if (ast_node_is_const(n->a))
-                return 0;
+            /* A constant operand that does not fold (`~(72UL / 0UL)` on a
+             * branch that never runs) is computed like its operand. */
+            if (ast_node_is_const(n->a)) {
+                long cv;
+
+                return n->op != '!' && n->a->kind == AST_BINARY &&
+                       (n->a->op == '/' || n->a->op == '%') &&
+                       !ast_const_scalar_fold(n->a, &cv) &&
+                       ast_expr_supported(n->a);
+            }
             return ast_expr_supported(n->a);
         }
         /* A bare addressable identifier has a pointer-to-element result.
