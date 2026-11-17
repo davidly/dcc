@@ -8434,6 +8434,22 @@ static int mir_value_has_signedness_use(int value, int type, int depth)
     return 0;
 }
 
+/* A constant, possibly through conversions, negation or complement
+ * (`(short)-32768L`). */
+static int mir_value_is_constant_conversion(int value, int depth)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    if (definition == NULL || depth > 8)
+        return 0;
+    if (definition->opcode == MIR_CONST)
+        return 1;
+    return definition->opcode == MIR_UNARY &&
+           (definition->immediate == 0 || definition->immediate == '-' ||
+            definition->immediate == '~' || definition->immediate == '+') &&
+           mir_value_is_constant_conversion(definition->src1, depth + 1);
+}
+
 static int mir_unary_is_representation_identity(
     const struct MirInsn *insn, const struct MirInsn *source)
 {
@@ -8472,8 +8488,10 @@ static int mir_unary_is_representation_identity(
              source->type != insn->type &&
              type_ptr_depth(source->type) == 0 &&
              type_ptr_depth(insn->type) == 0 &&
-             mir_block_name_has_multiple_declared_types(
-                 mir.insns[instruction].name)))
+             (mir_block_name_has_multiple_declared_types(
+                  mir.insns[instruction].name) ||
+              (strstr(mir.insns[instruction].name, "#b") != NULL &&
+               mir_value_is_constant_conversion(insn->src1, 0)))))
             return 0;
     return 1;
 }
@@ -8719,6 +8737,29 @@ static int mir_deferred_function_pointer_call_is_well_ordered(
         mir.declared_proto_variadic[declaration]);
 }
 
+/* A narrow integer constant's value as an operand of a 4-byte operation:
+ * an operand lowering could not convert (a nested-block local's forwarded
+ * update) still widens by its own type, so the unsigned short constant
+ * whose bits are -68 is 65468 in `t + 1UL`, not -68. */
+static long mir_repaired_operand_constant(const struct MirInsn *constant,
+                                          int operand_type)
+{
+    int bytes = type_size(constant->type);
+    unsigned long mask;
+    unsigned long sign;
+    unsigned long bits;
+
+    if (type_size(operand_type) != 4 || (bytes != 1 && bytes != 2) ||
+        type_ptr_depth(constant->type) != 0)
+        return constant->immediate;
+    mask = bytes == 1 ? 0xffUL : 0xffffUL;
+    sign = bytes == 1 ? 0x80UL : 0x8000UL;
+    bits = (unsigned long)constant->immediate & mask;
+    if ((constant->type & TYPE_UNSIGNED) == 0 && (bits & sign) != 0)
+        bits |= ~mask;
+    return (long)bits;
+}
+
 static int mir_fold_repaired_integer_binary(struct MirInsn *insn)
 {
     struct MirInsn *left;
@@ -8742,11 +8783,15 @@ static int mir_fold_repaired_integer_binary(struct MirInsn *insn)
         (type_size(operand_type) != 2 && type_size(operand_type) != 4) ||
         !(compare
               ? mir_fold_constant_compare(
-                    (int)insn->immediate, left->immediate,
-                    right->immediate, operand_type, &folded)
+                    (int)insn->immediate,
+                    mir_repaired_operand_constant(left, operand_type),
+                    mir_repaired_operand_constant(right, operand_type),
+                    operand_type, &folded)
               : mir_fold_constant_binary(
-                    (int)insn->immediate, left->immediate,
-                    right->immediate, operand_type, &folded)))
+                    (int)insn->immediate,
+                    mir_repaired_operand_constant(left, operand_type),
+                    mir_repaired_operand_constant(right, operand_type),
+                    operand_type, &folded)))
         return 0;
     insn->opcode = MIR_CONST;
     insn->src1 = -1;
@@ -15188,6 +15233,28 @@ static int mir_narrow_demanded_right_shifts(void)
     return changed;
 }
 
+/* A narrow constant just folded from a unary that a long operation reads
+ * unconverted (a nested-block local's `22L <= ~k`) takes the operation's
+ * type, extended by its own, as the repair pass gives such constants. */
+static void mir_extend_folded_long_operand(int value)
+{
+    const struct MirInsn *use;
+    int use_index;
+
+    if (value < 0 || mir_value_use_count(value) != 1 ||
+        (use_index = mir_next_use(value, -1)) < 0)
+        return;
+    use = &mir.insns[use_index];
+    if (use->opcode != MIR_BINARY ||
+        type_size(use->secondary_offset) != 4 ||
+        type_ptr_depth(use->secondary_offset) != 0 ||
+        type_is_float(use->secondary_offset) ||
+        (use->src2 == value &&
+         (use->immediate == TOK_SHL || use->immediate == TOK_SHR)))
+        return;
+    mir_extend_deferred_constant(value, use->secondary_offset);
+}
+
 int mir_optimize_integer_expressions(void)
 {
     int changed = 0;
@@ -15199,7 +15266,10 @@ int mir_optimize_integer_expressions(void)
     mir_use_cache_scope_active = 0;
     mir_invalidate_use_cache();
     for (i = 0; i < mir.count; ++i) {
-        changed += mir_fold_repaired_integer_unary(&mir.insns[i]);
+        if (mir_fold_repaired_integer_unary(&mir.insns[i])) {
+            mir_extend_folded_long_operand(mir.insns[i].dst);
+            ++changed;
+        }
         changed += mir_fold_repaired_integer_binary(&mir.insns[i]);
     }
     changed += mir_narrow_demanded_right_shifts();
