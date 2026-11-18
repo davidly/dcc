@@ -25,10 +25,9 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-073](#bug-073) | #363 | wrong result | A pointer walk across an array produces the wrong global state |
 | [BUG-074](#bug-074) | #364 | hang (dccpeep, no stack check) | A pointer-walk loop hangs with peephole optimization and no stack check |
 
-Two findings remain open from the extended integer and float fuzz runs.
+One finding remains open from the extended integer and float fuzz runs.
 BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
 diagnostic are fixed below.
 
@@ -97,6 +96,19 @@ Found only in `peep` and `peep-nosc`; reduced and parked as
 `tests/known-bugs/bug072.c`.
 
 ## BUG-073
+
+**Fixed on `fix/fuzz-15001-22000`; promoted as `tests/twalksc.c`.**
+Declaration replay now checks block-local probe homes after publishing the
+replayed declaration type, so the probe's differently numbered object can be
+found. A home overlapping a live enclosing local is moved to the real replay
+slot. This also clears the independently reduced hang tracked below.
+Original seed 19187 passes in all four production modes. Restored integer
+seeds 1–300: 296 ok, 4 INVALID, zero FAIL. Both strict full+extended suites,
+existing performance checks, sanitized compiler probes, nine focused debug/type
+tests and the scope-mutation proof pass. The census changes only
+`tcmpabi:insertion_sort` (frame offsets; identical instruction count and size);
+its checked performance does not regress. Existing tests and baseline rows
+are unchanged.
 
 **A pointer walk across an array produces the wrong global state.** In the
 reduced seed 19187, a function-scope pointer advances from an array's first

@@ -5004,7 +5004,8 @@ static void mir_repair_overlapping_probe_home(const struct Sym *symbol)
     int size;
 
     if (scan_mode || !mir.declaration_active ||
-        g_func_pass.for_decl_seq < 0 || symbol->storage != SC_LOCAL)
+        (g_func_pass.for_decl_seq < 0 && strstr(symbol->name, "#b") == NULL) ||
+        symbol->storage != SC_LOCAL)
         return;
     object = mir_find_object(symbol->name);
     if (object < 0 || mir.objects[object].offset == symbol->offset)
@@ -5042,7 +5043,6 @@ void mir_note_declared_symbol(struct Sym *symbol)
     int is_new;
     if (!mir.active || symbol == NULL)
         return;
-    mir_repair_overlapping_probe_home(symbol);
     for (i = 0; i < mir.declared_count; ++i)
         if (strcmp(mir.declared_names[i], symbol->name) == 0)
             break;
@@ -5108,6 +5108,10 @@ void mir_note_declared_symbol(struct Sym *symbol)
     mir.declared_proto_variadic[i] = symbol->proto_variadic;
     memcpy(mir.declared_proto_types[i], symbol->proto_types,
            sizeof(mir.declared_proto_types[i]));
+    /* Block replay can number the declaration differently from its support
+     * probe. Publish its type first so object lookup can match that probe's
+     * source name, then reject a home overlapping an enclosing live local. */
+    mir_repair_overlapping_probe_home(symbol);
 }
 
 void mir_note_narrowed_for_counter(void)
