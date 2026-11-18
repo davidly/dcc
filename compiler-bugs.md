@@ -25,11 +25,10 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-072](#bug-072) | #362 | wrong result (dccpeep) | Peephole mode changes a loop condition involving a conditional bit-field return |
 | [BUG-073](#bug-073) | #363 | wrong result | A pointer walk across an array produces the wrong global state |
 | [BUG-074](#bug-074) | #364 | hang (dccpeep, no stack check) | A pointer-walk loop hangs with peephole optimization and no stack check |
 
-Three findings remain open from the extended integer and float fuzz runs.
+Two findings remain open from the extended integer and float fuzz runs.
 BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
 diagnostic are fixed below.
 
@@ -78,6 +77,15 @@ Found in float seeds 16106, 16938, 17444, 17844, 18197, 18810, 19134, 19575,
 seed 17844 is parked as `tests/known-bugs/bug071.c`.
 
 ## BUG-072
+
+**Fixed on `fix/fuzz-15001-22000`; promoted as `tests/tpebool.c`.**
+The peephole boolean-suffix rewrite now requires opposite constants on its
+paths. Equal constants cannot be routed to opposite successors. A new
+`bool-suffix-equal` fixture covers both 0/0 and 1/1 with z/nz branches.
+Original seed 15807 passes in all four production modes. Restored integer
+seeds 1–300: 299 ok, 1 INVALID, zero FAIL. Both strict full+extended suites,
+peephole fixture/idempotence checks, host proof and line-debug tests pass;
+existing unit tests and performance rows are unchanged.
 
 **With `dccpeep`, a loop condition involving a conditional unsigned bit-field
 return produces a different program state.** The reduced seed 15807 compares a

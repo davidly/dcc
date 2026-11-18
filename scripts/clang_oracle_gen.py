@@ -1496,7 +1496,6 @@ FEATURES = frozenset((
 # table when its bug is fixed.
 KNOWN_BUGS = {
     'bytevarshl': 'BUG-002',
-    'bfcondcall': 'BUG-072',
     'walk': 'BUG-073',
 }
 

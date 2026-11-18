@@ -1,0 +1,74 @@
+; Equal boolean constants must choose the same successor on both paths.
+	cseg
+	public _same0z
+_same0z:
+	call _condition
+	ld a,h
+	or l
+	jp z,M0z
+	ld hl,0
+	jp E0z
+M0z:
+	ld hl,0
+E0z:
+	ld a,h
+	or l
+	jp z,D0z
+	jp _no
+D0z:
+	jp _yes
+	public _same0nz
+_same0nz:
+	call _condition
+	ld a,h
+	or l
+	jp z,M0nz
+	ld hl,0
+	jp E0nz
+M0nz:
+	ld hl,0
+E0nz:
+	ld a,h
+	or l
+	jp nz,D0nz
+	jp _no
+D0nz:
+	jp _yes
+	public _same1z
+_same1z:
+	call _condition
+	ld a,h
+	or l
+	jp z,M1z
+	ld hl,1
+	jp E1z
+M1z:
+	ld hl,1
+E1z:
+	ld a,h
+	or l
+	jp z,D1z
+	jp _no
+D1z:
+	jp _yes
+	public _same1nz
+_same1nz:
+	call _condition
+	ld a,h
+	or l
+	jp z,M1nz
+	ld hl,1
+	jp E1nz
+M1nz:
+	ld hl,1
+E1nz:
+	ld a,h
+	or l
+	jp nz,D1nz
+	jp _no
+D1nz:
+	jp _yes
+	extrn _condition
+	extrn _yes
+	extrn _no
+	end

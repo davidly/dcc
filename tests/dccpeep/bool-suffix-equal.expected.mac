@@ -1,0 +1,66 @@
+	extrn _no
+	extrn _yes
+	extrn _condition
+; Equal boolean constants must choose the same successor on both paths.
+	cseg
+	public _same0z
+_same0z:
+	call _condition
+	ld a,h
+	or l
+	jp z,M0z
+	ld hl,0
+	jr E0z ; peep: jp_to_jr
+M0z:
+	ld hl,0
+E0z:
+	ld a,h
+	or l
+	jp nz, _no ; peep: branch_over_jump
+D0z:
+	jp _yes
+_same0nz:
+	call _condition
+	ld a,h
+	or l
+	jp z,M0nz
+	ld hl,0
+	jr E0nz ; peep: jp_to_jr
+M0nz:
+	ld hl,0
+E0nz:
+	ld a,h
+	or l
+	jp z, _no ; peep: branch_over_jump
+D0nz:
+	jp _yes
+_same1z:
+	call _condition
+	ld a,h
+	or l
+	jp z,M1z
+	ld hl,1
+	jr E1z ; peep: jp_to_jr
+M1z:
+	ld hl,1
+E1z:
+	ld a,h
+	or l
+	jp nz, _no ; peep: branch_over_jump
+D1z:
+	jp _yes
+_same1nz:
+	call _condition
+	ld a,h
+	or l
+	jp z,M1nz
+	ld hl,1
+	jr E1nz ; peep: jp_to_jr
+M1nz:
+	ld hl,1
+E1nz:
+	ld a,h
+	or l
+	jp z, _no ; peep: branch_over_jump
+D1nz:
+	jp _yes
