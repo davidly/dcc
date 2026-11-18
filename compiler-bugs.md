@@ -25,11 +25,62 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
+| [BUG-075](#bug-075) | #366 | compile | Post-decrement of a signed byte parameter rejected in a call argument |
+| [BUG-076](#bug-076) | #367 | wrong result | Struct member compound assignment with a logical RHS corrupts the stored value |
+| [BUG-077](#bug-077) | #368 | wrong result | Signed right shift after narrowing a multiplication yields a logical shift |
+| [BUG-078](#bug-078) | #369 | wrong result | Float assignment from a constant logical expression stores the wrong value |
+| [BUG-079](#bug-079) | #370 | wrong result | Nested loops lose float local state across an inner short-circuit condition |
+| [BUG-080](#bug-080) | #371 | wrong result | Float compound division by a negated member-array decrement computes the wrong value |
 
-No findings remain open from the extended integer and float fuzz runs.
-BUG-070 through BUG-074 are fixed on `fix/fuzz-15001-22000` below.
-BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
-diagnostic are fixed below.
+Six observed defect shapes from seeds 30001–40000 are open (one compile diagnostic and five wrong-result shapes), covering all 37 failures. Grouping remains provisional until fixes prove the shared causes.
+
+## BUG-075
+
+**Post-decrement of a signed byte parameter rejected in a call argument.**
+
+The reduced call is `k1(1, x4--, (int32_t)1, (uint16_t)1)`, with a signed-byte parameter `x4` and a widened second formal. dcc emits DCC-E1002. The precise necessary context remains to be narrowed; the title describes the observed shape.
+
+Found in the seeds 30001–40000 campaign on `821f1784`. The parked source is `tests/known-bugs/bug075.c`; baseline `tests/known-bugs/baselines/bug075.txt`. All 37 reduced cases were rechecked: clang O0/O2 and ASan/UBSan match the saved host baselines, and each of the four dcc production configurations still fails. Detailed per-seed results are saved under `build/triage30001-results/`.
+
+## BUG-076
+
+**Struct member compound assignment with a logical RHS corrupts the stored value.**
+
+Integer seeds 30170, 30623, 31092, 31375, 31494, 31796, 31858, 32137, 32313, 32660, 32782, 33159, 33477, 33690, 34396, 35096, 35331, 35800, 35837, 36321, 37383, 37755, 37764, 38180, 38200, 38242, 38386, 39169 and 39513 all reduce to member compound assignments consuming `&&` or `||`. This is an observed shape grouping, not a proven common implementation cause. In seed 30170, replacing the logical RHS with literal `1` restores the host checksum; a standalone small member compound also passes, so retain the surrounding declarations.
+
+Found in the seeds 30001–40000 campaign on `821f1784`. The parked source is `tests/known-bugs/bug076.c`; baseline `tests/known-bugs/baselines/bug076.txt`. All 37 reduced cases were rechecked: clang O0/O2 and ASan/UBSan match the saved host baselines, and each of the four dcc production configurations still fails. Detailed per-seed results are saved under `build/triage30001-results/`.
+
+## BUG-077
+
+**Signed right shift after narrowing a multiplication yields a logical shift.**
+
+The reduced helper returns `((int16_t)((uint16_t)(g3 * (uint16_t)1))) >> 1`. After the global decrements, the second call should return -1 after signed narrowing, but dcc returns 32767. Keep the call and narrowing context.
+
+Found in the seeds 30001–40000 campaign on `821f1784`. The parked source is `tests/known-bugs/bug077.c`; baseline `tests/known-bugs/baselines/bug077.txt`. All 37 reduced cases were rechecked: clang O0/O2 and ASan/UBSan match the saved host baselines, and each of the four dcc production configurations still fails. Detailed per-seed results are saved under `build/triage30001-results/`.
+
+## BUG-078
+
+**Float assignment from a constant logical expression stores the wrong value.**
+
+Float seeds 33890, 34226, 37592 and 39436 reduce to logical-expression assignments to a float global, array element or local. Expressions include `1 || 0.0f`, `1 || (3.14159f >= 4.0f)`, `10.0f && 1` and `0.56f || 1`. They must convert integer 1 to float 1.0. These results do not establish a relationship to the historical loop defect (#229).
+
+Found in the seeds 30001–40000 campaign on `821f1784`. The parked source is `tests/known-bugs/bug078.c`; baseline `tests/known-bugs/baselines/bug078.txt`. All 37 reduced cases were rechecked: clang O0/O2 and ASan/UBSan match the saved host baselines, and each of the four dcc production configurations still fails. Detailed per-seed results are saved under `build/triage30001-results/`.
+
+## BUG-079
+
+**Nested loops lose float local state across an inner short-circuit condition.**
+
+Float seed 34823 retains nested while loops, a compound inner condition, a float local copied to an array and then updated, and a final global store. The compiler disagrees with the host checksum. A relationship to historical loop or PHI bugs has not been established.
+
+Found in the seeds 30001–40000 campaign on `821f1784`. The parked source is `tests/known-bugs/bug079.c`; baseline `tests/known-bugs/baselines/bug079.txt`. All 37 reduced cases were rechecked: clang O0/O2 and ASan/UBSan match the saved host baselines, and each of the four dcc production configurations still fails. Detailed per-seed results are saved under `build/triage30001-results/`.
+
+## BUG-080
+
+**Float compound division by a negated member-array decrement computes the wrong value.**
+
+Float seed 35767 reduces to `s1[1].m3 /= -(--s0.m2[0])` with surrounding locals. The source member starts at 0.75 and the destination at 1.5; the update should produce -0.25 and the negated divisor 0.25, hence a destination of 6.0. This resembles the historical negated-update consumer issue, but the compound division context requires separate confirmation.
+
+Found in the seeds 30001–40000 campaign on `821f1784`. The parked source is `tests/known-bugs/bug080.c`; baseline `tests/known-bugs/baselines/bug080.txt`. All 37 reduced cases were rechecked: clang O0/O2 and ASan/UBSan match the saved host baselines, and each of the four dcc production configurations still fails. Detailed per-seed results are saved under `build/triage30001-results/`.
 
 ## BUG-070
 
