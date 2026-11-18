@@ -50,11 +50,13 @@ the `blockcassign` steer is removed. BUG-069 (`sizeof` of a
 two-dimensional or partially indexed array struct member) is closed by T4 and
 promoted as `tests/tszmdim.c`.
 
-Open reproducers: BUG-074. BUG-073 is promoted as
-`tests/twalksc.c` (nested-local probe homes beside live pointer walks). BUG-072 is promoted as
-`tests/tpebool.c` (Boolean suffix paths with equal constants). BUG-071 is promoted as
-`tests/tfcmexpr.c` (integer compounds consuming deferred float expressions). BUG-070 is promoted as
-`tests/tbfrhs.c` (compound division/remainder by narrow unsigned bit-fields).
+Open reproducers: none. The extended seeds 15001–22000 findings are promoted as:
+
+- BUG-070: `tests/tbfrhs.c`, compound division/remainder by bit-fields.
+- BUG-071: `tests/tfcmexpr.c`, integer compounds consuming float expressions.
+- BUG-072: `tests/tpebool.c`, Boolean suffix paths with equal constants.
+- BUG-073: `tests/twalksc.c`, block probe homes beside live pointer walks.
+- BUG-074: `tests/twalkend.c`, the separate pointer-walk hang reduction.
 
 ## Checking them
 

@@ -25,13 +25,15 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-074](#bug-074) | #364 | hang (dccpeep, no stack check) | A pointer-walk loop hangs with peephole optimization and no stack check |
 
-One finding remains open from the extended integer and float fuzz runs.
+No findings remain open from the extended integer and float fuzz runs.
+BUG-070 through BUG-074 are fixed on `fix/fuzz-15001-22000` below.
 BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
 diagnostic are fixed below.
 
 ## BUG-070
+
+Upstream issue: [#360](https://github.com/davidly/dcc/issues/360).
 
 **Fixed on `fix/fuzz-15001-22000`; promoted as `tests/tbfrhs.c`.**
 Compound division/remainder now uses the right bit-field's range-promoted
@@ -52,6 +54,8 @@ with and without `dccpeep` and the stack check. Reproduced in the reduced
 program below, also parked as `tests/known-bugs/bug070.c`.
 
 ## BUG-071
+
+Upstream issue: [#361](https://github.com/davidly/dcc/issues/361).
 
 **Fixed on `fix/fuzz-15001-22000`; promoted as `tests/tfcmexpr.c`.**
 Compound lowering now retains the implicit conversion obligation when the
@@ -77,6 +81,8 @@ seed 17844 is parked as `tests/known-bugs/bug071.c`.
 
 ## BUG-072
 
+Upstream issue: [#362](https://github.com/davidly/dcc/issues/362).
+
 **Fixed on `fix/fuzz-15001-22000`; promoted as `tests/tpebool.c`.**
 The peephole boolean-suffix rewrite now requires opposite constants on its
 paths. Equal constants cannot be routed to opposite successors. A new
@@ -96,6 +102,8 @@ Found only in `peep` and `peep-nosc`; reduced and parked as
 `tests/known-bugs/bug072.c`.
 
 ## BUG-073
+
+Upstream issue: [#363](https://github.com/davidly/dcc/issues/363).
 
 **Fixed on `fix/fuzz-15001-22000`; promoted as `tests/twalksc.c`.**
 Declaration replay now checks block-local probe homes after publishing the
@@ -119,6 +127,18 @@ instead, as separately reduced below.
 Reproduced and parked as `tests/known-bugs/bug073.c`.
 
 ## BUG-074
+
+Upstream issue: [#364](https://github.com/davidly/dcc/issues/364).
+
+**Fixed by the block probe-home repair in `5681dc72`; promoted as
+`tests/twalkend.c`.** This independently reduced termination failure shares
+the live-pointer/inner-local slot collision with BUG-073. The separately
+promoted test terminates and matches the host in all four production modes,
+including `peep-nosc`. Its baseline also passes ASan/UBSan on the host.
+The final strict full+extended runs pass: 610 runnable apps, 24 configured
+skips, zero failures in both stack modes. Existing performance rows remain
+unchanged; `twalkend` adds only its own measured row. The restored 300-seed
+pointer-walk campaign (296 ok, 4 INVALID, zero FAIL) validates the shared fix.
 
 **A pointer-walk loop hangs with `dccpeep` when the stack check is disabled.**
 The original seed 19187 does not terminate in `peep-nosc` within the fuzzer's
