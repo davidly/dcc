@@ -2664,6 +2664,7 @@ static int mir_lower_compound_value(int left, int right, int operation,
     const struct MirInsn *right_definition;
     const struct MirInsn *left_definition = mir_mutable_definition(left);
     int computation_type = target_type;
+    int right_type;
     int value;
 
     /* Extraction and arithmetic have different types: an unsigned field
@@ -2715,9 +2716,15 @@ static int mir_lower_compound_value(int left, int right, int operation,
         int converted;
 
         right_definition = mir_mutable_definition(right);
-        computation_type = common_arith_type(
-            computation_type, right_definition != NULL
-                ? right_definition->type : target_type);
+        right_type = right_definition != NULL
+            ? right_definition->type : target_type;
+        /* A field on the right has the same range-based promotion as a
+         * field on the left. Preserve the existing modulo-low-bits shapes
+         * for operations whose stored result is signedness-independent. */
+        if (right_definition != NULL && right_definition->bit_width > 0 &&
+            (operation == '/' || operation == '%'))
+            right_type = mir_promoted_operand_type(right_definition);
+        computation_type = common_arith_type(computation_type, right_type);
         /* With a nested-block rhs these conversions target an assumed type;
          * mark them so repair retypes them with the operation. */
         converted = mir_lower_conversion(left, computation_type);

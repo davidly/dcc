@@ -25,17 +25,24 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-070](#bug-070) | #360 | wrong result | Compound `/=` or `%=` gives the wrong result when its right operand is a narrow unsigned bit-field |
 | [BUG-071](#bug-071) | #361 | wrong result | Integer compound assignments using float expressions store the wrong result |
 | [BUG-072](#bug-072) | #362 | wrong result (dccpeep) | Peephole mode changes a loop condition involving a conditional bit-field return |
 | [BUG-073](#bug-073) | #363 | wrong result | A pointer walk across an array produces the wrong global state |
 | [BUG-074](#bug-074) | #364 | hang (dccpeep, no stack check) | A pointer-walk loop hangs with peephole optimization and no stack check |
 
-Five findings from the extended integer and float fuzz runs are recorded below.
+Four findings remain open from the extended integer and float fuzz runs.
 BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
 diagnostic are fixed below.
 
 ## BUG-070
+
+**Fixed on `fix/fuzz-15001-22000`; promoted as `tests/tbfrhs.c`.**
+Compound division/remainder now uses the right bit-field's range-promoted
+operand type. The new test retains seed 17347 and adds signed-negative,
+full-width unsigned and explicit-cast controls. All four original seeds pass
+in all production modes. Restored integer seeds 1–300: 299 ok, 1 INVALID,
+zero FAIL. Both strict full+extended gates pass; all existing performance
+rows are unchanged. 47 focused integer/type tests and line-debug tests pass.
 
 **Compound `/=` or `%=` gives the wrong result when its right operand is a
 narrow unsigned bit-field.** For example, an `int8_t` array element containing
