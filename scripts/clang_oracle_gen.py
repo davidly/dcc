@@ -656,6 +656,9 @@ def known_shapes(prog):
         if op == 'asg':
             lv, rhs = e.k
             lt = ty(lv)
+            if e.a in ('/=', '%=') and is_bitfield(rhs) and not rhs.a.t.signed \
+                    and 0 < rhs.a.bf < 16:
+                found.add('bfdivrhs')
             if is_int(lt) and e.a == '=':
                 if lv.op == 'var':
                     stored(rhs, lv.a)
@@ -723,6 +726,9 @@ def known_shapes(prog):
                 found.add('selfoperand')
             if const_div_zero(e):
                 found.add('constdivzero')
+        elif op == 'cond' and any(is_bitfield(k) and not k.a.t.signed and 0 < k.a.bf < 16
+                                  for k in e.k[1:]):
+            found.add('bfcondcall')
         elif op == 'call':
             if any(a.op == 'var' and a.a.storage != 'global' and is_int(a.a.t)
                    and a.a.t.bits == 32 for a in e.k):
@@ -1478,7 +1484,7 @@ FEATURES = frozenset((
     'cassign', 'incdec', 'i8', 'i32', 'sizeof',
     # forms that hit a logged dcc defect; see KNOWN_BUGS
     'widecassign', 'bytevarshl', 'castsfx', 'widepostinc', 'structbytecasg', 'negnotconst',
-    'bfdivasg', 'wideidxincdec', 'logicinit', 'logicbyteinit', 'blockwidediv', 'ptrcallconv',
+    'bfdivasg', 'bfdivrhs', 'bfcondcall', 'wideidxincdec', 'logicinit', 'logicbyteinit', 'blockwidediv', 'ptrcallconv',
     'blockwideneg', 'nestedwideless', 'bfpromo', 'widelocalinc', 'inittype',
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg', 'wideincadd',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
@@ -1490,6 +1496,9 @@ FEATURES = frozenset((
 # table when its bug is fixed.
 KNOWN_BUGS = {
     'bytevarshl': 'BUG-002',
+    'bfdivrhs': 'BUG-070',
+    'bfcondcall': 'BUG-072',
+    'walk': 'BUG-073',
 }
 
 
@@ -1817,7 +1826,13 @@ class Gen:
         if kind == 'cast':
             return self.mk('cast', [sub()], t=self.int_type())
         if kind == 'cond':
-            return self.mk('cond', [self.gen_cond(c, depth - 1), sub(), sub()])
+            test, yes, no = self.gen_cond(c, depth - 1), sub(), sub()
+            if not self.on('bfcondcall'):
+                if is_bitfield(yes) and not yes.a.t.signed and 0 < yes.a.bf < 16:
+                    yes = self.mk('cast', [yes], t=I16)
+                if is_bitfield(no) and not no.a.t.signed and 0 < no.a.bf < 16:
+                    no = self.mk('cast', [no], t=I16)
+            return self.mk('cond', [test, yes, no])
         if kind == 'call':
             f = r.choice(self.pure_fns)
             args = [sub() for _ in f.params]
@@ -1967,6 +1982,9 @@ class Gen:
         if op == '=' and not self.on('blockwidecopy') and wide_block_store(lv, rhs):
             rhs = self.mk('cast', [rhs], t=lt)
         if op != '=' and is_int(lt):
+            if not self.on('bfdivrhs') and op in ('/=', '%=') \
+                    and is_bitfield(rhs) and not rhs.a.t.signed and 0 < rhs.a.bf < 16:
+                rhs = self.mk('cast', [rhs], t=I16)
             if not self.on('selfand') and lv.op == 'var' and rhs.op == 'var' and rhs.a is lv.a:
                 rhs = self.small(1, 7)
             if not self.on('widelocalinc') and lv.op == 'var' and lt.bits == 32 \

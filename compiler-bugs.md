@@ -25,9 +25,74 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
+| [BUG-070](#bug-070) | #360 | wrong result | Compound `/=` or `%=` gives the wrong result when its right operand is a narrow unsigned bit-field |
+| [BUG-071](#bug-071) | #361 | wrong result | Integer compound assignments using float expressions store the wrong result |
+| [BUG-072](#bug-072) | #362 | wrong result (dccpeep) | Peephole mode changes a loop condition involving a conditional bit-field return |
+| [BUG-073](#bug-073) | #363 | wrong result | A pointer walk across an array produces the wrong global state |
+| [BUG-074](#bug-074) | #364 | hang (dccpeep, no stack check) | A pointer-walk loop hangs with peephole optimization and no stack check |
 
-No entries are open. BUG-013's unsigned bit-field promotion, BUG-009's hang
-and BUG-022's masked diagnostic are fixed below.
+Five findings from the extended integer and float fuzz runs are recorded below.
+BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
+diagnostic are fixed below.
+
+## BUG-070
+
+**Compound `/=` or `%=` gives the wrong result when its right operand is a
+narrow unsigned bit-field.** For example, an `int8_t` array element containing
+`-24`, compound-assigned `%=` a 9-bit `uint16_t` bit-field containing `42`,
+should remain `-24`; dcc stores a different value. The same mismatch occurs
+for `/=` and with 8-, 13- and 14-bit unsigned bit-fields.
+
+Found in integer seeds 15084, 17347, 20041 and 20997; every failure appeared
+with and without `dccpeep` and the stack check. Reproduced in the reduced
+program below, also parked as `tests/known-bugs/bug070.c`.
+
+## BUG-071
+
+**Integer compound assignment with a float right operand computes the wrong
+result.** A signed or unsigned integer lvalue updated by `+=`, `-=`, or `*=`
+with a float expression can differ from clang; the float operand may be a
+prefix/postfix update of a scalar, array element or struct member, or a float
+assignment expression. The mismatch appears with and without `dccpeep` and
+the stack check.
+
+Found in float seeds 16106, 16938, 17444, 17844, 18197, 18810, 19134, 19575,
+19626, 19637, 19857, 20580, 20784, 20891, 20983, 20991 and 21100. The reduced
+seed 17844 is parked as `tests/known-bugs/bug071.c`.
+
+## BUG-072
+
+**With `dccpeep`, a loop condition involving a conditional unsigned bit-field
+return produces a different program state.** The reduced seed 15807 compares a
+signed 16-bit struct member with a helper returning a conditional expression
+whose true arm is a 12-bit unsigned field. The state checksum differs from
+clang in the peephole build; `nopeep` agrees with clang.
+
+Found only in `peep` and `peep-nosc`; reduced and parked as
+`tests/known-bugs/bug072.c`.
+
+## BUG-073
+
+**A pointer walk across an array produces the wrong global state.** In the
+reduced seed 19187, a function-scope pointer advances from an array's first
+element to its one-past-end pointer and writes each element. The result differs
+from clang in `nopeep`, `nopeep-nosc` and `peep`; the `peep-nosc` run hangs
+instead, as separately reduced below.
+
+Reproduced and parked as `tests/known-bugs/bug073.c`.
+
+## BUG-074
+
+**A pointer-walk loop hangs with `dccpeep` when the stack check is disabled.**
+The original seed 19187 does not terminate in `peep-nosc` within the fuzzer's
+20-second timeout. Its reduced reproducer also hangs in `peep-nosc`; it
+terminates in `nopeep-nosc` and `peep`, but hangs in `nopeep` with the stack
+check enabled. The seed's wrong-result outcomes are recorded separately.
+
+Reproduced and parked as `tests/known-bugs/bug074.c`.
+
+---
+
 
 Sixty-seven reported bugs are fixed:
 [one in cluster T4](#fixed-in-cluster-t4),
