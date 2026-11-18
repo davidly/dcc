@@ -25,16 +25,26 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-075](#bug-075) | #366 | compile | Post-decrement of a signed byte parameter rejected in a call argument |
+| [BUG-081](#bug-081) | #372 | wrong result | Byte compound value in a widened conditional stores the wrong unsigned word |
 | [BUG-076](#bug-076) | #367 | wrong result | Struct member compound assignment with a logical RHS corrupts the stored value |
 | [BUG-077](#bug-077) | #368 | wrong result | Signed right shift after narrowing a multiplication yields a logical shift |
 | [BUG-078](#bug-078) | #369 | wrong result | Float assignment from a constant logical expression stores the wrong value |
 | [BUG-079](#bug-079) | #370 | wrong result | Nested loops lose float local state across an inner short-circuit condition |
 | [BUG-080](#bug-080) | #371 | wrong result | Float compound division by a negated member-array decrement computes the wrong value |
 
-Six observed defect shapes from seeds 30001–40000 are open (one compile diagnostic and five wrong-result shapes), covering all 37 failures. Grouping remains provisional until fixes prove the shared causes.
+Five observed wrong-result shapes from seeds 30001–40000 remain open, covering 36 failures. BUG-075 is fixed below. Validation found one additional open defect, BUG-081/#372. Grouping remains provisional until fixes prove the shared causes.
+
+## BUG-081
+
+**A byte compound value in a widened conditional stores the wrong unsigned word.**
+
+Validation seed 40414 reduces to `l2 = (0 ? (uint32_t)0 : (l1 -= 0))` inside a loop where `l1` is a signed byte and `l2` a static unsigned word. Across two calls, clang produces state checksums `9e377a06` and `9e377ab0`; dcc produces `9e377a06` and `9e3779b2`. This is an additional finding discovered during validation of #366. The pre-fix compiler and the local #366 fix produce byte-identical wrong output, so it is not introduced by that admission change. No common cause with the other logged bugs has been established. Preserve the static state and repeated calls.
+
+Reduced source: `tests/known-bugs/bug081.c`. Expected host output: `tests/known-bugs/baselines/bug081.txt`.
 
 ## BUG-075
+
+**Fixed:** admit plain integer postfix updates of parameters beyond IX’s direct displacement range, matching the existing local-object policy. MIR already computes their frame addresses. Promoted as `tests/tfarpost.c`, retaining seed 33500 and adding signed/unsigned byte/word boundary cases with prefix/postfix observations. Both stack and no-stack censuses preserve all 3,985 original function records; all prior performance baseline bytes are unchanged. Both strict full+extended suites pass (611 pass, 24 skip), as do nine debug/type tests and host O0/O2/ASan/UBSan checks. The original seed passes all four production configurations. Fresh integer seeds 40601–40900 with `--off known` report zero FAIL (see `build/fix366-final-fuzz.log`). The new regression also passes release/line/full debug with peep/nopeep; both line-debug COMs are byte-identical to release. Earlier validation failures were reproduced identically with the pre-fix compiler and logged under #367, #368 and #372.
 
 **Post-decrement of a signed byte parameter rejected in a call argument.**
 
@@ -44,6 +54,8 @@ Found in the seeds 30001–40000 campaign on `821f1784`. The parked source is `t
 
 ## BUG-076
 
+Additional validation seed 40224 reduces to `s1.m4 *= ((uint32_t)0xffffff9c || (int32_t)3)`. The old and fixed-for-#366 compilers produce identical wrong output. Generator feature `memberlogic` now steers direct logical RHS member compounds when `--off known` is used.
+
 **Struct member compound assignment with a logical RHS corrupts the stored value.**
 
 Integer seeds 30170, 30623, 31092, 31375, 31494, 31796, 31858, 32137, 32313, 32660, 32782, 33159, 33477, 33690, 34396, 35096, 35331, 35800, 35837, 36321, 37383, 37755, 37764, 38180, 38200, 38242, 38386, 39169 and 39513 all reduce to member compound assignments consuming `&&` or `||`. This is an observed shape grouping, not a proven common implementation cause. In seed 30170, replacing the logical RHS with literal `1` restores the host checksum; a standalone small member compound also passes, so retain the surrounding declarations.
@@ -51,6 +63,8 @@ Integer seeds 30170, 30623, 31092, 31375, 31494, 31796, 31858, 32137, 32313, 326
 Found in the seeds 30001–40000 campaign on `821f1784`. The parked source is `tests/known-bugs/bug076.c`; baseline `tests/known-bugs/baselines/bug076.txt`. All 37 reduced cases were rechecked: clang O0/O2 and ASan/UBSan match the saved host baselines, and each of the four dcc production configurations still fails. Detailed per-seed results are saved under `build/triage30001-results/`.
 
 ## BUG-077
+
+Additional validation seed 40168 reduces to `(int16_t)(uint16_t)((uint16_t)x2 << 3) >> 1`. The old and fixed-for-#366 compilers produce identical wrong output. Generator feature `narrowright` widens a narrowed signed word to signed long before shifting when `--off known` is used.
 
 **Signed right shift after narrowing a multiplication yields a logical shift.**
 

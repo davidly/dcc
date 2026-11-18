@@ -50,7 +50,7 @@ the `blockcassign` steer is removed. BUG-069 (`sizeof` of a
 two-dimensional or partially indexed array struct member) is closed by T4 and
 promoted as `tests/tszmdim.c`.
 
-Open reproducers: six, BUG-075 through BUG-080, covering the 37 failures from seeds 30001–40000. See the summary and per-seed groupings in `compiler-bugs.md`.
+Open reproducers: six, BUG-076 through BUG-081, covering 36 failures from seeds 30001–40000 and the additional validation seed 40414. BUG-075 is promoted as `tests/tfarpost.c`. See the summary and per-seed groupings in `compiler-bugs.md`.
 
 The extended seeds 15001–22000 findings are promoted as:
 
