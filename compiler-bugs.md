@@ -25,12 +25,11 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-071](#bug-071) | #361 | wrong result | Integer compound assignments using float expressions store the wrong result |
 | [BUG-072](#bug-072) | #362 | wrong result (dccpeep) | Peephole mode changes a loop condition involving a conditional bit-field return |
 | [BUG-073](#bug-073) | #363 | wrong result | A pointer walk across an array produces the wrong global state |
 | [BUG-074](#bug-074) | #364 | hang (dccpeep, no stack check) | A pointer-walk loop hangs with peephole optimization and no stack check |
 
-Four findings remain open from the extended integer and float fuzz runs.
+Three findings remain open from the extended integer and float fuzz runs.
 BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
 diagnostic are fixed below.
 
@@ -55,6 +54,17 @@ with and without `dccpeep` and the stack check. Reproduced in the reduced
 program below, also parked as `tests/known-bugs/bug070.c`.
 
 ## BUG-071
+
+**Fixed on `fix/fuzz-15001-22000`; promoted as `tests/tfcmexpr.c`.**
+Compound lowering now retains the implicit conversion obligation when the
+lowered right operand is untyped, including assignment/update wrappers whose
+AST lacks a deferred mark. Replayed float operands therefore convert the
+integer left value before arithmetic. All 17 original seeds pass in all four
+production modes; restored float seeds 1–300 give 297 ok, 3 INVALID, zero FAIL.
+The new test adds member/scalar updates, all integer widths and controls.
+Both strict full+extended suites, existing performance checks, nine focused
+line-debug/type tests and the host baseline proof pass. Existing tests and
+performance rows are unchanged.
 
 **Integer compound assignment with a float right operand computes the wrong
 result.** A signed or unsigned integer lvalue updated by `+=`, `-=`, or `*=`

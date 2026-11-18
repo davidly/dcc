@@ -2716,6 +2716,12 @@ static int mir_lower_compound_value(int left, int right, int operation,
         int converted;
 
         right_definition = mir_mutable_definition(right);
+        /* Assignment/update expressions can acquire their float type only
+         * after block declarations or member addresses are replayed. Their
+         * AST wrapper need not carry the deferred mark. Keep the binary's
+         * conversion obligation when the lowered value is still untyped. */
+        if (right_definition != NULL && right_definition->type == 0)
+            deferred_rhs = 1;
         right_type = right_definition != NULL
             ? right_definition->type : target_type;
         /* A field on the right has the same range-based promotion as a
