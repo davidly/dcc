@@ -1,60 +1,34 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "Build active DCC C file for debugging",
-            "type": "shell",
-            "command": "${workspaceFolder}/dccmake",
-            "args": [
-                "-g",
-                "${file}",
-                "dcc-output=DCCDEBUG"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Stage debug data files",
-            "type": "shell",
-            "command": "mkdir -p build/fixtures && find \"${fileDirname}\" -maxdepth 1 -type f \\( -name '*.WTS' -o -name '*.IN' -o -name '*.DAT' \\) -exec cp -f {} build/fixtures/ \\;",
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Build and stage active DCC C file for debugging",
-            "dependsOrder": "sequence",
-            "dependsOn": [
-                "Build active DCC C file for debugging",
-                "Stage debug data files"
-            ],
-            "problemMatcher": []
-        },
-        {
-            "label": "Build DCC debugger host",
-            "type": "shell",
-            "command": "${workspaceFolder}/m.sh",
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": [
-                "$gcc"
-            ],
-            "windows": {
-                "command": "${workspaceFolder}\\m.bat"
-            }
-        },
-        {
-            "label": "Prepare active DCC C file for debugging",
-            "dependsOrder": "sequence",
-            "dependsOn": [
-                "Build and stage active DCC C file for debugging",
-                "Build DCC debugger host"
-            ],
-            "problemMatcher": []
-        }
-    ]
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build DCC",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": ["${workspaceFolder}/scripts/build-dcc.py"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": "$gcc",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Run DCC Extended Tests",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "${workspaceFolder}/scripts/runall.py",
+        "--mode",
+        "full",
+        "--extended"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
 }
