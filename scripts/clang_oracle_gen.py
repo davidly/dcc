@@ -656,6 +656,13 @@ def known_shapes(prog):
         if op == 'asg':
             lv, rhs = e.k
             lt = ty(lv)
+            if e.a != '=' and lv.op == 'fld' and rhs.op == 'bin' and rhs.a in LOGIC:
+                found.add('memberlogic')
+        if op == 'bin' and e.a == '>>' and e.k[0].op == 'cast' and ty(e.k[0]) is I16:
+            found.add('narrowright')
+        if op == 'asg':
+            lv, rhs = e.k
+            lt = ty(lv)
             if e.a in ('/=', '%=') and is_bitfield(rhs) and not rhs.a.t.signed \
                     and 0 < rhs.a.bf < 16:
                 found.add('bfdivrhs')
@@ -1477,6 +1484,7 @@ class Ctx:
 
 
 FEATURES = frozenset((
+    'memberlogic', 'narrowright',
     'bitfield', 'nested', 'arrfield', 'struct', 'structval', 'ptr', 'arr2d', 'localarr',
     'if', 'for', 'while', 'do', 'switch', 'block', 'call', 'scopy', 'walk', 'brk', 'ret',
     'goto', 'c99for', 'blockdecl', 'static', 'varbound',
@@ -1496,6 +1504,8 @@ FEATURES = frozenset((
 # table when its bug is fixed.
 KNOWN_BUGS = {
     'bytevarshl': 'BUG-002',
+    'memberlogic': 'BUG-076',
+    'narrowright': 'BUG-077',
 }
 
 
@@ -1515,6 +1525,9 @@ class Gen:
     def mk(self, op, k=(), a=None, t=None):
         if op in ('bin', 'cond', 'asg'):
             k = self.host_sized(op, k, a)
+        if op == 'bin' and a == '>>' and k[0].op == 'cast' and ty(k[0]) is I16 \
+                and not self.on('narrowright'):
+            k = [self.mk('cast', [k[0]], t=I32), k[1]]
         if op == 'bin' and not self.on('wideincadd') and wide_increment_add(a, k):
             # Subtraction retains the update without using the faulty direct add.
             a = '-'
@@ -1976,6 +1989,9 @@ class Gen:
         reject or miscompile (see KNOWN_BUGS); the operand is converted so the
         statement stays out of it and fuzzing can reach other code."""
         lt = ty(lv)
+        if op != '=' and lv.op == 'fld' and rhs.op == 'bin' and rhs.a in LOGIC \
+                and not self.on('memberlogic'):
+            rhs = self.small(1, 1)
         if op == '=' and not self.on('blockwidecopy') and wide_block_store(lv, rhs):
             rhs = self.mk('cast', [rhs], t=lt)
         if op != '=' and is_int(lt):
