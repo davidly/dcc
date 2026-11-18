@@ -58,8 +58,8 @@ Unix. Commands below use `python`; use `python3` where that is the installed
 command name. Full local proof/coverage runs additionally require sh,
 `ntvcm`, Clang, and matching `llvm-cov` / `llvm-profdata` tools.
 
-Some release-packaging and specialized utility scripts still use PowerShell
-7. Install it only when running those remaining `.ps1` utilities; see
+Release packaging and specialized test utilities also use Python. Native
+installer creation additionally requires the platform's packaging tools; see
 [`scripts/README.md`](https://github.com/davidly/dcc/blob/main/scripts/README.md).
 
 ## Clone the repositories

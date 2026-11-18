@@ -62,29 +62,13 @@ jobs:
 
       - name: Build ntvcm emulator on Windows
         if: runner.os == 'Windows'
-        shell: pwsh
-        working-directory: ntvcm
+        shell: python
+        env:
+          DCC_RELEASE_TARGET: ${{ matrix.target }}
         run: |
-          $vcvarsName = if ('${{ matrix.target }}' -eq 'windows-arm64') { 'vcvarsarm64.bat' } else { 'vcvars64.bat' }
-          $component = if ('${{ matrix.target }}' -eq 'windows-arm64') { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' } else { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $installPath = & $vswhere -latest -products * -requires $component -property installationPath
-          if (-not $installPath) { throw "Visual Studio C++ tools not found for ${{ matrix.target }}" }
-
-          $vcvars = Join-Path $installPath "VC\Auxiliary\Build\$vcvarsName"
-          if (-not (Test-Path $vcvars)) { throw "MSVC environment script not found: $vcvars" }
-
-          $buildBat = Join-Path $env:RUNNER_TEMP 'build-ntvcm.bat'
-          $buildLines = @(
-            "call `"$vcvars`"",
-            'if errorlevel 1 exit /b %errorlevel%',
-            'cl /nologo ntvcm.cxx x80.cxx /I. /GS- /GL /Oti2 /Ob3 /EHsc /Zi /link user32.lib /OPT:REF /OUT:ntvcm.exe',
-            'exit /b %errorlevel%'
-          )
-          Set-Content -LiteralPath $buildBat -Value $buildLines -Encoding ascii
-
-          & cmd /c "`"$buildBat`""
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          import os, subprocess, sys
+          arch = 'arm64' if os.environ['DCC_RELEASE_TARGET'].endswith('arm64') else 'x64'
+          subprocess.run([sys.executable, 'scripts/ci_tools.py', 'build-ntvcm', '--release', '--arch', arch], check=True)
 
       - name: Build ntvcm emulator on Linux
         if: runner.os == 'Linux'
@@ -104,53 +88,29 @@ jobs:
 
       - name: Sign Windows binaries
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: python
         env:
           WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
           WINDOWS_CODESIGN_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
           WINDOWS_CODESIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL }}
         run: |
-          if (-not $env:WINDOWS_CODESIGN_PFX_BASE64 -or -not $env:WINDOWS_CODESIGN_PASSWORD) {
-            Write-Host "Skipping Windows binary signing because WINDOWS_CODESIGN_PFX_BASE64 or WINDOWS_CODESIGN_PASSWORD is not configured."
-            return
-          }
+          import subprocess, sys
+          subprocess.run([sys.executable, 'scripts/ci_tools.py', 'sign',
+              'dcc.exe', 'dccpeep.exe', 'dccrtlstrip.exe', 'dccmake.exe',
+              'm80c.exe', 'l80c.exe', 'ntvcm/ntvcm.exe'], check=True)
 
-          $timestampUrl = if ($env:WINDOWS_CODESIGN_TIMESTAMP_URL) { $env:WINDOWS_CODESIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
-          $pfxPath = Join-Path $env:RUNNER_TEMP "codesign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
-
-          $signToolPath = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
-          if (-not $signToolPath) {
-            $signToolPath = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
-              Sort-Object FullName -Descending |
-              Select-Object -First 1).FullName
-          }
-          if (-not $signToolPath) { throw "signtool.exe was not found." }
-
-          foreach ($file in @("dcc.exe", "dccpeep.exe", "dccrtlstrip.exe", "ntvcm/${{ matrix.ntvcm }}")) {
-            if (Test-Path -LiteralPath $file) {
-              & $signToolPath sign /fd SHA256 /tr $timestampUrl /td SHA256 /f $pfxPath /p $env:WINDOWS_CODESIGN_PASSWORD $file
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            }
-          }
-
-      - name: Package release directory
-        shell: pwsh
+      - name: Package release directory and archive
+        shell: python
+        env:
+          DCC_ARCHIVE: ${{ matrix.archive }}
+          DCC_NTVCM: ${{ matrix.ntvcm }}
         run: |
-          ./scripts/package-release.ps1 `
-            -PackageName "$env:PACKAGE_NAME" `
-            -NtvcmPath "ntvcm/${{ matrix.ntvcm }}" `
-            -OutputDir dist `
-            -Version "$env:RELEASE_VERSION"
-
-      - name: Create zip archive
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: Compress-Archive -Path "dist/$env:PACKAGE_NAME" -DestinationPath "dist/$env:PACKAGE_NAME.zip" -Force
-
-      - name: Create tar.gz archive
-        if: matrix.archive == 'tar.gz'
-        run: tar -czf "dist/$PACKAGE_NAME.tar.gz" -C dist "$PACKAGE_NAME"
+          import os, subprocess, sys
+          subprocess.run([sys.executable, 'scripts/package-release.py',
+              '--package-name', os.environ['PACKAGE_NAME'],
+              '--ntvcm-path', 'ntvcm/' + os.environ['DCC_NTVCM'],
+              '--output-dir', 'dist', '--version', os.environ['RELEASE_VERSION'],
+              '--archive', os.environ['DCC_ARCHIVE']], check=True)
 
       - name: Upload release package artifact
         uses: actions/upload-artifact@v4

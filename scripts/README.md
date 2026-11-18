@@ -436,7 +436,7 @@ python scripts/run-mir-clobber-tests.py --jobs 8 --execution-manifest build/clob
 Listing requires no compiler, emulator, or generator. Failed runs retain their
 source files, build/run logs, and shard artifacts under `build/`.
 
-## `publish-package.ps1`
+## `publish-package.py`
 
 Publishes or republishes the binary package release. By default it reads the
 version from `scripts/package-version.txt` (`v2.0.0`), deletes any existing
@@ -444,9 +444,9 @@ GitHub release/tag for that version, recreates the tag at the current commit,
 and pushes the tag so `.github/workflows/release.yml` rebuilds the package
 assets.
 
-```pwsh
-pwsh ./scripts/publish-package.ps1
-pwsh ./scripts/publish-package.ps1 -Version v2.0.1 -Watch
+```sh
+python scripts/publish-package.py
+python scripts/publish-package.py -Version v2.0.1 -Watch
 ```
 
 The script requires `git` and the GitHub CLI (`gh`) on `PATH`, and refuses to
@@ -830,26 +830,29 @@ The runner reads `tests/_test_overrides.json`; fixture files are copied into the
 run directory before execution. Build artifacts are removed after a successful
 run unless `--keep-build` is passed.
 
-## `stress-runall.ps1`
+## `stress-runall.py`
 
 Stress-tests the suite by running `runall.py` repeatedly, stopping on the first
 failure. Useful for shaking out intermittent/flaky failures under parallel load.
-The failing iteration's full log is kept for inspection.
+The failing iteration's full log is kept for inspection. Each invocation owns
+its build directory; other builds are left intact. `--` forwards additional
+arguments to `runall.py` (for example `-- --mode full --apps ttt`). Compiler
+process trees and stdin fixtures are supervised during stress runs.
 
 ### Usage
 
-```pwsh
-pwsh ./scripts/stress-runall.ps1                # up to 50 parallel runs
-pwsh ./scripts/stress-runall.ps1 -Iterations 100
-pwsh ./scripts/stress-runall.ps1 -Serial -Iterations 10
-pwsh ./scripts/stress-runall.ps1 -ThrottleLimit 8 -KeepLogs
+```sh
+python scripts/stress-runall.py                # up to 10 repeated suite runs
+python scripts/stress-runall.py -Iterations 100
+python scripts/stress-runall.py -Serial -Iterations 10
+python scripts/stress-runall.py -ThrottleLimit 8 -KeepLogs
 ```
 
 ### Parameters
 
 | Parameter | Default | Meaning |
 | --------- | ------- | ------- |
-| `-Iterations` | `50` | Maximum number of suite runs |
+| `-Iterations` | `10` | Maximum number of suite runs |
 | `-Serial` | (off) | Run the suite serially each iteration |
 | `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
 | `-LogDir` | temp folder | Where per-iteration logs are written |
@@ -860,27 +863,51 @@ pwsh ./scripts/stress-runall.ps1 -ThrottleLimit 8 -KeepLogs
 - `0` — All iterations passed
 - `1` — An iteration failed (loop stopped early)
 
-## `convert-baseline.ps1`
+## Retired baseline converter
 
-Splits the legacy concatenated baseline `baseline_test_dcc.txt` into per-app
-baseline files under `tests/baselines/` (one `<app>.txt` per test). Used to
-(re)generate the baselines consumed by `runall.py`.
+The one-time concatenated-baseline splitter has been removed. Current expected
+output lives directly in `tests/baselines/`; maintain those files alongside
+the tests rather than regenerating them from the retired combined format.
 
-### Usage
+## `runall-extended.py`
 
-```pwsh
-pwsh ./scripts/convert-baseline.ps1 -AppList (Get-Content legacy-app-order.txt)
+Standalone Python 3.7+ entry point sharing `runall.py`'s extended build/verdict
+implementation. C89 is the default selection; C99 includes C89, and C11 includes
+both. Use `--all` for all imported tags, `--test NAME` for individual cases,
+`--suite-dir` / `--skip-file` for custom corpora, and `--mode full` for both
+optimization modes. Stack checks are enabled unless `--no-stack-check` is set.
+Previous single-dash spellings are retained.
+
+## Release packaging
+
+All release utilities use Python 3.7+; neither the workflows nor staged binary
+packages need PowerShell. The native DEB/PKG/MSI builders still require their
+platform's `dpkg-deb`, `pkgbuild`, or WiX tools. Native installers are separate
+from the archive-only release workflow.
+
+```sh
+python scripts/package-release.py --package-name dcc-test --ntvcm-path ../ntvcm/ntvcm --archive tar.gz
+python scripts/package-native-installer.py --package-name dcc-test --package-root dist/dcc-test --target linux-x64
+python scripts/package-native-installer.py --package-name dcc-test --package-root dist/dcc-test --target windows-x64 --prepare-only
+python scripts/publish-package.py --dry-run
 ```
 
-### Parameters
+`package-release.py` stages all six native DCC tools, ntvcm, runtime, headers,
+optional emulated assembler/linker, and Python install/uninstall helpers.
+`--archive zip` or `--archive tar.gz` writes a package-root archive.
+Unix install helpers accept PREFIX/LINK_DIR or explicit directory options;
+Windows uses the user environment and an optional PATH update. Installers refuse
+to replace unrelated directories and preserve unrelated command links and user
+environment overrides during removal.
 
-| Parameter | Default | Meaning |
-| --------- | ------- | ------- |
-| `-InputFile` | `baseline_test_dcc.txt` | Legacy concatenated baseline |
-| `-OutputDir` | `tests/baselines` | Destination for per-app baseline files |
-| `-AppList` | required | Complete original app order used as split boundaries |
+`package-native-installer.py --prepare-only` writes the payload/manifest and
+prints the native command without invoking it. Unix native installers link all
+seven tools and provide `dcc-ma` through the shipped native `dccmake`.
+`publish-package.py --dry-run` performs local version/branch/worktree checks
+without fetching, pushing, deleting releases, or changing tags. Publishing
+keeps the original explicit release/tag replacement semantics and stops on
+GitHub lookup/authentication errors. `--allow-dirty`, `--no-push-branch`, and
+`--watch` retain their previous aliases.
 
-Supply the complete original app order in `legacy-app-order.txt`, one app
-name per line. The converter uses that order so output lines beginning with `test ` (e.g.
-`test tstdc completed with great success`) are not mistaken for section headers.
-The split reproduces the original baseline byte-for-byte.
+`ci_tools.py build-ntvcm` shares MSVC discovery with the normal builder;
+`ci_tools.py sign` handles optional signing credentials without logging them.

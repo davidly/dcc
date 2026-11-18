@@ -144,32 +144,32 @@ premise conflicts with dcc's CP/M 2.2/Z80 target model or documented C dialect
 expressions, or C99/C11 features that dcc intentionally does not provide). The
 extended runner reports them as skipped instead of failures.
 
-Use `scripts/runall-extended.ps1` to build those cases with the same dcc,
+Use `scripts/runall-extended.py` to build those cases with the same dcc,
 dccpeep, M80, dccrtlstrip, M80, and L80 pipeline as the main suite, then run the
 resulting `.COM` files under `ntvcm` and compare stdout+stderr with the matching
 `.expected` file.
 
-```pwsh
+```sh
 # C89-tagged tests (default when no standard flag is supplied)
-pwsh ./scripts/runall-extended.ps1 -C89
+python scripts/runall-extended.py -C89
 
 # C99 target-standard set; c89-tagged tests are included by c-testsuite rules
-pwsh ./scripts/runall-extended.ps1 -C99
+python scripts/runall-extended.py -C99
 
 # C11 target-standard set; c89 and c99 tests are included by c-testsuite rules
-pwsh ./scripts/runall-extended.ps1 -C11
+python scripts/runall-extended.py -C11
 
 # Every imported single-exec case, including any case without a standard tag
-pwsh ./scripts/runall-extended.ps1 -All
+python scripts/runall-extended.py -All
 
 # Smoke-test one case
-pwsh ./scripts/runall-extended.ps1 -C89 -Test 00001
+python scripts/runall-extended.py -C89 -Test 00001
 
 # Bound each build pass and emulator run to 30 seconds
-pwsh ./scripts/runall-extended.ps1 -C89 -RunTimeout 30
+python scripts/runall-extended.py -C89 -RunTimeout 30
 
 # Use an alternate skip file, or an empty/nonexistent one to run everything
-pwsh ./scripts/runall-extended.ps1 -C89 -SkipFile tests/_extended_test_overrides.json
+python scripts/runall-extended.py -C89 -SkipFile tests/_extended_test_overrides.json
 ```
 
 The runner defaults to `--mode fast` and parallel execution, matching the main
@@ -217,20 +217,10 @@ need to mask another kind of volatile value.
 4. Run `python3 ./scripts/runall.py` and confirm the new test reports
    "Output matches baseline".
 
-## Regenerating baselines from the legacy file
+## Maintaining baselines
 
-The baselines were originally derived from the single concatenated file
-`baseline_test_dcc.txt` (output blocks separated by `test <app>` headers, in a
-fixed run order). To (re)generate the per-app `baselines/` files from it:
-
-```pwsh
-pwsh ./scripts/convert-baseline.ps1 -AppList (Get-Content legacy-app-order.txt)
-```
-
-Supply the complete original app order in `legacy-app-order.txt`, one app
-name per line. The converter uses that order so output lines beginning with `test ` (e.g.
-`test tstdc completed with great success`) are not mistaken for section
-headers. The split reproduces the original baseline byte-for-byte.
+The former combined baseline and its one-time splitter are retired. Maintain
+individual `baselines/<app>.txt` files as described above.
 
 ## Notes for automated agents
 

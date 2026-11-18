@@ -97,6 +97,21 @@ def command(name: str) -> str:
 
 def run(argv, cwd: Path, timeout: int, stdin: str = "", env=None):
     """Run a tool, capturing merged output; terminate its process tree on timeout."""
+    if os.environ.get("DCC_STRESS_SUPERVISE") == "1":
+        try:
+            try: from .process_supervision import Process
+            except ImportError: from process_supervision import Process
+            child = Process(argv, cwd, environment=env,
+                            parent_scope=os.environ.get("DCC_PROCESS_SCOPE"), drain_timeout=1, stdin=stdin + ("\n" if stdin and not stdin.endswith("\n") else ""))
+            try:
+                while not child.ready(timeout if timeout > 0 else float("inf")):
+                    time.sleep(.01)
+                result = child.complete(0)
+                return result["ExitCode"], result["TimedOut"], result["Output"]
+            finally:
+                child.stop()
+        except OSError as exc:
+            return 1, False, f"ERROR starting {argv[0]}: {exc}"
     try:
         popen_args = dict(cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True, env=env)
@@ -331,7 +346,7 @@ def build(name, source, directory, mode, override, args):
     if args.emulated_m80: cmd.append("dcc-use-emulated-m80=true")
     if args.emulated_l80: cmd.append("dcc-use-emulated-l80=true")
     if override.get("dcc_args"): cmd += words(override["dcc_args"])
-    return run(cmd, ROOT, 0 if args.timeout == 0 else max(args.timeout, 60))
+    return run(cmd, ROOT, 0 if args.timeout == 0 else getattr(args, "build_timeout", max(args.timeout, 60)))
 
 
 def check_run(name, directory, baseline, run_args, stdin, args, perf=True,
@@ -592,13 +607,40 @@ def dccpeep_fixtures(workers: int, fixture_dir=None, peep=None):
         return len(lines) == 2 and len(lines[0]) == 702
 
 
-def prepare_extended_suite(args, runroot: Path, modes: list[str]):
+def prepare_extended_suite(args, runroot: Path, modes: list[str], suite=None, overrides_path=None,
+                           standards=None, names=(), allow_empty=False):
     """Create extended-test work items after the suite has been bootstrapped."""
-    suite = ROOT / "tests/extended-tests/tests/single-exec"
-    overrides_path = ROOT / "tests/_extended_test_overrides.json"
-    ext_overrides = {x["name"].lower(): x for x in json.loads(overrides_path.read_text())["tests"]}
-    cases = [p for p in sorted(suite.glob("*.c"))
-             if not ext_overrides.get(p.stem.lower(), {}).get("ignore")]
+    suite = Path(suite) if suite is not None else ROOT / "tests/extended-tests/tests/single-exec"
+    overrides_path = Path(overrides_path) if overrides_path is not None else ROOT / "tests/_extended_test_overrides.json"
+    ext_overrides = {x["name"].lower(): x for x in json.loads(overrides_path.read_text())["tests"]} if overrides_path.is_file() else {}
+    requested = {Path(n).stem.lower() for item in names for n in item.split(",")}
+    sources = sorted(suite.glob("*.c"))
+    missing = requested - {p.stem.lower() for p in sources}
+    if missing:
+        return None, "Unknown extended tests: " + ", ".join(sorted(missing))
+    cases = []
+    skipped = []
+    matching = 0
+    for source in sources:
+        if requested and source.stem.lower() not in requested:
+            continue
+        if standards is not None:
+            tags_path = source.with_suffix(".c.tags")
+            tags = {line.strip().lower() for line in tags_path.read_text().splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")} if tags_path.is_file() else set()
+            accepted = {"c89"}
+            if "c11" in standards: accepted.update(("c99", "c11"))
+            elif "c99" in standards: accepted.add("c99")
+            if not tags & accepted: continue
+        matching += 1
+        override = ext_overrides.get(source.stem.lower(), {})
+        if override.get("ignore"):
+            skipped.append((source.stem, override.get("reason", "ignored")))
+        else:
+            cases.append(source)
+    args.extended_skipped = skipped
+    if not cases and matching and allow_empty:
+        return [], None
     if not cases:
         return None, f"Extended suite unavailable or contains no runnable tests: {suite}"
     baselines = {case: load_baseline(case.with_suffix(".c.expected")) for case in cases}

@@ -78,9 +78,11 @@ class Capture:
 
 
 class Process:
-    def __init__(self,argv,cwd,log=None,environment=None,remove_environment=(),parent_scope=None,drain_timeout=5):
+    def __init__(self,argv,cwd,log=None,environment=None,remove_environment=(),parent_scope=None,drain_timeout=5,stdin=None):
         if not 0.01 <= drain_timeout <= 86400:raise ValueError('invalid drain timeout')
         cwd=Path(cwd).resolve()
+        import locale
+        input_data=stdin.encode(locale.getpreferredencoding(False)) if stdin is not None else None
         self._ownership_lock=threading.RLock()
         self._owned_stopped=False
         self.started=time.monotonic()
@@ -112,9 +114,20 @@ class Process:
             if os.name=='nt':self.job=windows_job(job_name,create=True)
             options={'creationflags':subprocess.CREATE_NEW_PROCESS_GROUP} if os.name=='nt' else {}
             self.process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--launch',str(request)],
-                cwd=str(cwd),env=env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,**options)
+                cwd=str(cwd),env=env,stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,**options)
             self.stdout=Capture(self.process.stdout)
             self.stderr=Capture(self.process.stderr)
+            if stdin is not None:
+                def feed():
+                    try:
+                        self.process.stdin.write(input_data)
+                        self.process.stdin.flush()
+                    except (OSError, ValueError):
+                        pass # Early compiler exits may close their input pipe.
+                    finally:
+                        try:self.process.stdin.close()
+                        except (OSError,ValueError):pass
+                threading.Thread(target=feed,daemon=True).start()
         except BaseException:
             if hasattr(self,'process'):
                 self.kill_owned()
