@@ -826,6 +826,10 @@ static int try_bool_suffix_at(int i)
             peep_parse_jp_uncond_label(lines[i + 1], ljump) &&
             label_name_at(i + 2, lab_mid) &&
             (eq(i + 3, "ld hl,0") || eq(i + 3, "ld hl,1")) &&
+            /* This rewrite routes the two paths to opposite successors.
+             * Equal constants (for example `condition || 1`) need the
+             * ordinary constant-test fold instead. */
+            eq(i, "ld hl,1") != eq(i + 3, "ld hl,1") &&
             label_name_at(i + 4, lab_end) &&
             strcmp(ljump, lab_end) == 0 &&
             eq(i + 5, "ld a,h") &&

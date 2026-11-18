@@ -26,8 +26,130 @@ entries and their historical diagnoses are retained below.
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
 
-No entries are open. BUG-013's unsigned bit-field promotion, BUG-009's hang
-and BUG-022's masked diagnostic are fixed below.
+No findings remain open from the extended integer and float fuzz runs.
+BUG-070 through BUG-074 are fixed on `fix/fuzz-15001-22000` below.
+BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
+diagnostic are fixed below.
+
+## BUG-070
+
+Upstream issue: [#360](https://github.com/davidly/dcc/issues/360).
+
+**Fixed on `fix/fuzz-15001-22000`; promoted as `tests/tbfrhs.c`.**
+Compound division/remainder now uses the right bit-field's range-promoted
+operand type. The new test retains seed 17347 and adds signed-negative,
+full-width unsigned and explicit-cast controls. All four original seeds pass
+in all production modes. Restored integer seeds 1–300: 299 ok, 1 INVALID,
+zero FAIL. Both strict full+extended gates pass; all existing performance
+rows are unchanged. 47 focused integer/type tests and line-debug tests pass.
+
+**Compound `/=` or `%=` gives the wrong result when its right operand is a
+narrow unsigned bit-field.** For example, an `int8_t` array element containing
+`-24`, compound-assigned `%=` a 9-bit `uint16_t` bit-field containing `42`,
+should remain `-24`; dcc stores a different value. The same mismatch occurs
+for `/=` and with 8-, 13- and 14-bit unsigned bit-fields.
+
+Found in integer seeds 15084, 17347, 20041 and 20997; every failure appeared
+with and without `dccpeep` and the stack check. Reproduced in the reduced
+program below, also parked as `tests/known-bugs/bug070.c`.
+
+## BUG-071
+
+Upstream issue: [#361](https://github.com/davidly/dcc/issues/361).
+
+**Fixed on `fix/fuzz-15001-22000`; promoted as `tests/tfcmexpr.c`.**
+Compound lowering now retains the implicit conversion obligation when the
+lowered right operand is untyped, including assignment/update wrappers whose
+AST lacks a deferred mark. Replayed float operands therefore convert the
+integer left value before arithmetic. All 17 original seeds pass in all four
+production modes; restored float seeds 1–300 give 297 ok, 3 INVALID, zero FAIL.
+The new test adds member/scalar updates, all integer widths and controls.
+Both strict full+extended suites, existing performance checks, nine focused
+line-debug/type tests and the host baseline proof pass. Existing tests and
+performance rows are unchanged.
+
+**Integer compound assignment with a float right operand computes the wrong
+result.** A signed or unsigned integer lvalue updated by `+=`, `-=`, or `*=`
+with a float expression can differ from clang; the float operand may be a
+prefix/postfix update of a scalar, array element or struct member, or a float
+assignment expression. The mismatch appears with and without `dccpeep` and
+the stack check.
+
+Found in float seeds 16106, 16938, 17444, 17844, 18197, 18810, 19134, 19575,
+19626, 19637, 19857, 20580, 20784, 20891, 20983, 20991 and 21100. The reduced
+seed 17844 is parked as `tests/known-bugs/bug071.c`.
+
+## BUG-072
+
+Upstream issue: [#362](https://github.com/davidly/dcc/issues/362).
+
+**Fixed on `fix/fuzz-15001-22000`; promoted as `tests/tpebool.c`.**
+The peephole boolean-suffix rewrite now requires opposite constants on its
+paths. Equal constants cannot be routed to opposite successors. A new
+`bool-suffix-equal` fixture covers both 0/0 and 1/1 with z/nz branches.
+Original seed 15807 passes in all four production modes. Restored integer
+seeds 1–300: 299 ok, 1 INVALID, zero FAIL. Both strict full+extended suites,
+peephole fixture/idempotence checks, host proof and line-debug tests pass;
+existing unit tests and performance rows are unchanged.
+
+**With `dccpeep`, a loop condition involving a conditional unsigned bit-field
+return produces a different program state.** The reduced seed 15807 compares a
+signed 16-bit struct member with a helper returning a conditional expression
+whose true arm is a 12-bit unsigned field. The state checksum differs from
+clang in the peephole build; `nopeep` agrees with clang.
+
+Found only in `peep` and `peep-nosc`; reduced and parked as
+`tests/known-bugs/bug072.c`.
+
+## BUG-073
+
+Upstream issue: [#363](https://github.com/davidly/dcc/issues/363).
+
+**Fixed on `fix/fuzz-15001-22000`; promoted as `tests/twalksc.c`.**
+Declaration replay now checks block-local probe homes after publishing the
+replayed declaration type, so the probe's differently numbered object can be
+found. A home overlapping a live enclosing local is moved to the real replay
+slot. This also clears the independently reduced hang tracked below.
+Original seed 19187 passes in all four production modes. Restored integer
+seeds 1–300: 296 ok, 4 INVALID, zero FAIL. Both strict full+extended suites,
+existing performance checks, sanitized compiler probes, nine focused debug/type
+tests and the scope-mutation proof pass. The census changes only
+`tcmpabi:insertion_sort` (frame offsets; identical instruction count and size);
+its checked performance does not regress. Existing tests and baseline rows
+are unchanged.
+
+**A pointer walk across an array produces the wrong global state.** In the
+reduced seed 19187, a function-scope pointer advances from an array's first
+element to its one-past-end pointer and writes each element. The result differs
+from clang in `nopeep`, `nopeep-nosc` and `peep`; the `peep-nosc` run hangs
+instead, as separately reduced below.
+
+Reproduced and parked as `tests/known-bugs/bug073.c`.
+
+## BUG-074
+
+Upstream issue: [#364](https://github.com/davidly/dcc/issues/364).
+
+**Fixed by the block probe-home repair in `5681dc72`; promoted as
+`tests/twalkend.c`.** This independently reduced termination failure shares
+the live-pointer/inner-local slot collision with BUG-073. The separately
+promoted test terminates and matches the host in all four production modes,
+including `peep-nosc`. Its baseline also passes ASan/UBSan on the host.
+The final strict full+extended runs pass: 610 runnable apps, 24 configured
+skips, zero failures in both stack modes. Existing performance rows remain
+unchanged; `twalkend` adds only its own measured row. The restored 300-seed
+pointer-walk campaign (296 ok, 4 INVALID, zero FAIL) validates the shared fix.
+
+**A pointer-walk loop hangs with `dccpeep` when the stack check is disabled.**
+The original seed 19187 does not terminate in `peep-nosc` within the fuzzer's
+20-second timeout. Its reduced reproducer also hangs in `peep-nosc`; it
+terminates in `nopeep-nosc` and `peep`, but hangs in `nopeep` with the stack
+check enabled. The seed's wrong-result outcomes are recorded separately.
+
+Reproduced and parked as `tests/known-bugs/bug074.c`.
+
+---
+
 
 Sixty-seven reported bugs are fixed:
 [one in cluster T4](#fixed-in-cluster-t4),

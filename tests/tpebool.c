@@ -1,0 +1,92 @@
+/* A condition OR true must remain true after peephole boolean folding.
+ * Reduced from integer seed 15807; checks the unchanged struct state. */
+#include <stdint.h>
+#include <stdio.h>
+
+struct S0 {
+    int32_t m0;
+    uint8_t m1;
+    int16_t m2;
+    uint8_t m3[2];
+};
+struct S1 {
+    uint16_t m0 : 12;
+    uint16_t m1;
+    int16_t m2;
+};
+
+static int8_t a6[8] = { -86, 14, -1, 0, 3, 1, -1, 0 };
+static struct S1 s1 = { 3332, 31, -2 };
+static struct S0 s2[4] = { { -1, 5, 32766, { 127, 254 } }, { 21930, 1, -1, { 1, 181 } }, { -128, 1, 179, { 91, 239 } }, { -128, 2, 3, { 255, 137 } } };
+
+static void hex4(uint16_t v)
+{
+    int8_t k;
+    for (k = 12; k >= 0; k -= 4)
+        putchar("0123456789abcdef"[(v >> k) & 15]);
+}
+
+static void show(uint16_t id, uint32_t v)
+{
+    hex4(id);
+    putchar(' ');
+    hex4((uint16_t)(v >> 16));
+    hex4((uint16_t)v);
+    putchar('\n');
+}
+
+static uint32_t ck;
+
+static void mix(uint32_t v)
+{
+    ck = ((ck << 5) | (ck >> 27)) ^ v;
+    ck = ck + (uint32_t)0x9e3779b1;
+}
+
+static uint32_t state(void)
+{
+    uint8_t i, j;
+    ck = 0;
+    for (i = 0; i < 8; i++)
+        mix((uint32_t)a6[i]);
+    {
+        mix((uint32_t)s1.m0);
+        mix((uint32_t)s1.m1);
+        mix((uint32_t)s1.m2);
+    }
+    for (i = 0; i < 4; i++)
+        {
+            mix((uint32_t)s2[i].m0);
+            mix((uint32_t)s2[i].m1);
+            mix((uint32_t)s2[i].m2);
+            for (j = 0; j < 2; j++)
+                mix((uint32_t)s2[i].m3[j]);
+        }
+    return ck;
+}
+
+
+static int32_t h3(unsigned short x0, unsigned short x1)
+{
+    return ((((uint32_t)138) < s1.m1) || 1) ? s1.m0 : a6[1];
+}
+
+static int16_t f4(void)
+{
+    short w10 = 0;
+    w10 = 4;
+    while ((w10--) > 0) {
+        if (s2[2].m2 < h3(((uint16_t)1), ((uint32_t)1))) {
+            break;
+        }
+        s1.m0 = ((uint16_t)1);
+    }
+    return (uint16_t)1;
+}
+
+int main(void)
+{
+    show(1, (uint32_t)f4());
+    show(16385, state());
+    return 0;
+}

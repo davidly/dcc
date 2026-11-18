@@ -2664,6 +2664,7 @@ static int mir_lower_compound_value(int left, int right, int operation,
     const struct MirInsn *right_definition;
     const struct MirInsn *left_definition = mir_mutable_definition(left);
     int computation_type = target_type;
+    int right_type;
     int value;
 
     /* Extraction and arithmetic have different types: an unsigned field
@@ -2715,9 +2716,21 @@ static int mir_lower_compound_value(int left, int right, int operation,
         int converted;
 
         right_definition = mir_mutable_definition(right);
-        computation_type = common_arith_type(
-            computation_type, right_definition != NULL
-                ? right_definition->type : target_type);
+        /* Assignment/update expressions can acquire their float type only
+         * after block declarations or member addresses are replayed. Their
+         * AST wrapper need not carry the deferred mark. Keep the binary's
+         * conversion obligation when the lowered value is still untyped. */
+        if (right_definition != NULL && right_definition->type == 0)
+            deferred_rhs = 1;
+        right_type = right_definition != NULL
+            ? right_definition->type : target_type;
+        /* A field on the right has the same range-based promotion as a
+         * field on the left. Preserve the existing modulo-low-bits shapes
+         * for operations whose stored result is signedness-independent. */
+        if (right_definition != NULL && right_definition->bit_width > 0 &&
+            (operation == '/' || operation == '%'))
+            right_type = mir_promoted_operand_type(right_definition);
+        computation_type = common_arith_type(computation_type, right_type);
         /* With a nested-block rhs these conversions target an assumed type;
          * mark them so repair retypes them with the operation. */
         converted = mir_lower_conversion(left, computation_type);
@@ -4991,7 +5004,8 @@ static void mir_repair_overlapping_probe_home(const struct Sym *symbol)
     int size;
 
     if (scan_mode || !mir.declaration_active ||
-        g_func_pass.for_decl_seq < 0 || symbol->storage != SC_LOCAL)
+        (g_func_pass.for_decl_seq < 0 && strstr(symbol->name, "#b") == NULL) ||
+        symbol->storage != SC_LOCAL)
         return;
     object = mir_find_object(symbol->name);
     if (object < 0 || mir.objects[object].offset == symbol->offset)
@@ -5029,7 +5043,6 @@ void mir_note_declared_symbol(struct Sym *symbol)
     int is_new;
     if (!mir.active || symbol == NULL)
         return;
-    mir_repair_overlapping_probe_home(symbol);
     for (i = 0; i < mir.declared_count; ++i)
         if (strcmp(mir.declared_names[i], symbol->name) == 0)
             break;
@@ -5095,6 +5108,10 @@ void mir_note_declared_symbol(struct Sym *symbol)
     mir.declared_proto_variadic[i] = symbol->proto_variadic;
     memcpy(mir.declared_proto_types[i], symbol->proto_types,
            sizeof(mir.declared_proto_types[i]));
+    /* Block replay can number the declaration differently from its support
+     * probe. Publish its type first so object lookup can match that probe's
+     * source name, then reject a home overlapping an enclosing live local. */
+    mir_repair_overlapping_probe_home(symbol);
 }
 
 void mir_note_narrowed_for_counter(void)
