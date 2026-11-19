@@ -2719,8 +2719,12 @@ static int mir_lower_compound_value(int left, int right, int operation,
         /* Assignment/update expressions can acquire their float type only
          * after block declarations or member addresses are replayed. Their
          * AST wrapper need not carry the deferred mark. Keep the binary's
-         * conversion obligation when the lowered value is still untyped. */
-        if (right_definition != NULL && right_definition->type == 0)
+         * conversion obligation when the lowered value is still untyped.
+         * An && or || value is an untyped 0/1 phi but always an int; marking
+         * it would let repair retype a wide member target's operation to
+         * int before the member load is typed. */
+        if (right_definition != NULL && right_definition->type == 0 &&
+            right_definition->opcode != MIR_PHI)
             deferred_rhs = 1;
         right_type = right_definition != NULL
             ? right_definition->type : target_type;

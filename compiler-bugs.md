@@ -27,9 +27,34 @@ entries and their historical diagnoses are retained below.
 |---|---|---|---|
 
 No findings remain open from the extended integer and float fuzz runs.
-BUG-070 through BUG-074 are fixed on `fix/fuzz-15001-22000` below.
+BUG-070 through BUG-074 are fixed on `fix/fuzz-15001-22000` below, and
+BUG-075, a regression from the BUG-071 fix, is fixed with its report.
 BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
 diagnostic are fixed below.
+
+## BUG-075
+
+Upstream issue: none; found and fixed in the same change.
+
+**Fixed; promoted as `tests/tcmplog.c`.** A regression from the BUG-071 fix
+(`569da4d3`), which marks a compound operation for deferred retyping whenever
+its lowered right operand is untyped. An `&&` or `||` value is an untyped 0/1
+phi, so it was marked too; repair then met the member load before it was
+typed, rederived `long - int` as `int`, and retyped away the right operand's
+widening. `mir_lower_compound_value` no longer marks a phi, whose type is
+always `int`. All three seeds pass in every configuration, and of the corpus
+only the new test's assembly changes. Both full suites, the extended suite,
+the dccpeep fixtures, the five typed-expr fuzz modes and the forced-candidate
+sweep pass; existing performance rows are unchanged.
+
+**A compound assignment to a `long` struct member with an `&&` or `||` right
+operand stores only the low word, sign-extended, when the function also
+declares a nested-block local.** `s.m4 += (1L || 1); { short b = 1; }` turns
+`0x47FEEF93` into `0xFFFFEF94`. A global or pointer target, or a `?:`,
+comparison, assignment or update on the right, is unaffected. The mismatch
+appears with and without `dccpeep` and the stack check.
+
+Found in integer seeds 22131, 23375 and 23873 (seeds 22001–24000).
 
 ## BUG-070
 
