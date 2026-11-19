@@ -43,6 +43,8 @@ below.
 
 ## BUG-076
 
+Upstream issue: [#375](https://github.com/davidly/dcc/issues/375).
+
 **Fixed; promoted as `tests/tldhexx.c` and the dccpeep fixture
 `ld-h-zero-clobber`.** `pass_elim_redundant_ld_h_zero` deletes an
 `ld h,0` while H is still known to be zero, and decided what ends that run
