@@ -1,0 +1,187 @@
+/* Regression for compound assignment with a logical expression as rhs. */
+#include <stdint.h>
+#include <stdio.h>
+
+struct S0 {
+    uint8_t m0;
+    int8_t m1[4];
+    int16_t m2;
+    uint32_t m3;
+    int16_t m4 : 13;
+};
+struct S1 {
+    int8_t m0;
+    int16_t m1 : 4;
+    uint32_t m2;
+    int16_t m3 : 6;
+    uint8_t m4;
+    uint8_t m5;
+};
+
+char g0 = -65;
+char g1 = 8;
+unsigned char g2 = 254;
+static uint8_t g3 = 255;
+static short g4 = -8584;
+static unsigned short g5 = 7;
+int32_t g6 = -129;
+int32_t g7 = 74565;
+static uint32_t g8 = 0xfffe;
+static uint8_t a0[8] = { 69, 59, 1, 165, 129, 206, 1, 5 };
+int16_t a1[8] = { 135, 223, -32767, -2, -2, 0, 22547, 42 };
+static uint16_t a2[4] = { 128, 1000, 0xfffe, 7 };
+static int32_t a3[4] = { -2, 255, 21930, 43605 };
+static uint32_t a4[8] = { 0xffffff00, 171, 0xfffffffe, 0xffffff6a, 235, 2, 256, 0xffffff21 };
+uint8_t a5[4][4] = { { 127, 3, 63, 255 }, { 1, 255, 63, 255 }, { 0, 7, 127, 0 }, { 69, 16, 116, 254 } };
+int8_t a6[8] = { 1, 0, -1, 34, -1, -2, -1, 0 };
+static struct S0 s0 = { 131, { 15, 1, -124, 31 }, 63, 129, -812 };
+static struct S1 s1 = { -50, -1, 0x85d331ff, -13, 212, 68 };
+static struct S1 s2[4] = { { 12, 2, 0xffffff80, 23, 239, 31 }, { 0, 3, 0x8000, 27, 101, 19 }, { 2, -3, 15, 26, 195, 1 }, { 0, 1, 0xfffe, 7, 237, 199 } };
+
+static void hex4(uint16_t v)
+{
+    int8_t k;
+    for (k = 12; k >= 0; k -= 4)
+        putchar("0123456789abcdef"[(v >> k) & 15]);
+}
+
+static void show(uint16_t id, uint32_t v)
+{
+    hex4(id);
+    putchar(' ');
+    hex4((uint16_t)(v >> 16));
+    hex4((uint16_t)v);
+    putchar('\n');
+}
+
+static uint32_t ck;
+
+static void mix(uint32_t v)
+{
+    ck = ((ck << 5) | (ck >> 27)) ^ v;
+    ck = ck + (uint32_t)0x9e3779b1;
+}
+
+static uint32_t state(void)
+{
+    uint8_t i, j;
+    ck = 0;
+    mix((uint32_t)g0);
+    mix((uint32_t)g1);
+    mix((uint32_t)g2);
+    mix((uint32_t)g3);
+    mix((uint32_t)g4);
+    mix((uint32_t)g5);
+    mix((uint32_t)g6);
+    mix((uint32_t)g7);
+    mix((uint32_t)g8);
+    for (i = 0; i < 8; i++)
+        mix((uint32_t)a0[i]);
+    for (i = 0; i < 8; i++)
+        mix((uint32_t)a1[i]);
+    for (i = 0; i < 4; i++)
+        mix((uint32_t)a2[i]);
+    for (i = 0; i < 4; i++)
+        mix((uint32_t)a3[i]);
+    for (i = 0; i < 8; i++)
+        mix((uint32_t)a4[i]);
+    for (i = 0; i < 4; i++)
+        for (j = 0; j < 4; j++)
+            mix((uint32_t)a5[i][j]);
+    for (i = 0; i < 8; i++)
+        mix((uint32_t)a6[i]);
+    {
+        mix((uint32_t)s0.m0);
+        for (j = 0; j < 4; j++)
+            mix((uint32_t)s0.m1[j]);
+        mix((uint32_t)s0.m2);
+        mix((uint32_t)s0.m3);
+        mix((uint32_t)s0.m4);
+    }
+    {
+        mix((uint32_t)s1.m0);
+        mix((uint32_t)s1.m1);
+        mix((uint32_t)s1.m2);
+        mix((uint32_t)s1.m3);
+        mix((uint32_t)s1.m4);
+        mix((uint32_t)s1.m5);
+    }
+    for (i = 0; i < 4; i++) {
+        mix((uint32_t)s2[i].m0);
+        mix((uint32_t)s2[i].m1);
+        mix((uint32_t)s2[i].m2);
+        mix((uint32_t)s2[i].m3);
+        mix((uint32_t)s2[i].m4);
+        mix((uint32_t)s2[i].m5);
+    }
+    return ck;
+}
+
+static uint8_t h1(void);
+static uint32_t h2(void);
+static uint8_t (*h1_p)(void) = h1;
+static uint32_t (*h2_p)(void) = h2;
+
+static uint32_t h0(void)
+{
+    uint8_t l1 = (uint16_t)1;
+    uint32_t l2 = -218;
+    uint32_t w3 = 0;
+    uint32_t i5 = 0;
+    return (uint16_t)1;
+}
+
+static uint8_t h1(void)
+{
+    uint32_t v1[8] = { 0xb85675f6, 104, 0xffff7fff, 0xffff7fff, 0x61714158, 0x7fffffff, 0xffffff9c, 0x7fffffff };
+    uint32_t *p2 = &v1[2];
+    struct S0 t3 = { 90, { 16, 1, -1, -86 }, -32767, 0xffffffff, -719 };
+    return (uint16_t)1;
+}
+
+static uint32_t h2(void)
+{
+    int8_t v1[8] = { 19, -1, 0, -127, 15, 1, 0, 9 };
+    int8_t *p2 = &v1[5];
+    return (uint32_t)16711935;
+}
+
+static int16_t h3(void)
+{
+    int32_t l1 = (int32_t)1;
+    int16_t v2[4] = { -2, 2, 1, 31 };
+    int16_t *p3 = &v2[0];
+    struct S1 t4 = { 0, 5, 255, -8, 69, 1 };
+    return (uint16_t)1;
+}
+
+static uint8_t k0(void)
+{
+    unsigned char l1 = (uint16_t)1;
+    int32_t v2[2] = { -1, 7 };
+    return (uint16_t)1;
+}
+
+static uint16_t f4(struct S1 *x0)
+{
+    int32_t l1 = (int32_t)1;
+    unsigned char l2 = (uint16_t)1;
+    uint16_t l3 = (uint16_t)1;
+    uint32_t l4 = (uint32_t)1;
+    uint32_t v5[2] = { 0xfffffffd, 0x8000 };
+    uint32_t *p6 = &v5[0];
+    int8_t *p7 = &a6[1];
+    {
+        int16_t *q8 = &a1[0];
+        int16_t *e9 = a1 + 8;
+    }
+    x0->m2 ^= (((int32_t)1) || ((int32_t)1));
+    return (int32_t)1;
+}
+
+int main(void)
+{
+    show(1, (uint32_t)f4((&s2[1])));
+    show(16385, state());
+    return 0;
+}

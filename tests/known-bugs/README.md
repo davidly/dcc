@@ -58,6 +58,11 @@ Open reproducers: none. The extended seeds 15001–22000 findings are promoted a
 - BUG-073: `tests/twalksc.c`, block probe homes beside live pointer walks.
 - BUG-074: `tests/twalkend.c`, the separate pointer-walk hang reduction.
 
+Issue #366 (integer seed 33500), originally BUG-075 on the separate
+`fix/fuzz-30001-40000` branch, is covered by `tests/tfarpost.c`. That branch's
+fix was missing from main and is included here, with a separate
+output baseline and performance row.
+
 ## Checking them
 
 ```sh
