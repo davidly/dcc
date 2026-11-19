@@ -1,0 +1,40 @@
+; A known-zero H stays known only until something writes H: exx swaps in H', and inc, rotates, shifts and set can change it.
+cseg
+
+_exx_swap:
+ld l,a
+ld h,0
+exx
+ld l,(ix-1)
+ld h,0
+push hl
+exx
+ret
+
+_inc_h:
+ld l,a
+ld h,0
+inc h
+ld l,b
+ld h,0
+ret
+
+_srl_h:
+ld l,a
+ld h,0
+set 1,h
+srl h
+ld l,b
+ld h,0
+ret
+
+_still_zero:
+ld l,a
+ld h,0
+push hl
+ld l,b
+ld h,0
+push hl
+ret
+
+end

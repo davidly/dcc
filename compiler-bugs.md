@@ -28,9 +28,35 @@ entries and their historical diagnoses are retained below.
 
 No findings remain open from the extended integer and float fuzz runs.
 BUG-070 through BUG-074 are fixed on `fix/fuzz-15001-22000` below, and
-BUG-075, a regression from the BUG-071 fix, is fixed with its report.
-BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
-diagnostic are fixed below.
+BUG-075, a regression from the BUG-071 fix, is fixed with its report, and
+so is BUG-076, a `dccpeep` pass that missed `exx`. BUG-013's unsigned
+bit-field promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed
+below.
+
+## BUG-076
+
+**Fixed; promoted as `tests/tldhexx.c` and the dccpeep fixture
+`ld-h-zero-clobber`.** `pass_elim_redundant_ld_h_zero` deletes an
+`ld h,0` while H is still known to be zero, and decided what ends that run
+from a list of instruction prefixes. `exx` was not on it, nor `inc h`,
+`dec h` or a rotate, shift, `set` or `res` of `h`. dcc builds a call's
+second argument in the alternate registers, so after zero-extending the
+first argument in HL, the `ld h,0` in `exx; ld l,(ix-1); ld h,0; push hl;
+exx` was deleted and H' was pushed as the argument's high byte. The pass now
+also ends the run at any line whose recorded effects write H, at `exx`, at
+any unclassified instruction naming `h` or `hl`, and at user assembly. Of the
+635-program corpus, only the new test's `dccpeep` output changes.
+
+**A `uint8_t` loop counter passed as a 16-bit argument, after an argument
+that is zero-extended from a byte, arrives with a nonzero high byte under
+`dccpeep`.** In
+`for (uint8_t i = 3; i < 6; i++) a6[above(a5[3][1], i) & 7] = 1;`, where
+`above` returns `x1 > 127`, the call returns 1 when H' is nonzero (here, left
+by an earlier `printf`), so `a6[1]` is set instead of `a6[0]`. Builds without
+`dccpeep` are unaffected.
+
+Found in deep-shape integer seed 27896 (`--depth 4 --size 8`, seeds
+27001–28000).
 
 ## BUG-075
 

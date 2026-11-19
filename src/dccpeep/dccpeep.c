@@ -11961,6 +11961,24 @@ static int pass_elim_redundant_ld_h_zero(void)
             strncmp(tmp, "call ", 5) == 0 ||
             strcmp(tmp, "ret") == 0) {
             h_is_zero = 0;
+            continue;
+        }
+
+        /* Anything else that writes H also ends the run: inc/dec h, the
+         * rotates, shifts and set/res on h, and exx, which swaps in the
+         * alternate H. An "ld h,0" after exx zeroes H', not the H known
+         * to be zero. */
+        {
+            const PeepLineInfo *info = peep_line_info(i);
+
+            if (info == NULL || info->kind == PEEP_LINE_OPAQUE ||
+                (info->kind == PEEP_LINE_INSTRUCTION &&
+                 ((info->effects.writes & PEEP_REG_H) ||
+                  (info->effects.unknown &&
+                   (strcmp(tmp, "exx") == 0 ||
+                    ((info->left.registers | info->right.registers) &
+                     PEEP_REG_H))))))
+                h_is_zero = 0;
         }
     }
 
