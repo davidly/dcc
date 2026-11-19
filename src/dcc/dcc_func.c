@@ -3245,6 +3245,22 @@ void bank_api_record(struct Sym *s, int definition)
     }
 }
 
+/* A file-scope name declared both as a function and as an object is a
+ * constraint violation (C99 6.7p3). add_global() would silently turn the
+ * object into a function, so its later uses failed with an unrelated
+ * "unsupported" error; report the redefinition where it happens instead. */
+static void check_global_symbol_kind(const char *name, int is_function)
+{
+    struct Sym *prior = find_global(name);
+    char msg[128];
+
+    if (prior == NULL || (prior->storage == SC_FUNC) == is_function)
+        return;
+    snprintf(msg, sizeof(msg),
+             "redefinition of '%s' as different kind of symbol", name);
+    error_here(msg);
+}
+
 void parse_function_or_global(int base_type)
 {
     int done;
@@ -3352,6 +3368,7 @@ void parse_function_or_global(int base_type)
          * Treat this as a function declaration.  Pointer declarators such as
          * fn_t *fp have already cleared base_is_func_typedef above. */
         if (base_is_func_typedef && g_funcptr_decl_array_len == 0) {
+            check_global_symbol_kind(name, 1);
             s = add_global(name, type, SC_FUNC);
             s->pointee_is_volatile = pointee_is_volatile;
             s->pointee_volatile_mask = volatile_mask;
@@ -3371,6 +3388,7 @@ void parse_function_or_global(int base_type)
 
         /* Function declarator or definition. */
         if (is_funcret_funcptr_decl || (g_funcptr_decl_array_len == 0 && accept('('))) {
+            check_global_symbol_kind(name, 1);
             s = add_global(name, type, SC_FUNC);
             s->pointee_is_volatile = pointee_is_volatile;
             s->pointee_volatile_mask = volatile_mask;
@@ -3721,6 +3739,7 @@ void parse_function_or_global(int base_type)
 
             if (g_decl.is_extern) {
                 int already_declared = (find_global(name) != NULL);
+                check_global_symbol_kind(name, 0);
                 s = add_global(name, type, SC_EXTERN);
                 s->is_volatile = object_is_volatile;
                 s->pointee_is_volatile = pointee_is_volatile;
@@ -3803,6 +3822,7 @@ void parse_function_or_global(int base_type)
                 return;
             }
 
+            check_global_symbol_kind(name, 0);
             s = add_global(name, type, SC_GLOBAL);
             copy_funcptr_prototype_to_sym(s, direct_funcptr_decl);
             if (s->storage == SC_EXTERN)
