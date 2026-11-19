@@ -4259,6 +4259,19 @@ static int mir_lower_expr_impl(const struct AstNode *node)
                     left, right, binary_operator, target_type,
                     node != mir_discarded_expr,
                     mir_compound_rhs_deferred(node->b) || pointer_deferred);
+                /* With no pointee type assumed at all, lowering left no
+                 * narrowing; a used value still owes one (`v = (p[1] -= 1)`
+                 * on a uint8_t *p is 255, not -1). */
+                if (pointer_deferred && target_type == 0 &&
+                    node != mir_discarded_expr) {
+                    int result = mir_new_value();
+                    insn = mir_emit(MIR_UNARY);
+                    insn->dst = result;
+                    insn->src1 = value;
+                    insn->type = 0;
+                    insn->immediate = 0;
+                    value = result;
+                }
                 if (pointer_deferred) {
                     struct MirInsn *narrowing =
                         mir_mutable_definition(value);
@@ -9050,6 +9063,103 @@ static void mir_repair_deferred_float_types(void)
     } while (changed);
 }
 
+/* The promoted type of a deferred binary's operand during scoped repair. A
+ * member load is typed only after that repair, but its member address
+ * already is: assuming int for it would narrow a long target's operation
+ * (`s.m %= (b -= 1)`). Other untyped operands keep the int assumption. */
+static int mir_repair_operand_type(const struct MirInsn *operand)
+{
+    const struct MirInsn *address;
+
+    if (operand->type != 0)
+        return mir_promoted_operand_type(operand);
+    if (operand->opcode == MIR_LOAD_INDIRECT && operand->bit_width == 0 &&
+        operand->src1 >= 0) {
+        address = mir_definition(operand->src1);
+        if (address != NULL && address->opcode == MIR_MEMBER_ADDRESS &&
+            type_ptr_depth(address->type) == 1 &&
+            !type_is_float(type_decay_ptr(address->type)) &&
+            !type_is_struct_object(type_decay_ptr(address->type)))
+            return promote_int_type(type_decay_ptr(address->type));
+    }
+    return TYPE_INT;
+}
+
+/* The value of a constant seen through plain conversions and unary + - ~,
+ * each truncating to its type and extending by that type's signedness. */
+static int mir_converted_constant_value(const struct MirInsn *insn,
+                                        long *value)
+{
+    int bytes;
+    unsigned long mask;
+    unsigned long bits;
+
+    if (insn == NULL || type_ptr_depth(insn->type) != 0 ||
+        type_is_float(insn->type))
+        return 0;
+    if (insn->opcode == MIR_UNARY && insn->src1 >= 0 &&
+        (insn->immediate == 0 || insn->immediate == '+' ||
+         insn->immediate == '-' || insn->immediate == '~')) {
+        if (!mir_converted_constant_value(mir_definition(insn->src1), value))
+            return 0;
+        if (insn->immediate == '-')
+            *value = (long)(0UL - (unsigned long)*value);
+        else if (insn->immediate == '~')
+            *value = ~*value;
+    } else if (insn->opcode == MIR_CONST) {
+        *value = insn->immediate;
+    } else {
+        return 0;
+    }
+    bytes = type_size(insn->type);
+    if (bytes != 1 && bytes != 2 && bytes != 4)
+        return 0;
+    mask = bytes == 4 ? 0xffffffffUL : bytes == 2 ? 0xffffUL : 0xffUL;
+    bits = (unsigned long)*value & mask;
+    if ((insn->type & TYPE_UNSIGNED) == 0 &&
+        (bits & ((mask >> 1) + 1)) != 0)
+        bits |= ~mask;
+    *value = (long)bits;
+    return 1;
+}
+
+/* Whether a deferred binary's operand is a negative one- or two-byte
+ * constant, or conversions of one, narrower than the operation's four-byte
+ * integer type. A non-negative one widens to the same bits either way. */
+static int mir_narrow_constant_operand(const struct MirInsn *operand,
+                                       int operand_type)
+{
+    long value;
+
+    if (operand == NULL || type_size(operand_type) != 4 ||
+        type_is_float(operand_type) || type_ptr_depth(operand_type) != 0 ||
+        (type_size(operand->type) != 1 && type_size(operand->type) != 2))
+        return 0;
+    return mir_converted_constant_value(operand, &value) && value < 0;
+}
+
+/* Convert operand 1 or 2 of the binary at `index` to `type`, marked like
+ * lowering's conversions so later rounds retype rather than repeat it. */
+static void mir_insert_repair_widening(int index, int operand, int type)
+{
+    int value = mir_new_value();
+    struct MirInsn *conversion =
+        mir_insert_instruction_before(index, MIR_UNARY);
+
+    if (conversion == NULL)
+        fatal("cannot insert deferred integer conversion");
+    conversion->dst = value;
+    conversion->src1 = operand == 1 ? mir.insns[index + 1].src1
+                                    : mir.insns[index + 1].src2;
+    conversion->type = type;
+    conversion->immediate = 0;
+    conversion->deferred_operand_types = 1;
+    if (operand == 1)
+        mir.insns[index + 1].src1 = value;
+    else
+        mir.insns[index + 1].src2 = value;
+}
+
 void mir_resolve_deferred_metadata(void)
 {
 
@@ -9276,10 +9386,8 @@ void mir_resolve_deferred_metadata(void)
                         left->type = TYPE_INT;
                     if (right->opcode == MIR_PHI && right->type == 0)
                         right->type = TYPE_INT;
-                    left_type = left->type != 0
-                        ? mir_promoted_operand_type(left) : TYPE_INT;
-                    right_type = right->type != 0
-                        ? mir_promoted_operand_type(right) : TYPE_INT;
+                    left_type = mir_repair_operand_type(left);
+                    right_type = mir_repair_operand_type(right);
                     operand_type =
                         insn->immediate == TOK_SHL || insn->immediate == TOK_SHR
                             ? left_type
@@ -9327,6 +9435,25 @@ void mir_resolve_deferred_metadata(void)
                              right_conversion->type) != operand_type)) {
                         right_conversion->type = operand_type;
                         changed = 1;
+                    }
+                    /* A constant's widening that lowering omitted as an
+                     * assumed identity (`(b = 933859954u) < l`, b a block
+                     * short) still follows its own type; emitted as is, the
+                     * short's bits 0x9272 would widen as 37490. */
+                    if (insn->immediate != TOK_SHL &&
+                        insn->immediate != TOK_SHR) {
+                        /* Decide both before an insertion moves them. */
+                        int widen_left = left_conversion == NULL &&
+                            mir_narrow_constant_operand(left, operand_type);
+                        int widen_right = right_conversion == NULL &&
+                            mir_narrow_constant_operand(right, operand_type);
+
+                        if (widen_left)
+                            mir_insert_repair_widening(i++, 1, operand_type);
+                        if (widen_right)
+                            mir_insert_repair_widening(i++, 2, operand_type);
+                        if (widen_left || widen_right)
+                            changed = 1;
                     }
                 } else if (insn->opcode == MIR_PHI &&
                            insn->deferred_operand_types &&
@@ -9469,8 +9596,11 @@ scoped_type_repair_done:
             !type_is_float(left->type) && !type_is_float(right->type))
             insn->secondary_offset =
                 common_arith_type(left->type, right->type);
+        /* An operand still untyped here (a member load not yet typed)
+         * would derive int; keep the operation's type instead. */
         if (left != NULL && right != NULL &&
             (insn->immediate == '/' || insn->immediate == '%') &&
+            left->type != 0 && right->type != 0 &&
             type_ptr_depth(left->type) == 0 &&
             type_ptr_depth(right->type) == 0) {
             insn->type = common_arith_type(left->type, right->type);

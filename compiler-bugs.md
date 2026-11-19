@@ -34,14 +34,89 @@ entries and their historical diagnoses are retained below.
 | [BUG-081](#bug-081) | #372 | fixed | A byte compound value in a widened conditional stores the wrong unsigned word |
 | [BUG-082](#bug-082) | #375 | fixed | dccpeep drops the zero-extend of a byte argument built after exx |
 | [BUG-083](#bug-083) | #376 | fixed | Compound remainder by a unary over a block-local operation stays signed |
+| [BUG-084](#bug-084) | #377 | fixed | Member compound remainder by a block-local assignment is computed as int |
+| [BUG-085](#bug-085) | #378 | fixed | A used compound value through a block-local pointer is not narrowed |
+| [BUG-086](#bug-086) | #379 | fixed | A negative constant assigned to a narrow block local compares as unsigned |
 
 No findings remain open from the extended runs through seeds 24000. In the
 seeds 30001–40000 follow-up, BUG-076–081 are fixed.
 BUG-070 through BUG-074 are fixed on `fix/fuzz-15001-22000` below, and
 BUG-075, a regression from the BUG-071 fix, is fixed with its report, as
 are BUG-082, a `dccpeep` pass that missed `exx`, and BUG-083, a sibling of
-BUG-075 found in the deep-shape runs. BUG-013's unsigned bit-field
-promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
+BUG-075 found in the deep-shape runs, and so are BUG-084 through BUG-086,
+three more nested-block typing defects from the deep-shape runs and a probe
+around them. BUG-013's unsigned bit-field promotion, BUG-009's hang and
+BUG-022's masked diagnostic are fixed below.
+
+## BUG-086
+
+Upstream issue: [#379](https://github.com/davidly/dcc/issues/379).
+
+**Fixed; promoted as `tests/tblkncmp.c`.** Assigning a constant to a
+nested-block local whose type lowering could only assume leaves the
+assignment's value with no widening, an assumed identity. When the
+narrow value is negative and the comparison or arithmetic around it is four
+bytes wide, the emitter widened the short's bits as unsigned: 0x9272 became
+37490 instead of -28046. Scoped repair now inserts the widening for a
+negative one- or two-byte constant (seen through conversions and unary
+`+`, `-`, `~`) under a four-byte integer operation, which then folds to the
+sign-extended constant. A non-negative constant widens to the same bits
+either way and is left alone, so no existing test's code changes.
+
+**Comparing the value of an assignment of a negative constant to a signed
+narrow nested-block local against a wider operand gives the wrong
+answer.** `{ short b = 1; if ((b = (uint32_t)933859954) < x[3]) *x = 1; }`
+with `x[3] == 5` should store (`b` is -28046) but does not; `(b = -3) < l`
+for a 32-bit `l` is false. `+` and `-` around the same value are unaffected,
+as is the same code without the nested block.
+
+Found in deep-shape integer seed 32225 (`--depth 4 --size 8`, seeds
+31001–36000), where only the `dccpeep` build differed; the reduced program
+fails in every configuration.
+
+## BUG-085
+
+Upstream issue: [#378](https://github.com/davidly/dcc/issues/378).
+
+**Fixed; promoted as `tests/tblkpv.c`.** A compound assignment through a
+pointer declared in a nested block (BUG-068) is lowered before the pointer
+has a type. When no pointee type is assumed at all, the compound lowering
+emitted no narrowing back to it, and repair only retargets a narrowing that
+exists, so a used value kept the wider operation's result. A used value now
+gets a narrowing typed with the target, flagged to follow the repaired store
+like BUG-068's.
+
+**The value of a compound assignment through a `uint8_t *` (or other narrow
+pointer) declared in a nested block is used without narrowing.**
+`{ uint8_t *p = bytes; p[1] = 0; v = (p[1] -= 1); }` sets `v` to -1
+instead of 255; through an `int8_t *`, `(q[0] += 1)` from 127 gives 128
+instead of -128. The stored byte is correct.
+
+Found by a probe of compound assignments around BUG-084, not by the fuzzer.
+
+## BUG-084
+
+Upstream issue: [#377](https://github.com/davidly/dcc/issues/377).
+
+**Fixed; promoted as `tests/tblkmem.c`.** Scoped type repair derives a
+deferred binary's type from its operands, and treated an untyped operand as
+`int`. A struct member's load is typed only after that repair, so a
+`/` or `%` whose right operand assigns a nested-block local, and is
+therefore deferred, was computed as `int` on a `long` member; the late pass
+that rederives `/` and `%` from their operands did the same. Repair now
+takes an untyped member load's type from its member address, which is
+already typed, and the late pass leaves an operation with an untyped operand
+alone. Bit-field members and other untyped operands keep the `int`
+assumption.
+
+**A compound `/=` or `%=` on a `long` struct member whose right operand
+assigns a nested-block local stores the wrong value.**
+`s.m = 43605; { uint8_t b = 0; s.m %= (b -= 1); }` should leave 0
+(43605 is 171 × 255) but stores -1. Global and array-element targets are
+unaffected.
+
+Found in deep-shape integer seed 32261 (`--depth 4 --size 8`, seeds
+31001–36000).
 
 ## BUG-083
 
