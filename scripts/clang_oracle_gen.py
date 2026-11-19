@@ -1495,7 +1495,6 @@ FEATURES = frozenset((
 # that each one would otherwise keep rediscovering. Remove a feature from this
 # table when its bug is fixed.
 KNOWN_BUGS = {
-    'bytevarshl': 'BUG-002',
 }
 
 
