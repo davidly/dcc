@@ -25,12 +25,47 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
+| [Seed 33500](#seed-33500) | #366 | fixed | Postfix update of a distant stack parameter rejected in a call argument |
+| [BUG-076](#bug-076) | #367 | fixed | Struct member compound assignment with a logical RHS corrupts the stored value |
+| [BUG-077](#bug-077) | #368 | fixed | Signed right shift after narrowing a multiplication yields a logical shift |
+| [BUG-078](#bug-078) | #369 | fixed | Float assignment from a constant logical expression stores the wrong value |
+| [BUG-079](#bug-079) | #370 | fixed | Nested loops lose float local state across an inner short-circuit condition |
+| [BUG-080](#bug-080) | #371 | fixed | Float compound division by a negated member-array decrement computes the wrong value |
+| [BUG-081](#bug-081) | #372 | fixed | A byte compound value in a widened conditional stores the wrong unsigned word |
 
-No findings remain open from the extended integer and float fuzz runs.
+No findings remain open from the extended runs through seeds 24000. In the
+seeds 30001–40000 follow-up, BUG-076–081 are fixed.
 BUG-070 through BUG-074 are fixed on `fix/fuzz-15001-22000` below, and
 BUG-075, a regression from the BUG-071 fix, is fixed with its report.
 BUG-013's unsigned bit-field promotion, BUG-009's hang and BUG-022's masked
 diagnostic are fixed below.
+
+## Seed 33500
+
+Upstream issue: [#366](https://github.com/davidly/dcc/issues/366).
+
+**Fixed; promoted as `tests/tfarpost.c`.** The issue was previously
+closed by commit `53ff66a5` on `fix/fuzz-30001-40000`, but that commit had not
+reached `main`; rerunning integer seed 33500 on `11edadec` reproduced the
+same DCC-E1002 diagnostic. The report is reopened to track integration.
+This entry was numbered BUG-075 on that branch; BUG-075 below is the
+separate logical-compound defect already recorded on main.
+
+`ast_postfix_plain_int` admitted distant locals but rejected parameters
+outside IX's direct displacement range. It now admits integer parameters
+under the same policy; MIR already computes their frame addresses. The
+existing upstream fix and `tfarpost` regression are reused. The test retains
+the reduced seed and observes prefix/postfix values and updated signed and
+unsigned byte/word parameters after 124-, 126-, and 128-byte struct
+arguments. Its host-proven baseline and performance row are independent of
+the existing tests. The original saved seed and the unit test pass peep and
+nopeep, with stack checking enabled and disabled.
+
+The full plus extended suite passes: 618 applications pass, 24 are skipped,
+and the extended, diagnostic and dccpeep suites pass. Existing performance
+baseline rows are byte-for-byte unchanged, with zero measured regressions.
+Integer seeds 33401–33700 with production configurations and `--off known`
+report 297 ok, 3 INVALID, zero failures. Logs are under `build/fix33500/`.
 
 ## BUG-075
 
@@ -55,6 +90,106 @@ comparison, assignment or update on the right, is unaffected. The mismatch
 appears with and without `dccpeep` and the stack check.
 
 Found in integer seeds 22131, 23375 and 23873 (seeds 22001–24000).
+
+## BUG-076
+
+Upstream issue: [#367](https://github.com/davidly/dcc/issues/367).
+
+**Fixed by the logical compound-assignment typing repair for BUG-075; promoted
+as `tests/tcmpxor.c`.** The fuzz reproducer covers a 32-bit struct member
+updated with `^=` and an `||` expression amid surrounding declarations. It
+now matches the host with and without `dccpeep`. All existing performance
+rows remain unchanged; `tcmpxor` adds its own measured row.
+
+**A struct member compound assignment with a logical-expression right
+operand stores the wrong value.** Integer seeds 30170, 30623, 31092, 31375,
+31494, 31796, 31858, 32137, 32313, 32660, 32782, 33159, 33477, 33690,
+34396, 35096, 35331, 35800, 35837, 36321, 37383, 37755, 37764, 38180,
+38200, 38242, 38386, 39169 and 39513 reduced to this shape.
+
+## BUG-078
+
+Upstream issue: [#369](https://github.com/davidly/dcc/issues/369).
+
+**Fixed; promoted as `tests/tfbool.c`.** When a constant logical expression
+folded to an untyped MIR constant and was widened to float, its source was
+treated as an arbitrary register value instead of the C `int` value `1`.
+`mir_type_untyped_widened_value` now types that constant as `int` for float
+consumers; boolean phis retain the existing path. The reproducer passes with
+and without `dccpeep`. Existing performance rows remain unchanged; `tfbool`
+adds its own measured row.
+
+**A logical expression assigned to a float must convert its `int` result to
+`1.0f`.** The failure occurs for a constant form such as `fg1 = (1 || 0.0f)`.
+Float seeds 33890, 34226, 37592 and 39436 reduced to this shape.
+
+## BUG-077
+
+Upstream issue: [#368](https://github.com/davidly/dcc/issues/368).
+
+**Fixed; promoted as `tests/tshrnarr.c`.** The equal-width cast from unsigned
+to signed was removed as a representation-only conversion even though the
+value fed a signed right shift. The cast is now retained for a right-shift
+consumer whose promoted operand signedness differs from the source. The
+reproducer passes with and without `dccpeep`; existing performance rows are
+unchanged, and `tshrnarr` has its own measured row.
+
+**A signed right shift after narrowing an unsigned product was emitted as a
+logical shift.** On the second call, narrowing `g3 * 1` to `int16_t` yields
+`-1`; shifting it right by one must remain `-1`.
+
+## BUG-079
+
+Upstream issue: [#370](https://github.com/davidly/dcc/issues/370).
+
+**Fixed; promoted as `tests/tfland.c`.** The signed-zero comparison branch
+emitter's compact form copied PHIs on its false edge but omitted copies for
+the fallthrough edge. When the outer loop entered the nested loop, its float
+local PHI therefore read an uninitialized slot. The compact branch now emits
+the pending fallthrough copies after its tests. The reproducer passes with
+and without `dccpeep`; existing performance rows remain unchanged, and
+`tfland` adds its own measured row.
+
+**Nested loops lose float-local state across a short-circuit condition.** In
+the reduced case, a float local is copied into an array and then updated
+inside the inner loop; the final checksum differs from the host.
+
+## BUG-080
+
+Upstream issue: [#371](https://github.com/davidly/dcc/issues/371).
+
+**Fixed; promoted as `tests/tcmpflt.c`.** A compound division with an
+unresolved left operand did not retain its deferred operand-type repair
+obligation. The resolved float member load was therefore combined with an
+integer operation type. `mir_lower_compound_value` now preserves deferred
+repair for float computations with an unresolved left operand, retaining
+the existing handling of a deferred right operand. Integer operations keep
+their established typing so logical compound assignments remain correct.
+The reduced reproducer passes with and without `dccpeep`; `tcmpflt` has its
+own measured performance row and existing rows remain unchanged.
+
+**Float compound division by a negated member-array decrement computes the
+wrong value.** In the reduced case,
+`s1[1].m3 /= (-(--s0.m2[0]));` must divide using the float value produced by
+the decrement and negation.
+
+## BUG-081
+
+Upstream issue: [#372](https://github.com/davidly/dcc/issues/372).
+
+**Fixed; promoted as `tests/tphibyte.c`.** A loop-carried promoted byte value
+and its phi shared a backend slot number, so the spill planner removed the
+edge copy. The phi reads through its declared local home, which is distinct
+from that slot. `mir_collect_phi_copies_for_edge` now retains the copy for a
+byte phi using its scalar object home unless that edge already stores the
+source value into the object. The reduced reproducer passes with and without
+`dccpeep`; `tphibyte` has a measured performance row and existing rows remain
+unchanged.
+
+**A signed-byte compound-assignment value widened through a conditional can
+be stale on a loop backedge.** Three iterations of
+`result = (0 ? (uint32_t)0 : (value -= 0)); value -= 1;` must leave the
+unsigned word result at `0xffff`.
 
 ## BUG-070
 

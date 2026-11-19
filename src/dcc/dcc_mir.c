@@ -1840,11 +1840,10 @@ static int mir_emit_pointer_word_load(int address, int result_type)
     return value;
 }
 
-/* && and || lower to untyped 0/1 phis, and an untyped value is never
- * converted. Before such a phi is widened to a long or float, type it as the
- * int it is; otherwise the high word is whatever HL:DE held. Narrow
- * consumers, and untyped constants (folded later), keep the untyped form the
- * optimizers and exact schedules expect. */
+/* && and || lower to untyped 0/1 values. Before an untyped boolean phi or a
+ * folded boolean constant is widened to long or float, type it as the int it
+ * is; otherwise the high word is whatever HL:DE held. Narrow consumers keep
+ * the untyped form the optimizers and exact schedules expect. */
 static void mir_type_untyped_widened_value(int value, int target_type)
 {
     struct MirInsn *definition;
@@ -1853,8 +1852,9 @@ static void mir_type_untyped_widened_value(int value, int target_type)
         (type_size(target_type) <= 2 && !type_is_float(target_type)))
         return;
     definition = mir_mutable_definition(value);
-    if (definition != NULL && definition->opcode == MIR_PHI &&
-        definition->type == 0)
+    if (definition != NULL && definition->type == 0 &&
+        (definition->opcode == MIR_PHI ||
+         (type_is_float(target_type) && definition->opcode == MIR_CONST)))
         definition->type = TYPE_INT;
 }
 
@@ -2665,6 +2665,9 @@ static int mir_lower_compound_value(int left, int right, int operation,
     const struct MirInsn *left_definition = mir_mutable_definition(left);
     int computation_type = target_type;
     int right_type;
+    int deferred_lhs = left_definition != NULL &&
+        left_definition->type == 0 && left_definition->opcode != MIR_PHI;
+    int deferred_operands = deferred_rhs;
     int value;
 
     /* Extraction and arithmetic have different types: an unsigned field
@@ -2735,14 +2738,16 @@ static int mir_lower_compound_value(int left, int right, int operation,
             (operation == '/' || operation == '%'))
             right_type = mir_promoted_operand_type(right_definition);
         computation_type = common_arith_type(computation_type, right_type);
+        deferred_operands = deferred_rhs ||
+            (deferred_lhs && type_is_float(computation_type));
         /* With a nested-block rhs these conversions target an assumed type;
          * mark them so repair retypes them with the operation. */
         converted = mir_lower_conversion(left, computation_type);
-        if (deferred_rhs && converted != left)
+        if (deferred_operands && converted != left)
             mir_mutable_definition(converted)->deferred_operand_types = 1;
         left = converted;
         converted = mir_lower_conversion(right, computation_type);
-        if (deferred_rhs && converted != right)
+        if (deferred_operands && converted != right)
             mir_mutable_definition(converted)->deferred_operand_types = 1;
         right = converted;
     }
@@ -2755,7 +2760,7 @@ static int mir_lower_compound_value(int left, int right, int operation,
     insn->secondary_offset = computation_type;
     insn->immediate = operation;
     /* A nested-block local's type is unknown until repair (0 here). */
-    insn->deferred_operand_types = target_type == 0 || deferred_rhs;
+    insn->deferred_operand_types = target_type == 0 || deferred_operands;
     /* Repair may widen the operation past the target (`(long)(a[i] -= kl)`),
      * so a used value keeps an explicit narrowing even when the assumed
      * types match. */
@@ -8521,6 +8526,14 @@ static int mir_unary_is_representation_identity(
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir_use_widens_value(
                 &mir.insns[instruction], insn->dst, insn->type) ||
+            (mir.insns[instruction].opcode == MIR_BINARY &&
+             mir.insns[instruction].immediate == TOK_SHR &&
+             mir.insns[instruction].src1 == insn->dst &&
+             type_size(mir.insns[instruction].secondary_offset) == source_size &&
+             (source->bit_width == 0 ||
+              source->bit_width >= source_size * 8) &&
+             (mir.insns[instruction].secondary_offset & TYPE_UNSIGNED) !=
+                 (source->type & TYPE_UNSIGNED)) ||
             (mir.insns[instruction].opcode == MIR_STORE &&
              mir.insns[instruction].src1 == insn->dst &&
              mir.insns[instruction].type == insn->type &&

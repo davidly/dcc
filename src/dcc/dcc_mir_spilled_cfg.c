@@ -26023,6 +26023,10 @@ static int mir_emit_fused_comparison_branch(MirStream *out, const int *labels,
                     out, "\tjp z,L%d\n\tbit 7,h\n\tjp z,L%d\nL%d:\n",
                     skip, labels[branch->label], skip);
             }
+            if (!mir_phi_copies_are_empty(predecessor, predecessor + 1) &&
+                !mir_emit_spilled_phi_copies(
+                    out, predecessor, predecessor + 1))
+                return 0;
             return 1;
         }
         {
@@ -26046,6 +26050,10 @@ static int mir_emit_fused_comparison_branch(MirStream *out, const int *labels,
             mir_stream_printf(
                 out, "\tjp L%d\nL%d:\n",
                 labels[branch->label], skip);
+            if (!mir_phi_copies_are_empty(predecessor, predecessor + 1) &&
+                !mir_emit_spilled_phi_copies(
+                    out, predecessor, predecessor + 1))
+                return 0;
             return 1;
         }
     } else if (de_holds_biased_constant &&
@@ -26943,6 +26951,10 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
              mir_phi_slot_cleanup_is_active() ||
              mir_value_is_wide_phi_update_result(source) ||
              mir_value_is_narrow_phi_adjust_result(source)) &&
+            (!mir_phi_uses_scalar_object_home(phi->dst) ||
+             type_size(phi->type) != 1 ||
+             mir_phi_edge_stores_object_value(
+                 predecessor_label, phi->object, source)) &&
             mir_phi_copy_is_slot_identity(source, phi->dst)) {
             instruction =
                 mir_next_phi_in_block(successor, instruction + 1);
