@@ -32,16 +32,43 @@ entries and their historical diagnoses are retained below.
 | [BUG-079](#bug-079) | #370 | fixed | Nested loops lose float local state across an inner short-circuit condition |
 | [BUG-080](#bug-080) | #371 | fixed | Float compound division by a negated member-array decrement computes the wrong value |
 | [BUG-081](#bug-081) | #372 | fixed | A byte compound value in a widened conditional stores the wrong unsigned word |
+| [BUG-082](#bug-082) | #375 | fixed | dccpeep drops the zero-extend of a byte argument built after exx |
+| [BUG-083](#bug-083) | #376 | fixed | Compound remainder by a unary over a block-local operation stays signed |
 
 No findings remain open from the extended runs through seeds 24000. In the
 seeds 30001–40000 follow-up, BUG-076–081 are fixed.
 BUG-070 through BUG-074 are fixed on `fix/fuzz-15001-22000` below, and
-BUG-075, a regression from the BUG-071 fix, is fixed with its report, and
-so is BUG-076, a `dccpeep` pass that missed `exx`. BUG-013's unsigned
-bit-field promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed
-below.
+BUG-075, a regression from the BUG-071 fix, is fixed with its report, as
+are BUG-082, a `dccpeep` pass that missed `exx`, and BUG-083, a sibling of
+BUG-075 found in the deep-shape runs. BUG-013's unsigned bit-field
+promotion, BUG-009's hang and BUG-022's masked diagnostic are fixed below.
 
-## BUG-076
+## BUG-083
+
+Upstream issue: [#376](https://github.com/davidly/dcc/issues/376).
+
+**Fixed; promoted as `tests/tcmpnot.c`.** `mir_compound_rhs_deferred`
+decides whether a compound assignment's right operand derives from a
+nested-block local, whose type lowering can only assume. It looked through
+`*`, `-`, `~`, `+` and indexing to a bare identifier, but not at the mark the
+AST leaves on an operation over one, so `g %= ~k` was marked and
+`g %= ~(1 % k)` was not. The unary was then assumed `int`, the remainder was
+computed as `long`, and repair retyped the unary to `unsigned long` without
+retyping the unmarked remainder. The helper now also honors the
+`deferred_types` mark of the node under the unary. Of the corpus, only the
+new test's assembly changes.
+
+**A compound `%=` or `/=` on a signed `long` whose right operand is `~` or
+unary `-` over an operation on an `unsigned long` nested-block local is
+computed as signed.** `g = 132; { unsigned long k = 1; g %= ~(1 % k); }`
+should leave 132 (the remainder is unsigned, by `0xFFFFFFFF`), but dcc
+computes `132 % -1` and stores 0. Globals, array elements and struct members
+are affected, with and without `dccpeep`.
+
+Found in deep-shape integer seed 30980 (`--depth 4 --size 8`, seeds
+28001–31000).
+
+## BUG-082
 
 Upstream issue: [#375](https://github.com/davidly/dcc/issues/375).
 

@@ -2628,6 +2628,10 @@ static int mir_compound_rhs_deferred(const struct AstNode *rhs)
             (rhs->op == '*' || rhs->op == '-' || rhs->op == '~' ||
              rhs->op == '+')))
         rhs = rhs->a;
+    /* Under the unary, an operation on one (`g %= ~(1 % k)`) carries its
+     * own mark. */
+    if (rhs->deferred_types)
+        return 1;
     /* A closed block's local no longer resolves; its load is typed later. */
     return rhs->kind == AST_IDENT && mir_ident_symbol(rhs) == NULL;
 }
