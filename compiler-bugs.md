@@ -34,7 +34,7 @@ diagnostic are fixed below.
 
 ## BUG-075
 
-Upstream issue: none; found and fixed in the same change.
+Upstream issue: [#373](https://github.com/davidly/dcc/issues/373).
 
 **Fixed; promoted as `tests/tcmplog.c`.** A regression from the BUG-071 fix
 (`569da4d3`), which marks a compound operation for deferred retyping whenever
