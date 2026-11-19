@@ -2235,11 +2235,12 @@ int ast_postfix_plain_int(const struct AstNode *n)
     sz = type_size(s->type);
     if (sz != 1 && sz != 2)
         return 0;
-    /* Accept IX-direct locals/params, global/extern words, any SC_LOCAL, and
+    /* Accept IX-direct locals/params, global/extern words, any local/parameter, and
      * global/extern BYTES.  A global byte is not is_global_word_sym (that is
      * word-only), so it needs its own clause. MIR supports the same byte
-     * address/update semantics for global and local storage. */
+     * address/update semantics for frame objects beyond IX's direct range. */
     if (!sym_can_ix_direct(s) && !is_global_word_sym(s) && s->storage != SC_LOCAL &&
+        s->storage != SC_PARAM &&
         !((s->storage == SC_GLOBAL || s->storage == SC_EXTERN) && sz == 1))
         return 0;
     return 1;
