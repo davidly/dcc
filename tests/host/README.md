@@ -265,11 +265,11 @@ Performance baselines must remain unchanged.
 Target loop execution and volatile access-count/flag assertions are covered by:
 
 ```sh
-pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases semantics
-pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases domloop
-pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases aliasmem
-pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases qualexpr
-pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases qualgen
+python scripts/run-mir-clobber-tests.py -Cases semantics
+python scripts/run-mir-clobber-tests.py -Cases domloop
+python scripts/run-mir-clobber-tests.py -Cases aliasmem
+python scripts/run-mir-clobber-tests.py -Cases qualexpr
+python scripts/run-mir-clobber-tests.py -Cases qualgen
 ```
 
 These fixtures run in release, full debug, and line-debug modes, with and
@@ -392,8 +392,8 @@ stack configurations and peephole modes remain within checked baselines.
 The seeded `fuzz` case complements the fixed `qualgen` matrix:
 
 ```sh
-pwsh scripts/run-mir-clobber-tests.ps1 -Cases fuzz
-pwsh scripts/run-mir-clobber-tests.ps1 -Cases fuzz -FuzzSeeds 23117
+python scripts/run-mir-clobber-tests.py -Cases fuzz
+python scripts/run-mir-clobber-tests.py -Cases fuzz --fuzz-seeds 0 1
 python scripts/new-mir-fuzz-source.py -OutputPath build/replay.c -Seed 23117 -Programs 1
 python scripts/test-mir-fuzz-source.py
 python scripts/run-mir-compiler-mutations.py
@@ -468,7 +468,7 @@ the production compiler:
 python3 -m unittest discover -s scripts/tests -p 'test_mir_compiler_mutations.py'
 ```
 
-`run-mir-clobber-tests.ps1` records each successful target configuration in an
+`run-mir-clobber-tests.py` records each successful target configuration in an
 optional JSON execution manifest and verifies the exact expected count for
 full and focused runs. Candidate-forcing cases require both the selector and
 the `DCC_MIR_COST_REPORT` candidate identity. Debug MinMax configurations are

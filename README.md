@@ -20,7 +20,9 @@ The complete host toolchain builds and runs on Windows, Linux, and macOS with
 `dccmake`, `m80c`, `l80c`, `dcc-debug-host`, and the example debugger I/O
 adapter. The host tools are too large to run on CP/M. `sh m.sh` on Unix and
 `m.bat` on Windows invoke the same Python builder. Python 3.7 and newer are
-supported, including the older Python installations on Raspberry Pi OS.
+supported, including the older Python installations on Raspberry Pi OS. Python
+3.7 is the minimum; newer Python 3 releases work too. See the
+[platform-specific Python installation steps](docs/docs/en/00-setup-toolchain.md#install-prerequisites).
 
 Dcc has been built and had regression tests run on AMD64 (Linux and Windows), Arm64(Linux, Windows, MacOS), Arm32 (Linux), and RISC-V 64 (Linux).
 

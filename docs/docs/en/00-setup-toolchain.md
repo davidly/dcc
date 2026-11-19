@@ -25,37 +25,96 @@ Setup flow:
 ## Install prerequisites
 
 Building and testing DCC C Compiler requires **Python 3.7 or newer** and a
-native C compiler. The debugger host and example adapter also require CMake
-and a C++17 compiler. The same Python drivers run on Windows, macOS, Linux,
-and Raspberry Pi; PowerShell is not needed for normal builds or test suites.
+native C compiler. **3.7 is the minimum supported version, not the version to
+install specifically.** An existing Python 3.7+ installation is sufficient;
+for a new installation, choose the current stable Python 3 supported by your
+operating system. The build and test drivers use Python's standard library,
+so they do not require a separate `pip install` step.
+
+The debugger host and example adapter also require CMake and a C++17 compiler.
+The same Python drivers run on Windows, macOS, Linux, and Raspberry Pi.
 
 === "Windows"
 
-    Install Python 3.7+ and put `python` on your `PATH`. Install Visual Studio
-    or Visual Studio Build Tools with **Desktop development with C++** and its
-    CMake component. For Windows ARM64, include the ARM64/ARM64EC build tools.
-    The Python builder locates MSVC and initializes its environment itself.
+    1. If `python --version` already reports Python 3.7 or later, keep that
+       installation. Otherwise, download the **Python install manager** from
+       [Python's Windows downloads](https://www.python.org/downloads/windows/)
+       and open the downloaded installer. The Microsoft Store version is also
+       supported by Python's [Windows installation guide](https://docs.python.org/3/using/windows.html).
+    2. Open a new Command Prompt and install the default runtime with the
+       manager, then verify it:
+
+        ```bat
+        py install default
+        python --version
+        python -c "import sys; print(sys.executable)"
+        ```
+
+       `py install` is a command of the install manager, not the older `py`
+       launcher. If an existing `py` command does not recognize `install`, use
+       the manager's `pymanager install default` command instead. If `python`
+       opens the Store or is not found, check **Manage app execution aliases**
+       for the manager's **Python (default)** alias, then reopen the terminal.
+       The Python guide above has the corresponding troubleshooting steps.
+    3. Install Visual Studio or Visual Studio Build Tools with **Desktop
+       development with C++** and its CMake component. For Windows ARM64,
+       include the ARM64/ARM64EC build tools. The Python builder locates MSVC
+       and initializes its environment itself.
+
+    Run DCC scripts with `python`, for example `python scripts/build-dcc.py`.
+    The `m.bat` wrapper also expects `python` to be available on `PATH`.
 
 === "macOS"
 
-    Install Xcode Command Line Tools with `xcode-select --install`, plus
-    Python 3.7+ and CMake. Verify `clang`, `python3`, and `cmake` are on `PATH`.
+    1. Download the current stable **macOS installer** from
+       [Python's macOS downloads](https://www.python.org/downloads/macos/).
+       Open the `.pkg` and follow the installer with its default options.
+       The universal2 installer supports both Apple Silicon and Intel Macs
+       within that release's supported macOS versions. Python's
+       [macOS installation guide](https://docs.python.org/3/using/mac.html)
+       describes the installer and supported systems.
+    2. Open a new Terminal window and verify the installed interpreter:
+
+        ```sh
+        python3 --version
+        python3 -c "import sys; print(sys.executable)"
+        ```
+
+       Confirm the version is at least 3.7. An existing suitable installation
+       can be used; installing another copy is not required.
+    3. Install the native compiler tools:
+
+        ```sh
+        xcode-select --install
+        ```
+
+       Install CMake separately if building the debugger host, and verify
+       `clang` and `cmake` are on `PATH`.
+
+    Run DCC scripts with `python3`, for example `python3 scripts/build-dcc.py`.
 
 === "Ubuntu / Raspberry Pi OS"
 
-    Install the native build tools, Python, and CMake:
+    Install the distribution's Python 3, native build tools, and CMake:
 
     ```sh
     sudo apt update
     sudo apt install build-essential python3 cmake
+    python3 --version
+    python3 -c "import sys; print(sys.executable)"
     ```
 
-    The Python drivers support the older Python versions available on
-    Raspberry Pi 4 systems; no PowerShell installation is required.
+    Confirm the reported version is at least 3.7. Existing Python 3.7+
+    installations on older Raspberry Pi 4 systems are supported; a newer
+    Python is not required just to run DCC's build and test scripts.
+    Run scripts with `python3`, for example `python3 scripts/build-dcc.py`.
 
-Verify Python with `python --version` on Windows or `python3 --version` on
-Unix. Commands below use `python`; use `python3` where that is the installed
-command name. Full local proof/coverage runs additionally require sh,
+Documentation examples that use `python` mean the selected Python 3.7+
+interpreter. On macOS, Ubuntu, and Raspberry Pi OS, use `python3` instead.
+The version and executable-path checks above help confirm which interpreter
+will run the scripts. PowerShell is not required on any platform.
+
+Full local proof/coverage runs additionally require sh,
 `ntvcm`, Clang, and matching `llvm-cov` / `llvm-profdata` tools.
 
 Release packaging and specialized test utilities also use Python. Native

@@ -46,7 +46,7 @@ baseline approval, documented in its scoped exceptions below.
      baseline to absorb a regression.
   4. Reproducers are promoted to `tests/` (`tests/known-bugs/README.md`)
      as **new** unit tests with **new** `perf_baselines.csv` rows measured
-     on the normal stack-check `runall.ps1` path, entries closed in
+     on the normal stack-check `runall.py` path, entries closed in
      `compiler-bugs.md`, issues closed from the commit.
 - The goal is still concise, fast Z80. A fix is the narrowest change that
   makes the wrong shape right, not a general fallback to a slower or larger
@@ -4784,7 +4784,7 @@ Work on a new branch from `main`, one branch for this cluster only.
    - dccpeep bugs (cluster K): nopeep output is the reference. The fix is
      to make the peephole rule decline the unsafe case it currently
      mis-handles, not to disable or weaken the rule for the cases it gets
-     right. Run `pwsh ./scripts/run-dccpeep-tests.ps1`.
+     right. Run `python scripts/run-dccpeep-tests.py`.
    - Runtime bugs in `DCCRTL.MAC` (BUG-039 in cluster J): use the smallest
      correct Z80 sequence and the idioms already in the file; avoid code
      bloat. Run `python3 scripts/rtl-iy-safety.py` and
