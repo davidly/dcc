@@ -8462,6 +8462,32 @@ static int mir_use_widens_value(
     return 0;
 }
 
+/* A reload of the named nested-block local is widened, possibly by an
+ * argument's implicit conversion. Forwarding may hand such a reload the
+ * stored value itself, so that value must carry the local's type (#380). */
+static int mir_block_local_reload_widens(const char *name, int type)
+{
+    int load;
+    int instruction;
+
+    for (load = 0; load < mir.count; ++load) {
+        const struct MirInsn *reload = &mir.insns[load];
+
+        if (reload->opcode != MIR_LOAD || reload->dst < 0 ||
+            strcmp(reload->name, name) != 0)
+            continue;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *use = &mir.insns[instruction];
+
+            if (mir_use_widens_value(use, reload->dst, type) ||
+                (use->opcode == MIR_ARG && use->src1 == reload->dst &&
+                 type_size(use->type) > type_size(type)))
+                return 1;
+        }
+    }
+    return 0;
+}
+
 /* Promotion may expose an initializer's raw bits. Preserve the declared
  * interpretation when a load's consumers can observe its signedness. */
 static int mir_value_has_signedness_use(int value, int type, int depth)
@@ -8539,6 +8565,8 @@ static int mir_unary_is_representation_identity(
      * or float conversion must still see the cast's signedness, including
      * implicit widening in deferred binaries and indirect stores.
      * Same-width consumers can use the original representation directly.
+     * A nested-block local's reloads may be forwarded the stored value, so
+     * a cast stored there stays when a reload is widened (#380).
      */
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir_use_widens_value(
@@ -8560,7 +8588,9 @@ static int mir_unary_is_representation_identity(
              (mir_block_name_has_multiple_declared_types(
                   mir.insns[instruction].name) ||
               (strstr(mir.insns[instruction].name, "#b") != NULL &&
-               mir_value_is_constant_conversion(insn->src1, 0)))))
+               (mir_value_is_constant_conversion(insn->src1, 0) ||
+                mir_block_local_reload_widens(
+                    mir.insns[instruction].name, insn->type))))))
             return 0;
     return 1;
 }

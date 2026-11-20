@@ -37,6 +37,9 @@ entries and their historical diagnoses are retained below.
 | [BUG-084](#bug-084) | #377 | fixed | Member compound remainder by a block-local assignment is computed as int |
 | [BUG-085](#bug-085) | #378 | fixed | A used compound value through a block-local pointer is not narrowed |
 | [BUG-086](#bug-086) | #379 | fixed | A negative constant assigned to a narrow block local compares as unsigned |
+| [BUG-087](#bug-087) | #380 | fixed | A narrow block local passed to a long parameter widens with the wrong signedness |
+| [BUG-088](#bug-088) | #381 | fixed | A by-value struct argument before a constant argument is copied from a stale address |
+| [BUG-089](#bug-089) | #382 | fixed | A loop that leaves a narrow local unchanged crashes dcc in a large function |
 
 No findings remain open from the extended runs through seeds 24000. In the
 seeds 30001–40000 follow-up, BUG-076–081 are fixed.
@@ -45,8 +48,81 @@ BUG-075, a regression from the BUG-071 fix, is fixed with its report, as
 are BUG-082, a `dccpeep` pass that missed `exx`, and BUG-083, a sibling of
 BUG-075 found in the deep-shape runs, and so are BUG-084 through BUG-086,
 three more nested-block typing defects from the deep-shape runs and a probe
-around them. BUG-013's unsigned bit-field promotion, BUG-009's hang and
+around them. BUG-087, another nested-block typing defect reported in #380,
+is fixed, as are BUG-088, a call argument cache conflict, and BUG-089, a
+compiler crash, both from the seeds 36001–41000 deep-shape run. BUG-013's unsigned bit-field promotion, BUG-009's hang and
 BUG-022's masked diagnostic are fixed below.
+
+## BUG-089
+
+Upstream issue: [#382](https://github.com/davidly/dcc/issues/382).
+
+**Fixed; promoted as `tests/tphiself.c`.** A loop that never changes a
+local, here through `l1 = l1;`, carries the loop header's phi for that
+local around its own backedge. In a function of 100 or more blocks, the
+check whether a word phi may reuse its local's named home follows the
+backedge value when it is also a phi of that local, and here that value was
+the header phi itself, so the check recursed until dcc overflowed its stack.
+The chain it accepts is a conditional update joined just before the latch,
+which always follows the header, so the check now only follows a backedge
+phi that comes after the one being checked. That also ends any longer cycle.
+No existing test's code changes.
+
+**dcc crashes (segmentation fault) compiling a large function with a loop
+that leaves an `unsigned short` local unchanged.** It crashes in every
+configuration, before any code is written.
+
+Found in deep-shape integer seed 36405 (`--depth 4 --size 8`, seeds
+36001–41000), as a build failure in every configuration. The fuzzer's
+reducer does not reduce crashes, so it was reduced by line deletion with a
+check that the program stayed valid C.
+
+## BUG-088
+
+Upstream issue: [#381](https://github.com/davidly/dcc/issues/381).
+
+**Fixed; promoted as `tests/tsarghl.c`.** In `f(t[1], 0)` with a two-byte
+struct passed by value, the spilled-scalar emitter planned to keep the
+struct's address in HL, since only a constant argument is pushed after it
+(through DE). That HL cache is only understood by the direct argument push,
+but a struct argument is copied by `ldir` from an address the copy reloads
+from the BC cache, and BC was never set, so the callee received whatever
+bytes BC pointed to. A by-value struct argument is no longer eligible for
+the HL cache; it falls back to the BC cache, which the copy does read. No
+existing test's code changes.
+
+**A two-byte struct passed by value ahead of a constant argument arrives
+with the wrong contents.** `void f(struct W x, signed char c) { t[2] = x; }`
+called as `f(t[1], 0);` from a function that does nothing else stores
+garbage in `t[2]`; it worked only when BC happened to hold the address. A
+call with the struct as the only argument is unaffected.
+
+Found in deep-shape integer seed 36857 (`--depth 4 --size 8`, seeds
+36001–41000), as a checksum mismatch in every configuration.
+
+## BUG-087
+
+Upstream issue: [#380](https://github.com/davidly/dcc/issues/380).
+
+**Fixed; promoted as `tests/tblkarg.c`.** A same-width conversion such as
+`int` to `unsigned short` stored to a nested-block local was dropped as a
+representation identity, and a reload of the local was later forwarded the
+stored value, still typed `int`. A prototyped argument's widening is
+implicit in `MIR_ARG` and follows its source's type, so a 32-bit parameter
+received the value sign-extended. Scoped repair now keeps such a cast
+when a reload of that block local is widened, by an argument or by
+any of the deferred consumers already checked. Only `tests/tblkword.c`'s
+code changes, by moving one store.
+
+**A narrow nested-block local passed to a wider parameter widens with the
+signedness of the value stored to it.** `{ unsigned short b = (-18603) | 1;
+k(b); }` with `k(int32_t)` passes -18603, not 46933, and so does
+`unsigned short b = x;` for an `int x`; `short b = u;` for an `unsigned u`
+passes 46933, not -18603. The issue's struct argument does not matter. The
+same code passes correctly when several block locals of that name have
+different types, or without the nested block.
+
+Reported in #380 from integer oracle seed 47245, reduced under nopeep.
 
 ## BUG-086
 

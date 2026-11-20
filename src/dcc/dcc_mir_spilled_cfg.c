@@ -3653,6 +3653,10 @@ static int mir_narrow_call_argument_hl_cache_eligible(
         if (arg->opcode == MIR_ARG &&
             arg->secondary_offset == call->secondary_offset &&
             arg->src1 == value) {
+            /* A by-value struct argument copies from its address, which
+             * the copy reloads from the BC cache, not HL. */
+            if (type_is_struct_object(arg->type))
+                return 0;
             argument_index = (int)arg->immediate;
             break;
         }
@@ -6242,7 +6246,9 @@ static int mir_phi_uses_scalar_object_home(int value)
      * one predecessor before and one after the phi, a real entry-edge store,
      * and a backedge value which is itself a proven named-home phi.  The last
      * condition covers a conditional update joined immediately before the
-     * latch without treating arbitrary loop values as materialized. */
+     * latch without treating arbitrary loop values as materialized.  That
+     * join follows the header, which also ends the recursion: a loop which
+     * never changes the object carries the header phi itself around. */
     if (mir_value_use_count(value) < 2)
         return 0;
     pred1_index = mir_find_label(definition->phi_pred1);
@@ -6266,6 +6272,7 @@ static int mir_phi_uses_scalar_object_home(int value)
     return back_definition != NULL &&
            back_definition->opcode == MIR_PHI &&
            back_definition->object == definition->object &&
+           back_definition > definition &&
            mir_phi_uses_scalar_object_home(back_source);
 }
 
