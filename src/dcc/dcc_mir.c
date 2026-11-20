@@ -9329,13 +9329,10 @@ void mir_resolve_deferred_metadata(void)
      * above, propagate that stable type through ordinary unary expressions and
      * conditional phis before repairing their consumers. */
     {
-        int needs_scoped_type_repair = 0;
+        /* A C99 for-init local is deferred like a block local; an
+         * operation on it was typed as if it were int too. */
+        int needs_scoped_type_repair = mir.alias_count > 0;
         int changed;
-        for (i = 0; i < mir.alias_count; ++i)
-            if (strstr(mir.alias_internal_names[i], "#b") != NULL) {
-                needs_scoped_type_repair = 1;
-                break;
-            }
         if (!needs_scoped_type_repair)
             goto scoped_type_repair_done;
         do {

@@ -25328,11 +25328,22 @@ static int mir_narrow_multiply_has_named_word_home(
     int memory_storage;
     int memory_offset;
 
+    int instruction;
+
     if (source == NULL || source->opcode != MIR_PARAM ||
         !mir_scalar_memory_location(
             source, &memory_type, &memory_storage, &memory_offset) ||
         type_size(memory_type) != 2)
         return 0;
+    /* The home holds the entry value only while nothing writes it:
+     * (int32_t)(x++) * m must multiply x before its increment. */
+    if (source->object >= 0 &&
+        mir_object_address_taken(source->object))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_STORE &&
+            mir.insns[instruction].object == source->object)
+            return 0;
     if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN)
         return 1;
     return (memory_storage == SC_LOCAL ||

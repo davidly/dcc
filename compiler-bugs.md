@@ -40,6 +40,8 @@ entries and their historical diagnoses are retained below.
 | [BUG-087](#bug-087) | #380 | fixed | A narrow block local passed to a long parameter widens with the wrong signedness |
 | [BUG-088](#bug-088) | #381 | fixed | A by-value struct argument before a constant argument is copied from a stale address |
 | [BUG-089](#bug-089) | #382 | fixed | A loop that leaves a narrow local unchanged crashes dcc in a large function |
+| [BUG-090](#bug-090) | #383 | fixed | A comparison with a for-init long index widens a constant as unsigned |
+| [BUG-091](#bug-091) | #384 | fixed | A widened parameter postincrement multiplies the incremented value |
 
 No findings remain open from the extended runs through seeds 24000. In the
 seeds 30001–40000 follow-up, BUG-076–081 are fixed.
@@ -50,8 +52,60 @@ BUG-075 found in the deep-shape runs, and so are BUG-084 through BUG-086,
 three more nested-block typing defects from the deep-shape runs and a probe
 around them. BUG-087, another nested-block typing defect reported in #380,
 is fixed, as are BUG-088, a call argument cache conflict, and BUG-089, a
-compiler crash, both from the seeds 36001–41000 deep-shape run. BUG-013's unsigned bit-field promotion, BUG-009's hang and
+compiler crash, both from the seeds 36001–41000 deep-shape run, and
+BUG-090, a for-init local missed by the same typing repair, and BUG-091, a
+stale parameter home read by a widening multiply, from the seeds
+41001–46000 run. BUG-013's unsigned bit-field promotion, BUG-009's hang and
 BUG-022's masked diagnostic are fixed below.
+
+## BUG-091
+
+Upstream issue: [#384](https://github.com/davidly/dcc/issues/384).
+
+**Fixed; promoted as `tests/tpostmul.c`.** In
+`g = ((int32_t)(x++)) * m` with `short x` and `m`, the spilled-scalar
+emitter computes the product with the 16x16->32 multiply helper and loads
+an operand that is a word parameter straight from the parameter's frame
+home. That home is where `x++` stores the incremented value, so the
+product used `x + 1`, and the slot that saved the old value was reused
+because its lifetime ended early for the same reason. A parameter's home is
+now read directly only when nothing stores to the parameter and its address
+is not taken. No existing test's code changes.
+
+**A long multiply by a widened postincrement or postdecrement of a
+parameter uses the updated value.** `void f(short x) { g =
+((int32_t)(x++)) * m; }` stores -100 for `f(0)` with `m == -100`, not 0;
+`x--` gives `(x - 1) * m`. A separate temporary, `int32_t t = x++;`, is
+unaffected.
+
+Found in deep-shape integer seed 42726 (`--depth 4 --size 8`, seeds
+41001–46000), where only the `dccpeep` builds differed because the nopeep
+build was too large to load; the reduced program fails in every
+configuration.
+
+## BUG-090
+
+Upstream issue: [#383](https://github.com/davidly/dcc/issues/383).
+
+**Fixed; promoted as `tests/tforlong.c`.** A C99 `for`-init local's type is
+unknown at lowering, like a nested-block local's, so an operation on it is
+typed as if it were `int`. In `(-32767 - 1) >= (i + (uint16_t)1)` for an
+`int32_t i`, that made the sum `unsigned int`, and lowering converted the
+constant to `unsigned int`. Scoped type repair retypes such an operation and
+its operand conversions from the repaired types, but it ran only when the
+function had a nested-block (`#b`) alias, so with only for-init locals the
+comparison became a long one while the constant's conversion stayed
+unsigned and widened -32768 as 32768. Repair now runs whenever the function
+has any scoped alias. No existing test's code changes.
+
+**A comparison between a constant and a sum of a for-init `int32_t` index
+and an `unsigned short` gives the wrong answer.** In
+`for (int32_t i = 7; i >= 3; i--) r = ((-32767 - 1) >= (i + ((uint16_t)1)));`
+`r` ends as 1, not 0, and `(-5) >= (i + one)` with `uint16_t one` is true for
+every `i`. The same code with `i` declared before the loop is correct.
+
+Found in deep-shape integer seed 42986 (`--depth 4 --size 8`, seeds
+41001–46000), as a mismatch in every configuration.
 
 ## BUG-089
 
