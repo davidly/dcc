@@ -42,6 +42,7 @@ entries and their historical diagnoses are retained below.
 | [BUG-089](#bug-089) | #382 | fixed | A loop that leaves a narrow local unchanged crashes dcc in a large function |
 | [BUG-090](#bug-090) | #383 | fixed | A comparison with a for-init long index widens a constant as unsigned |
 | [BUG-091](#bug-091) | #384 | fixed | A widened parameter postincrement multiplies the incremented value |
+| [BUG-092](#bug-092) | #385 | fixed | A logical not over a constant division by zero is rejected |
 
 No findings remain open from the extended runs through seeds 24000. In the
 seeds 30001–40000 follow-up, BUG-076–081 are fixed.
@@ -55,8 +56,32 @@ is fixed, as are BUG-088, a call argument cache conflict, and BUG-089, a
 compiler crash, both from the seeds 36001–41000 deep-shape run, and
 BUG-090, a for-init local missed by the same typing repair, and BUG-091, a
 stale parameter home read by a widening multiply, from the seeds
-41001–46000 run. BUG-013's unsigned bit-field promotion, BUG-009's hang and
-BUG-022's masked diagnostic are fixed below.
+41001–46000 run. BUG-092, a rejected logical not over a constant division
+by zero, from the seeds 46001–51000 run, is fixed too. BUG-013's unsigned
+bit-field promotion, BUG-009's hang and BUG-022's masked diagnostic are
+fixed below.
+
+## BUG-092
+
+Upstream issue: [#385](https://github.com/davidly/dcc/issues/385).
+
+**Fixed; promoted as `tests/tdznot.c`.** The AST support gate accepts a
+unary operator over a constant operand that does not fold, so that
+`~(72UL / 0UL)` on a branch that never runs is computed like its operand
+(the `tconstdz` fix). It left out `!`, and accepted only a `/` or `%` operand,
+so `!(5 % 0)` and `!(5 % 0 + 1)` made their statement unsupported. It now
+accepts any unary operator over any constant binary operand that does not
+fold and is otherwise supported. No existing test's code changes.
+
+**A logical not over a constant division by zero is rejected.** On a path
+that never runs, `if (!((255 - 256) % 0))` fails with "DCC-E1002:
+unsupported if condition or branch", and `return !(5 % 0);` with
+"unsupported return expression". When the `if` is nested, the error names
+the outer statement. clang accepts both, and `-`, `+` and `~` over the same
+operand compiled.
+
+Found in deep-shape integer seed 47279 (`--depth 4 --size 8`, seeds
+46001–51000), as a compile error in every configuration.
 
 ## BUG-091
 
