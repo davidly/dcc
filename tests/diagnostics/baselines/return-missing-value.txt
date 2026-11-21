@@ -1,0 +1,4 @@
+<source>:4: error DCC-E0807: non-void function must return a value near ';'
+            return;
+                  ^
+dcc: 1 error(s)

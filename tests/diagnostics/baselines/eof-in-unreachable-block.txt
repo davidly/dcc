@@ -1,0 +1,7 @@
+<source>:4: error DCC-E1003: malformed statement near '{'
+        {
+        ^
+<source>:4: error DCC-E1103: expected '}' near '<eof>'
+        {
+         ^
+dcc: 2 error(s)

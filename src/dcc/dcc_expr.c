@@ -994,7 +994,15 @@ int peek_simple_unary_type(void)
              * refines the lookahead; it returns the inner operand's promoted
              * type.
              */
-            int inner = peek_simple_unary_type();
+            static int peek_depth;
+            int inner = TYPE_INT;
+
+            /* Past the expression nesting limit the build rejects anyway. */
+            if (peek_depth < 1024) {
+                ++peek_depth;
+                inner = peek_simple_unary_type();
+                --peek_depth;
+            }
             lex_restore(&_ls);
             g_tok_long_suffix = save_long_suffix; g_tok_unsigned_suffix = save_unsigned_suffix;
             return inner;

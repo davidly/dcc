@@ -20,6 +20,7 @@
 
 static const char *pp_expr_p;
 static int pp_expr_depth;
+static int pp_expr_bad;          /* a '(' was left unclosed */
 
 static void pp_expr_skip_ws(void)
 {
@@ -133,6 +134,8 @@ static long pp_expr_defined(void)
         pp_expr_skip_ws();
         if (*pp_expr_p == ')')
             pp_expr_p++;
+        else
+            pp_expr_bad = 1;
     } else {
         i = 0;
         while (is_ident_char((unsigned char)*pp_expr_p) && i < 63)
@@ -161,6 +164,8 @@ static long pp_expr_primary(void)
         pp_expr_skip_ws();
         if (*pp_expr_p == ')')
             pp_expr_p++;
+        else
+            pp_expr_bad = 1;
         return v;
     }
 
@@ -457,5 +462,12 @@ int pp_eval_simple_expr(const char *s)
 {
     pp_expr_p = s;
     pp_expr_depth = 0;
+    pp_expr_bad = 0;
     return pp_expr_cond() != 0;
+}
+
+/* Whether the last pp_eval_simple_expr() met an unclosed '('. */
+int pp_eval_expr_malformed(void)
+{
+    return pp_expr_bad;
 }

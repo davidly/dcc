@@ -1153,7 +1153,13 @@ void parse_auto_struct_initializer(struct Sym *s, int baseoff, int type)
                 capture_local_init_zero_bytes(s, baseoff + fd->offset, 2);
             }
 
-            rhs = ast_build_assign_expr(&g_ast_init_arena);
+            {
+                int errors_before = errors;
+
+                rhs = ast_build_assign_expr(&g_ast_init_arena);
+                if (rhs == NULL && errors == errors_before)
+                    error_here("malformed initializer expression");
+            }
             ast_validate_expr_symbols(rhs);
             mir_capture_bitfield_init_expr(s, baseoff + fd->offset, fd, rhs);
             ast_arena_reset(&g_ast_init_arena);

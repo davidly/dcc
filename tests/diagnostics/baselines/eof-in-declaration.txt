@@ -1,0 +1,4 @@
+<source>:2: error DCC-E1104: identifier expected near '<eof>'
+    int *p,
+           ^
+dcc: 1 error(s)

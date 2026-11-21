@@ -1,0 +1,7 @@
+<source>:1: error DCC-E0103: unterminated string literal
+    char *s = "abc;
+              ^
+<source>:2: error DCC-E1102: expected ';' near 'int'
+    int y;
+    ^
+dcc: 2 error(s)

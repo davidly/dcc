@@ -1,0 +1,4 @@
+<source>:5: error DCC-E0403: expected an expression near ';'
+        x = ;
+            ^
+dcc: 1 error(s)

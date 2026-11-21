@@ -88,9 +88,14 @@ int parse_typed_designator_index_expr(void)
 long parse_typed_const_expr_long(void)
 {
     struct ConstVal value;
+    int errors_before;
 
+    errors_before = g_diag_error_count;
     if (try_parse_const_expr_value(&value))
         return cf_signed_value(value);
+    /* `int y = (1 + 2;` must not silently initialize y to 0. */
+    if (g_diag_error_count == errors_before)
+        error_here("constant initializer expected");
     return 0;
 }
 

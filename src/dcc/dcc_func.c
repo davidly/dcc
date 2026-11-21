@@ -3904,6 +3904,9 @@ void parse_function_or_global(int base_type)
         expect(';');
         done = 1;
     }
+    /* The file ended inside the declaration (`int *p,` or `unsigned`). */
+    if (!done)
+        error_here("identifier expected");
 }
 
 void add_predefined_extern(const char *name, int type, int storage)

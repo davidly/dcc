@@ -1,0 +1,19 @@
+<source>:3: error DCC-E0506: field name expected near ']'
+        union { float f; int ] u; } v;
+                             ^
+<source>:3: error DCC-E1102: expected ';' near ']'
+        union { float f; int ] u; } v;
+                             ^
+<source>:3: error DCC-E0531: type expected near ']'
+        union { float f; int ] u; } v;
+                             ^
+<source>:3: error DCC-E0506: field name expected near ']'
+        union { float f; int ] u; } v;
+                             ^
+<source>:3: error DCC-E1102: expected ';' near ']'
+        union { float f; int ] u; } v;
+                             ^
+<source>:3: error DCC-E0531: type expected near 'u'
+        union { float f; int ] u; } v;
+                               ^
+dcc: 6 error(s)

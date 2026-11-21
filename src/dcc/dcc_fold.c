@@ -359,7 +359,24 @@ int cf_parse_primary(struct ConstVal *out)
     return 0;
 }
 
+static int cf_parse_unary_operand(struct ConstVal *out);
+
+/* Parentheses and unary operators recurse through here; past this depth the
+ * expression is rejected rather than overflowing the host stack. */
 int cf_parse_unary(struct ConstVal *out)
+{
+    static int depth;
+    int ok;
+
+    if (depth >= 1024)
+        return 0;
+    ++depth;
+    ok = cf_parse_unary_operand(out);
+    --depth;
+    return ok;
+}
+
+static int cf_parse_unary_operand(struct ConstVal *out)
 {
     int op;
 

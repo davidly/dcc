@@ -27,6 +27,7 @@ void ast_capture_initializer_expr(void)
     int no_deref;
     LexState _ls;
     LexState _le;
+    int errors_before = errors;
 
     _ls = lex_save();
 
@@ -59,7 +60,8 @@ void ast_capture_initializer_expr(void)
     ast_arena_reset(&g_ast_init_arena);
 
     lex_restore(&_ls);
-    error_here(n == NULL ? "malformed initializer expression" : "unsupported initializer expression");
+    if (errors == errors_before)
+        error_here(n == NULL ? "malformed initializer expression" : "unsupported initializer expression");
 
     if (n != NULL) {
         lex_restore(&_le);
@@ -74,11 +76,13 @@ void ast_capture_initializer_expr(void)
  * effects are required.  VLA parameter bounds use this at function entry. */
 void ast_capture_discarded_expr(void)
 {
+    int errors_before = errors;
     struct AstNode *n = ast_build_assign_expr(&g_ast_init_arena);
 
     if (n == NULL) {
         ast_arena_reset(&g_ast_init_arena);
-        error_here("malformed discarded expression");
+        if (errors == errors_before)
+            error_here("malformed discarded expression");
         return;
     }
     ast_validate_expr_symbols(n);
@@ -92,6 +96,7 @@ void ast_capture_struct_initializer(struct Sym *s)
     struct AstNode *rhs;
     LexState _ls;
     LexState _le;
+    int errors_before = errors;
 
     _ls = lex_save();
 
@@ -119,7 +124,8 @@ void ast_capture_struct_initializer(struct Sym *s)
     ast_arena_reset(&g_ast_init_arena);
 
     lex_restore(&_ls);
-    error_here(rhs == NULL ? "malformed initializer expression" : "unsupported struct initializer expression");
+    if (errors == errors_before)
+        error_here(rhs == NULL ? "malformed initializer expression" : "unsupported struct initializer expression");
 
     if (rhs != NULL) {
         lex_restore(&_le);

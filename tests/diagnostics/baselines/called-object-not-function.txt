@@ -1,0 +1,4 @@
+<source>:5: error DCC-E0808: called object is not a function near '('
+        return x(1);
+                ^
+dcc: 1 error(s)

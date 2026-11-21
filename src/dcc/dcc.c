@@ -704,6 +704,11 @@ int try_parse_include(const char *line, long n, const char *file, int src_line,
         return report_include_error(file, src_line, "unterminated include name");
 
     name[j] = 0;
+    /* `<>` would name the include directory itself. */
+    while (j > 0 && (name[j - 1] == ' ' || name[j - 1] == '\t'))
+        --j;
+    if (j == 0)
+        return report_include_error(file, src_line, "expected \"FILENAME\" or <FILENAME>");
     return 1;
 }
 
@@ -959,6 +964,15 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
  * and macros in an active include block visible consistently: an assert.h block
  * can both define assert(e) and define __assert_fail().
  */
+static void report_pp_expr_malformed(long line_start)
+{
+    char filebuf[256];
+    int lno;
+
+    source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+    dcc_error_at(filebuf, lno, line_start, "missing ')' in preprocessor expression", NULL);
+}
+
 char *filter_active_preprocessor_source(long *lenp)
 {
     char *out;
@@ -1145,6 +1159,8 @@ char *filter_active_preprocessor_source(long *lenp)
             strip_macro_replacement_comments(expr);
             g_lex.line_no = logical_line;
             cond = pp_eval_simple_expr(expr);
+            if (active && pp_eval_expr_malformed())
+                report_pp_expr_malformed(line_start);
             if (sp >= MAX_IFSTACK) {
                 char filebuf[256];
                 int lno;
@@ -1194,6 +1210,8 @@ char *filter_active_preprocessor_source(long *lenp)
                     strip_macro_replacement_comments(expr);
                         g_lex.line_no = logical_line;
                     cond = pp_eval_simple_expr(expr);
+                    if (parent && pp_eval_expr_malformed())
+                        report_pp_expr_malformed(line_start);
                     active = parent && cond;
                     if (active)
                         branch_taken[i] = 1;
@@ -1444,6 +1462,18 @@ char *filter_active_preprocessor_source(long *lenp)
             source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
             sprintf(msg, "unknown preprocessor directive '#%s'", word);
             dcc_error_at(filebuf, lno, line_start, msg, NULL);
+        } else if (active) {
+            /* A lone # is the null directive; `#(1, 2);` is not one. */
+            while (s < e && (*s == ' ' || *s == '\t' || *s == '\r'))
+                s++;
+            if (s < e && !(*s == '/' && s + 1 < e && (s[1] == '/' || s[1] == '*'))) {
+                char filebuf[256];
+                int lno;
+                char msg[64];
+                source_location_at(line_start, filebuf, sizeof(filebuf), &lno);
+                sprintf(msg, "'#%c' is not a valid preprocessor directive", *s);
+                dcc_error_at(filebuf, lno, line_start, msg, NULL);
+            }
         }
         append_mem(&out, &out_len, &out_cap, "\n", 1);
 

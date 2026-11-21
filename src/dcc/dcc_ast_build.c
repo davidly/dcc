@@ -719,9 +719,14 @@ static struct AstNode *p_primary(struct AstArena *ar)
     case '(':
         next_token();
         n = ast_build_expr(ar);          /* comma operator allowed in parens */
-        if (g_lex.tok.kind == ')')
-            next_token();
+        if (n == NULL)
+            return NULL;
+        expect(')');
         return n;
+    case ';': case ')': case ']': case '}': case ',': case ':': case TOK_EOF:
+        /* No expression starts here, so an operand is missing (`x = ;`). */
+        error_here("expected an expression");
+        return NULL;
     default:
         return NULL;
     }
@@ -765,17 +770,31 @@ static struct AstNode *p_postfix_tail(struct AstArena *ar, struct AstNode *n)
             next_token();
             m->a = n;
             m->b = ast_build_expr(ar);
-            if (g_lex.tok.kind == ']')
-                next_token();
+            if (m->b == NULL)
+                return NULL;
+            expect(']');
             n = m;
         } else if (g_lex.tok.kind == '(') {
-            struct AstNode *call = ast_call(ar, n, 0);
+            struct AstNode *call;
+
+            /* `1.0f(1)` or `x(1)` for a plain int x calls no function. */
+            if (n->kind == AST_INT_LIT || n->kind == AST_FLOAT_LIT ||
+                n->kind == AST_STR_LIT ||
+                (n->kind == AST_IDENT && n->sym != NULL &&
+                 n->sym->storage != SC_FUNC && !n->sym->is_array &&
+                 type_ptr_depth(n->sym->type) == 0 &&
+                 !(n->sym->type & TYPE_STRUCT))) {
+                error_here("called object is not a function");
+                return NULL;
+            }
+            call = ast_call(ar, n, 0);
             next_token();
             if (g_lex.tok.kind != ')') {
                 for (;;) {
                     struct AstNode *arg = p_assign(ar);
-                    if (arg != NULL)
-                        ast_list_push(ar, call, arg);
+                    if (arg == NULL)
+                        return NULL;
+                    ast_list_push(ar, call, arg);
                     if (g_lex.tok.kind == ',') {
                         next_token();
                         continue;
@@ -783,12 +802,12 @@ static struct AstNode *p_postfix_tail(struct AstArena *ar, struct AstNode *n)
                     break;
                 }
             }
-            if (g_lex.tok.kind == ')')
-                next_token();
-            if (n->kind == AST_IDENT && n->sym != NULL && n->sym->has_proto && !n->sym->proto_variadic) {
+            expect(')');
+            if (n->kind == AST_IDENT && n->sym != NULL && n->sym->has_proto) {
+                /* A variadic call still needs every fixed argument: printf(). */
                 if (call->list_len < n->sym->proto_nargs)
                     error_here("too few arguments to function call");
-                else if (call->list_len > n->sym->proto_nargs)
+                else if (!n->sym->proto_variadic && call->list_len > n->sym->proto_nargs)
                     error_here("too many arguments to function call");
             }
             n = call;
@@ -799,10 +818,12 @@ static struct AstNode *p_postfix_tail(struct AstArena *ar, struct AstNode *n)
             if (g_lex.tok.kind == '.')
                 m->sym = ast_add_struct_return_member_temp(ar, n);
             next_token();
-            if (g_lex.tok.kind == TOK_ID) {
-                m->sval = cur_text(ar);
-                next_token();
+            if (g_lex.tok.kind != TOK_ID) {
+                error_here("field name expected");
+                return NULL;
             }
+            m->sval = cur_text(ar);
+            next_token();
             n = m;
         } else if (g_lex.tok.kind == TOK_INC || g_lex.tok.kind == TOK_DEC) {
             struct AstNode *m = ast_new(ar, AST_POSTFIX);
@@ -825,7 +846,27 @@ static struct AstNode *p_postfix(struct AstArena *ar)
     return p_postfix_tail(ar, n);
 }
 
+static struct AstNode *p_unary_operand(struct AstArena *ar);
+
+/* Every nested operand (parentheses, unary chains, binary right operands)
+ * passes through here; past this depth the expression is rejected rather
+ * than overflowing the host stack. */
 static struct AstNode *p_unary(struct AstArena *ar)
+{
+    static int depth;
+    struct AstNode *n;
+
+    if (depth >= 1024) {
+        error_here("expression nested too deeply");
+        return NULL;
+    }
+    ++depth;
+    n = p_unary_operand(ar);
+    --depth;
+    return n;
+}
+
+static struct AstNode *p_unary_operand(struct AstArena *ar)
 {
     int k = g_lex.tok.kind;
 
@@ -835,6 +876,8 @@ static struct AstNode *p_unary(struct AstArena *ar)
         struct AstNode *unary;
         next_token();
         operand = p_unary(ar);
+        if (operand == NULL)
+            return NULL;
         unary = ast_unary(ar, k, operand, 0);
         unary->type = ast_expr_type_for_sizeof(unary);
         return unary;
@@ -855,6 +898,8 @@ static struct AstNode *p_unary(struct AstArena *ar)
         } else {
             struct AstNode *n = ast_new(ar, AST_SIZEOF_EXPR);
             n->a = p_unary(ar);
+            if (n->a == NULL)
+                return NULL;
             n->type = ast_sizeof_result_type(n);
             /* Resolve the operand's size during semantic processing, after
              * nested declaration spans have entered their symbols. */
@@ -878,6 +923,8 @@ static struct AstNode *p_unary(struct AstArena *ar)
         if (g_lex.tok.kind == '{')
             return p_postfix_tail(ar, ast_build_compound_literal(ar, cty));
         operand = p_unary(ar);
+        if (operand == NULL)
+            return NULL;
         cast = ast_cast(ar, cty, operand);
         cast->pointee_volatile_mask = volatile_mask;
         cast->sym = prototype;
@@ -952,6 +999,8 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
         if (k != TOK_ANDAND && k != TOK_OROR)
             peek = peek_simple_unary_type();
         rhs = p_binary(ar, lev + 1);     /* left-associative */
+        if (rhs == NULL)
+            return NULL;
         if (k == TOK_ANDAND)
             lhs = ast_binary(ar, AST_LOGAND, k, lhs, rhs, 0);
         else if (k == TOK_OROR)
@@ -983,14 +1032,17 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
 static struct AstNode *p_conditional(struct AstArena *ar)
 {
     struct AstNode *c = p_binary(ar, 1);
-    if (g_lex.tok.kind == '?') {
+    if (c != NULL && g_lex.tok.kind == '?') {
         struct AstNode *then_e;
         struct AstNode *else_e;
         next_token();
         then_e = ast_build_expr(ar);     /* full expression before ':' */
-        if (g_lex.tok.kind == ':')
-            next_token();
+        if (then_e == NULL)
+            return NULL;
+        expect(':');
         else_e = p_conditional(ar);
+        if (else_e == NULL)
+            return NULL;
         {
             struct AstNode *conditional = ast_cond(ar, c, then_e, else_e, 0);
             conditional->type = ast_expr_type_for_sizeof(conditional);
@@ -1014,11 +1066,13 @@ static int is_assign_op(int k)
 static struct AstNode *p_assign(struct AstArena *ar)
 {
     struct AstNode *lhs = p_conditional(ar);
-    if (is_assign_op(g_lex.tok.kind)) {
+    if (lhs != NULL && is_assign_op(g_lex.tok.kind)) {
         int op = g_lex.tok.kind;
         struct AstNode *rhs;
         next_token();
         rhs = p_assign(ar);              /* right-associative */
+        if (rhs == NULL)
+            return NULL;
         if (op == '=' && type_ptr_depth(ast_expr_type_for_sizeof(lhs)) > 0 &&
             !ast_expr_is_pointer_assignment_rhs(rhs))
             error_here("incompatible integer to pointer assignment");
@@ -1030,10 +1084,12 @@ static struct AstNode *p_assign(struct AstArena *ar)
 struct AstNode *ast_build_expr(struct AstArena *ar)
 {
     struct AstNode *n = p_assign(ar);
-    while (g_lex.tok.kind == ',') {
+    while (n != NULL && g_lex.tok.kind == ',') {
         struct AstNode *rhs;
         next_token();
         rhs = p_assign(ar);
+        if (rhs == NULL)
+            return NULL;
         n = ast_binary(ar, AST_COMMA, ',', n, rhs, 0);
     }
     return n;
@@ -1063,8 +1119,14 @@ static struct AstNode *ast_build_return_stmt(struct AstArena *ar)
                                            * case */
 
     next_token();                        /* consume 'return' */
-    if (g_lex.tok.kind != ';')
-        val = ast_build_expr(ar);
+    if (g_lex.tok.kind == ';' && ((current_return_type & 15) != TYPE_VOID ||
+                                  type_ptr_depth(current_return_type) > 0 ||
+                                  (current_return_type & TYPE_STRUCT))) {
+        error_here("non-void function must return a value");
+        return NULL;
+    }
+    if (g_lex.tok.kind != ';' && (val = ast_build_expr(ar)) == NULL)
+        return NULL;
     if (g_lex.tok.kind != ';')
         return NULL;                     /* malformed: decline */
     next_token();                        /* consume ';' */
@@ -1320,21 +1382,21 @@ static struct AstNode *ast_build_for_stmt(struct AstArena *ar)
         if (init == NULL)
             return NULL;
     } else {
-        if (g_lex.tok.kind != ';')
-            init = ast_build_expr(ar);
+        if (g_lex.tok.kind != ';' && (init = ast_build_expr(ar)) == NULL)
+            return NULL;
         if (g_lex.tok.kind != ';')
             return NULL;
         next_token();                    /* consume first ';' */
     }
 
-    if (g_lex.tok.kind != ';')
-        cond = ast_build_expr(ar);
+    if (g_lex.tok.kind != ';' && (cond = ast_build_expr(ar)) == NULL)
+        return NULL;
     if (g_lex.tok.kind != ';')
         return NULL;
     next_token();                        /* consume second ';' */
 
-    if (g_lex.tok.kind != ')')
-        inc = ast_build_expr(ar);
+    if (g_lex.tok.kind != ')' && (inc = ast_build_expr(ar)) == NULL)
+        return NULL;
     if (g_lex.tok.kind != ')')
         return NULL;
     next_token();                        /* consume ')' */
@@ -1862,7 +1924,26 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
 /* Build one statement from the current lexer position.  Returns NULL (without
  * committing to a partial parse for unrecognised leads).  In normal codegen a
  * NULL result is reported as an unsupported AST shape. */
+static struct AstNode *ast_build_stmt_at_depth(struct AstArena *ar);
+
+/* Statement bodies and blocks nest through here; past this depth the
+ * statement is rejected rather than overflowing the host stack. */
 struct AstNode *ast_build_stmt(struct AstArena *ar)
+{
+    static int depth;
+    struct AstNode *n;
+
+    if (depth >= 256) {
+        error_here("statements nested too deeply");
+        return NULL;
+    }
+    ++depth;
+    n = ast_build_stmt_at_depth(ar);
+    --depth;
+    return n;
+}
+
+static struct AstNode *ast_build_stmt_at_depth(struct AstArena *ar)
 {
     struct AstNode *n;
     struct Token start_tok;

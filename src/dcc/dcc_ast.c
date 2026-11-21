@@ -131,6 +131,7 @@ struct AstNode *ast_new(struct AstArena *ar, int kind)
     n->file = (char *)ast_arena_alloc(ar, file_len);
     memcpy(n->file, file, file_len);
     n->line = g_lex.tok_line;
+    n->pos = g_lex.tok_start_pos;
     n->end_file = NULL;
     n->end_line = 0;
     return n;

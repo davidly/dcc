@@ -1,0 +1,4 @@
+<source>:5: error DCC-E1105: expected ')' near ';'
+        return g(1;
+                  ^
+dcc: 1 error(s)

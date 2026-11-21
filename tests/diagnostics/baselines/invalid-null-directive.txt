@@ -1,0 +1,4 @@
+<source>:3: error DCC-E0310: '#(' is not a valid preprocessor directive
+        #(1, 2);
+    ^
+dcc: 1 error(s)

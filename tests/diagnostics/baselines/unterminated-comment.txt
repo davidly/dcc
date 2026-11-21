@@ -1,0 +1,4 @@
+<source>:3: error DCC-E0101: unterminated comment
+    /* this comment never ends
+    ^
+dcc: 1 error(s)

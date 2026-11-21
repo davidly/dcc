@@ -287,16 +287,17 @@ lock these messages and carets against exact baselines.
 
 | Category | Code range | Examples |
 | --- | --- | --- |
+| Lexical errors | `DCC-E0101`-`DCC-E0103` | unterminated comments, character constants and string literals |
 | Name lookup | `DCC-E0201` | undeclared identifiers |
-| Preprocessor and include handling | `DCC-E0301`-`DCC-E0321` | malformed `#include`, unknown directives, unmatched `#elif`/`#else`/`#endif`, bad macro arity |
+| Preprocessor and include handling | `DCC-E0301`-`DCC-E0322` | malformed `#include`, unknown directives, unmatched `#elif`/`#else`/`#endif`, an unclosed `(` in an `#if` expression, bad macro arity |
 | Constant expressions | `DCC-E0401`-`DCC-E0403` | non-constant expressions, division by zero, missing expression operands |
-| Struct/union/enum/type semantics | `DCC-E0501`-`DCC-E0540` | field designators, `offsetof`, bit-fields, duplicate enum constants, missing type names, multiple storage classes |
+| Struct/union/enum/type semantics | `DCC-E0501`-`DCC-E0540` | field designators, `offsetof`, bit-fields, duplicate enum constants, missing type names, conflicting type specifiers, multiple storage classes |
 | Array and pointer constraints | `DCC-E0601`-`DCC-E0605` | unsupported variable inner dimensions, invalid bounds/object sizes, scalar subscripting |
 | Statement control flow | `DCC-E0701`-`DCC-E0706` | `break`/`continue` outside valid contexts, stray `case`/`default`, duplicate or undefined labels |
-| Functions and declarations | `DCC-E0801`-`DCC-E0806` | parameter declaration errors, redefinitions, too few or too many function-call arguments |
+| Functions and declarations | `DCC-E0801`-`DCC-E0808` | parameter declaration errors, redefinitions, too few or too many function-call arguments, a bare `return;` in a non-void function, calling an object that is not a function |
 | Initializers and assignment compatibility | `DCC-E0901`-`DCC-E0921` | invalid initializers, integer-to-pointer assignment, taking the address of a register-qualified object |
-| Unsupported or malformed constructs | `DCC-E1001`-`DCC-E1005` | unsupported AST forms, malformed syntax, oversized string literals, unsupported `sizeof` expressions |
-| General syntax and top-level parsing | `DCC-E1101`-`DCC-E1107` | expected tokens such as `;`, `)`, `]`, `=`, or an external declaration |
+| Unsupported or malformed constructs | `DCC-E1001`-`DCC-E1006` | unsupported AST forms, malformed syntax, oversized string literals, unsupported `sizeof` expressions, statements or expressions nested too deeply |
+| General syntax and top-level parsing | `DCC-E1101`-`DCC-E1108` | expected tokens such as `;`, `)`, `]`, `=`, `:`, or an external declaration |
 | CP/M/Z80 target-model limits | `DCC-E1201`-`DCC-E1203` | unsupported `double`, `long long`, and 64-bit integer typedef names |
 
 The categories are deliberately broad: the numeric code says where the problem

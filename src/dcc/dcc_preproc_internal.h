@@ -26,6 +26,7 @@ void add_define_ex(const char *name, const char *value, int is_func, int nargs,
 void add_define(const char *name, const char *value);
 void remove_define(const char *name);
 int pp_eval_simple_expr(const char *s);
+int pp_eval_expr_malformed(void);
 void strip_macro_replacement_comments(char *s);
 
 #endif

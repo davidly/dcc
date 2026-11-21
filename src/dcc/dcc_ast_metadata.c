@@ -120,7 +120,7 @@ void ast_validate_expr_symbols(const struct AstNode *node)
                 node->sval);
         dcc_error_at(source_file,
                      node->line > 0 ? node->line : g_lex.tok_line,
-                     -1, message, NULL);
+                     node->line > 0 ? node->pos : -1, message, NULL);
         return;
     }
     ast_validate_expr_symbols(node->a);

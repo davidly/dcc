@@ -78,12 +78,29 @@ void process_compound(void)
         } else {
             if (dead) {
                 struct AstNode *n;
+                LexState start = lex_save();
+                int errors_before = errors;
 
                 n = ast_build_stmt(&g_ast_arena);
                 if (n != NULL)
                     ast_support_cache_begin();
-                if (n == NULL || !ast_stmt_supported(n))
-                    fatal("unsupported AST statement");
+                if (n == NULL || !ast_stmt_supported(n)) {
+                    /* Diagnose and recover as for a reachable statement,
+                     * without repeating an error the build just reported. */
+                    int reported = errors != errors_before;
+                    int ok;
+
+                    ast_arena_reset(&g_ast_arena);
+                    lex_restore(&start);
+                    if (reported)
+                        asm_suppress_depth++;
+                    ok = ast_process_statement();
+                    if (reported)
+                        asm_suppress_depth--;
+                    if (!ok)
+                        fatal("unsupported AST statement");
+                    continue;
+                }
                 if (ast_stmt_has_reentry_label(n)) {
                     mir_capture_stmt(n);
                     ast_process_stmt_metadata(n);

@@ -51,6 +51,9 @@ static int dcc_msg_has(const char *msg, const char *needle)
 
 const char *dcc_diag_code_for_message(const char *msg)
 {
+    if (dcc_msg_has(msg, "unterminated comment")) return "DCC-E0101";
+    if (dcc_msg_has(msg, "unterminated character constant")) return "DCC-E0102";
+    if (dcc_msg_has(msg, "unterminated string literal")) return "DCC-E0103";
     if (dcc_msg_has(msg, "undeclared identifier")) return "DCC-E0201";
     if (dcc_msg_has(msg, "expected \"FILENAME\" or <FILENAME>")) return "DCC-E0301";
     if (dcc_msg_has(msg, "include name too long")) return "DCC-E0302";
@@ -65,6 +68,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "#endif without matching #if")) return "DCC-E0315";
     if (dcc_msg_has(msg, "#else after #else")) return "DCC-E0316";
     if (dcc_msg_has(msg, "#if with no matching #endif")) return "DCC-E0317";
+    if (dcc_msg_has(msg, "missing ')' in preprocessor expression")) return "DCC-E0318";
     if (dcc_msg_has(msg, "too many arguments provided to function-like macro invocation")) return "DCC-E0320";
     if (dcc_msg_has(msg, "too few arguments provided to function-like macro invocation")) return "DCC-E0321";
     if (dcc_msg_has(msg, "macro argument too long in function-like macro invocation")) return "DCC-E0322";
@@ -91,6 +95,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "enumerator value is not representable as 16-bit int")) return "DCC-E0522";
     if (dcc_msg_has(msg, "struct/union name or '{' expected")) return "DCC-E0530";
     if (dcc_msg_has(msg, "type expected")) return "DCC-E0531";
+    if (dcc_msg_has(msg, "conflicting type specifiers")) return "DCC-E0532";
     if (dcc_msg_has(msg, "multiple storage classes in declaration")) return "DCC-E0540";
     if (dcc_msg_has(msg, "variable length arrays are not supported")) return "DCC-E0601";
     if (dcc_msg_has(msg, "variable inner dimensions in variable-length arrays are not supported")) return "DCC-E0601";
@@ -110,6 +115,8 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "redefinition of")) return "DCC-E0804";
     if (dcc_msg_has(msg, "too few arguments to function call")) return "DCC-E0805";
     if (dcc_msg_has(msg, "too many arguments to function call")) return "DCC-E0806";
+    if (dcc_msg_has(msg, "non-void function must return a value")) return "DCC-E0807";
+    if (dcc_msg_has(msg, "called object is not a function")) return "DCC-E0808";
     if (dcc_msg_has(msg, "identifier expected after & in initializer")) return "DCC-E0901";
     if (dcc_msg_has(msg, "constant initializer expected")) return "DCC-E0902";
     if (dcc_msg_has(msg, "string initializer too long")) return "DCC-E0903";
@@ -133,6 +140,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "malformed")) return "DCC-E1003";
     if (dcc_msg_has(msg, "string literal too long")) return "DCC-E1004";
     if (dcc_msg_has(msg, "'(' expected after sizeof in constant expression")) return "DCC-E1005";
+    if (dcc_msg_has(msg, "nested too deeply")) return "DCC-E1006";
     if (dcc_msg_has(msg, "external declaration expected")) return "DCC-E1101";
     if (dcc_msg_has(msg, "expected ';'")) return "DCC-E1102";
     if (dcc_msg_has(msg, "expected '}'")) return "DCC-E1103";
@@ -140,6 +148,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "expected ')'")) return "DCC-E1105";
     if (dcc_msg_has(msg, "expected ']'")) return "DCC-E1106";
     if (dcc_msg_has(msg, "expected '='")) return "DCC-E1107";
+    if (dcc_msg_has(msg, "expected ':'")) return "DCC-E1108";
     if (dcc_msg_has(msg, "double is not supported")) return "DCC-E1201";
     if (dcc_msg_has(msg, "long long is not supported")) return "DCC-E1202";
     if (dcc_msg_has(msg, "64-bit integer types are not supported")) return "DCC-E1203";

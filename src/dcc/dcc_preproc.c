@@ -653,6 +653,57 @@ void parse_preprocessor_line(void)
     while (peekc() && peekc() != '\n') getc_src();
 }
 
+/* Report a lexical error at source offset pos (a token's first character),
+ * once: lookahead and the scan passes relex the same text. */
+static void lex_error_at(long pos, const char *msg)
+{
+    static long reported[64];
+    static long reported_generation[64];
+    static int nreported;
+    char file[256];
+    int line;
+    int i;
+
+    for (i = 0; i < nreported; ++i)
+        if (reported[i] == pos && reported_generation[i] == g_src_generation)
+            return;
+    /* A probe parse suppresses diagnostics; the real pass must still report. */
+    if (nreported < 64 && asm_suppress_depth == 0) {
+        reported[nreported] = pos;
+        reported_generation[nreported++] = g_src_generation;
+    }
+    source_location_at(pos, file, sizeof(file), &line);
+    dcc_error_at(file, line, pos, msg, NULL);
+}
+
+/* Whether the '#' at src[pos] begins a directive: only whitespace and block
+ * comments may precede it on its line. A '#' later in a line (`int x #if`)
+ * is an ordinary token and a syntax error, not a directive. */
+static int pp_hash_starts_line(long pos)
+{
+    long i = pos - 1;
+
+    while (i >= 0) {
+        char c = src[i];
+
+        if (c == '\n')
+            return 1;
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\f' || c == '\v') {
+            --i;
+            continue;
+        }
+        if (c == '/' && i > 0 && src[i - 1] == '*') {
+            i -= 2;
+            while (i > 0 && !(src[i - 1] == '/' && src[i] == '*'))
+                --i;
+            i -= 2;
+            continue;
+        }
+        return 0;
+    }
+    return 1;
+}
+
 void skip_ws_and_comments(void)
 {
     int c;
@@ -671,18 +722,24 @@ void skip_ws_and_comments(void)
         }
 
         if (c == '/' && g_lex.posi + 1 < src_len && src[g_lex.posi + 1] == '*') {
+            long start = g_lex.posi;
+            int closed = 0;
+
             g_lex.posi += 2;
             while (peekc()) {
                 if (peekc() == '*' && g_lex.posi + 1 < src_len && src[g_lex.posi + 1] == '/') {
                     g_lex.posi += 2;
+                    closed = 1;
                     break;
                 }
                 getc_src();
             }
+            if (!closed)
+                lex_error_at(start, "unterminated comment");
             continue;
         }
 
-        if (c == '#') {
+        if (c == '#' && pp_hash_starts_line(g_lex.posi)) {
             getc_src();
             parse_preprocessor_line();
             continue;
@@ -2430,7 +2487,7 @@ void next_token(void)
 
     if (c == '"') {
         i = 0;
-        while (peekc() && peekc() != '"' && i < MAX_TOK_TEXT - 1) {
+        while (peekc() && peekc() != '"' && peekc() != '\n' && i < MAX_TOK_TEXT - 1) {
             if (peekc() == '\\') {
                 getc_src();
                 g_lex.tok.text[i++] = (char)read_escape();
@@ -2445,9 +2502,9 @@ void next_token(void)
          * the unread tail (including the closing ") to be relexed as stray
          * tokens, which silently derailed the parser instead of diagnosing.
          */
-        if (peekc() && peekc() != '"') {
+        if (peekc() && peekc() != '"' && peekc() != '\n') {
             error_here("string literal too long");
-            while (peekc() && peekc() != '"') {
+            while (peekc() && peekc() != '"' && peekc() != '\n') {
                 if (peekc() == '\\') {
                     getc_src();
                     read_escape();
@@ -2456,13 +2513,23 @@ void next_token(void)
                 }
             }
         }
-        if (peekc() == '"') getc_src();
+        if (peekc() == '"')
+            getc_src();
+        else
+            lex_error_at(g_lex.tok_start_pos, "unterminated string literal");
         g_lex.tok.kind = TOK_STR;
         g_lex.tok.text_len = i;
         return;
     }
 
     if (c == '\'') {
+        long close = g_lex.posi;
+
+        /* No closing quote on the line: `return ' ;`. */
+        while (close < src_len && src[close] != '\n' && src[close] != '\'')
+            close += src[close] == '\\' ? 2 : 1;
+        if (close >= src_len || src[close] != '\'')
+            lex_error_at(g_lex.tok_start_pos, "unterminated character constant");
         if (peekc() == '\\') {
             getc_src();
             g_lex.tok.val = read_escape();

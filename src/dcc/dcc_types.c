@@ -438,6 +438,9 @@ void parse_struct_definition(int struct_id)
     bit_unit_offset = 0;
 
     while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '}') {
+        long member_start = g_lex.tok_start_pos;
+        long member_generation = g_src_generation;
+
         /* C11 6.7.2.1: a static_assert-declaration is a valid struct-declaration.
          * It contributes no member and is consumed (through its ';') here. */
         if (g_lex.tok.kind == TOK_STATIC_ASSERT) {
@@ -632,6 +635,9 @@ void parse_struct_definition(int struct_id)
         }
 
         expect(';');
+        /* A member that consumed nothing (`raw32_t ] u;`) would loop forever. */
+        if (g_lex.tok_start_pos == member_start && g_src_generation == member_generation)
+            next_token();
     }
 
     expect('}');
@@ -699,6 +705,7 @@ int parse_base_type(void)
     int saw_long;
     int saw_long_long;
     int saw_short;
+    int saw_int;
     int saw_char;
     int saw_void;
     int saw_float;
@@ -711,6 +718,7 @@ int parse_base_type(void)
     saw_long = 0;
     saw_long_long = 0;
     saw_short = 0;
+    saw_int = 0;
     saw_char = 0;
     saw_void = 0;
     saw_float = 0;
@@ -791,12 +799,27 @@ int parse_base_type(void)
             next_token();
             continue;
         }
-        if (g_lex.tok.kind == TOK_SHORT) { saw_short = 1; saw_any = 1; next_token(); continue; }
-        if (g_lex.tok.kind == TOK_INT) { saw_any = 1; next_token(); continue; }
-        if (g_lex.tok.kind == TOK_FLOAT) { saw_float = 1; saw_any = 1; next_token(); continue; }
-        if (g_lex.tok.kind == TOK_BOOL) { saw_bool = 1; saw_any = 1; next_token(); continue; }
-        if (g_lex.tok.kind == TOK_CHAR) { saw_char = 1; saw_any = 1; next_token(); continue; }
-        if (g_lex.tok.kind == TOK_VOID) { saw_void = 1; saw_any = 1; next_token(); continue; }
+        /* One of int, float, _Bool, char and void, and short at most once:
+         * `float float b` and `int char c` are errors. */
+        if (g_lex.tok.kind == TOK_SHORT || g_lex.tok.kind == TOK_INT ||
+            g_lex.tok.kind == TOK_FLOAT || g_lex.tok.kind == TOK_BOOL ||
+            g_lex.tok.kind == TOK_CHAR || g_lex.tok.kind == TOK_VOID) {
+            int kind = g_lex.tok.kind;
+
+            if ((kind == TOK_SHORT && saw_short) ||
+                (kind != TOK_SHORT &&
+                 saw_int + saw_float + saw_bool + saw_char + saw_void > 0))
+                error_here("conflicting type specifiers");
+            if (kind == TOK_SHORT) saw_short = 1;
+            if (kind == TOK_INT) saw_int = 1;
+            if (kind == TOK_FLOAT) saw_float = 1;
+            if (kind == TOK_BOOL) saw_bool = 1;
+            if (kind == TOK_CHAR) saw_char = 1;
+            if (kind == TOK_VOID) saw_void = 1;
+            saw_any = 1;
+            next_token();
+            continue;
+        }
 
         if (g_lex.tok.kind == TOK_STRUCT || g_lex.tok.kind == TOK_UNION) {
             int sid;

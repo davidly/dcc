@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0532: conflicting type specifiers near 'float'
+    int f(float a, float float b)
+                         ^
+dcc: 1 error(s)

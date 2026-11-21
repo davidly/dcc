@@ -1,0 +1,4 @@
+<source>:1: error DCC-E0318: missing ')' in preprocessor expression
+    #if defined(FOO
+    ^
+dcc: 1 error(s)

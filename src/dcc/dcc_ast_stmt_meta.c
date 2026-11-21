@@ -479,6 +479,25 @@ static const char *ast_unsupported_statement_message(const struct AstNode *n)
     }
 }
 
+/* Whether n declares anything: its block locals are not yet in the symbol
+ * table, so its identifiers cannot be checked for declaration. */
+static int ast_stmt_has_decl(const struct AstNode *n)
+{
+    int i;
+
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_DECL)
+        return 1;
+    if (ast_stmt_has_decl(n->a) || ast_stmt_has_decl(n->b) ||
+        ast_stmt_has_decl(n->c) || ast_stmt_has_decl(n->d))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (ast_stmt_has_decl(n->list[i]))
+            return 1;
+    return 0;
+}
+
 int ast_process_statement(void)
 {
     LexState _ls;
@@ -487,6 +506,7 @@ int ast_process_statement(void)
     int sv_block_seq;
     struct AstNode *n;
     int report;
+    int errors_before;
 
     g_ast_last_stmt_exits = 0;
 
@@ -499,6 +519,7 @@ int ast_process_statement(void)
     sv_for_seq = g_func_pass.for_seq;
     sv_block_seq = g_func_pass.block_seq;
 
+    errors_before = errors;
     n = ast_build_stmt(&g_ast_arena);
 
     _le = lex_save();
@@ -509,6 +530,17 @@ int ast_process_statement(void)
     if (n != NULL && ast_stmt_supported(n)) {
         g_func_pass.for_seq = sv_for_seq;
         g_func_pass.block_seq = sv_block_seq;
+        /* A discarded `zz;` passes the gate; report zz rather than fail
+         * later in code generation. */
+        if (!ast_stmt_has_decl(n)) {
+            int errors_checked = errors;
+
+            ast_validate_expr_symbols(n);
+            if (errors != errors_checked) {
+                ast_arena_reset(&g_ast_arena);
+                return 1;
+            }
+        }
         if (g_ast_dump_enabled)
             ast_dump(n, 0);
         mir_capture_stmt(n);
@@ -529,7 +561,13 @@ int ast_process_statement(void)
     }
 
     lex_restore(&_ls);
-    error_here(ast_unsupported_statement_message(n));
+    /* `return zz;` is rejected because zz is undeclared; say so. */
+    if (errors == errors_before && n != NULL && !ast_stmt_has_decl(n))
+        ast_validate_expr_symbols(n);
+    /* A syntax error the build already reported (`expected ')'`) needs no
+     * second, vaguer complaint about the whole statement. */
+    if (errors == errors_before)
+        error_here(ast_unsupported_statement_message(n));
 
     if (n != NULL) {
         lex_restore(&_le);

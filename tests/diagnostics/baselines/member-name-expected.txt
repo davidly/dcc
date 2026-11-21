@@ -1,0 +1,4 @@
+<source>:7: error DCC-E0506: field name expected near ';'
+        return s.;
+                 ^
+dcc: 1 error(s)

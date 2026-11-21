@@ -1,0 +1,4 @@
+<source>:5: error DCC-E1106: expected ']' near ';'
+        return a[1;
+                  ^
+dcc: 1 error(s)

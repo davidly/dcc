@@ -1,0 +1,4 @@
+<source>:3: error DCC-E1108: expected ':' near '2'
+        return x ? 1 2;
+                     ^
+dcc: 1 error(s)

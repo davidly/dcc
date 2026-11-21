@@ -1,4 +1,4 @@
-<source>:3: error DCC-E1002: unsupported return expression near 'return'
+<source>:3: error DCC-E0201: use of undeclared identifier 'missing_symbol'
         return missing_symbol;
-        ^
+               ^
 dcc: 1 error(s)
