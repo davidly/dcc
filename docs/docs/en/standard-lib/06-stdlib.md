@@ -147,6 +147,8 @@ unsigned long u = strtoul("4294967295", NULL, 10); /* ULONG_MAX */
 and returns IEEE 754 single precision. C89 `atof` normally returns `double`, which DCC C Compiler
 does not have. It accepts ordinary decimal text with an optional exponent, plus the case-insensitive
 spellings `nan`, `inf`, and `infinity`. Overflow returns signed infinity; underflow returns signed zero.
+The first nine significant digits are kept exactly and the result is within
+two units in the last place of the correctly rounded value, usually exact.
 `strtod` uses the same parser and reports the first unconsumed byte through
 `endptr`. Numeric overflow and underflow set `errno` to `ERANGE`; explicit
 infinity/NaN spellings and an exact zero with a large exponent are not range

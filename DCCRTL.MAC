@@ -6729,10 +6729,10 @@ atf_nodp:
         ld      (__atf_sd),a            ; saw at least one mantissa digit
         inc     hl
         ld      (__atf_p),hl
-        ; Keep at most 38 significant decimal digits so the intermediate
-        ; float mantissa cannot overflow before exponent scaling.  Skipped
-        ; integer digits are folded into an exponent adjustment; skipped
-        ; fractional digits are simply discarded precision.
+        ; Keep the first 9 significant decimal digits, exactly, as a 32-bit
+        ; integer (10^9 < 2^32).  Skipped integer digits are folded into an
+        ; exponent adjustment; skipped fractional digits are simply
+        ; discarded precision.
         ld      a,(__atf_ndig)
         or      a
         jr      nz,atf_sig_digit
@@ -6741,7 +6741,7 @@ atf_nodp:
         jr      z,atf_keep_digit        ; leading zero: keep but don't count
 atf_sig_digit:
         ld      a,(__atf_ndig)
-        cp      38
+        cp      9
         jr      c,atf_count_digit
         ld      a,(__atf_dp)
         or      a
@@ -6761,32 +6761,33 @@ atf_keep_digit:
         inc     hl
         ld      (__atf_frac),hl
 atf_nfc:
-        ; mant = mant * 10.0f: push left=10.0f, right=mant
-        ; (fmul is commutative; 10.0f: DE=0x4120, HL=0x0000)
-        ld      de,04120h
-        ld      hl,0
-        push    de
-        push    hl
+        ; mant = mant * 10 + digit, as an integer: (mant * 4 + mant) * 2
         ld      hl,(__atf_mant)
         ld      de,(__atf_mant+2)
-        call    __fmf
+        push    de
+        push    hl
+        add     hl,hl
+        rl      e
+        rl      d
+        add     hl,hl
+        rl      e
+        rl      d
         pop     bc
+        add     hl,bc
+        ex      de,hl
         pop     bc
-        ld      (__atf_mant),hl
-        ld      (__atf_mant+2),de
-        ; mant += (float)digit  via __fif(HL=digit) -> DE:HL
+        adc     hl,bc
+        ex      de,hl
+        add     hl,hl
+        rl      e
+        rl      d
         ld      a,(__atf_d)
-        ld      l,a
-        ld      h,0
-        call    __fif
-        ; fadd is commutative: push digit then mant (order doesn't matter)
-        push    de
-        push    hl
-        ld      hl,(__atf_mant)
-        ld      de,(__atf_mant+2)
-        call    __faf
-        pop     bc
-        pop     bc
+        ld      c,a
+        ld      b,0
+        add     hl,bc
+        jr      nc,atf_nfc_st
+        inc     de
+atf_nfc_st:
         ld      (__atf_mant),hl
         ld      (__atf_mant+2),de
         jp      atf_dlp
@@ -6947,6 +6948,14 @@ atf_net_sv:
         or      h
         or      l
         jp      z,atf_sign_bit
+        ; One rounding to float, then one per scaling step below: the old
+        ; float accumulation and a multiply or divide per power of ten were
+        ; up to 6 ulps off.
+        ld      hl,(__atf_mant)
+        ld      de,(__atf_mant+2)
+        call    __fulf
+        ld      (__atf_mant),hl
+        ld      (__atf_mant+2),de
         ld      hl,(__atf_net)
         ld      a,h
         or      l
@@ -6959,9 +6968,9 @@ atf_net_sv:
         jp      nc,atf_range_inf
         ld      hl,(__atf_net)
 atf_pos_net:
-        ; mant *= 10.0f, net times
-        ld      de,04120h
-        ld      hl,0
+        ; mant *= 10^net, net in 1..38
+        ld      a,(__atf_net)
+        call    atf_pow10
         push    de
         push    hl
         ld      hl,(__atf_mant)
@@ -6971,10 +6980,6 @@ atf_pos_net:
         pop     bc
         ld      (__atf_mant),hl
         ld      (__atf_mant+2),de
-        ld      a,(__atf_net)
-        dec     a
-        ld      (__atf_net),a
-        jr      nz,atf_pos_net
         ld      a,d
         and     7fh
         cp      7fh
@@ -6991,22 +6996,32 @@ atf_neg_net:
         or      a                       ; mantissa, so this always underflows
         sbc     hl,de
         jr      nc,atf_range_zero
-        ; mant /= 10.0f, |net| times (net is negative, counting toward 0)
-        ld      hl,(__atf_mant)
-        ld      de,(__atf_mant+2)
-        push    de
-        push    hl                      ; left = mant (numerator)
-        ld      de,04120h
-        ld      hl,0                    ; right = 10.0f (divisor), live for __fdf
-        call    __fdf
+        add     hl,de
+        ld      a,l                     ; |net| in 1..77
+atf_neg_chunk:
+        ; mant /= 10^k, the excess over 38 first so 10^k stays finite and
+        ; the quotient stays normal until the last step.
+        ld      (__atf_net),a           ; remaining scale
+        cp      39
+        jr      c,atf_neg_k
+        sub     38
+atf_neg_k:
+        ld      (__atf_frac),a          ; k
+        call    atf_pow10
+        ld      bc,(__atf_mant+2)
+        push    bc
+        ld      bc,(__atf_mant)
+        push    bc                      ; left = mant (numerator)
+        call    __fdf                   ; right = 10^k (divisor)
         pop     bc
         pop     bc
         ld      (__atf_mant),hl
         ld      (__atf_mant+2),de
+        ld      a,(__atf_frac)
+        ld      b,a
         ld      a,(__atf_net)
-        inc     a                       ; towards 0; range is only -77..-1
-        ld      (__atf_net),a
-        jr      nz,atf_neg_net
+        sub     b
+        jr      nz,atf_neg_chunk
         ld      a,d
         and     7fh
         or      e
@@ -7039,6 +7054,25 @@ atf_make_zero:
         ld      hl,0
         ld      de,0
         jr      atf_apply_sign
+; DE:HL = 10.0f^A for A in 1..39 (10^39 is +Inf); exact through 10^10.
+atf_pow10:
+        ld      (__atf_d),a
+        ld      de,03f80h               ; 1.0f
+        ld      hl,0
+atf_pw_lp:
+        push    de
+        push    hl
+        ld      de,04120h               ; 10.0f
+        ld      hl,0
+        call    __fmf
+        pop     bc
+        pop     bc
+        ld      a,(__atf_d)
+        dec     a
+        ld      (__atf_d),a
+        jr      nz,atf_pw_lp
+        ret
+
 __atf_p:        dw      0
 __atf_orig:     dw      0
 __atf_mant:     ds      4
@@ -17719,12 +17753,8 @@ FMSSPECIAL:
         jp      FMSRET          ; sqrt(+Inf) = +Inf
 
 FMSPOS:
-        ; x = m * 2^(2*q), with 1 <= m < 4. Starting from g=x and
-        ; taking only eight Newton steps fails for large AND small x.
-        ; Reduce first so division and the final square stay in range;
+        ; x = m * 2^(2*q), with 1 <= m < 4, and
         ; sqrt(x) = sqrt(m) * 2^q, whose result is always normal.
-        ; Locals: g at -4..-1, q at -5, iteration budget at -6,
-        ; correction product at -10..-7. The argument slot holds m.
         ld      a,c             ; biased exponent, raw bits still live
         ld      b,0
         or      a
@@ -17749,133 +17779,113 @@ FMSNORM:
         ld      b,a
         sra     b
         rr      c               ; carry = odd exponent, including negatives
-        ld      (ix-5),c         ; q is in -75..63
-        jr      c,FMSODD
-        ld      d,3fh           ; m exponent 127: [1,2)
+        ld      (ix-10),c       ; q is in -75..63
+        ; Integer square root of the significand, which is exact and so
+        ; correctly rounded; Newton iteration in float settled one ulp off.
+        ; M = E:H:L with its leading one. sqrt(m) * 2^23 = sqrt(N) for
+        ; N = M << 24 (odd exponent, m in [2,4)) or M << 23 (even, [1,2)).
+        ; N's top 32 bits are in the alternate DE:HL (its low 16 bits are
+        ; zero) and the remainder in DE:HL. Locals: root at -8..-6,
+        ; iteration count at -9, q at -10.
         set     7,e
-        jr      FMSINIT
+        ld      a,0
+        jr      c,FMSODD        ; carry still holds the odd exponent
+        srl     e
+        rr      h
+        rr      l
+        rra
 FMSODD:
-        ld      d,40h           ; m exponent 128: [2,4)
-        res     7,e
-FMSINIT:
-        ld      (ix+4),l
-        ld      (ix+5),h
-        ld      (ix+6),e
-        ld      (ix+7),d
-        ld      (ix-4),l
-        ld      (ix-3),h
-        ld      (ix-2),e
-        ld      (ix-1),d
-        ld      (ix-6),8
-FMSLP:
-        ; g = (g + x / g) * 0.5f
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)
+        ld      d,e
+        ld      e,h
+        ld      h,l
+        ld      l,a
+        exx
+        xor     a
+        ld      (ix-6),a
+        ld      (ix-7),a
+        ld      (ix-8),a
+        ld      h,a
+        ld      l,a
+        ld      d,a
+        ld      e,a
+        ld      (ix-9),24
+FMSQL:
+        ld      b,2             ; remainder = remainder * 4 + next two bits of N
+FMSQS:
+        exx
+        add     hl,hl
+        rl      e
+        rl      d
+        exx
+        adc     hl,hl
+        rl      e
+        rl      d
+        djnz    FMSQS
+        ld      a,(ix-8)        ; root *= 2
+        add     a,a
+        ld      (ix-8),a
+        ld      a,(ix-7)
+        rla
+        ld      (ix-7),a
+        ld      a,(ix-6)
+        rla
+        ld      (ix-6),a
+        push    de              ; keep the remainder for a failed trial
+        push    hl
         push    de
         push    hl
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        push    de
-        push    hl
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)        ; g (divisor), live for __fdf
-        call    __fdf
+        ld      a,(ix-8)        ; DE:BC = trial = 2 * root + 1
+        scf
+        rla
+        ld      c,a
+        ld      a,(ix-7)
+        rla
+        ld      b,a
+        ld      a,(ix-6)
+        rla
+        ld      e,a
+        ld      a,0
+        rla
+        ld      d,a
+        pop     hl              ; remainder - trial
+        or      a
+        sbc     hl,bc
+        ex      de,hl
+        ex      (sp),hl
+        pop     bc
+        sbc     hl,bc
+        jr      c,FMSQNO
+        ex      de,hl           ; fits: keep the difference, set the root bit
         pop     bc
         pop     bc
-        call    __faf
-        pop     bc
-        pop     bc
-        ld      b,0ffh            ; exact * 2^-1, replacing full multiply by 0.5f
-        call    __fscale_pow2
-        ; If the new iterate equals the previous g bit-for-bit, Newton's
-        ; method has reached a fixed point and every remaining iteration would
-        ; reproduce it, so stop early.  g is a positive finite float here
-        ; (never NaN), so a byte compare is a true value compare and the early
-        ; exit is bit-identical to running the full iteration count.
-        ld      a,l
-        cp      (ix-4)
-        jr      nz,FMSUPD
-        ld      a,h
-        cp      (ix-3)
-        jr      nz,FMSUPD
-        ld      a,e
-        cp      (ix-2)
-        jr      nz,FMSUPD
-        ld      a,d
-        cp      (ix-1)
-        jp      z,FMSDONE       ; converged: stored g already equals new g
-FMSUPD:
-        ld      (ix-4),l
-        ld      (ix-3),h
-        ld      (ix-2),e
-        ld      (ix-1),d
-
-        dec     (ix-6)
-        jp      nz,FMSLP
-
-FMSDONE:
-        ; One final correction: the simple division/multiply helpers truncate,
-        ; so Newton iteration can settle one representable value below the
-        ; correctly rounded answer for perfect squares such as 9.0f.  If
-        ; g*g < x, advance positive g by one IEEE single-precision bit.
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)
-        push    de
-        push    hl
-        call    __fmf
-        pop     bc
-        pop     bc
-        ; Save product, then call __fltf(product, x): x is pushed, product
-        ; stays live in DE:HL for the fastcall convention (see __fltf's
-        ; header in DCCRTL.MAC).
-        ld      (ix-10),l
-        ld      (ix-9),h
-        ld      (ix-8),e
-        ld      (ix-7),d
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      e,(ix+6)
-        ld      d,(ix+7)
-        push    de
-        push    hl
-        ld      l,(ix-10)
-        ld      h,(ix-9)
-        ld      e,(ix-8)
-        ld      d,(ix-7)
-        call    __fltf             ; g*g < x ?
-        pop     bc
-        pop     bc
-        ld      a,h
-        or      l
-        jp      z,FMSLD
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)
-        inc     hl
-        ld      a,h
-        or      l
-        jr      nz,FMSST
-        inc     de
-FMSST:
-        ld      (ix-4),l
-        ld      (ix-3),h
-        ld      (ix-2),e
-        ld      (ix-1),d
-FMSLD:
-        ld      l,(ix-4)
-        ld      h,(ix-3)
-        ld      e,(ix-2)
-        ld      d,(ix-1)
-        ld      b,(ix-5)
+        inc     (ix-8)
+        jr      FMSQNX
+FMSQNO:
+        pop     hl
+        pop     de
+FMSQNX:
+        dec     (ix-9)
+        jp      nz,FMSQL
+        ; Round to nearest: up when remainder > root (no ties for a root).
+        ld      c,l
+        ld      b,h
+        ld      l,(ix-8)
+        ld      h,(ix-7)
+        or      a
+        sbc     hl,bc
+        ld      l,(ix-6)
+        ld      h,0
+        sbc     hl,de           ; carry = root < remainder
+        ld      l,(ix-8)        ; float bits: (126 << 23) + root, whose
+        ld      h,(ix-7)        ; leading one makes the exponent 127
+        ld      e,(ix-6)
+        ld      d,3fh
+        ld      bc,0
+        adc     hl,bc
+        jr      nc,FMSRND
+        inc     de              ; a carry into the exponent is still exact
+FMSRND:
+        ld      b,(ix-10)
         call    __fscale_pow2    ; exact: every nonzero finite sqrt is normal
 FMSRET:
         ld      sp,ix
@@ -19910,6 +19920,39 @@ MFL50:
         ld (__cosf_sign),hl
         ld (__cosf_sign+2),de
 MFL51:
+        ; Above pi/4 the polynomial below is short of float accuracy (it was
+        ; off by 5e-4 near pi/2), so use cos x = sin(pi/2 - |x|) there.
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
+        res 7,d                 ; |x|; cos is even
+        ld (__cosf_x),hl
+        ld (__cosf_x+2),de
+        push de
+        push hl
+        ld hl,4059
+        ld de,16201             ; pi/4
+        call __fltf             ; pi/4 < |x|
+        pop bc
+        pop bc
+        ld a,h
+        or l
+        jp z,MFL51P
+        ld hl,4059
+        ld de,16329             ; pi/2
+        push de
+        push hl
+        ld hl,(__cosf_x)
+        ld de,(__cosf_x+2)
+        call __fsf              ; pi/2 - |x|
+        pop bc
+        pop bc
+        push de
+        push hl
+        call _sinf
+        pop bc
+        pop bc
+        jp MFL51S
+MFL51P:
         ld hl,(__cosf_x)
         ld de,(__cosf_x+2)
         push de
@@ -19975,6 +20018,7 @@ MFL51:
         call __faf
         pop bc
         pop bc
+MFL51S:
         ld (__cosf_poly),hl
         ld (__cosf_poly+2),de
         ld hl,(__cosf_sign)
@@ -20161,44 +20205,75 @@ MFL60:
         pop bc
         ld (__tanf_r2),hl
         ld (__tanf_r2+2),de
+        ; tan r = r(945 - 105r^2 + r^4) / (945 - 420r^2 + 15r^4), the [5/4]
+        ; Pade approximant; the [3/2] form r(15 - r^2)/(15 - 6r^2) was off
+        ; by 2e-4 near pi/4.
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
         push de
         push hl
+        ld hl,(__tanf_r2)
+        ld de,(__tanf_r2+2)
+        push de
+        push hl
         ld hl,0
-        ld de,16752
+        ld de,17106             ; 105.0
+        call __fsf              ; r^2 - 105
+        pop bc
+        pop bc
         push de
         push hl
         ld hl,(__tanf_r2)
         ld de,(__tanf_r2+2)
-        call __fsf
+        call __fmf              ; r^2 (r^2 - 105)
         pop bc
         pop bc
-        call __fmf
+        push de
+        push hl
+        ld hl,16384
+        ld de,17516             ; 945.0
+        call __faf
+        pop bc
+        pop bc
+        call __fmf              ; times r
         pop bc
         pop bc
         ld (__tanf_num),hl
         ld (__tanf_num+2),de
-        ld hl,0
-        ld de,16752
+        ld hl,(__tanf_r2)
+        ld de,(__tanf_r2+2)
         push de
         push hl
         ld hl,0
-        ld de,16576
+        ld de,16752             ; 15.0
+        call __fmf              ; 15 r^2
+        pop bc
+        pop bc
+        push de
+        push hl
+        ld hl,0
+        ld de,17362             ; 420.0
+        call __fsf              ; 15 r^2 - 420
+        pop bc
+        pop bc
         push de
         push hl
         ld hl,(__tanf_r2)
         ld de,(__tanf_r2+2)
-        call __fmf
+        call __fmf              ; r^2 (15 r^2 - 420)
         pop bc
         pop bc
-        call __fsf
+        push de
+        push hl
+        ld hl,16384
+        ld de,17516             ; 945.0
+        call __faf
         pop bc
         pop bc
         ld (__tanf_den),hl
         ld (__tanf_den+2),de
-        ; Range reduction guarantees |r| <= pi/4, so 15-6*r*r is > 11
-        ; and cannot be zero.  Divide directly; the old dead zero return also
+        ; Range reduction guarantees |r| <= pi/4, so the denominator is
+        ; above 690 and cannot be zero.  Divide directly; the old dead zero return also
         ; masked pole residuals as tangent zero.
         ld hl,(__tanf_num)
         ld de,(__tanf_num+2)
@@ -20903,6 +20978,8 @@ MFL90:
         pop bc
         jp MFL87
 MFL92:
+        ; |x| <= 0.5: the Taylor series through x^13, good to 1e-6 at 0.5.
+        ; Four tuned terms were off by 1.2e-4 near 0.5.
         ld l,(ix+4)
         ld h,(ix+5)
         ld e,(ix+6)
@@ -20941,7 +21018,7 @@ MFL92:
         pop bc
         push de
         push hl
-        ld hl,43748
+        ld hl,43691
         ld de,15914
         push de
         push hl
@@ -20951,7 +21028,7 @@ MFL92:
         ld d,(ix-5)
         push de
         push hl
-        ld hl,33013
+        ld hl,39322
         ld de,15769
         push de
         push hl
@@ -20961,8 +21038,8 @@ MFL92:
         ld d,(ix-5)
         push de
         push hl
-        ld hl,16070
-        ld de,15674
+        ld hl,56174
+        ld de,15670
         push de
         push hl
         ld l,(ix-8)
@@ -20971,8 +21048,40 @@ MFL92:
         ld d,(ix-5)
         push de
         push hl
-        ld hl,235
-        ld de,15558
+        ld hl,58254
+        ld de,15608
+        push de
+        push hl
+        ld l,(ix-8)
+        ld h,(ix-7)
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,17873
+        ld de,15543
+        push de
+        push hl
+        ld l,(ix-8)
+        ld h,(ix-7)
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,10082
+        ld de,15502
+        call __fmf
+        pop bc
+        pop bc
+        call __faf
+        pop bc
+        pop bc
+        call __fmf
+        pop bc
+        pop bc
+        call __faf
+        pop bc
+        pop bc
         call __fmf
         pop bc
         pop bc

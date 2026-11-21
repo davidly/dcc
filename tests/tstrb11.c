@@ -165,10 +165,10 @@ int main(void)
     check_parse("negative underflow boundary", "-1e-38!",
                 0x80000000UL, ERANGE, 6);
     check_parse("finite high boundary", "3e38!",
-                0x7f61b1e4UL, EDOM, 4);
+                0x7f61b1e7UL, EDOM, 4);
     check_range("finite high value", last_value.f, 2.99e38f, 3.01e38f);
     check_parse("finite low boundary", "2e-38!",
-                0x00d9c7ddUL, EDOM, 5);
+                0x00d9c7dcUL, EDOM, 5);
     check_range("finite low value", last_value.f, 1.99e-38f, 2.01e-38f);
 
     check_parse("bad exponent endpoint", "12e+!",
@@ -178,12 +178,12 @@ int main(void)
 
     make_integer_cancel();
     check_parse("integer cancellation", text,
-                0x3f800002UL, EDOM, 505);
+                0x3f800000UL, EDOM, 505);
     check_range("integer cancellation value", last_value.f,
                 0.99999f, 1.00001f);
     errno = EDOM;
     value.f = atof(text);
-    check_bits("atof integer cancellation", value.u, 0x3f800002UL);
+    check_bits("atof integer cancellation", value.u, 0x3f800000UL);
     check_int("atof cancellation errno", errno, EDOM);
 
     make_fraction_cancel();
