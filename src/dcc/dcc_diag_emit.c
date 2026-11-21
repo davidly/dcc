@@ -164,6 +164,10 @@ static void dcc_print_source_caret(long ofs)
 
     if (!src || src_len <= 0 || ofs < 0 || ofs > src_len)
         return;
+    /* An error at a CRLF line end (end of file, say) shows the line it ends,
+     * as an LF line end does. */
+    if (ofs > 0 && ofs < src_len && src[ofs] == '\n' && src[ofs - 1] == '\r')
+        ofs--;
 
     start = ofs;
     while (start > 0 && src[start - 1] != '\n' && src[start - 1] != '\r')

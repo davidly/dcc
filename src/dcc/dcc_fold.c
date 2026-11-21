@@ -368,7 +368,7 @@ int cf_parse_unary(struct ConstVal *out)
     static int depth;
     int ok;
 
-    if (depth >= 1024)
+    if (depth >= 256)
         return 0;
     ++depth;
     ok = cf_parse_unary_operand(out);

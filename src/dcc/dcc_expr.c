@@ -997,8 +997,11 @@ int peek_simple_unary_type(void)
             static int peek_depth;
             int inner = TYPE_INT;
 
-            /* Past the expression nesting limit the build rejects anyway. */
-            if (peek_depth < 1024) {
+            /* Each level saves a LexState (about 1.8 KB), so a deep
+             * nest would exhaust a 1 MB host stack well before the
+             * expression nesting limit; deeper parentheses only lose the
+             * type prediction. */
+            if (peek_depth < 64) {
                 ++peek_depth;
                 inner = peek_simple_unary_type();
                 --peek_depth;

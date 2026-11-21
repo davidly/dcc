@@ -856,7 +856,7 @@ static struct AstNode *p_unary(struct AstArena *ar)
     static int depth;
     struct AstNode *n;
 
-    if (depth >= 1024) {
+    if (depth >= 256) {
         error_here("expression nested too deeply");
         return NULL;
     }
@@ -1933,7 +1933,7 @@ struct AstNode *ast_build_stmt(struct AstArena *ar)
     static int depth;
     struct AstNode *n;
 
-    if (depth >= 256) {
+    if (depth >= 128) {
         error_here("statements nested too deeply");
         return NULL;
     }
