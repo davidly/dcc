@@ -15,6 +15,20 @@ short sequence of calls into the runtime library with random arguments:
                     the documented 5-6 significant digits
   malloc family     allocate, grow, shrink, free and verify contents
   div/ldiv/abs      quotients and remainders
+  va_list printf    vsprintf, vsnprintf, vprintf, vfprintf, and printf,
+                    fprintf and puts to stdout
+  file I/O          create, reopen in every mode, then random reads, writes,
+                    seeks, pushback and status checks against a model of the
+                    file; verify, rename and remove; tmpfile
+  time.h            gmtime, asctime, strftime, difftime, mktime round trips
+                    and normalization
+  properties        rand repeatability and range, setjmp/longjmp from nested
+                    calls, atexit order, multibyte round trips
+
+File tests stay inside each file's logical length, or use lengths that are a
+multiple of 128: CP/M pads the last record with Ctrl-Z, which a read past the
+logical end returns and SEEK_END on a reopened file counts. The host runs in
+UTC, as dcc has no time zone.
 
 The program is compiled by dcc and run under the emulator, and compiled by
 clang with -m32 (so long is 32 bits) and run on the host. Tests print through
@@ -48,6 +62,9 @@ PRELUDE = r'''#include <stdio.h>
 #include <math.h>
 #include <errno.h>
 #include <stdint.h>
+#include <stdarg.h>
+#include <setjmp.h>
+#include <time.h>
 #ifndef _DCC_
 #include <strings.h>
 #define stricmp strcasecmp
@@ -105,6 +122,59 @@ static int cmp_krec(const void *a, const void *b)
     int x = ((const struct krec *)a)->key, y = ((const struct krec *)b)->key;
     return (x > y) - (x < y);
 }
+
+static int vsp(char *b, const char *fmt, ...)
+{
+    va_list ap;
+    int r;
+
+    va_start(ap, fmt);
+    r = vsprintf(b, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int vsnp(char *b, size_t n, const char *fmt, ...)
+{
+    va_list ap;
+    int r;
+
+    va_start(ap, fmt);
+    r = vsnprintf(b, n, fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int vp(const char *fmt, ...)
+{
+    va_list ap;
+    int r;
+
+    va_start(ap, fmt);
+    r = vprintf(fmt, ap);
+    va_end(ap);
+    return r;
+}
+static int vfp(FILE *f, const char *fmt, ...)
+{
+    va_list ap;
+    int r;
+
+    va_start(ap, fmt);
+    r = vfprintf(f, fmt, ap);
+    va_end(ap);
+    return r;
+}
+
+static jmp_buf jb;
+static void jdeep(int d, int v) { if (d <= 0) longjmp(jb, v); jdeep(d - 1, v); }
+
+static void ptm(const struct tm *t)
+{
+    pd(t->tm_year); sp(); pd(t->tm_mon); sp(); pd(t->tm_mday); sp(); pd(t->tm_hour); sp();
+    pd(t->tm_min); sp(); pd(t->tm_sec); sp(); pd(t->tm_wday); sp(); pd(t->tm_yday); sp();
+}
+
+static void atexit1(void) { ps("atexit 1\n"); }
+static void atexit2(void) { ps("atexit 2\n"); }
 
 static void fill(char *p, int n, int seed) { int i; for (i = 0; i < n; i++) p[i] = (char)(seed + i * 7); }
 static int check(const char *p, int n, int seed)
@@ -327,9 +397,10 @@ class Gen:
                 outs.append('pmem(%s, 5); sp();' % v)
             else:
                 w = self.word(8).replace(' ', '').replace('\t', '').replace(',', '') or 'w'
-                tok = w
+                width = 11 if kind == 's' else self.r.randint(1, 5)
+                tok = w[:width]                  # a remainder would feed the next conversion
                 decls.append("char %s[12] = \"??????????\";" % v)
-                fmt += '%11s' if kind == 's' else '%%%ds' % self.r.randint(1, 5)
+                fmt += '%11s' if kind == 's' else '%%%ds' % width
                 args.append(v)
                 outs.append('pstr(%s); sp();' % v)
             text += tok
@@ -592,8 +663,12 @@ class Gen:
             call = 'powf(x, %s)' % c_float(y)
         else:
             call = '%s(x)' % fn
-        if fn == 'tanf' and abs(math.cos(x)) < 1e-3:
-            x = f32(x + 0.1)
+        if fn == 'tanf':
+            # Reduction by a float pi shifts the argument by up to 3e-6 near
+            # 100, which tan magnifies near its poles.
+            x = f32(max(-10.0, min(10.0, x)))
+            if abs(math.cos(x)) < 1e-2:
+                x = f32(x + 0.1)
         return ['volatile float vx = %s;' % c_float(x), 'float x = vx;',
                 'tag(%d, "~%s");' % (tid, fn), 'pf(%s); nl();' % call]
 
@@ -638,9 +713,277 @@ class Gen:
                 lines.append('if (p[%d]) { pd(check(p[%d], %d, %d)); free(p[%d]); }' % (k, k, n, oseed, k))
         return lines + ['nl();']
 
+    # ---------------------------------------------------------- va_list
+
+    def t_vprintf(self, tid):
+        fmt, args = '', []
+        for _ in range(self.r.randint(1, 3)):
+            if self.r.random() < 0.5:
+                fmt += ''.join(self.pick('ab =:,') for _ in range(self.r.randint(1, 3)))
+            text, arg, _ = self.printf_conv()
+            fmt += text
+            if arg is not None:
+                args.append(arg)
+        rest = ''.join(', ' + a for a in args)
+        sink = self.pick(('vsprintf', 'vsnprintf', 'printf', 'vprintf', 'fprintf', 'vfprintf', 'puts'))
+        if sink == 'vsprintf':
+            return ['char b[100];', 'int r;', 'r = vsp(b, %s%s);' % (c_str(fmt), rest),
+                    'tag(%d, "vsprintf");' % tid, 'pd(r); sp(); pstr(b); nl();']
+        if sink == 'vsnprintf':
+            size = self.r.randint(0, 30)
+            return ['char b[100];', 'int r;', "memset(b, '#', sizeof b);",
+                    'r = vsnp(b, %d, %s%s);' % (size, c_str(fmt), rest),
+                    'tag(%d, "vsnprintf %d");' % (tid, size), 'pd(r); sp(); pmem(b, %d); nl();' % (size + 2)]
+        if sink == 'puts':
+            return ['int r;', 'tag(%d, "puts");' % tid, 'r = puts(%s);' % c_str(self.word()),
+                    'pd(r >= 0); nl();']
+        call = {'printf': 'printf(%s%s)', 'vprintf': 'vp(%s%s)',
+                'fprintf': 'fprintf(stdout, %s%s)', 'vfprintf': 'vfp(stdout, %s%s)'}[sink]
+        return ['int r;', 'tag(%d, "%s");' % (tid, sink), 'r = ' + call % (c_str(fmt), rest) + ';',
+                'ps(" ="); pd(r); nl();']
+
+    # ---------------------------------------------------------- files
+
+    FILE_DATA = 'abcxyz0123 ,\n'
+
+    def file_bytes(self, n):
+        return ''.join(self.pick(self.FILE_DATA) for _ in range(n))
+
+    def t_file(self, tid):
+        name, name2 = 'F%d.TMP' % tid, 'G%d.TMP' % tid
+        out = ['FILE *f;', 'char b[700];', 'int r;', 'long p;', 'fpos_t pos;', 'size_t n;',
+               'remove("%s"); remove("%s");' % (name, name2), 'tag(%d, "file");' % tid]
+        if self.r.random() < 0.15:
+            data = self.file_bytes(self.r.randint(0, 120))
+            return out + ['f = tmpfile(); pd(f != 0); sp();', 'if (!f) { nl(); return; }',
+                          'pd((int32_t)fwrite(%s, 1, %d, f)); sp();' % (c_str(data), len(data)),
+                          'rewind(f);', 'n = fread(b, 1, %d, f); pd((int32_t)n); sp(); pmem(b, (int)n); sp();'
+                          % len(data), 'pd(fclose(f)); nl();']
+        # Create, keeping a model of the contents.
+        content = ''
+        wmode = self.pick(('w', 'wb', 'w+', 'wb+'))
+        out += ['f = fopen("%s", "%s"); pd(f != 0); sp();' % (name, wmode), 'if (!f) { nl(); return; }']
+        for _ in range(self.r.randint(1, 5)):
+            kind = self.pick(('fputc', 'fputs', 'fwrite', 'fprintf'))
+            if kind == 'fputc':
+                c = self.pick(self.FILE_DATA)
+                out.append('pd(fputc(%d, f)); sp();' % ord(c))
+                content += c
+            elif kind == 'fputs':
+                t = self.file_bytes(self.r.randint(0, 30))
+                out.append('pd(fputs(%s, f) >= 0); sp();' % c_str(t))
+                content += t
+            elif kind == 'fwrite':
+                t = self.file_bytes(self.r.randint(0, 40))
+                out.append('pd((int32_t)fwrite(%s, 1, %d, f)); sp();' % (c_str(t), len(t)))
+                content += t
+            else:
+                v, w = self.r.randint(-999, 999), self.word(6).replace('\t', ' ')
+                t = '%d,%s;' % (v, w)
+                out.append('pd(fprintf(f, "%%d,%%s;", %d, %s)); sp();' % (v, c_str(w)))
+                content += t
+        if self.r.random() < 0.3:
+            pad = (-len(content)) % 128 or 128
+            out.append('for (r = 0; r < %d; r++) fputc(%d, f);' % (pad, ord('p')))
+            content += 'p' * pad
+        out.append('pd(fclose(f)); sp();')
+        aligned = len(content) % 128 == 0
+        # Reopen and wander.
+        mode = self.pick(('r', 'rb', 'r+', 'rb+', 'a', 'a+'))
+        out += ['f = fopen("%s", "%s"); pd(f != 0); sp();' % (name, mode), 'if (!f) { nl(); return; }']
+        # Where an append stream starts, for reading and for ftell, is
+        # implementation-defined: wait for a write or seek to fix it.
+        pos = None if mode.startswith('a') else 0
+        can_read = mode != 'a'
+        can_write = mode != 'r' and mode != 'rb'
+        last = None                      # 'r' or 'w': a switch needs a seek
+        eof = False
+        saved = None
+        unget = False                    # glibc's SEEK_CUR goes wrong after a pushback
+        for _ in range(self.r.randint(2, 12)):
+            n = len(content)
+            ops = ['seek', 'rewind', 'status'] + (['ftell'] if pos is not None else [])
+            if can_read and pos is not None:
+                ops += ['fgetc', 'fread', 'fgets', 'fread', 'ungetc']
+            if can_write:
+                ops += ['write', 'write']
+            if pos is not None:
+                ops += ['getpos'] if saved is None else ['setpos']
+            op = self.pick(ops)
+            room = n - (pos or 0)        # readable bytes before the logical end
+            if op in ('fgetc', 'fread', 'fgets', 'ungetc'):
+                if last == 'w':
+                    out.append('fseek(f, 0L, SEEK_CUR);')
+                last = 'r'
+            if op == 'fgetc':
+                if room <= 0 and not aligned:
+                    continue
+                out.append('pd(fgetc(f)); sp();')
+                if room > 0:
+                    pos += 1
+                else:
+                    eof = True
+            elif op == 'fread':
+                k = self.r.randint(0, 40)
+                if not aligned:
+                    k = min(k, room)
+                out.append('n = fread(b, 1, %d, f); pd((int32_t)n); sp(); pmem(b, (int)n); sp();' % k)
+                got = max(0, min(k, room))
+                pos += got
+                if got < k:
+                    eof = True
+            elif op == 'fgets':
+                k = self.r.randint(2, 40)
+                if not aligned:
+                    k = min(k, room + 1)
+                if k < 2:
+                    continue
+                out.append('pd(fgets(b, %d, f) != 0); sp(); pstr(b); sp();' % k)
+                chunk = content[pos:pos + k - 1]
+                if '\n' in chunk:
+                    chunk = chunk[:chunk.index('\n') + 1]
+                if not chunk:
+                    eof = True
+                    out[-1] = 'pd(fgets(b, %d, f) != 0); sp();' % k
+                elif len(chunk) < k - 1 and pos + len(chunk) >= n:
+                    eof = True
+                pos += len(chunk)
+            elif op == 'ungetc':
+                # At position 0 a pushback leaves the position indeterminate.
+                if room <= 0 or not pos:
+                    continue
+                c = self.pick('QRS')
+                # A pushback is read straight back, so the position is unchanged.
+                out.append('pd(ungetc(%d, f)); sp(); pd(fgetc(f)); sp();' % ord(c))
+                eof = False
+                unget = True
+            elif op == 'write':
+                if last == 'r':
+                    out.append('fseek(f, %dL, SEEK_SET);' % pos if unget else 'fseek(f, 0L, SEEK_CUR);')
+                    unget = False
+                last = 'w'
+                t = self.file_bytes(self.r.randint(1, 30))
+                if mode.startswith('a'):
+                    pos = n
+                if self.r.random() < 0.5:
+                    out.append('pd((int32_t)fwrite(%s, 1, %d, f)); sp();' % (c_str(t), len(t)))
+                else:
+                    out.append('pd(fputs(%s, f) >= 0); sp();' % c_str(t))
+                content = content[:pos] + t + content[pos + len(t):]
+                pos += len(t)
+                aligned = len(content) % 128 == 0
+                eof = False
+            elif op == 'ftell':
+                out.append('pd(ftell(f)); sp();')
+            elif op == 'seek':
+                how = self.pick(('SEEK_SET', 'SEEK_CUR', 'SEEK_END') if aligned else ('SEEK_SET', 'SEEK_CUR'))
+                if how == 'SEEK_SET':
+                    target = self.r.randint(0, n)
+                    off = target
+                elif how == 'SEEK_CUR' and pos is not None and not unget:
+                    target = self.r.randint(0, n)
+                    off = target - pos
+                else:
+                    how = 'SEEK_END' if aligned else 'SEEK_SET'
+                    target = self.r.randint(0, n)
+                    off = target - n if aligned else target
+                out.append('pd(fseek(f, %dL, %s) != 0); sp();' % (off, how))
+                pos, eof, last, unget = target, False, None, False
+            elif op == 'rewind':
+                out.append('rewind(f);')
+                pos, eof, last = 0, False, None
+            elif op == 'status':
+                out.append('pd(!!feof(f)); pd(!!ferror(f)); sp();')
+                if eof:
+                    out.append('clearerr(f);')
+                    eof = False
+            elif op == 'getpos':
+                out.append('pd(fgetpos(f, &pos)); sp();')
+                saved = pos
+            else:
+                out.append('pd(fsetpos(f, &pos)); sp();')
+                pos, eof, last = saved, False, None
+                saved = None
+        out.append('pd(fclose(f)); sp();')
+        # Verify the contents, then rename and remove.
+        n = len(content)
+        out += ['f = fopen("%s", "rb");' % name,
+                'if (f) { n = fread(b, 1, %d, f); pd((int32_t)n); sp(); pmem(b, (int)n); sp(); fclose(f); }' % n]
+        if self.r.random() < 0.5:
+            out += ['pd(rename("%s", "%s") == 0); sp();' % (name, name2),
+                    'f = fopen("%s", "r"); pd(f != 0); sp(); if (f) fclose(f);' % name,
+                    'pd(remove("%s") == 0); sp();' % name2]
+        else:
+            out.append('pd(remove("%s") == 0); sp();' % name)
+        out.append('f = fopen("%s", "r"); pd(f != 0); if (f) fclose(f); nl();' % name)
+        return out
+
+    # ---------------------------------------------------------- time
+
+    TIME_CONV = 'aAbBCcdHIjmMpSUwWxXyY%'
+
+    def time_value(self):
+        return self.pick((0, 1, 59, 86399, 86400, 951782400, 946684799, 1234567890, 2147483647,
+                          68169599, 1709251199, self.r.randint(0, 2**31 - 1), self.r.randint(0, 2**31 - 1)))
+
+    def t_time(self, tid):
+        t = self.time_value()
+        fmt = ''
+        for _ in range(self.r.randint(1, 4)):
+            if self.r.random() < 0.4:
+                fmt += self.pick((' ', '-', ':', '/', 'x', '[]'))
+            fmt += '%' + self.pick(self.TIME_CONV)
+        size = 80 if self.r.random() < 0.8 else self.r.randint(0, 12)
+        d = self.r.randint(-10**6, 10**6)
+        if not -2**31 <= t - d < 2**31:
+            d = -d                       # t - d must not overflow time_t
+        return ['time_t t = %dL;' % t, 'struct tm c;', 'char b[90];', 'size_t r;',
+                'c = *gmtime(&t);', 'tag(%d, "time");' % tid, 'ptm(&c);',
+                'r = strftime(b, %d, %s, &c); pd((int32_t)r); sp(); if (r) pstr(b); sp();' % (size, c_str(fmt)),
+                'pstr(asctime(&c));',
+                'px((uint32_t)mktime(&c)); sp();',
+                'pd((int32_t)difftime(t, t - %dL));' % d, 'nl();']
+
+    def t_mktime(self, tid):
+        f = dict(year=self.r.randint(75, 132), mon=self.r.randint(-15, 26), mday=self.r.randint(-40, 70),
+                 hour=self.r.randint(-30, 60), min=self.r.randint(-100, 200), sec=self.r.randint(-100, 200))
+        if self.r.random() < 0.4:
+            f.update(mon=self.r.randint(0, 11), mday=self.r.randint(1, 28), hour=self.r.randint(0, 23),
+                     min=self.r.randint(0, 59), sec=self.r.randint(0, 59))
+        return ['struct tm c;', 'time_t t;', 'memset(&c, 0, sizeof c);',
+                'c.tm_year = %(year)d; c.tm_mon = %(mon)d; c.tm_mday = %(mday)d;' % f,
+                'c.tm_hour = %(hour)d; c.tm_min = %(min)d; c.tm_sec = %(sec)d;' % f,
+                't = mktime(&c);', 'tag(%d, "mktime");' % tid, 'px((uint32_t)t); sp(); ptm(&c); nl();']
+
+    # ---------------------------------------------------------- properties
+
+    def t_rand(self, tid):
+        seed = self.pick((0, 1, 2, 12345, 32767, 65535, self.r.randint(0, 65535)))
+        return ['int a[8];', 'int k;', 'int same = 1;', 'int inrange = 1;', 'srand(%du);' % seed,
+                'for (k = 0; k < 8; k++) { a[k] = rand(); if (a[k] < 0 || a[k] > RAND_MAX) inrange = 0; }',
+                'srand(%du);' % seed, 'for (k = 0; k < 8; k++) if (rand() != a[k]) same = 0;',
+                'tag(%d, "rand");' % tid, 'pd(same); sp(); pd(inrange); sp(); pd(RAND_MAX >= 32767); nl();']
+
+    def t_setjmp(self, tid):
+        depth, val = self.r.randint(0, 6), self.pick((0, 1, 2, -1, 255, 32767))
+        return ['volatile int n = 0;', 'int r;', 'r = setjmp(jb);',
+                'if (r == 0) { n = %d; jdeep(%d, %d); n = -99; }' % (depth + 10, depth, val),
+                'tag(%d, "setjmp");' % tid, 'pd(r); sp(); pd(n); nl();']
+
+    def t_mb(self, tid):
+        w = self.word(10)
+        return ['static const char s[] = %s;' % c_str(w), 'wchar_t w[16];', 'char c[16];',
+                'wchar_t wc = 0;', 'size_t n;', 'tag(%d, "mb");' % tid,
+                'n = mbstowcs(w, s, 16); pd((int32_t)n); sp();',
+                "memset(c, '#', sizeof c); n = wcstombs(c, w, 16); pd((int32_t)n); sp(); pstr(c); sp();",
+                'pd(mblen(s, %d)); sp(); pd(mbtowc(&wc, s, %d)); sp(); pd((int32_t)wc); sp();' % (len(w) + 1, len(w) + 1),
+                'pd(wctomb(c, %d)); sp(); pd(c[0]); nl();' % ord(self.pick('AZaz09 '))]
+
     TESTS = (('t_sprintf', 8), ('t_sscanf', 5), ('t_strtol', 4), ('t_atoi', 1), ('t_strtod', 2),
              ('t_div', 1), ('t_string', 5), ('t_copy', 4), ('t_strtok', 1), ('t_ctype', 1),
-             ('t_qsort', 2), ('t_math_exact', 4), ('t_math_approx', 4), ('t_heap', 1))
+             ('t_qsort', 2), ('t_math_exact', 4), ('t_math_approx', 4), ('t_heap', 1),
+             ('t_vprintf', 3), ('t_file', 4), ('t_time', 3), ('t_mktime', 2), ('t_rand', 1),
+             ('t_setjmp', 1), ('t_mb', 1))
 
     def program(self, count, only=None):
         names = [n for n, w in self.TESTS for _ in range(w)]
@@ -651,6 +994,7 @@ class Gen:
                 continue
             body.append('static void t%d(void)\n{\n%s\n}\n' % (tid, '\n'.join('    ' + ln for ln in lines)))
             calls.append('    t%d();' % tid)
+        calls = ['    atexit(atexit1);', '    atexit(atexit2);'] + calls
         return PRELUDE + '\n' + '\n'.join(body) + '\nint main(void)\n{\n' + '\n'.join(calls) + \
             '\n    return 0;\n}\n'
 
@@ -663,8 +1007,12 @@ def host_expected(source, work, timeout):
                        capture_output=True, text=True)
     if r.returncode != 0:
         return None, 'host build failed: ' + (r.stderr.strip().splitlines() or ['?'])[0]
+    files = work / 'hostfiles'
+    files.mkdir(exist_ok=True)
+    env = dict(os.environ, TZ='UTC0')    # dcc has no time zone
     try:
-        run = subprocess.run([str(exe)], capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        run = subprocess.run([str(exe)], capture_output=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                             cwd=files, env=env)
     except subprocess.TimeoutExpired:
         return None, 'host run timed out'
     if run.returncode != 0:

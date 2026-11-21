@@ -455,6 +455,7 @@ static int may_access_escaped_frame(const char *s)
 static int pass_elim_dead_ix_stores(void)
 {
     static char is_dead[MAX_LINES];
+    static char in_setjmp_function[MAX_LINES];
     int last_store[256];  /* last_store[offset+128] = line index; -1 = none */
     int i, idx, changed;
     char tmp[MAX_LINE];
@@ -469,9 +470,40 @@ static int pass_elim_dead_ix_stores(void)
     changed = 0;
     escaped_from = 128;
 
+    /* In a function that calls setjmp, any later call may longjmp back to
+     * code that reads the frame, so a store before a call is never dead. */
+    {
+        int seg_start = 0;
+        int has_setjmp = 0;
+
+        for (i = 0; i <= nlines; i++) {
+            int boundary = i == nlines;
+
+            if (!boundary) {
+                strip_peep_comment_copy(tmp, lines[i]);
+                n = (int)strlen(tmp);
+                boundary = n > 1 && tmp[n-1] == ':' && tmp[0] != ' ' &&
+                           tmp[0] != '\t' && tmp[0] != 'L';
+            }
+            if (boundary) {
+                for (idx = seg_start; idx < i; idx++)
+                    in_setjmp_function[idx] = (char)has_setjmp;
+                seg_start = i;
+                has_setjmp = 0;
+            }
+            if (i < nlines && strstr(tmp, "call _setjmp") != NULL)
+                has_setjmp = 1;
+        }
+    }
+
     for (i = 0; i < nlines; i++) {
         strip_peep_comment_copy(tmp, lines[i]);
         n = (int)strlen(tmp);
+
+        if (in_setjmp_function[i] && strncmp(tmp, "call ", 5) == 0) {
+            memset(last_store, -1, sizeof(last_store));
+            continue;
+        }
 
         /* Compiler and optimizer local labels all start with L, including
          * LS/LI/LR and the longer optimizer-generated prefixes. */
