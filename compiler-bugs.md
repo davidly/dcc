@@ -6,7 +6,7 @@ environment variables (some required `dccpeep`), except BUG-056/059, latent
 wrong-code findings from withdrawn BUG-041 admission experiments. Fixed
 entries and their historical diagnoses are retained below.
 
-- **Compiler under test:** `main` at `6ef8e575` (2026-11-22).
+- **Compiler under test:** `6ef8e575` plus the local issue fixes below (2026-11-22).
 - **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
   with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
   Each baseline is the host compiler's output, and the program also runs
@@ -28,7 +28,7 @@ entries and their historical diagnoses are retained below.
 | [BUG-016](#bug-016) | #236 | fixed | Local initializer signedness still leaks into word shifts and long division |
 | [BUG-093](#bug-093) | #386 | fixed | Unsigned right shift of a signed bit-field uses an arithmetic shift |
 | [BUG-094](#bug-094) | #387 | fixed | Unreachable float constant division by zero is rejected as an if condition |
-| [BUG-095](#bug-095) | #388 | wrong result | Comparing two float member updates loses the left operand |
+| [BUG-095](#bug-095) | #388 | fixed | Comparing two float member updates loses the left operand |
 | [Seed 33500](#seed-33500) | #366 | fixed | Postfix update of a distant stack parameter rejected in a call argument |
 | [BUG-076](#bug-076) | #367 | fixed | Struct member compound assignment with a logical RHS corrupts the stored value |
 | [BUG-077](#bug-077) | #368 | fixed | Signed right shift after narrowing a multiplication yields a logical shift |
@@ -48,17 +48,17 @@ entries and their historical diagnoses are retained below.
 | [BUG-091](#bug-091) | #384 | fixed | A widened parameter postincrement multiplies the incremented value |
 | [BUG-092](#bug-092) | #385 | fixed | A logical not over a constant division by zero is rejected |
 
-**Open: 1 wrong-result defect.** Seven
+**Open: none.** Seven
 failures from the production campaigns over seeds 70001–120000 map to these
 four entries. Original sources were generated at `3cf4788d` and preserved
-under `build/`; all seven still fail with the rebuilt upstream `6ef8e575`
+under `build/`; all seven failed with the rebuilt upstream `6ef8e575` before these fixes
 compiler. The upstream generator added new shapes, so regenerating these
 seed numbers now does not identify the original programs. Integer seed
 105721 is an assembler target limit (code segment
 exceeds the 65535-byte REL limit), not a compiler defect; upstream now
 classifies that diagnostic as `TOOBIG`.
 
-Validation at `6ef8e575`: the full extended suite reports `SUCCESS` (634
+Validation before the fixes at `6ef8e575`: the full extended suite reports `SUCCESS` (634
 passed, 24 skipped); all four parked reproducers are host-proven and report
 `fails`. With steering, the original seed numbers give seven passes and one
 target limit, and 3,000 seeds per generator contain no disabled known shapes.
@@ -67,6 +67,28 @@ The Python suite runs 466 tests with two pre-existing assertion failures in
 and unsigned targets: 52 vs 58 and 48 vs 54 bytes); two tests are skipped.
 The same assertions failed before the upstream pull. All 21 oracle
 generator tests pass. Logs are under `build/oracle-upstream-*`.
+
+**Final local validation:** four separate fix commits on
+`fix/oracle-70001-120000`, four new C regression tests and four new measured
+performance rows. All **619 existing performance rows** and **4,142 existing
+function census rows in both stack modes** are unchanged. Strict
+full+extended stack and no-stack runs pass (638 apps passed, 24 skipped),
+as do all four new tests' checked performance runs, host baselines,
+ASan/UBSan compiler probes, release-identical `-gline` code and full-debug
+execution with and without dccpeep. All seven original saved programs pass
+all four production configurations.
+
+With every fixed bug removed from `KNOWN_BUGS`, fresh seeds 120601–120900
+are clean: integer **299 ok, 1 target-limit-only**; float **294 ok, 6 INVALID**;
+zero FAIL in either generator. Compiler/toolchain hashes stayed unchanged
+through those campaigns. Logs are `build/oracle-fixed-*`.
+
+The regular Python suite runs 466 tests with five assertion failures and two
+skips: the two unchanged optimization-size assertions listed above, plus
+three subcases of `test_float_seeds_are_detected_before_and_absent_after_steering`
+that still expect the now-fixed float shapes in `KNOWN_BUGS`. Existing tests
+were left unchanged as requested. The two-line lifecycle-only adjustment is
+prepared, not applied, in `build/fuzzer-lifecycle-update.patch`.
 
 No findings remain open from the extended runs through seeds 24000. In the
 seeds 30001–40000 follow-up, BUG-076–081 are fixed.
@@ -98,8 +120,8 @@ All 4,142 existing function census rows are identical with and without
 stack checks; only the new performance row is added. Strict full+extended
 stack and no-stack runs, host validation, debug checks and an ASan/UBSan
 compiler probe pass. The two pre-existing optimization-size assertions are
-unchanged. `initinterpret` and `finitinterpret` are restored; fresh campaigns
-will validate all fixes together after the remaining shapes are restored.
+unchanged. `initinterpret` and `finitinterpret` are restored and covered by
+the final clean campaigns below.
 The local-variable facet of BUG-093 also passes, while its two direct-cast
 cases still fail. The following describes the historical reopened finding.
 
@@ -202,6 +224,21 @@ the reduced reproducer were retested with a fresh upstream `6ef8e575` build.
 ## BUG-095
 
 Upstream issue: [#388](https://github.com/davidly/dcc/issues/388).
+
+**Fixed locally; promoted as `tests/tfupcmp.c`.** Integer comparison type
+refinement no longer replaces an already-float computation type using
+indirect updates that are still untyped or temporarily assumed int. Their
+lvalues are repaired to float later. A following C99 for-init declaration
+also triggers scoped repair and temporarily types the updates as int; the
+new twelve-line test includes that context for prefix and postfix updates.
+The original float seed 94893 now passes all four production configurations.
+Both original 4,142-function censuses are identical; only the new test's
+performance row is added. All four new tests have release-identical `-gline`
+code and correct full-debug output in peep and nopeep. `fupdatepair` is
+restored. A broad guard on all unknown comparison operands was rejected
+because it changed existing integer schedules; the accepted fix preserves
+only a comparison already typed float. The final restored-shape campaigns
+are clean. The following describes the historical finding.
 
 **Comparing two float member updates loses the left operand.** With
 `struct S { float v[2]; };` and `s.v == {4.0f, 1.5f}`,

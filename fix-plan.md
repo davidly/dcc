@@ -84,11 +84,18 @@ until the local commits are published.
   sign-extended field. Both original censuses remain identical.
 - #387 / BUG-094: fixed locally; `tfzeroc` covers supported non-folding
   constant float conditions, including a runtime-guarded dead branch.
-- #388 / BUG-095: do not derive a comparison's type from still-untyped updates.
+- #388 / BUG-095: fixed locally; `tfupcmp` preserves parsed float comparison
+  types while update lvalues are repaired, including scoped-loop contexts.
 
-Final fresh production campaigns run with all four fixes' steers removed.
-The unchanged pre-existing Python optimization-size assertion failures remain
-outside this work.
+Final fresh production campaigns with all four fixes' steers removed are
+clean over seeds 120601–120900: integer 299 ok / 1 target-limit-only; float
+294 ok / 6 INVALID. All seven original sources pass every production config.
+All 619 old performance rows and both original 4,142-function censuses are
+unchanged. Strict full+extended stack/no-stack and new tests' debug/host/
+sanitizer checks pass. Existing tests were not edited: the regular Python
+suite retains its two pre-existing optimization-size assertion failures and
+three obsolete float-steering subcases. A lifecycle-only patch is prepared
+under `build/` pending the user's response.
 
 ## Clusters
 

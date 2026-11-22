@@ -9632,7 +9632,10 @@ scoped_type_repair_done:
                      insn->immediate == TOK_LE || insn->immediate == TOK_GE;
         left = mir_mutable_definition(insn->src1);
         right = mir_mutable_definition(insn->src2);
+        /* Indirect updates can still carry an assumed integer type here.
+         * Preserve a parsed float comparison until lvalue repair below. */
         if (comparison && left != NULL && right != NULL &&
+            !type_is_float(insn->secondary_offset) &&
             type_ptr_depth(left->type) == 0 &&
             type_ptr_depth(right->type) == 0 &&
             !type_is_float(left->type) && !type_is_float(right->type))
