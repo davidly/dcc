@@ -24,6 +24,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <errno.h>
+#include "dcc_version.h"
 
 typedef unsigned char U8;
 typedef unsigned short U16;
@@ -571,6 +572,11 @@ int main(int argc, char **argv) {
     char signature_symbols[MAXEXPORT][MAXNAME];
     int signature_count = 0;
     int export_count = 0;
+
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        printf("l80c %s\n", DCC_BUILD_VERSION);
+        return 0;
+    }
 
     if (argc > 0) g_progname = argv[0];
     outname[0] = 0;

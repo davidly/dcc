@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include "dcc_version.h"
 /* Each source is read twice and the FILE is private to this process. Avoid
  * stdio's per-line stream lock on POSIX hosts; MSVC has no fgets_unlocked. */
 #ifdef _WIN32
@@ -2220,6 +2221,10 @@ static void parse_cmd(Asm *a,int argc,char **argv) {
 }
 int main(int argc,char **argv) {
     Asm a;
+    if(argc==2 && strcmp(argv[1],"--version")==0) {
+        printf("m80c %s\n",DCC_BUILD_VERSION);
+        return 0;
+    }
     parse_cmd(&a,argc,argv);
     if(!assemble_pass(&a,1)) return 1;
     if(!assemble_pass(&a,2)) return 1;

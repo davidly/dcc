@@ -30,6 +30,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <time.h>
+#include "dcc_version.h"
 
 /* MSVC's <sys/stat.h> defines the S_IFDIR bitmask but not the POSIX
  * S_ISDIR macro built on top of it - supply the standard fallback. */
@@ -1283,7 +1284,7 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
         if (!strcmp(arg, "--no-config"))
             continue;
         if (!strcmp(arg, "-v") || !strcmp(arg, "--version")) {
-            printf("dccmake 1.0\n");
+            printf("dccmake %s\n", DCC_BUILD_VERSION);
             exit(0);
         }
         if (!strcmp(arg, "-f") || !strcmp(arg, "-ffloatio")) {
@@ -2777,6 +2778,11 @@ int main(int argc, char **argv)
     struct Config cfg;
     char ancestors[MAX_PROJECT_DEPTH][MAX_PATH_LEN];
     int i, no_config = 0;
+
+    if (argc == 2 && (!strcmp(argv[1], "-v") || !strcmp(argv[1], "--version"))) {
+        printf("dccmake %s\n", DCC_BUILD_VERSION);
+        return 0;
+    }
 
     for (i = 1; i < argc; ++i) {
         if (is_help_option(argv[i])) {

@@ -12,6 +12,19 @@
 
 cmake_minimum_required(VERSION 3.10)
 project(dcc C)
+if(CMAKE_VERSION VERSION_LESS 3.12)
+    find_package(PythonInterp 3 REQUIRED)
+    set(DCC_PYTHON ${PYTHON_EXECUTABLE})
+else()
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(DCC_PYTHON ${Python3_EXECUTABLE})
+endif()
+
+add_custom_target(dcc_version_header
+    COMMAND ${DCC_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/generate-version.py
+            --output ${CMAKE_CURRENT_BINARY_DIR}/dcc_version.h
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/dcc_version.h
+    VERBATIM)
 
 option(DCC_ENABLE_COVERAGE "Build dcc with Clang source coverage instrumentation" OFF)
 set(DCC_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH
@@ -87,7 +100,8 @@ set(DCC_SOURCES
 add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_internal.h
                    dcc_preproc_internal.h dcc_mir.h
                    dcc_mir_machine_internal.h)
-target_include_directories(dcc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_dependencies(dcc dcc_version_header)
+target_include_directories(dcc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 if(DCC_ENABLE_COVERAGE)
     if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang")

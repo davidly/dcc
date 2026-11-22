@@ -33,6 +33,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Checkout ntvcm emulator
         uses: actions/checkout@v4
@@ -78,6 +79,9 @@ jobs:
       - name: Build dcc host tools
         shell: bash
         run: python scripts/build-dcc.py
+
+      - name: Check tool versions and assembly provenance
+        run: python scripts/test-tool-version.py
 
       - name: Test native build driver
         shell: bash

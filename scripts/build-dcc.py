@@ -194,6 +194,9 @@ def unix_compiler(args, env, system):
 
 
 def build_tools(root, output, args, env, system):
+    version = invoke([sys.executable, Path(__file__).with_name('generate-version.py'),
+                      '--root', root, '--output', output / 'dcc_version.h'], root, env).strip()
+    print('DCC version: ' + version, flush=True)
     windows = system == 'Windows'
     vcvars = None
     if windows:
@@ -221,10 +224,10 @@ def build_tools(root, output, args, env, system):
             obj = objdir / (path.stem + ('.obj' if windows else '.o'))
             objects.append(obj)
             if windows:
-                options = ['/I' + str(source), '/c', path, '/Fo:' + str(obj),
+                options = ['/I' + str(source), '/I' + str(output), '/c', path, '/Fo:' + str(obj),
                            '/Fa' + str(objdir) + '\\', '/Fd:' + str(objdir / (name + '.pdb'))]
             else:
-                options = ['-I', source, '-c', path, '-o', obj]
+                options = ['-I', source, '-I', output, '-c', path, '-o', obj]
             compiles.append((name + '/' + path.name, compiler + flags + options))
         exe = root / (name + ('.exe' if windows else ''))
         outputs.append(exe)

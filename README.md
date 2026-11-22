@@ -272,6 +272,14 @@ repository root. `CC` and `CFLAGS` overrides are supported on Unix.
 Windows automatically locates the native MSVC x64/ARM64 toolchain, including
 Visual Studio Preview and its bundled CMake.
 
+All six host tools report the same build version with `--version` (and `dcc`
+and `dccmake` also accept `-v`). The build derives it from the nearest `v*`
+Git tag: a build at a release tag reports that tag, later commits include their
+commit count and short hash, and local uncommitted changes add `-dirty`.
+`dcc` puts its own build version in a comment at the start of each generated
+`.MAC`; `dccpeep` and `dccrtlstrip --strip-apps` preserve that comment.
+The generated `RTLMIN.MAC` also records the `dccrtlstrip` build version.
+
 
 
 
