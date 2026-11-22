@@ -27,7 +27,7 @@ entries and their historical diagnoses are retained below.
 |---|---|---|---|
 | [BUG-016](#bug-016) | #236 | fixed | Local initializer signedness still leaks into word shifts and long division |
 | [BUG-093](#bug-093) | #386 | fixed | Unsigned right shift of a signed bit-field uses an arithmetic shift |
-| [BUG-094](#bug-094) | #387 | compile error | Unreachable float constant division by zero is rejected as an if condition |
+| [BUG-094](#bug-094) | #387 | fixed | Unreachable float constant division by zero is rejected as an if condition |
 | [BUG-095](#bug-095) | #388 | wrong result | Comparing two float member updates loses the left operand |
 | [Seed 33500](#seed-33500) | #366 | fixed | Postfix update of a distant stack parameter rejected in a call argument |
 | [BUG-076](#bug-076) | #367 | fixed | Struct member compound assignment with a logical RHS corrupts the stored value |
@@ -48,7 +48,7 @@ entries and their historical diagnoses are retained below.
 | [BUG-091](#bug-091) | #384 | fixed | A widened parameter postincrement multiplies the incremented value |
 | [BUG-092](#bug-092) | #385 | fixed | A logical not over a constant division by zero is rejected |
 
-**Open: 2 defects — 1 wrong-result defect and 1 compile error.** Seven
+**Open: 1 wrong-result defect.** Seven
 failures from the production campaigns over seeds 70001–120000 map to these
 four entries. Original sources were generated at `3cf4788d` and preserved
 under `build/`; all seven still fail with the rebuilt upstream `6ef8e575`
@@ -169,6 +169,16 @@ the reduced reproducer were retested with a fresh upstream `6ef8e575` build.
 ## BUG-094
 
 Upstream issue: [#387](https://github.com/davidly/dcc/issues/387).
+
+**Fixed locally; promoted as `tests/tfzeroc.c`.** A supported constant float
+condition need not fold to a literal to be admitted. Unreachable division
+by zero can remain a runtime expression when an enclosing branch has a
+runtime guard; it is never given a fabricated constant value. The new test
+covers both eliminated and runtime-guarded dead branches plus three controls.
+Original float seeds 77632 and 82776 pass in all four configurations. Both
+4,142-function existing censuses are identical, strict full+extended stack
+and no-stack runs pass, and only the new performance row is added.
+`fconstdivzero` is restored. The following describes the historical finding.
 
 **An unreachable float constant division by zero is rejected as an `if`
 condition.** `if (0) { if (0.001f / 0.0f) { return 2; } }` fails with

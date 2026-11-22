@@ -82,7 +82,8 @@ until the local commits are published.
   and sign-bit-clear long constants. Both 4,142-function censuses are unchanged.
 - #386 / BUG-093: fixed locally; `tbfushft` covers the unsigned view of a
   sign-extended field. Both original censuses remain identical.
-- #387 / BUG-094: admit a supported, non-folding constant float condition.
+- #387 / BUG-094: fixed locally; `tfzeroc` covers supported non-folding
+  constant float conditions, including a runtime-guarded dead branch.
 - #388 / BUG-095: do not derive a comparison's type from still-untyped updates.
 
 Final fresh production campaigns run with all four fixes' steers removed.

@@ -713,6 +713,12 @@ int ast_cond_generic(const struct AstNode *n)
         (type_is_float(ast_expr_type_for_sizeof(n)) &&
          ast_const_float_fold(n, &fv)))
         return 1;
+    /* A constant float division by zero need not fold to be supported.
+     * Keep its runtime condition on paths where it is not eliminated. */
+    if (ast_node_is_const(n) &&
+        type_is_float(ast_expr_type_for_sizeof(n)) &&
+        ast_expr_supported(n) && !ast_const_float_fold(n, &fv))
+        return 1;
     if (ast_is_const_cmp_cond(n))
         return 1;
     if (ast_is_const_plain_int_cmp_cond(n))
