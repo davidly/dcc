@@ -736,6 +736,18 @@ static struct AstNode *p_primary(struct AstArena *ar)
     }
 }
 
+/* Operator chains are parsed in loops, but the passes after the parser walk
+ * them recursively, about 2 KB of host stack per level. */
+#define AST_EXPR_HEIGHT_MAX 2000
+
+static int ast_expr_too_deep(const struct AstNode *n)
+{
+    if (n->height <= AST_EXPR_HEIGHT_MAX)
+        return 0;
+    error_here("expression nested too deeply (dcc allows chains of 2000 operators)");
+    return 1;
+}
+
 static struct AstNode *p_postfix_tail(struct AstArena *ar, struct AstNode *n)
 {
     for (;;) {
@@ -777,6 +789,7 @@ static struct AstNode *p_postfix_tail(struct AstArena *ar, struct AstNode *n)
             if (m->b == NULL)
                 return NULL;
             expect(']');
+            ast_note_height(m);
             n = m;
         } else if (g_lex.tok.kind == '(') {
             struct AstNode *call;
@@ -828,16 +841,20 @@ static struct AstNode *p_postfix_tail(struct AstArena *ar, struct AstNode *n)
             }
             m->sval = cur_text(ar);
             next_token();
+            ast_note_height(m);
             n = m;
         } else if (g_lex.tok.kind == TOK_INC || g_lex.tok.kind == TOK_DEC) {
             struct AstNode *m = ast_new(ar, AST_POSTFIX);
             m->op = g_lex.tok.kind;
             m->a = n;
             next_token();
+            ast_note_height(m);
             n = m;
         } else {
             break;
         }
+        if (ast_expr_too_deep(n))
+            return NULL;
     }
     return n;
 }
@@ -1031,12 +1048,15 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
                  ast_binary_operand_is_bitfield(lhs->b)))
                 lhs->type = lhs->operand_type;
         }
+        if (ast_expr_too_deep(lhs))
+            return NULL;
     }
     return lhs;
 }
 
 static struct AstNode *p_conditional(struct AstArena *ar)
 {
+    static int depth;
     struct AstNode *c = p_binary(ar, 1);
     if (c != NULL && g_lex.tok.kind == '?') {
         struct AstNode *then_e;
@@ -1046,11 +1066,19 @@ static struct AstNode *p_conditional(struct AstArena *ar)
         if (then_e == NULL)
             return NULL;
         expect(':');
+        if (depth >= AST_EXPR_HEIGHT_MAX) {
+            error_here("expression nested too deeply (dcc allows chains of 2000 operators)");
+            return NULL;
+        }
+        ++depth;
         else_e = p_conditional(ar);
+        --depth;
         if (else_e == NULL)
             return NULL;
         {
             struct AstNode *conditional = ast_cond(ar, c, then_e, else_e, 0);
+            if (ast_expr_too_deep(conditional))
+                return NULL;
             conditional->type = ast_expr_type_for_sizeof(conditional);
             conditional->deferred_types = ast_types_deferred(then_e) ||
                                           ast_types_deferred(else_e);
@@ -1071,18 +1099,26 @@ static int is_assign_op(int k)
 
 static struct AstNode *p_assign(struct AstArena *ar)
 {
+    static int depth;
     struct AstNode *lhs = p_conditional(ar);
     if (lhs != NULL && is_assign_op(g_lex.tok.kind)) {
         int op = g_lex.tok.kind;
         struct AstNode *rhs;
         next_token();
+        if (depth >= AST_EXPR_HEIGHT_MAX) {
+            error_here("expression nested too deeply (dcc allows chains of 2000 operators)");
+            return NULL;
+        }
+        ++depth;
         rhs = p_assign(ar);              /* right-associative */
+        --depth;
         if (rhs == NULL)
             return NULL;
         if (op == '=' && type_ptr_depth(ast_expr_type_for_sizeof(lhs)) > 0 &&
             !ast_expr_is_pointer_assignment_rhs(rhs))
             error_here("incompatible integer to pointer assignment");
-        return ast_assign(ar, op, lhs, rhs, 0);
+        lhs = ast_assign(ar, op, lhs, rhs, 0);
+        return ast_expr_too_deep(lhs) ? NULL : lhs;
     }
     return lhs;
 }
@@ -1097,6 +1133,8 @@ struct AstNode *ast_build_expr(struct AstArena *ar)
         if (rhs == NULL)
             return NULL;
         n = ast_binary(ar, AST_COMMA, ',', n, rhs, 0);
+        if (ast_expr_too_deep(n))
+            return NULL;
     }
     return n;
 }

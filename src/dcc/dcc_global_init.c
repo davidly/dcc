@@ -113,6 +113,8 @@ static int parse_global_compound_literal_address(char *label, int labelsz)
 
     if (g_lex.tok.kind != '{') {
         error_here("compound literal initializer expected");
+        if (label && labelsz > 1)
+            strcpy(label, "0");
         return 1;
     }
 

@@ -134,7 +134,24 @@ struct AstNode *ast_new(struct AstArena *ar, int kind)
     n->pos = g_lex.tok_start_pos;
     n->end_file = NULL;
     n->end_line = 0;
+    n->height = 0;
     return n;
+}
+
+/* Record how deep the expression tree under n is, from its a/b/c operands,
+ * so the parser can reject chains that later recursive passes cannot walk
+ * within the host stack. */
+void ast_note_height(struct AstNode *n)
+{
+    int h = 0;
+
+    if (n->a != NULL && n->a->height > h)
+        h = n->a->height;
+    if (n->b != NULL && n->b->height > h)
+        h = n->b->height;
+    if (n->c != NULL && n->c->height > h)
+        h = n->c->height;
+    n->height = h + 1;
 }
 
 struct AstNode *ast_int_lit(struct AstArena *ar, long value, int type)
@@ -160,6 +177,7 @@ struct AstNode *ast_unary(struct AstArena *ar, int op, struct AstNode *operand,
     n->op = op;
     n->a = operand;
     n->type = type;
+    ast_note_height(n);
     return n;
 }
 
@@ -171,6 +189,7 @@ struct AstNode *ast_binary(struct AstArena *ar, int kind, int op,
     n->a = lhs;
     n->b = rhs;
     n->type = type;
+    ast_note_height(n);
     return n;
 }
 
@@ -182,6 +201,7 @@ struct AstNode *ast_assign(struct AstArena *ar, int op, struct AstNode *lhs,
     n->a = lhs;
     n->b = rhs;
     n->type = type;
+    ast_note_height(n);
     return n;
 }
 
@@ -194,6 +214,7 @@ struct AstNode *ast_cond(struct AstArena *ar, struct AstNode *cnd,
     n->b = then_e;
     n->c = else_e;
     n->type = type;
+    ast_note_height(n);
     return n;
 }
 
@@ -202,6 +223,7 @@ struct AstNode *ast_cast(struct AstArena *ar, int type, struct AstNode *operand)
     struct AstNode *n = ast_new(ar, AST_CAST);
     n->a = operand;
     n->type = type;
+    ast_note_height(n);
     return n;
 }
 
@@ -210,6 +232,7 @@ struct AstNode *ast_call(struct AstArena *ar, struct AstNode *callee, int type)
     struct AstNode *n = ast_new(ar, AST_CALL);
     n->a = callee;
     n->type = type;
+    ast_note_height(n);
     return n;
 }
 

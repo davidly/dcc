@@ -154,7 +154,14 @@ int ast_switch_gate_depth;
 
 /* Conservative: returns 1 only when the node is CERTAIN to evaluate to a plain
  * 16-bit int value.  Anything uncertain returns 0 (not supported here). */
+static int ast_value_is_plain_int_uncached(const struct AstNode *n);
+
 int ast_value_is_plain_int(const struct AstNode *n)
+{
+    return ast_value_class_cached(n, 0, ast_value_is_plain_int_uncached);
+}
+
+static int ast_value_is_plain_int_uncached(const struct AstNode *n)
 {
     struct Sym *s;
     int ei;

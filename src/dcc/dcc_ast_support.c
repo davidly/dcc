@@ -49,6 +49,52 @@ void ast_support_cache_begin(void)
 }
 
 
+/* The plain-int, long and float value classifiers call one another on the
+ * same operands, so a long `a + b + c ...` chain revisits each subtree an
+ * exponential number of times.  Memoize results for the duration of one
+ * outermost classifier call; the tree and scope cannot change inside it. */
+#define AST_VALUE_CACHE_SIZE 8192
+
+struct AstValueCacheEntry {
+    const struct AstNode *node;
+    unsigned stamp;
+    int which;
+    int value;
+};
+
+static struct AstValueCacheEntry ast_value_cache[AST_VALUE_CACHE_SIZE];
+static unsigned ast_value_cache_stamp;
+static int ast_value_cache_depth;
+
+int ast_value_class_cached(const struct AstNode *n, int which,
+                           int (*classify)(const struct AstNode *))
+{
+    struct AstValueCacheEntry *e;
+    unsigned idx;
+    int value;
+
+    if (n == NULL)
+        return 0;
+    if (ast_value_cache_depth == 0 && ++ast_value_cache_stamp == 0) {
+        memset(ast_value_cache, 0, sizeof(ast_value_cache));
+        ast_value_cache_stamp = 1;
+    }
+    idx = (unsigned)((((uintptr_t)n >> 4) * 3u + (unsigned)which) &
+                     (AST_VALUE_CACHE_SIZE - 1));
+    e = &ast_value_cache[idx];
+    if (e->stamp == ast_value_cache_stamp && e->node == n && e->which == which)
+        return e->value;
+    ++ast_value_cache_depth;
+    value = classify(n);
+    --ast_value_cache_depth;
+    e = &ast_value_cache[idx];
+    e->node = n;
+    e->stamp = ast_value_cache_stamp;
+    e->which = which;
+    e->value = value;
+    return value;
+}
+
 int ast_expr_yields_bool01(const struct AstNode *n)
 {
     if (n == NULL)
@@ -1235,7 +1281,14 @@ static int ast_update_lvalue_long_type(const struct AstNode *n, int *out_type)
     return 1;
 }
 
+static int ast_value_is_long_word_uncached(const struct AstNode *arg);
+
 int ast_value_is_long_word(const struct AstNode *arg)
+{
+    return ast_value_class_cached(arg, 1, ast_value_is_long_word_uncached);
+}
+
+static int ast_value_is_long_word_uncached(const struct AstNode *arg)
 {
     struct Sym *s;
 
@@ -1746,7 +1799,14 @@ int ast_call_indirect_supported(const struct AstNode *n)
     return 1;
 }
 
+static int ast_value_is_float_word_uncached(const struct AstNode *arg);
+
 int ast_value_is_float_word(const struct AstNode *arg)
+{
+    return ast_value_class_cached(arg, 2, ast_value_is_float_word_uncached);
+}
+
+static int ast_value_is_float_word_uncached(const struct AstNode *arg)
 {
     struct Sym *s;
 

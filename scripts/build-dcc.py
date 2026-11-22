@@ -231,13 +231,17 @@ def build_tools(root, output, args, env, system):
             compiles.append((name + '/' + path.name, compiler + flags + options))
         exe = root / (name + ('.exe' if windows else ''))
         outputs.append(exe)
+        # dcc walks expression trees recursively and needs a few MB of stack
+        # for its longest operator chains; Windows defaults to 1 MB and macOS
+        # to 8 MB, so reserve 16 MB on both (Linux uses the 8 MB ulimit).
         if windows:
             command = compiler + ['/nologo'] + objects + ['/Fe:' + str(exe), '/link', 'user32.lib',
-                       'ntdll.lib', '/OPT:REF', '/LTCG', '/DEBUG',
+                       'ntdll.lib', '/OPT:REF', '/LTCG', '/DEBUG', '/STACK:16777216',
                        '/PDB:' + str(objdir / (name + '-link.pdb'))]
         else:
             static = ['-static'] if system == 'Linux' and not args.no_static else []
-            command = compiler + flags + objects + static + ['-o', exe]
+            stack = ['-Wl,-stack_size,0x1000000'] if system == 'Darwin' else []
+            command = compiler + flags + objects + static + stack + ['-o', exe]
         links.append((name, command))
     print('\n=== Compiling {} in parallel ({} jobs) ==='.format(', '.join(TARGETS), args.jobs), flush=True)
     parallel_wave(compiles, args.jobs, root, env, args.verbose)

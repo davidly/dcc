@@ -78,8 +78,10 @@ def worker(repo,workspace,output,name,build_jobs):
     try:
         mutation=next((m for m in mutations() if m['Name']==name),None)
         if mutation is None:raise ValueError('Unknown compiler mutation: '+name)
-        for directory in ('src','tests/host','include','bin','output'):(workspace/directory).mkdir(parents=True)
+        for directory in ('src','tests/host','include','bin','output','scripts'):(workspace/directory).mkdir(parents=True)
         shutil.copytree(repo/'src/dcc',workspace/'src/dcc')
+        # src/dcc/CMakeLists.txt generates dcc_version.h with this script.
+        if (repo/'scripts/generate-version.py').is_file():shutil.copy2(repo/'scripts/generate-version.py',workspace/'scripts/generate-version.py')
         for source in (repo/'tests/host').glob('*.c'):shutil.copy2(source,workspace/'tests/host'/source.name)
         for source in repo.glob('*.h'):shutil.copy2(source,workspace/'include'/source.name)
         result['phase']='mutate'

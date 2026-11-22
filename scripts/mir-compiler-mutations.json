@@ -46,8 +46,8 @@
   },
   {
     "Name": "preprocessor-character-escape",
-    "After": "    if (*pp_expr_p == '\\\\') {\n        int c;\n        pp_expr_p++;\n        c = (unsigned char)*pp_expr_p;\n        if (c == 'n') v = '\\n';\n        else if (c == 'r') v = '\\r';\n        else if (c == 't') v = '\\t';\n        else if (c == '0') v = 0;\n        else v = c;\n        if (*pp_expr_p) pp_expr_p++;\n    } else {\n        v = (unsigned char)*pp_expr_p;\n        if (*pp_expr_p) pp_expr_p++;\n    }",
-    "Before": "    v = parse_escape_string_char(&pp_expr_p);",
+    "After": "        int c;\n        if (*p == '\\\\') {\n            p++;\n            c = (unsigned char)*p;\n            if (c == 'n') c = '\\n';\n            else if (c == 'r') c = '\\r';\n            else if (c == 't') c = '\\t';\n            else if (c == '0') c = 0;\n            if (*p) p++;\n        } else {\n            c = (unsigned char)*p;\n            if (*p) p++;\n        }",
+    "Before": "        int c = parse_escape_string_char(&p);",
     "ExpectedFailure": "FAIL preprocessor character alarm",
     "Source": "src/dcc/dcc_pp_expr.c"
   },

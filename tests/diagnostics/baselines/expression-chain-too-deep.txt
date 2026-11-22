@@ -1,0 +1,4 @@
+<source>:204: error DCC-E1006: expression nested too deeply (dcc allows chains of 2000 operators) near '+'
+            + x + x + x + x + x + x + x + x + x + x;
+                    ^
+dcc: 1 error(s)

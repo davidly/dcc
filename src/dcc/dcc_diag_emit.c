@@ -89,6 +89,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "macro parameter")) return "DCC-E0342";
     if (dcc_msg_has(msg, "'##' cannot appear")) return "DCC-E0343";
     if (dcc_msg_has(msg, "#line")) return "DCC-E0344";
+    if (dcc_msg_has(msg, "macro replacement list too long")) return "DCC-E0345";
     if (dcc_msg_has(msg, "#include nested too deeply")) return "DCC-E0305";
     if (dcc_msg_has(msg, "unterminated function-like macro invocation")) return "DCC-E0323";
     if (dcc_msg_has(msg, "_Pragma takes")) return "DCC-E0324";

@@ -168,6 +168,7 @@ struct MirObject {
 
 struct MirSwitchContext {
     long values[MAX_SWITCH_CASES];
+    const struct AstNode *nodes[MAX_SWITCH_CASES];
     int labels[MAX_SWITCH_CASES];
     int count;
     int default_label;

@@ -127,26 +127,36 @@ if(DCC_BUILD_MIR_TESTS)
     list(REMOVE_ITEM DCC_MIR_TEST_SOURCES dcc.c)
     add_executable(mir-verify-test
         ../../tests/host/mir_verify.c ${DCC_MIR_TEST_SOURCES})
-    target_include_directories(mir-verify-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(mir-verify-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR})
     add_executable(mir-scalar-dag-test
         ../../tests/host/mir_scalar_dag.c ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
-        mir-scalar-dag-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        mir-scalar-dag-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR})
     add_executable(mir-selector-isolation-test
         ../../tests/host/mir_selector_isolation.c
         ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
-        mir-selector-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        mir-selector-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR})
     add_executable(mir-consteval-isolation-test
         ../../tests/host/mir_consteval_isolation.c
         ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
-        mir-consteval-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        mir-consteval-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR})
     add_executable(mir-vla-smooth-isolation-test
         ../../tests/host/mir_vla_smooth_isolation.c
         ${DCC_MIR_TEST_SOURCES})
     target_include_directories(
-        mir-vla-smooth-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+        mir-vla-smooth-isolation-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR})
+    foreach(test_target mir-verify-test mir-scalar-dag-test
+            mir-selector-isolation-test mir-consteval-isolation-test
+            mir-vla-smooth-isolation-test)
+        add_dependencies(${test_target} dcc_version_header)
+    endforeach()
     target_compile_definitions(
         mir-vla-smooth-isolation-test PRIVATE
         DCC_MIR_VLA_SMOOTH_ISOLATION_TEST=1)

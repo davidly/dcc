@@ -1367,6 +1367,17 @@ static int pp_check_define(const char *s, const char *e, long line_start)
     while (s < e && bi < MAX_MACRO_TEXT - 1)
         body[bi++] = *s++;
     body[bi] = 0;
+    while (s < e && (*s == ' ' || *s == '\t' || *s == '\r'))
+        s++;
+    if (s < e && !(s + 1 < e && *s == '/' && (s[1] == '/' || s[1] == '*'))) {
+        char msg[96];
+        sprintf(msg, "macro replacement list too long (dcc allows %d characters)",
+                MAX_MACRO_TEXT - 1);
+        pp_directive_error(line_start, msg);
+        free(body);
+        free(old_body);
+        return 0;
+    }
     pp_normalize_body(body, body, MAX_MACRO_TEXT);
 
     bi = (int)strlen(body);

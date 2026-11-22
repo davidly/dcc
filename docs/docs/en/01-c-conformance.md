@@ -36,6 +36,7 @@ portability surprises when code is moved from a hosted desktop compiler.
 | `atof` returns `float` | C89 declares `atof` as returning `double`; DCC C Compiler has no distinct `double`, so `stdlib.h` declares `float atof(const char *)`. |
 | `float` precision is ~24 bits | Integers above about +/-16,777,216 are not all exactly representable as `float`; converting large `long` values rounds to nearest representable single precision value. |
 | `%` is integer-only | Use `fmodf` for floating-point remainder; `float % float` is a compile error. |
+| Expressions have a depth limit | An expression may nest 256 levels of parentheses or unary operators, and a chain of binary, `?:` or assignment operators may be 2000 operators deep. Deeper expressions are compile errors. |
 
 ## C89 support
 
@@ -69,7 +70,8 @@ operand of `defined`) and evaluate in the target's `long` and
 `unsigned long`: 32 bits, with the usual conversion to unsigned, so
 `-1 > 0u` is true. A character constant in `#if` has its byte value
 (`'\377'` is 255), which C leaves to the implementation. A macro may have at
-most 8 parameters, counting `...`. `#include` accepts a macro whose
+most 8 parameters, counting `...`, and a replacement list of at most 8191
+characters. `#include` accepts a macro whose
 expansion is `"file"` or `<file>`.
 
 Malformed directives are errors: a missing or non-identifier macro name, a

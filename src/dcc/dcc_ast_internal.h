@@ -46,6 +46,8 @@ int ast_types_deferred(const struct AstNode *n);
 struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n);
 int ast_ident_is_const(const char *name);
 int ast_value_is_plain_int(const struct AstNode *n);
+int ast_value_class_cached(const struct AstNode *n, int which,
+                           int (*classify)(const struct AstNode *));
 int ast_node_is_const(const struct AstNode *n);
 int ast_index_composite_elem_type(const struct AstNode *n, int *out_elem);
 int ast_index_plain_int_read(const struct AstNode *n);

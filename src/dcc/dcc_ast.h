@@ -141,6 +141,7 @@ struct AstNode {
     long pos;               /* source offset of its first token, for carets */
     char *end_file;         /* AST_COMPOUND closing-brace source filename  */
     int end_line;           /* AST_COMPOUND closing-brace source line      */
+    int height;             /* expression: longest operand chain below it  */
 };
 
 #define AST_INT_UVAL_CHARLIT       1UL
@@ -172,6 +173,7 @@ void *ast_arena_alloc(struct AstArena *ar, size_t n);
 void ast_arena_reset(struct AstArena *ar);   /* keep first block, drop rest */
 
 /* ---- node construction (all allocate from `ar`) ---- */
+void ast_note_height(struct AstNode *n);
 struct AstNode *ast_new(struct AstArena *ar, int kind);
 
 /* Re-emit a captured local-declaration span through declaration codegen so the

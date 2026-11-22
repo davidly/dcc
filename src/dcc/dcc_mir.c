@@ -2047,6 +2047,7 @@ static void mir_collect_switch_labels(const struct AstNode *node,
     case AST_CASE:
         if (context->count < MAX_SWITCH_CASES) {
             context->values[context->count] = node->ival;
+            context->nodes[context->count] = node;
             context->labels[context->count] = mir_new_label();
             ++context->count;
         }
@@ -2079,11 +2080,11 @@ static void mir_collect_switch_labels(const struct AstNode *node,
 }
 
 static int mir_switch_case_label(const struct MirSwitchContext *context,
-                                 long value)
+                                 const struct AstNode *node)
 {
     int i;
     for (i = 0; i < context->count; ++i)
-        if ((context->values[i] & 0xffffL) == (value & 0xffffL))
+        if (context->nodes[i] == node)
             return context->labels[i];
     return -1;
 }
@@ -4725,7 +4726,7 @@ static void mir_lower_stmt(const struct AstNode *node)
     case AST_CASE:
         if (mir.switch_depth > 0) {
             switch_context = &mir.switches[mir.switch_depth - 1];
-            next_label = mir_switch_case_label(switch_context, node->ival);
+            next_label = mir_switch_case_label(switch_context, node);
             if (next_label >= 0) {
                 mir_emit_label(next_label);
                 mir_lower_stmt(node->b);
