@@ -1,0 +1,10 @@
+<source>:2: error DCC-E0344: #line directive requires a positive integer argument
+    #line abc
+    ^
+<source>:3: error DCC-E0344: line number out of range in #line directive
+    #line 4294967296
+    ^
+<source>:4: error DCC-E0344: invalid filename for #line directive
+    #line 100 "unterminated.c
+    ^
+dcc: 3 error(s)

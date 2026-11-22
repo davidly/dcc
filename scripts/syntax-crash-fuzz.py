@@ -15,12 +15,17 @@ reject or accept the result cleanly. A run is reported when dcc
   accepted  with --accepts: compiles an input clang rejects, from a program
             clang accepts
 
+With --directives every mutation lands on a preprocessor directive line,
+in programs that have directives other than #include, to exercise #define,
+#if and the other directives' handling of mistakes.
+
 Build dcc with -fsanitize=address,undefined and pass it as --dcc to catch
 memory errors that do not crash. Failing inputs are kept as <work>/<seed>.c
 with dcc's output beside them; one input per distinct signature is listed.
 
   syntax-crash-fuzz.py --seeds 1-2000 --dcc build/asan/dcc
   syntax-crash-fuzz.py --seeds 1-2000 --accepts
+  syntax-crash-fuzz.py --seeds 1-2000 --directives --dcc build/asan/dcc
   syntax-crash-fuzz.py --reduce 17 --dcc build/asan/dcc
   syntax-crash-fuzz.py --generate 17 broken.c
 """
@@ -79,8 +84,18 @@ CLANG = ['clang', '-std=gnu99', '-fsigned-char', '-fsyntax-only', '-w', '-ferror
          '-Wno-error=return-type', '-I', str(ROOT), '-I', str(ROOT / 'tests')]
 
 
+DIRECTIVE = re.compile(r'^[ \t]*#[ \t]*(define|undef|if|ifdef|ifndef|elif|else|endif|line|pragma)\b',
+                       re.M)
+
+# Set by --directives: mutate only tokens on directive lines.
+directives_only = False
+
+
 def corpus():
-    return sorted(p for p in (ROOT / 'tests').glob('*.c'))
+    files = sorted(p for p in (ROOT / 'tests').glob('*.c'))
+    if directives_only:
+        files = [p for p in files if DIRECTIVE.search(p.read_text(encoding='latin-1'))]
+    return files
 
 
 def tokenize(text):
@@ -89,6 +104,28 @@ def tokenize(text):
 
 def significant(tokens):
     return [i for i, t in enumerate(tokens) if not t.isspace() and not t.startswith(('/*', '//'))]
+
+
+def directive_tokens(tokens):
+    """Indexes of significant tokens on directive lines, continuations
+    included."""
+    found = []
+    line_start = True
+    in_directive = False
+    previous = ''
+    for i, t in enumerate(tokens):
+        if t.isspace() or t.startswith(('/*', '//')):
+            if '\n' in t and previous != '\\':
+                line_start = True
+                in_directive = False
+            continue
+        if line_start:
+            in_directive = t == '#'
+            line_start = False
+        if in_directive:
+            found.append(i)
+        previous = t
+    return found
 
 
 def random_token(rng, tokens, sig):
@@ -108,7 +145,7 @@ def mutate_once(rng, tokens):
     sig = significant(tokens)
     if not sig:
         return tokens
-    at = rng.choice(sig)
+    at = rng.choice((directives_only and directive_tokens(tokens)) or sig)
     kind = rng.randrange(11)
     if kind == 0:
         tokens[at] = ''
@@ -341,7 +378,11 @@ def main():
     parser.add_argument('--messages', action='store_true', help='list every diagnostic message and its count')
     parser.add_argument('--reduce', type=int, help='shrink this seed\'s failure')
     parser.add_argument('--generate', nargs=2, metavar=('SEED', 'C'), help='only write seed SEED\'s input')
+    parser.add_argument('--directives', action='store_true',
+                        help='mutate only preprocessor directive lines')
     args = parser.parse_args()
+    global directives_only
+    directives_only = args.directives
     if args.generate:
         name, text = generate(int(args.generate[0]))
         Path(args.generate[1]).write_text(text, encoding='latin-1')

@@ -1,0 +1,16 @@
+<source>:4: error DCC-E0323: unterminated function-like macro invocation of 'F'
+    int x = F(1;
+            ^
+<source>:4: error DCC-E1102: expected ';' near '('
+    int x = F(1;
+             ^
+<source>:4: error DCC-E1101: external declaration expected near '('
+    int x = F(1;
+             ^
+<source>:4: error DCC-E1101: external declaration expected near '1'
+    int x = F(1;
+              ^
+<source>:4: error DCC-E1101: external declaration expected near ';'
+    int x = F(1;
+               ^
+dcc: 5 error(s)

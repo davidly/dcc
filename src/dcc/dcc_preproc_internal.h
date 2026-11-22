@@ -27,6 +27,10 @@ void add_define(const char *name, const char *value);
 void remove_define(const char *name);
 int pp_eval_simple_expr(const char *s);
 int pp_eval_expr_malformed(void);
+const char *pp_eval_expr_error(void);
+int macro_call_arity_matches(int di, int *nargs);
+extern int macro_call_args_too_many;
+extern int macro_call_arg_overflow;
 void strip_macro_replacement_comments(char *s);
 
 #endif

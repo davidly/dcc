@@ -1326,16 +1326,82 @@ static struct AstNode *ast_build_do_stmt(struct AstArena *ar)
     return n;
 }
 
+/* The case values of each switch being built, to diagnose a duplicate case
+ * value or a second default label, which the switch lowering cannot
+ * represent. Values are compared converted to the promoted controlling type. */
+#define AST_SWITCH_NEST_MAX 64
+
+struct AstSwitchCases {
+    long *values;
+    int count;
+    int cap;
+    int wide;               /* a 32-bit controlling expression */
+    int has_default;
+};
+
+static struct AstSwitchCases ast_switch_cases[AST_SWITCH_NEST_MAX];
+static int ast_switch_depth;
+
+/* Report a label error once: a function body may be built more than once. */
+static void ast_switch_label_error(long pos, int line, const char *msg)
+{
+    static long reported_pos[64];
+    static int reported_line[64];
+    static int nreported;
+    int i;
+
+    for (i = 0; i < nreported; ++i)
+        if (reported_pos[i] == pos && reported_line[i] == line)
+            return;
+    if (asm_suppress_depth == 0 && nreported < 64) {
+        reported_pos[nreported] = pos;
+        reported_line[nreported++] = line;
+    }
+    dcc_error_at(g_lex.tok.file[0] ? g_lex.tok.file : (input_name ? input_name : "<input>"),
+                 line, pos, msg, NULL);
+}
+
+static void ast_switch_note_case(long value, long pos, int line)
+{
+    struct AstSwitchCases *sw;
+    int i;
+
+    if (ast_switch_depth <= 0 || ast_switch_depth > AST_SWITCH_NEST_MAX)
+        return;
+    sw = &ast_switch_cases[ast_switch_depth - 1];
+    value = sw->wide ? (long)(value & 0xffffffffL) : (long)(value & 0xffffL);
+    for (i = 0; i < sw->count; ++i) {
+        if (sw->values[i] == value) {
+            char msg[64];
+            sprintf(msg, "duplicate case value %ld", value);
+            ast_switch_label_error(pos, line, msg);
+            return;
+        }
+    }
+    if (sw->count == sw->cap) {
+        int cap = sw->cap ? sw->cap * 2 : 16;
+        long *values = (long *)realloc(sw->values, (size_t)cap * sizeof(long));
+        if (values == NULL)
+            fatal("out of memory");
+        sw->values = values;
+        sw->cap = cap;
+    }
+    sw->values[sw->count++] = value;
+}
+
 static struct AstNode *ast_build_case_stmt(struct AstArena *ar)
 {
     struct AstNode *n;
     long cv;
+    long pos = g_lex.tok_start_pos;
+    int line = g_lex.tok_line;
 
     next_token();                        /* consume 'case' */
     cv = parse_typed_const_long_expr();
     if (g_lex.tok.kind != ':')
         return NULL;
     next_token();                        /* consume ':' */
+    ast_switch_note_case(cv, pos, line);
 
     n = ast_new(ar, AST_CASE);
     n->ival = cv;
@@ -1348,11 +1414,19 @@ static struct AstNode *ast_build_case_stmt(struct AstArena *ar)
 static struct AstNode *ast_build_default_stmt(struct AstArena *ar)
 {
     struct AstNode *n;
+    long pos = g_lex.tok_start_pos;
+    int line = g_lex.tok_line;
 
     next_token();                        /* consume 'default' */
     if (g_lex.tok.kind != ':')
         return NULL;
     next_token();                        /* consume ':' */
+    if (ast_switch_depth > 0 && ast_switch_depth <= AST_SWITCH_NEST_MAX) {
+        struct AstSwitchCases *sw = &ast_switch_cases[ast_switch_depth - 1];
+        if (sw->has_default)
+            ast_switch_label_error(pos, line, "multiple default labels in one switch");
+        sw->has_default = 1;
+    }
 
     n = ast_new(ar, AST_DEFAULT);
     n->b = ast_build_stmt(ar);
@@ -1449,7 +1523,15 @@ static struct AstNode *ast_build_switch_stmt(struct AstArena *ar)
         return NULL;
     next_token();                        /* consume ')' */
 
+    if (ast_switch_depth < AST_SWITCH_NEST_MAX) {
+        struct AstSwitchCases *sw = &ast_switch_cases[ast_switch_depth];
+        sw->count = 0;
+        sw->has_default = 0;
+        sw->wide = type_size(ast_promoted_operand_type(ctrl)) == 4;
+    }
+    ++ast_switch_depth;
     body = ast_build_stmt(ar);
+    --ast_switch_depth;
     if (body == NULL)
         return NULL;
 

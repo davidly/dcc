@@ -426,11 +426,11 @@ void parse_preprocessor_line(void)
             lp++;
 
         lno = 0;
-        while (isdigit((unsigned char)*lp))
-            lno = lno * 10 + *lp++ - '0';
-
-        if (lno > 0)
+        if (isdigit((unsigned char)*lp)) {
+            while (isdigit((unsigned char)*lp))
+                lno = lno * 10 + *lp++ - '0';
             g_lex.line_no = lno - 1;
+        }
 
         while (*lp && isspace((unsigned char)*lp))
             lp++;
@@ -509,7 +509,7 @@ void parse_preprocessor_line(void)
                         getc_src();
                         getc_src();
                         getc_src();
-                        if (nargs < 7) {
+                        if (nargs < MAX_MACRO_ARGS) {
                             strcpy(params[nargs], "__VA_ARGS__");
                             nargs++;
                         }
@@ -520,12 +520,20 @@ void parse_preprocessor_line(void)
                         continue;
                     }
 
-                    pp = 0;
-                    while (is_ident_char(peekc()) && pp < 31)
-                        params[nargs][pp++] = (char)getc_src();
-                    params[nargs][pp] = 0;
-                    if (params[nargs][0] && nargs < 7)
-                        nargs++;
+                    {
+                        char param[32];
+                        pp = 0;
+                        while (is_ident_char(peekc())) {
+                            c = getc_src();
+                            if (pp < 31)
+                                param[pp++] = (char)c;
+                        }
+                        param[pp] = 0;
+                        /* More parameters than MAX_MACRO_ARGS are diagnosed
+                         * by the source filter (pp_check_define). */
+                        if (param[0] && nargs < MAX_MACRO_ARGS)
+                            strcpy(params[nargs++], param);
+                    }
 
                     while (isspace((unsigned char)peekc()) && peekc() != '\n')
                         getc_src();
@@ -1255,8 +1263,46 @@ void strip_macro_replacement_comments(char *s)
     trim_arg(s);
 }
 
-static int macro_call_args_too_many;
-static int macro_call_arg_overflow;
+int macro_call_args_too_many;
+int macro_call_arg_overflow;
+static int macro_call_unterminated;   /* the last call read ran out of text */
+
+/* A macro call that is diagnosed is replaced by 0, and a probe parse, which
+ * suppresses diagnostics, may be the only pass to see it: report it even
+ * there, once per call. A probe that restores the source text would show
+ * the same call to the real pass, at the same place. */
+static void pp_report_rewritten_call(const char *msg)
+{
+    static long reported_pos[64];
+    static int reported_line[64];
+    static int nreported;
+    int saved = asm_suppress_depth;
+    int i;
+
+    for (i = 0; i < nreported; ++i)
+        if (reported_pos[i] == g_lex.tok_start_pos && reported_line[i] == g_lex.tok_line)
+            return;
+    if (nreported < 64) {
+        reported_pos[nreported] = g_lex.tok_start_pos;
+        reported_line[nreported++] = g_lex.tok_line;
+    }
+    asm_suppress_depth = 0;
+    error_here(msg);
+    asm_suppress_depth = saved;
+}
+
+/* Whether a call that supplied *nargs arguments fits macro di. `F()` gives a
+ * one-parameter macro one empty argument, so it counts as one. */
+int macro_call_arity_matches(int di, int *nargs)
+{
+    if (*nargs == defs[di].nargs)
+        return 1;
+    if (*nargs == 0 && defs[di].nargs == 1) {
+        *nargs = 1;
+        return 1;
+    }
+    return 0;
+}
 
 static void append_macro_call_arg_char(char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int ai, int *ap, int c)
 {
@@ -1273,6 +1319,7 @@ int read_macro_call_args(char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int *narg
     int ai;
     int ap;
 
+    macro_call_unterminated = 0;
     while (isspace((unsigned char)peekc()))
         getc_src();
 
@@ -1285,6 +1332,7 @@ int read_macro_call_args(char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int *narg
     depth = 0;
     macro_call_args_too_many = 0;
     macro_call_arg_overflow = 0;
+    macro_call_unterminated = 1;
     memset(args, 0, MAX_MACRO_ARGS * MAX_MACRO_ARG_LEN);
 
     for (;;) {
@@ -1361,8 +1409,9 @@ int read_macro_call_args(char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int *narg
                     else if ((c == ')' || c == ']' || c == '}') && depth > 0)
                         depth--;
                 }
+                macro_call_unterminated = c == 0;
                 *nargs = ai + 1;
-                return 1;
+                return c != 0;
             }
             ap = 0;
             continue;
@@ -1370,6 +1419,7 @@ int read_macro_call_args(char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN], int *narg
 
         append_macro_call_arg_char(args, ai, &ap, c);
     }
+    macro_call_unterminated = 0;
 
     if (variadic_named_count < 0 && ai == 1 && args[0][0] == 0)
         ai = 0;
@@ -1543,8 +1593,19 @@ int read_macro_call_args_text(const char **pp, char args[MAX_MACRO_ARGS][MAX_MAC
             args[ai][ap] = 0;
             trim_arg(args[ai]);
             ai++;
-            if (ai >= MAX_MACRO_ARGS)
-                fatal("too many macro arguments");
+            if (ai >= MAX_MACRO_ARGS) {
+                while ((c = (unsigned char)*p++) != 0) {
+                    if (c == '(')
+                        depth++;
+                    else if (c == ')' && depth-- == 0)
+                        break;
+                }
+                if (c == 0)
+                    return 0;
+                *nargs = ai + 1;
+                *pp = p;
+                return 1;
+            }
             ap = 0;
             continue;
         }
@@ -1707,10 +1768,21 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
                             defs[di].is_variadic ? defs[di].nargs - 1 : -1)) {
                         char tmp[MAX_MACRO_TEXT];
                         char tmp2[MAX_MACRO_TEXT];
-                        if (macro_call_arg_overflow)
-                            fatal("macro argument too long in function-like macro invocation");
-                        if (nargs != defs[di].nargs)
-                            fatal("wrong number of macro arguments");
+                        if (macro_call_arg_overflow || !macro_call_arity_matches(di, &nargs)) {
+                            char msg[160];
+                            sprintf(msg, "%s of '%.63s'",
+                                    macro_call_arg_overflow
+                                        ? "macro argument too long in function-like macro invocation"
+                                        : nargs > defs[di].nargs
+                                            ? "too many arguments provided to function-like macro invocation"
+                                            : "too few arguments provided to function-like macro invocation",
+                                    ident);
+                            pp_report_rewritten_call(msg);
+                            if (oi < outsz - 1)
+                                out[oi++] = '0';
+                            p = after_ident;
+                            continue;
+                        }
                         expand_function_macro(di, args, tmp, sizeof(tmp));
                         macro_expand_argument_text(tmp, tmp2, sizeof(tmp2), depth + 1);
                         for (ii = 0; tmp2[ii] && oi < outsz - 1; ++ii)
@@ -2245,6 +2317,48 @@ void next_token(void)
             strcpy(g_lex.tok.text, "1");
             return;
         }
+        if (!strcmp(g_lex.tok.text, "_Pragma") && find_define("_Pragma") < 0) {
+            /* C99 _Pragma("text") is #pragma text: destringize the operand,
+             * act on it and drop the operator from the source. */
+            char text[512];
+            long q = g_lex.posi;
+            int ti = 0;
+
+            while (q < src_len && isspace((unsigned char)src[q]))
+                q++;
+            if (q < src_len && src[q] == '(') {
+                q++;
+                while (q < src_len && isspace((unsigned char)src[q]))
+                    q++;
+                if (q < src_len && src[q] == 'L')
+                    q++;
+                if (q < src_len && src[q] == '"') {
+                    q++;
+                    while (q < src_len && src[q] != '"' && src[q] != '\n') {
+                        if (src[q] == '\\' && q + 1 < src_len &&
+                            (src[q + 1] == '"' || src[q + 1] == '\\'))
+                            q++;
+                        if (ti < (int)sizeof(text) - 1)
+                            text[ti++] = src[q];
+                        q++;
+                    }
+                    text[ti] = 0;
+                    if (q < src_len && src[q] == '"') {
+                        q++;
+                        while (q < src_len && isspace((unsigned char)src[q]))
+                            q++;
+                        if (q < src_len && src[q] == ')') {
+                            if (pp_active)
+                                handle_pragma_line(text);
+                            replace_source_range(g_lex.tok_start_pos, q + 1, " ");
+                            next_token();
+                            return;
+                        }
+                    }
+                }
+            }
+            lex_error_at(g_lex.tok_start_pos, "_Pragma takes a parenthesized string literal");
+        }
 
         di = find_define(g_lex.tok.text);
         if (di >= 0 && macro_disabled_here(g_lex.tok.text, g_lex.tok_start_pos))
@@ -2264,13 +2378,13 @@ void next_token(void)
                 if (read_macro_call_args(args, &nargs,
                         defs[di].is_variadic ? defs[di].nargs - 1 : -1)) {
                     if (macro_call_arg_overflow) {
-                        error_here("macro argument too long in function-like macro invocation");
+                        pp_report_rewritten_call("macro argument too long in function-like macro invocation");
                         replace_source_range(g_lex.tok_start_pos, g_lex.posi, "0");
                         next_token();
                         return;
                     }
-                    if (nargs != defs[di].nargs) {
-                        error_here(macro_call_args_too_many ?
+                    if (!macro_call_arity_matches(di, &nargs)) {
+                        pp_report_rewritten_call(nargs > defs[di].nargs ?
                                    "too many arguments provided to function-like macro invocation" :
                                    "too few arguments provided to function-like macro invocation");
                         replace_source_range(g_lex.tok_start_pos, g_lex.posi, "0");
@@ -2281,6 +2395,12 @@ void next_token(void)
                     replace_source_range(g_lex.tok_start_pos, g_lex.posi, expbuf);
                     next_token();
                     return;
+                }
+                if (macro_call_unterminated) {
+                    char msg[128];
+                    sprintf(msg, "unterminated function-like macro invocation of '%.63s'",
+                            g_lex.tok.text);
+                    lex_error_at(g_lex.tok_start_pos, msg);
                 }
                 g_lex.posi = save_pos;
                 g_lex.tok.kind = TOK_ID;

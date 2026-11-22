@@ -1,0 +1,16 @@
+<source>:2: error DCC-E0340: macro name missing
+    #ifdef
+    ^
+<source>:4: error DCC-E0341: macro name must be an identifier
+    #ifndef 123
+    ^
+<source>:6: error DCC-E0341: macro name must be an identifier
+    #ifdef (X)
+    ^
+<source>:8: error DCC-E0340: macro name missing
+    #undef
+    ^
+<source>:9: error DCC-E0341: macro name must be an identifier
+    #undef "s"
+    ^
+dcc: 5 error(s)

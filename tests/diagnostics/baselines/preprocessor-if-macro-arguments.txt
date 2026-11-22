@@ -1,0 +1,7 @@
+<source>:4: error DCC-E0321: too few arguments provided to function-like macro invocation of 'VER'
+    #if VER(1) > 100
+    ^
+<source>:6: error DCC-E0320: too many arguments provided to function-like macro invocation of 'VER'
+    #if VER(1, 2, 3) > 100
+    ^
+dcc: 2 error(s)

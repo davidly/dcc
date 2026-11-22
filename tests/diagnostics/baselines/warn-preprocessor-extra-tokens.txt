@@ -1,0 +1,7 @@
+<source>:15: warning: backslash and newline separated by space
+<source>:5: warning: extra tokens at end of #ifdef directive
+<source>:6: warning: extra tokens at end of #endif directive
+<source>:8: warning: extra tokens at end of #else directive
+<source>:10: warning: extra tokens at end of #undef directive
+<source>:12: warning: 'N' macro redefined
+dcc: 6 warning(s)

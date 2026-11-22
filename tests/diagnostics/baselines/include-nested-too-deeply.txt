@@ -1,0 +1,1 @@
+<source>:2: error DCC-E0305: #include nested too deeply (dcc allows 8 levels)

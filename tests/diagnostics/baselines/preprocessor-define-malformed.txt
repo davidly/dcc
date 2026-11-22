@@ -1,0 +1,31 @@
+<source>:2: error DCC-E0340: macro name missing
+    #define
+    ^
+<source>:3: error DCC-E0341: macro name must be an identifier
+    #define 1X 2
+    ^
+<source>:4: error DCC-E0342: duplicate macro parameter name 'a'
+    #define F(a, a) a
+    ^
+<source>:5: error DCC-E0342: expected ',' or ')' in macro parameter list
+    #define G(a 1
+    ^
+<source>:6: error DCC-E0342: expected parameter name in macro parameter list
+    #define H(a,) a
+    ^
+<source>:7: error DCC-E0342: missing ')' after '...' in macro parameter list
+    #define J(..., a) a
+    ^
+<source>:8: error DCC-E0341: 'defined' cannot be used as a macro name
+    #define defined 1
+    ^
+<source>:9: error DCC-E0343: '#' is not followed by a macro parameter
+    #define S(x) #y
+    ^
+<source>:10: error DCC-E0343: '##' cannot appear at either end of a macro replacement list
+    #define P(a) ## a
+    ^
+<source>:11: error DCC-E0343: '##' cannot appear at either end of a macro replacement list
+    #define Q(a) a ##
+    ^
+dcc: 10 error(s)

@@ -1,0 +1,7 @@
+<source>:7: error DCC-E0321: too few arguments provided to function-like macro invocation near 'F'
+        return F(1);
+               ^
+<source>:12: error DCC-E0320: too many arguments provided to function-like macro invocation near 'G'
+        return G(1, 2);
+               ^
+dcc: 2 error(s)

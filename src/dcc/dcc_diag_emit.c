@@ -68,7 +68,30 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "#endif without matching #if")) return "DCC-E0315";
     if (dcc_msg_has(msg, "#else after #else")) return "DCC-E0316";
     if (dcc_msg_has(msg, "#if with no matching #endif")) return "DCC-E0317";
+    if (dcc_msg_has(msg, "#asm with no matching #endasm")) return "DCC-E0317";
     if (dcc_msg_has(msg, "missing ')' in preprocessor expression")) return "DCC-E0318";
+    if (dcc_msg_has(msg, "#elif after #else")) return "DCC-E0319";
+    if (dcc_msg_has(msg, "with no expression")) return "DCC-E0330";
+    if (dcc_msg_has(msg, "division by zero in preprocessor expression")) return "DCC-E0331";
+    if (dcc_msg_has(msg, "remainder by zero in preprocessor expression")) return "DCC-E0331";
+    if (dcc_msg_has(msg, "constant '")) return "DCC-E0332";
+    if (dcc_msg_has(msg, "character constant in preprocessor expression")) return "DCC-E0332";
+    if (dcc_msg_has(msg, "function-like macro '")) return "DCC-E0333";
+    if (dcc_msg_has(msg, "after 'defined'")) return "DCC-E0334";
+    if (dcc_msg_has(msg, "in preprocessor expression")) return "DCC-E0335";
+    if (dcc_msg_has(msg, "in a preprocessor expression")) return "DCC-E0335";
+    if (dcc_msg_has(msg, "preprocessor conditional expression")) return "DCC-E0335";
+    if (dcc_msg_has(msg, "preprocessor expression")) return "DCC-E0335";
+    if (dcc_msg_has(msg, "macro name missing")) return "DCC-E0340";
+    if (dcc_msg_has(msg, "macro name must be an identifier")) return "DCC-E0341";
+    if (dcc_msg_has(msg, "cannot be used as a macro name")) return "DCC-E0341";
+    if (dcc_msg_has(msg, "'#' is not followed by a macro parameter")) return "DCC-E0343";
+    if (dcc_msg_has(msg, "macro parameter")) return "DCC-E0342";
+    if (dcc_msg_has(msg, "'##' cannot appear")) return "DCC-E0343";
+    if (dcc_msg_has(msg, "#line")) return "DCC-E0344";
+    if (dcc_msg_has(msg, "#include nested too deeply")) return "DCC-E0305";
+    if (dcc_msg_has(msg, "unterminated function-like macro invocation")) return "DCC-E0323";
+    if (dcc_msg_has(msg, "_Pragma takes")) return "DCC-E0324";
     if (dcc_msg_has(msg, "too many arguments provided to function-like macro invocation")) return "DCC-E0320";
     if (dcc_msg_has(msg, "too few arguments provided to function-like macro invocation")) return "DCC-E0321";
     if (dcc_msg_has(msg, "macro argument too long in function-like macro invocation")) return "DCC-E0322";
@@ -107,6 +130,8 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "continue statement outside loop")) return "DCC-E0702";
     if (dcc_msg_has(msg, "case label outside switch")) return "DCC-E0703";
     if (dcc_msg_has(msg, "default label outside switch")) return "DCC-E0704";
+    if (dcc_msg_has(msg, "duplicate case value")) return "DCC-E0707";
+    if (dcc_msg_has(msg, "multiple default labels")) return "DCC-E0708";
     if (dcc_msg_has(msg, "duplicate goto label")) return "DCC-E0705";
     if (dcc_msg_has(msg, "undefined goto label")) return "DCC-E0706";
     if (dcc_msg_has(msg, "parameter declaration name expected")) return "DCC-E0801";
@@ -288,13 +313,36 @@ static void build_srcline_table(void)
             j += 5;
             while (j < line_end && (src[j] == ' ' || src[j] == '\t'))
                 j++;
-            n = 0;
+            /* A malformed #line (diagnosed by the source filter) leaves the
+             * numbering alone, so its own error is reported where it is. */
+            n = -1;
             while (j < line_end && src[j] >= '0' && src[j] <= '9') {
-                n = n * 10 + src[j] - '0';
+                n = (n < 0 ? 0 : n * 10) + src[j] - '0';
+                if (n > 100000000)
+                    break;
                 j++;
             }
-            if (n > 0)
+            if (n >= 0 && n <= 100000000 &&
+                (j == line_end || src[j] == ' ' || src[j] == '\t' || src[j] == '\r')) {
+                long k = j;
+                while (k < line_end && (src[k] == ' ' || src[k] == '\t'))
+                    k++;
+                if (k < line_end && src[k] == '"') {
+                    long c = k + 1;
+                    while (c < line_end && src[c] != '"')
+                        c++;
+                    if (c >= line_end)
+                        n = -1;
+                } else if (k < line_end && src[k] != '\r') {
+                    n = -1;
+                }
+            } else {
+                n = -1;
+            }
+            if (n >= 0)
                 line = n - 1;
+            else
+                j = line_end;
 
             while (j < line_end && (src[j] == ' ' || src[j] == '\t'))
                 j++;

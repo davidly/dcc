@@ -1,0 +1,7 @@
+<source>:11: error DCC-E0707: duplicate case value 1
+        case OP_STORE:
+        ^
+<source>:15: error DCC-E0708: multiple default labels in one switch
+        default:
+        ^
+dcc: 2 error(s)

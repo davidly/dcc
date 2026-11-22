@@ -1,0 +1,4 @@
+<source>:7: error DCC-E0317: #asm with no matching #endasm (opened at <source>:4)
+    int y;
+          ^
+dcc: 1 error(s)

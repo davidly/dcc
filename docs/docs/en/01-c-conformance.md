@@ -64,6 +64,23 @@ numeric token. For example, `#define VALUE(u) (10u + (u))` expands `VALUE(2)`
 to `(10u + (2))`: the unsigned suffix is not a parameter. Numeric tokens also
 remain intact when macro arguments and pasted tokens are rescanned.
 
+`#if` and `#elif` expand object-like and function-like macros (but not the
+operand of `defined`) and evaluate in the target's `long` and
+`unsigned long`: 32 bits, with the usual conversion to unsigned, so
+`-1 > 0u` is true. A character constant in `#if` has its byte value
+(`'\377'` is 255), which C leaves to the implementation. A macro may have at
+most 8 parameters, counting `...`. `#include` accepts a macro whose
+expansion is `"file"` or `<file>`.
+
+Malformed directives are errors: a missing or non-identifier macro name, a
+bad parameter list, `#` not followed by a parameter, `##` at either end of a
+replacement list, a malformed `#if` expression (a missing operand or `)`, a
+floating or string constant, `=` for `==`, an undefined function-like macro,
+division by zero in an evaluated operand), a malformed `#line`, and a macro
+call with the wrong number of arguments or no closing `)`. Tokens after a
+directive's operands (`#endif FOO`), a redefinition that changes a macro, and
+a backslash followed by blanks before the newline are warnings.
+
 ### The `register` storage class
 
 `register` is an optimization hint for automatic objects and function
@@ -120,6 +137,8 @@ retaining these language semantics.
 | `restrict` qualifier | Accepted as source compatibility; no alias-analysis optimization semantics are provided |
 | Variadic macros and `__VA_ARGS__` | Supported |
 | Empty variadic macro arguments | Supported |
+| Empty macro arguments, including `F()` for a one-parameter macro | Supported |
+| `_Pragma("...")` operator | Supported; acts as the matching `#pragma` |
 | Designated initializers for struct and array members | Supported |
 | File-scope compound literals in constant initializers | Supported |
 | Address-taking block-scope compound literals | Supported |

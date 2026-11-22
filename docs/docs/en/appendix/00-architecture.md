@@ -289,7 +289,7 @@ lock these messages and carets against exact baselines.
 | --- | --- | --- |
 | Lexical errors | `DCC-E0101`-`DCC-E0103` | unterminated comments, character constants and string literals |
 | Name lookup | `DCC-E0201` | undeclared identifiers |
-| Preprocessor and include handling | `DCC-E0301`-`DCC-E0322` | malformed `#include`, unknown directives, unmatched `#elif`/`#else`/`#endif`, an unclosed `(` in an `#if` expression, bad macro arity |
+| Preprocessor and include handling | `DCC-E0301`-`DCC-E0344` | malformed or too deeply nested `#include`, unknown directives, unmatched `#elif`/`#else`/`#endif`, malformed `#if` expressions, malformed `#define` names and parameter lists, `#` and `##` misuse, malformed `#line`, bad macro arity or an unterminated macro call |
 | Constant expressions | `DCC-E0401`-`DCC-E0403` | non-constant expressions, division by zero, missing expression operands |
 | Struct/union/enum/type semantics | `DCC-E0501`-`DCC-E0540` | field designators, `offsetof`, bit-fields, duplicate enum constants, missing type names, conflicting type specifiers, multiple storage classes |
 | Array and pointer constraints | `DCC-E0601`-`DCC-E0605` | unsupported variable inner dimensions, invalid bounds/object sizes, scalar subscripting |

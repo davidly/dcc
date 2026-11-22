@@ -1,0 +1,40 @@
+<source>:2: error DCC-E0330: #if with no expression
+    #if
+    ^
+<source>:5: error DCC-E0330: #elif with no expression
+    #elif
+    ^
+<source>:7: error DCC-E0335: expected value in preprocessor expression
+    #if 1 ==
+    ^
+<source>:9: error DCC-E0335: unexpected ')' in preprocessor expression
+    #if 1)
+    ^
+<source>:11: error DCC-E0331: division by zero in preprocessor expression
+    #if 1 / 0
+    ^
+<source>:13: error DCC-E0332: floating constant '1.5' in preprocessor expression
+    #if 1.5
+    ^
+<source>:15: error DCC-E0335: string literal in preprocessor expression
+    #if "a"
+    ^
+<source>:17: error DCC-E0335: '=' is not valid in a preprocessor expression (use '==' to compare)
+    #if X = 1
+    ^
+<source>:19: error DCC-E0333: function-like macro 'F' is not defined
+    #if F(1)
+    ^
+<source>:21: error DCC-E0334: macro name missing after 'defined'
+    #if defined
+    ^
+<source>:23: error DCC-E0335: missing ':' in preprocessor conditional expression
+    #if 1 ? 2
+    ^
+<source>:25: error DCC-E0332: invalid integer constant '09' in preprocessor expression
+    #if 09
+    ^
+<source>:27: error DCC-E0335: missing binary operator before '1' in preprocessor expression
+    #if (int)1
+    ^
+dcc: 13 error(s)
