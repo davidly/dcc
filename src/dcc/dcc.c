@@ -1600,9 +1600,12 @@ char *filter_active_preprocessor_source(long *lenp)
                 if (!isdigit((unsigned char)*lp))
                     msg = "#line directive requires a positive integer argument";
                 while (!msg && isdigit((unsigned char)*lp)) {
-                    lno = lno * 10 + (*lp++ - '0');
-                    if (lno > 2147483647L)
+                    int digit = *lp++ - '0';
+                    /* Test before multiplying: a host long may be 32 bits. */
+                    if (lno > (2147483647L - digit) / 10)
                         msg = "line number out of range in #line directive";
+                    else
+                        lno = lno * 10 + digit;
                 }
                 if (!msg && *lp && !isspace((unsigned char)*lp))
                     msg = "#line directive requires a positive integer argument";
