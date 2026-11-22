@@ -25,7 +25,7 @@ entries and their historical diagnoses are retained below.
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-016](#bug-016) | #236 | wrong result | Local initializer signedness still leaks into word shifts and long division |
+| [BUG-016](#bug-016) | #236 | fixed | Local initializer signedness still leaks into word shifts and long division |
 | [BUG-093](#bug-093) | #386 | wrong result | Unsigned right shift of a signed bit-field uses an arithmetic shift |
 | [BUG-094](#bug-094) | #387 | compile error | Unreachable float constant division by zero is rejected as an if condition |
 | [BUG-095](#bug-095) | #388 | wrong result | Comparing two float member updates loses the left operand |
@@ -48,7 +48,7 @@ entries and their historical diagnoses are retained below.
 | [BUG-091](#bug-091) | #384 | fixed | A widened parameter postincrement multiplies the incremented value |
 | [BUG-092](#bug-092) | #385 | fixed | A logical not over a constant division by zero is rejected |
 
-**Open: 4 defects — 3 wrong-result defects and 1 compile error.** Seven
+**Open: 3 defects — 2 wrong-result defects and 1 compile error.** Seven
 failures from the production campaigns over seeds 70001–120000 map to these
 four entries. Original sources were generated at `3cf4788d` and preserved
 under `build/`; all seven still fail with the rebuilt upstream `6ef8e575`
@@ -88,6 +88,21 @@ fixed below.
 ## BUG-016
 
 Upstream issue: [#236](https://github.com/davidly/dcc/issues/236).
+
+**Fixed locally; promoted as `tests/tinitsgn.c`.** Signedness-observing
+promoted reads now include right shifts. A nonnegative constant still avoids
+an unnecessary typed identity for widening and shifts, but retains its
+object type when division/remainder can observe the other operand's sign.
+The new ten-line regression keeps all five failing cases and five controls.
+All 4,142 existing function census rows are identical with and without
+stack checks; only the new performance row is added. Strict full+extended
+stack and no-stack runs, host validation, debug checks and an ASan/UBSan
+compiler probe pass. The two pre-existing optimization-size assertions are
+unchanged. `initinterpret` and `finitinterpret` are restored; fresh campaigns
+will validate all fixes together after the remaining shapes are restored.
+The local-variable facet of BUG-093 also passes, while its two direct-cast
+cases still fail. The following describes the historical reopened finding.
+
 
 **Reopened: local initializer signedness still leaks into word shifts and
 long division.** The historical reproducer in `tests/tinittyp.c` remains

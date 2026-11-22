@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has one open bug found by the
+[compiler-bugs.md](compiler-bugs.md) tracks the open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -70,6 +70,24 @@ baseline approval, documented in its scoped exceptions below.
   (`test_mir_campaign_baselines`, `test_mir_exact_controls`) fail on `main`
   today for reasons unrelated to any cluster (#277); report them as
   pre-existing, do not refresh their expectations in a cluster PR.
+
+## Oracle seeds 70001–120000
+
+Work locally on `fix/oracle-70001-120000`, one issue per commit. Existing
+C tests, output baselines and performance rows remain unchanged; promoted
+reproducers get new test names and measured rows. GitHub issues stay open
+until the local commits are published.
+
+- #236 / BUG-016: fixed locally; `tinitsgn` covers the residual word shifts
+  and sign-bit-clear long constants. Both 4,142-function censuses are unchanged.
+- #386 / BUG-093: preserve an unsigned cast of a signed narrow bit-field
+  before right shift; its local-initializer facet is already cleared by #236.
+- #387 / BUG-094: admit a supported, non-folding constant float condition.
+- #388 / BUG-095: do not derive a comparison's type from still-untyped updates.
+
+Final fresh production campaigns run with all four fixes' steers removed.
+The unchanged pre-existing Python optimization-size assertion failures remain
+outside this work.
 
 ## Clusters
 
