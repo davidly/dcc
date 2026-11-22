@@ -1,0 +1,8 @@
+a 4095
+b 4095
+c 4095
+d 65524
+e 4095
+scalar 4095
+unsigned field 1
+wide cast 4095

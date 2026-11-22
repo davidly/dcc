@@ -53,7 +53,10 @@ class IntegerKnownShapeTests(unittest.TestCase):
                     expression = gen.E('var', a=gen.Decl('x', source, 'param'))
                     if cast:
                         expression = gen.E('cast', [expression], t=target)
-                    enabled = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS)).initialiser(
+                    # Isolate the optional blockwordinit steer from the
+                    # reopened BUG-016 initializer-interpretation steer.
+                    enabled = gen.Gen(0, off=frozenset(gen.KNOWN_BUGS) - {
+                        'initinterpret'}).initialiser(
                         None, target, expression, storage)
                     steered = gen.Gen(0, off={'blockwordinit'}).initialiser(
                         None, target, expression, storage)

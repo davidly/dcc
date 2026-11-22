@@ -270,7 +270,7 @@ class MirIntegerOptimizationTests(unittest.TestCase):
 
     @unittest.skipUnless((ROOT / "m80c").is_file() and (ROOT / "dccpeep").is_file(),
                          "built assembler and peephole optimizer required")
-    def test_block_word_widening_matches_same_signed_control_after_peep(self):
+    def test_block_word_widening_is_no_larger_than_same_signed_control_after_peep(self):
         for target, parameter in (("int16_t", "uint16_t"),
                                   ("uint16_t", "int16_t")):
             source = ("#include <stdint.h>\nint32_t g, a[2]; "
@@ -280,7 +280,9 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             with self.subTest(target=target):
                 actual = self.machine_sizes(source)
                 expected = self.machine_sizes(control)
-                self.assertEqual(actual["PEEP"], expected["PEEP"])
+                # Peephole forwarding can eliminate the local's reloads,
+                # making this smaller than the parameter-only control.
+                self.assertLessEqual(actual["PEEP"], expected["PEEP"])
                 self.assertLessEqual(actual["RAW"], expected["RAW"] + 12)
                 for stack in ((), ("-fstack-check",)):
                     self.assertEqual(self.code(self.compile(source, stack)),

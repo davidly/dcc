@@ -50,7 +50,15 @@ the `blockcassign` steer is removed. BUG-069 (`sizeof` of a
 two-dimensional or partially indexed array struct member) is closed by T4 and
 promoted as `tests/tszmdim.c`.
 
-Open reproducers: none. The extended seeds 15001–22000 findings are promoted as:
+Open reproducers: **none**. The production oracle findings over seeds
+70001–120000 are fixed locally. BUG-016/#236 is fixed locally and promoted as `tinitsgn`; its earlier
+`tinittyp` coverage remains unchanged.
+BUG-093/#386 is fixed locally and promoted as `tbfushft`.
+BUG-094/#387 is fixed locally and promoted as `tfzeroc`.
+BUG-095/#388 is fixed locally and promoted as `tfupcmp`, including the
+scoped-repair context from the original seed. All four issue fixes are local
+commits; GitHub issues remain open until publication.
+Integer seed 105721 is an assembler size limit, not a parked defect. The extended seeds 15001–22000 findings are promoted as:
 
 - BUG-070: `tests/tbfrhs.c`, compound division/remainder by bit-fields.
 - BUG-071: `tests/tfcmexpr.c`, integer compounds consuming float expressions.

@@ -1,6 +1,6 @@
 # Fix plan for the logged compiler bugs
 
-[compiler-bugs.md](compiler-bugs.md) has one open bug found by the
+[compiler-bugs.md](compiler-bugs.md) tracks the open bugs found by the
 clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
@@ -70,6 +70,39 @@ baseline approval, documented in its scoped exceptions below.
   (`test_mir_campaign_baselines`, `test_mir_exact_controls`) fail on `main`
   today for reasons unrelated to any cluster (#277); report them as
   pre-existing, do not refresh their expectations in a cluster PR.
+
+## Oracle seeds 70001–120000
+
+Work locally on `fix/oracle-70001-120000`, one issue per commit. Existing
+C tests, output baselines and performance rows remain unchanged; promoted
+reproducers get new test names and measured rows. GitHub issues stay open
+until the local commits are published.
+
+- #236 / BUG-016: fixed locally; `tinitsgn` covers the residual word shifts
+  and sign-bit-clear long constants. Both 4,142-function censuses are unchanged.
+- #386 / BUG-093: fixed locally; `tbfushft` covers the unsigned view of a
+  sign-extended field. Both original censuses remain identical.
+- #387 / BUG-094: fixed locally; `tfzeroc` covers supported non-folding
+  constant float conditions, including a runtime-guarded dead branch.
+- #388 / BUG-095: fixed locally; `tfupcmp` preserves parsed float comparison
+  types while update lvalues are repaired, including scoped-loop contexts.
+
+Final fresh production campaigns with all four fixes' steers removed are
+clean over seeds 120601–120900: integer 299 ok / 1 target-limit-only; float
+294 ok / 6 INVALID. All seven original sources pass every production config.
+All 619 old performance rows and both original 4,142-function censuses are
+unchanged. Strict full+extended stack/no-stack and new tests' debug/host/
+sanitizer checks pass. The user subsequently authorized removing obsolete
+Python assertions. Optional steering checks now select explicit features,
+and a new regression keeps the fixed features eligible with `--off known`.
+The widening performance check accepts code smaller than its control while
+retaining its raw-size bound and debug equivalence checks; both cases save
+six bytes by eliminating two indexed reloads. All 46 focused tests pass;
+full Python discovery runs 467 tests with zero failures and two skips
+outside the sandbox (required for LeakSanitizer). Both pipelines pass the
+four new regressions and existing `tblkword` coverage with checked
+performance. This cleanup changes no compiler source, existing C test or
+baseline.
 
 ## Clusters
 

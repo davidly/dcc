@@ -1,0 +1,10 @@
+a -32
+b -32
+c -32
+d -1
+e -1
+f 8
+word chain -1
+word single -17
+word separate -1
+word signed -1
