@@ -92,10 +92,17 @@ clean over seeds 120601–120900: integer 299 ok / 1 target-limit-only; float
 294 ok / 6 INVALID. All seven original sources pass every production config.
 All 619 old performance rows and both original 4,142-function censuses are
 unchanged. Strict full+extended stack/no-stack and new tests' debug/host/
-sanitizer checks pass. Existing tests were not edited: the regular Python
-suite retains its two pre-existing optimization-size assertion failures and
-three obsolete float-steering subcases. A lifecycle-only patch is prepared
-under `build/` pending the user's response.
+sanitizer checks pass. The user subsequently authorized removing obsolete
+Python assertions. Optional steering checks now select explicit features,
+and a new regression keeps the fixed features eligible with `--off known`.
+The widening performance check accepts code smaller than its control while
+retaining its raw-size bound and debug equivalence checks; both cases save
+six bytes by eliminating two indexed reloads. All 46 focused tests pass;
+full Python discovery runs 467 tests with zero failures and two skips
+outside the sandbox (required for LeakSanitizer). Both pipelines pass the
+four new regressions and existing `tblkword` coverage with checked
+performance. This cleanup changes no compiler source, existing C test or
+baseline.
 
 ## Clusters
 

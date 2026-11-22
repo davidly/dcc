@@ -12,15 +12,16 @@ finally:
 
 
 class CampaignSteeringTests(unittest.TestCase):
-    def test_original_integer_seeds_are_steered(self):
+    def test_original_integer_seeds_keep_optional_steering(self):
         # The original seeds predate the new optional generator constructs.
         original_off = frozenset({'union', 'comma', 'pdiff', 'varargs'})
         for seed in (70940, 86893, 91438, 108843):
             with self.subTest(seed=seed):
-                program = integer.generate(seed, off=original_off | frozenset(integer.KNOWN_BUGS))
+                program = integer.generate(seed, off=original_off | {
+                    'initinterpret', 'bfunsignedshift'})
                 self.assertFalse(integer.known_shapes(program))
 
-    def test_unsigned_initializer_positive_constant_still_needs_steering(self):
+    def test_unsigned_initializer_positive_constant_keeps_optional_steering(self):
         generator = integer.Gen(0, off={'initinterpret'})
         source = integer.mk_const(88, integer.U32)
         init, assignment = generator.initialiser(None, integer.I32, source, 'local')
@@ -34,10 +35,19 @@ class CampaignSteeringTests(unittest.TestCase):
                               (94893, 'fupdatepair')):
             with self.subTest(seed=seed):
                 original = floating.generate(seed)
-                original.off = frozenset(floating.KNOWN_BUGS)
+                original.off = frozenset({feature})
                 self.assertIn(feature, floating.known_shapes(original))
-                steered = floating.generate(seed, off=frozenset(floating.KNOWN_BUGS))
+                steered = floating.generate(seed, off=frozenset({feature}))
                 self.assertFalse(floating.known_shapes(steered))
+
+    def test_fixed_campaign_shapes_are_enabled_with_off_known(self):
+        for generator, features in (
+                (integer, ('initinterpret', 'bfunsignedshift')),
+                (floating, ('finitinterpret', 'fconstdivzero', 'fupdatepair'))):
+            for feature in features:
+                with self.subTest(generator=generator.__name__, feature=feature):
+                    self.assertIn(feature, generator.FEATURES)
+                    self.assertNotIn(feature, generator.KNOWN_BUGS)
 
     def test_nonzero_and_variable_float_denominators_remain_eligible(self):
         numerator = floating.E('const', a=0.001, t=floating.F32)

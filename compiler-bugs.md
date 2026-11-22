@@ -51,8 +51,8 @@ entries and their historical diagnoses are retained below.
 **Open: none.** Seven
 failures from the production campaigns over seeds 70001–120000 map to these
 four entries. Original sources were generated at `3cf4788d` and preserved
-under `build/`; all seven failed with the rebuilt upstream `6ef8e575` before these fixes
-compiler. The upstream generator added new shapes, so regenerating these
+under `build/`; all seven failed with the rebuilt upstream `6ef8e575` before
+these fixes. The upstream generator added new shapes, so regenerating these
 seed numbers now does not identify the original programs. Integer seed
 105721 is an assembler target limit (code segment
 exceeds the 65535-byte REL limit), not a compiler defect; upstream now
@@ -83,12 +83,22 @@ are clean: integer **299 ok, 1 target-limit-only**; float **294 ok, 6 INVALID**;
 zero FAIL in either generator. Compiler/toolchain hashes stayed unchanged
 through those campaigns. Logs are `build/oracle-fixed-*`.
 
-The regular Python suite runs 466 tests with five assertion failures and two
-skips: the two unchanged optimization-size assertions listed above, plus
-three subcases of `test_float_seeds_are_detected_before_and_absent_after_steering`
-that still expect the now-fixed float shapes in `KNOWN_BUGS`. Existing tests
-were left unchanged as requested. The two-line lifecycle-only adjustment is
-prepared, not applied, in `build/fuzzer-lifecycle-update.patch`.
+The obsolete Python assertions are corrected separately from the compiler
+fixes. Optional steering tests now select their features explicitly rather
+than assuming fixed bugs remain in `KNOWN_BUGS`; a new regression ensures
+all five restored integer/float features remain enabled with `--off known`.
+The word-widening check requires optimized code to be no larger than its
+control, retaining its raw-size bound and release-identical `-gline` checks.
+Both signed and unsigned cases are six bytes smaller than their controls
+because peephole forwarding removes two indexed loads (52 vs 58 bytes and
+48 vs 54). All 46 focused campaign/integer-optimization tests pass. Full
+Python discovery runs **467 tests, zero failures, two skips**; it runs
+outside the sandbox so LeakSanitizer can inspect host processes. The four
+new C regressions and the existing `tblkword` signedness coverage pass with
+checked performance in both pipelines. This cleanup changes no compiler
+source, existing C test or baseline. Logs are
+`build/oracle-cleanup-unit-unrestricted.log` and
+`build/oracle-cleanup-{focused,regressions,widening}.log`.
 
 No findings remain open from the extended runs through seeds 24000. In the
 seeds 30001–40000 follow-up, BUG-076–081 are fixed.
@@ -119,8 +129,7 @@ The new ten-line regression keeps all five failing cases and five controls.
 All 4,142 existing function census rows are identical with and without
 stack checks; only the new performance row is added. Strict full+extended
 stack and no-stack runs, host validation, debug checks and an ASan/UBSan
-compiler probe pass. The two pre-existing optimization-size assertions are
-unchanged. `initinterpret` and `finitinterpret` are restored and covered by
+compiler probe pass. `initinterpret` and `finitinterpret` are restored and covered by
 the final clean campaigns below.
 The local-variable facet of BUG-093 also passes, while its two direct-cast
 cases still fail. The following describes the historical reopened finding.
