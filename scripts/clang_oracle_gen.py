@@ -435,6 +435,36 @@ def init_keeps_type(init, t):
     return ty(init) is t
 
 
+def initializer_reinterprets(init, t):
+    """An unsigned initializer feeds an equal-width signed integer local.
+
+    BUG-016 also affects positive constants used by signed long division,
+    and signed word reads consumed by right shifts.
+    """
+    if not is_int(t) or not t.signed or t.bits not in (16, 32):
+        return False
+    source = init.k[0] if init.op == 'cast' and init.t is t else init
+    st = ty(source)
+    return is_int(st) and st.bits == t.bits and st.signed != t.signed
+
+
+def unsigned_bitfield_shift(e):
+    """BUG-093: a signed bit-field feeds an unsigned word right shift."""
+    if e.op != 'bin' or e.a != '>>' or ty(e.k[0]) is not U16:
+        return False
+
+    def source(x, seen):
+        if is_bitfield(x):
+            return x.a.t.signed
+        if x.op == 'cast' and ty(x).bits == 16:
+            return source(x.k[0], seen)
+        if x.op == 'var' and x.a not in seen and isinstance(x.a.init, E):
+            return source(x.a.init, seen | {x.a})
+        return False
+
+    return source(e.k[0], set())
+
+
 def folds(e):
     """e is a constant once an assignment of a constant is taken as its
     value: `~3`, `-(x = 77)`."""
@@ -731,6 +761,8 @@ def known_shapes(prog):
                     e.k[0].op != 'const' and is_constant(e.k[0]))):
                 found.add('negnotconst')
         elif op == 'bin':
+            if unsigned_bitfield_shift(e):
+                found.add('bfunsignedshift')
             if wide_increment_add(e.a, e.k):
                 found.add('wideincadd')
             if same_variable(e.k[0], e.k[1]):
@@ -754,6 +786,8 @@ def known_shapes(prog):
         if wide_block_copy(d):
             found.add('blockwidecopy')
         if isinstance(d.init, E):
+            if initializer_reinterprets(d.init, d.t):
+                found.add('initinterpret')
             if is_int(d.t):
                 stored(d.init, d)
                 if not init_keeps_type(d.init, d.t):
@@ -1556,12 +1590,15 @@ FEATURES = frozenset((
     'selfand', 'widecasgbf', 'widehelperparam', 'postincvalue', 'duplabel', 'crosstypeasg', 'wideincadd',
     'constjump', 'blockret', 'selfoperand', 'nestedifelse', 'bytesarcount', 'bytearm',
     'armfordecl', 'blockwidecopy', 'constdivzero', 'peepsum',
-    'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself', 'blockwordinit', 'blockcassign'))
+    'loopcallarg', 'loopcopy', 'wordarm', 'peepbyteself', 'blockwordinit', 'blockcassign',
+    'initinterpret', 'bfunsignedshift'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering. Remove a feature from this
 # table when its bug is fixed.
 KNOWN_BUGS = {
+    'initinterpret': 'BUG-016',
+    'bfunsignedshift': 'BUG-093',
 }
 
 
@@ -1581,6 +1618,13 @@ class Gen:
     def mk(self, op, k=(), a=None, t=None):
         if op in ('bin', 'cond', 'asg'):
             k = self.host_sized(op, k, a)
+        if op == 'bin' and not self.on('bfunsignedshift') \
+                and unsigned_bitfield_shift(E(op, k, a, t)):
+            # Logical shift as unsigned long division by a power of two.
+            count = self.mk('bin', [k[1], mk_const(15, U16)], '&')
+            divisor = self.mk('bin', [mk_const(1, U32), count], '<<')
+            quotient = self.mk('bin', [self.mk('cast', [k[0]], t=U32), divisor], '/')
+            return self.mk('cast', [quotient], t=U16)
         if op == 'bin' and not self.on('wideincadd') and wide_increment_add(a, k):
             # Subtraction retains the update without using the faulty direct add.
             a = '-'
@@ -2054,6 +2098,8 @@ class Gen:
         starts as expr. With `inittype` off, an expr that is not already of
         exactly type t is assigned by a following statement instead."""
         expr = self.stored(expr, t, storage)
+        if not self.on('initinterpret') and initializer_reinterprets(expr, t):
+            return mk_const(0, t), expr
         if not self.on('blockwidecopy') and storage == 'block' and t.bits == 32 \
                 and expr.op == 'var' and expr.a.storage != 'global':
             # an expression, not a copy of the variable

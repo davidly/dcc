@@ -49,12 +49,27 @@ FEATURES = frozenset((
     # forms that hit a logged dcc defect; see KNOWN_BUGS
     'fdivround', 'fconstfold', 'icasgf', 'fnegcmp', 'fretconv',
     'fintprodadd', 'fu32cast', 'fnegzero_not', 'fparamcmp', 'finittype',
-    'fconstjump', 'fselfop', 'fconstcond', 'floopcallarg', 'fptrparam', 'farrloopindex'))
+    'fconstjump', 'fselfop', 'fconstcond', 'floopcallarg', 'fptrparam', 'farrloopindex',
+    'finitinterpret', 'fconstdivzero', 'fupdatepair'))
 
 # Features switched off by `--off known`, with the entry in compiler-bugs.md
 # that each one would otherwise keep rediscovering.
 KNOWN_BUGS = {
+    'finitinterpret': 'BUG-016',
+    'fconstdivzero': 'BUG-094',
+    'fupdatepair': 'BUG-095',
 }
+
+
+def float_const_div_zero(e):
+    return e.op == 'bin' and e.a == '/' and ty(e) is F32 \
+        and is_anyconst(e.k[0]) and e.k[1].op == 'const' and e.k[1].a == 0
+
+
+def float_update_pair(e):
+    """Both comparison operands update indirect float objects (BUG-095)."""
+    return e.op == 'bin' and e.a in CMP and all(
+        k.op == 'incdec' and ty(k) is F32 and k.k[0].op != 'var' for k in e.k)
 
 
 def is_fconst(e):
@@ -276,6 +291,10 @@ def known_shapes(prog):
     found = set()
     for slot in expr_slots(prog):
         e = slot_get(slot)
+        if float_const_div_zero(e):
+            found.add('fconstdivzero')
+        if float_update_pair(e):
+            found.add('fupdatepair')
         if e.op == 'bin' and e.a == '/' and ty(e) is F32:
             found.add('fdivround')
         if e.op == 'asg' and e.a == '/=' and (ty(e.k[0]) is F32 or ty(e.k[1]) is F32):
@@ -312,6 +331,8 @@ def known_shapes(prog):
                 found.add('fu32cast')
     for b in all_blocks(prog):
         for d in b.decls:
+            if isinstance(d.init, E) and base.initializer_reinterprets(d.init, d.t):
+                found.add('finitinterpret')
             if d.t is F32 and isinstance(d.init, E) and is_u32s(d.init):
                 found.add('fu32cast')
             if d.storage == 'block' and is_int(d.t) and isinstance(d.init, E) \
@@ -1248,12 +1269,27 @@ class Gen:
 
     def steer_pass(self):
         for fn in self.prog.funcs:
+            if not self.on('finitinterpret'):
+                for b in all_blocks_of(fn):
+                    assignments = []
+                    for d in b.decls:
+                        if isinstance(d.init, E) and base.initializer_reinterprets(d.init, d.t):
+                            original = d.init
+                            d.init = self.mk('const', a=0, t=d.t)
+                            assignments.append(S('expr', [self.mk('asg', [
+                                self.mk('var', a=d), original], '=')]))
+                    b.stmts[0:0] = assignments
             if not self.on('farrloopindex'):
                 for lv in loop_float_array_stores(fn):
                     lv.k[0] = self.mk('const', a=0, t=I16)
             paramcmp = not self.on('fparamcmp')
             for slot in expr_slots(self.prog, [fn]):
                 e = slot_get(slot)
+                if not self.on('fconstdivzero') and float_const_div_zero(e):
+                    e.k[1] = self.mk('const', a=1.0, t=F32)
+                if not self.on('fupdatepair') and float_update_pair(e):
+                    # Sequence the update operands through a logical test.
+                    e.a = '&&'
                 # the child lists are edited in place so that the slots
                 # collected above stay valid
                 if paramcmp and is_paramcmp(e):
