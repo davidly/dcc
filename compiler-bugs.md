@@ -26,7 +26,7 @@ entries and their historical diagnoses are retained below.
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
 | [BUG-016](#bug-016) | #236 | fixed | Local initializer signedness still leaks into word shifts and long division |
-| [BUG-093](#bug-093) | #386 | wrong result | Unsigned right shift of a signed bit-field uses an arithmetic shift |
+| [BUG-093](#bug-093) | #386 | fixed | Unsigned right shift of a signed bit-field uses an arithmetic shift |
 | [BUG-094](#bug-094) | #387 | compile error | Unreachable float constant division by zero is rejected as an if condition |
 | [BUG-095](#bug-095) | #388 | wrong result | Comparing two float member updates loses the left operand |
 | [Seed 33500](#seed-33500) | #366 | fixed | Postfix update of a distant stack parameter rejected in a call argument |
@@ -48,7 +48,7 @@ entries and their historical diagnoses are retained below.
 | [BUG-091](#bug-091) | #384 | fixed | A widened parameter postincrement multiplies the incremented value |
 | [BUG-092](#bug-092) | #385 | fixed | A logical not over a constant division by zero is rejected |
 
-**Open: 3 defects — 2 wrong-result defects and 1 compile error.** Seven
+**Open: 2 defects — 1 wrong-result defect and 1 compile error.** Seven
 failures from the production campaigns over seeds 70001–120000 map to these
 four entries. Original sources were generated at `3cf4788d` and preserved
 under `build/`; all seven still fail with the rebuilt upstream `6ef8e575`
@@ -135,6 +135,16 @@ the reduced reproducer were retested with a fresh upstream `6ef8e575` build.
 ## BUG-093
 
 Upstream issue: [#386](https://github.com/davidly/dcc/issues/386).
+
+**Fixed locally; promoted as `tests/tbfushft.c`.** Equal-width cast removal
+now recognizes that a signed bit-field load has been sign-extended to the
+full word: its nominal field width does not prove the cast irrelevant to a
+right shift. The unsigned view is retained without adding a slower schedule.
+Both 4,142-function original censuses remain byte-identical; the eight-line
+new regression has its own measured performance row. The original integer
+seed 86893 passes in all production configurations. `bfunsignedshift` is
+removed from `KNOWN_BUGS`; the optional steer remains independently usable.
+The following is the historical finding.
 
 **Unsigned right shift of a signed bit-field uses an arithmetic shift.**
 For `struct S { int16_t b:5; };` with `s.b == -12`,

@@ -80,8 +80,8 @@ until the local commits are published.
 
 - #236 / BUG-016: fixed locally; `tinitsgn` covers the residual word shifts
   and sign-bit-clear long constants. Both 4,142-function censuses are unchanged.
-- #386 / BUG-093: preserve an unsigned cast of a signed narrow bit-field
-  before right shift; its local-initializer facet is already cleared by #236.
+- #386 / BUG-093: fixed locally; `tbfushft` covers the unsigned view of a
+  sign-extended field. Both original censuses remain identical.
 - #387 / BUG-094: admit a supported, non-folding constant float condition.
 - #388 / BUG-095: do not derive a comparison's type from still-untyped updates.
 

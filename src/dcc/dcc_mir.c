@@ -8577,6 +8577,8 @@ static int mir_unary_is_representation_identity(
      * or float conversion must still see the cast's signedness, including
      * implicit widening in deferred binaries and indirect stores.
      * Same-width consumers can use the original representation directly.
+     * A signed field is sign-extended to the load's width, so its narrow
+     * bit_width does not make an unsigned right-shift cast redundant.
      * A nested-block local's reloads may be forwarded the stored value, so
      * a cast stored there stays when a reload is widened (#380).
      */
@@ -8588,7 +8590,8 @@ static int mir_unary_is_representation_identity(
              mir.insns[instruction].src1 == insn->dst &&
              type_size(mir.insns[instruction].secondary_offset) == source_size &&
              (source->bit_width == 0 ||
-              source->bit_width >= source_size * 8) &&
+              source->bit_width >= source_size * 8 ||
+              (source->type & TYPE_UNSIGNED) == 0) &&
              (mir.insns[instruction].secondary_offset & TYPE_UNSIGNED) !=
                  (source->type & TYPE_UNSIGNED)) ||
             (mir.insns[instruction].opcode == MIR_STORE &&
