@@ -2043,8 +2043,10 @@ int ast_deref_long_read(const struct AstNode *n)
 
     if (n == NULL || n->kind != AST_UNARY || n->op != '*' || n->a == NULL)
         return 0;
+    /* A 32-bit va_arg, long or float, reads one 32-bit word. Accepting only
+     * float rejected `h + va_arg(ap, uint32_t)` as an operand. */
     if (ast_va_arg_deref_type(n, &base))
-        return type_is_float(base);
+        return type_is_long(base) || type_is_float(base);
     if (!ast_pointer_expr_type(n->a, &ptr_type, &no_deref))
         return 0;
     base = no_deref ? ptr_type : type_decay_ptr(ptr_type);

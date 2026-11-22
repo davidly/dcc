@@ -3,9 +3,10 @@
 compiler.
 
 Each seed generates one C program (scripts/clang_oracle_gen.py): helper and
-test functions over fixed-width integers, arrays, structs, bit-fields and
-pointers, with loops, switches, nested-block locals, gotos, calls, recursion
-and calls through function pointers. The same source is compiled by the host
+test functions over fixed-width integers, arrays, structs, unions, bit-fields
+and pointers, with loops, switches, nested-block locals, gotos, calls,
+recursion, calls through function pointers, comma expressions, pointer
+differences and variadic calls. The same source is compiled by the host
 compiler and by dcc, and the two outputs are compared.
 
 A program is used only when a host build with the checking layer, ASan and
@@ -209,7 +210,7 @@ def dcc_run(source, build, cfg, args):
         first = first.replace(str(source) + ':', '')
         if 'error DCC' in first or 'dcc: fatal' in first or 'MIR' in first:
             return 'COMPILE', first[:200], log
-        if 'program too large' in log:
+        if 'program too large' in log or 'code segment too large' in log:
             # over 64K: a limit of the target, not a defect
             return 'TOOBIG', 'program does not fit in 64K', log
         return 'BUILD', first[:200], log

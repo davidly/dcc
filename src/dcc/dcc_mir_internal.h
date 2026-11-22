@@ -143,6 +143,8 @@ struct MirInsn {
     int divmod_cast_types;
     /* Reciprocal instruction index + 1 for a proven word div/mod pair. */
     int word_divmod_partner;
+    /* MIR_BINARY '/': the exact stride division of a pointer difference. */
+    int pointer_difference_stride;
     /* MIR_BINARY, MIR_PHI, MIR_UNARY: types unknown at build (a nested-block
      * local), so they are re-derived after repair. */
     int deferred_operand_types;

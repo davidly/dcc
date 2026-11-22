@@ -129,9 +129,13 @@ int ast_call_result_type(const struct AstNode *n)
 
 int ast_promoted_operand_type(const struct AstNode *n)
 {
-    int type = n != NULL && n->type != 0
-        ? n->type : ast_expr_type_for_sizeof(n);
+    int type;
 
+    /* `(x, bf)` has the value of its right operand, bit-field rule and all. */
+    while (n != NULL && n->kind == AST_COMMA)
+        n = n->b;
+    type = n != NULL && n->type != 0
+        ? n->type : ast_expr_type_for_sizeof(n);
     if (n != NULL && n->kind == AST_MEMBER) {
         struct FieldDef *field = ast_member_field_for_sizeof(n);
         /* A signed bit-field, and an unsigned bit-field whose complete range
@@ -954,10 +958,12 @@ static int binop_level(int k)
 }
 
 /* Whether n's type is unknown at build: its value derives from a nested-block
- * local, directly, through an update or unary +, - or ~, or through a binary
- * whose own operand types were. */
+ * local, directly, through an update, unary +, - or ~ or the right operand of
+ * a comma, or through a binary whose own operand types were. */
 int ast_types_deferred(const struct AstNode *n)
 {
+    while (n != NULL && n->kind == AST_COMMA)
+        n = n->b;
     if (n == NULL)
         return 0;
     if (n->kind == AST_UNARY && (n->op == '-' || n->op == '~' || n->op == '+'))

@@ -196,11 +196,12 @@ complements `typed-expr-fuzz.py`: that one checks single expressions against a
 model; this one generates whole programs and lets clang say what they print.
 
 Each seed is one program of helper and test functions over fixed-width
-integers, arrays, structs, bit-fields and pointers, with `for`/`while`/`do`
-loops, `switch`, nested-block locals, `goto`, calls with mixed-width
-arguments, bounded recursion, calls through function pointers, compound
-assignment and `++`/`--` on every kind of lvalue, and assignments used as
-values. The generator and renderers are in `clang_oracle_gen.py`.
+integers, arrays, structs, unions, bit-fields and pointers, with
+`for`/`while`/`do` loops, `switch`, nested-block locals, `goto`, calls with
+mixed-width arguments, bounded recursion, calls through function pointers,
+compound assignment and `++`/`--` on every kind of lvalue, assignments used
+as values, comma expressions, pointer differences, and calls to a variadic
+`vmix(fmt, ...)` that reads its arguments back with `va_arg`. The generator and renderers are in `clang_oracle_gen.py`.
 
 `--gen float` switches to `clang_oracle_float_gen.py`, which builds on the
 same model to exercise dcc's only floating type: `float` globals, locals,

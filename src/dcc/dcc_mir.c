@@ -3984,6 +3984,7 @@ static int mir_lower_expr_impl(const struct AstNode *node)
                 insn->type = TYPE_INT;
                 insn->secondary_offset = TYPE_INT;
                 insn->immediate = '/';
+                insn->pointer_difference_stride = 1;
                 value = difference;
             }
         }
@@ -10997,7 +10998,7 @@ static void mir_ensure_use_cache(void)
                 mir_use_cache_arg_head[insn->secondary_offset];
             mir_use_cache_arg_head[insn->secondary_offset] = i;
             mir_use_cache_arg_odd[insn->secondary_offset] ^=
-                (unsigned char)((type_is_struct_object(insn->type)
+                (unsigned char)((type_is_struct_object(insn->type) && size > 1
                     ? size : (size == 4 ? 4 : 2)) & 1);
         }
     }
@@ -11111,7 +11112,7 @@ static int mir_call_has_odd_argument_bytes_uncached(const struct MirInsn *call)
             arg->secondary_offset != call->secondary_offset)
             continue;
         size = type_size(arg->type);
-        argument_bytes += type_is_struct_object(arg->type)
+        argument_bytes += type_is_struct_object(arg->type) && size > 1
             ? size : (size == 4 ? 4 : 2);
     }
     return (argument_bytes & 1) != 0;

@@ -26426,8 +26426,10 @@ static int mir_pointer_difference_pow2_shift(
     const struct MirInsn *scale;
     int shift;
 
+    /* Only the stride division is exact. A source-level division of a
+     * char pointer difference must still round toward zero. */
     if (insn == NULL || insn->opcode != MIR_BINARY ||
-        insn->immediate != '/' ||
+        insn->immediate != '/' || !insn->pointer_difference_stride ||
         type_size(insn->secondary_offset) != 2)
         return -1;
     difference = mir_definition(insn->src1);
@@ -36345,12 +36347,12 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                         mir_stream_puts("\tex de,hl\n", out);
                         mir_stream_printf(out,
                                 "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
-                                size);
+                                size < 2 ? 2 : size);
                         mir_assert_no_pending_call_cache_bc_writer(
                             arg->src1);
                         mir_stream_printf(out, "\tex de,hl\n\tld bc,%d\n\tldir\n",
                                 size);
-                        argument_bytes += size;
+                        argument_bytes += size < 2 ? 2 : size;
                     } else if (size == 4) {
                         int cached = mir_emit_cached_wide_call_argument(
                             out, arg->src1);
@@ -36483,14 +36485,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                             !mir_emit_rematerialized_argument(
                                 out, arg->src1, 2))
                             mir_emit_virtual_load(out, arg->src1);
+                        /* A one-byte aggregate still fills the two-byte
+                         * slot the callee lays its parameters out by. */
                         mir_stream_puts("\tex de,hl\n", out);
                         mir_stream_printf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
-                                size);
+                                size < 2 ? 2 : size);
                         mir_assert_no_pending_call_cache_bc_writer(
                             arg->src1);
                         mir_stream_printf(out, "\tex de,hl\n\tld bc,%d\n\tldir\n",
                                 size);
-                        argument_bytes += size;
+                        argument_bytes += size < 2 ? 2 : size;
                     } else if (size == 4) {
                         int cached = mir_emit_cached_wide_call_argument(
                             out, arg->src1);

@@ -18,9 +18,10 @@ similar tools use for mainstream compilers, adapted to a target whose `int` is
 
 1. **Generate a program.** One seed produces one self-contained C program:
    helper and test functions over fixed-width integers, arrays, structs,
-   bit-fields and pointers, with loops, `switch`, nested-block locals,
-   `goto`, calls with mixed-width arguments, bounded recursion and calls
-   through function pointers. The float generator adds `float` objects of
+   unions, bit-fields and pointers, with loops, `switch`, nested-block
+   locals, `goto`, calls with mixed-width arguments, bounded recursion,
+   calls through function pointers, comma expressions, pointer differences
+   and calls to a variadic function. The float generator adds `float` objects of
    every storage class, arithmetic, comparison, `?:`, `++`/`--`, compound
    assignment and conversions to and from every integer width. The program
    never spells `int` or `long`; the renderer inserts the casts and masks that
