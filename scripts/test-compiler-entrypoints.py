@@ -12,12 +12,12 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "dcc (DCC C89->Z80 compiler) 1.0\n"
+VERSION_PREFIX = "dcc (DCC C89->Z80 compiler) "
 USAGE = ("usage: dcc [-c|-module] [-f|-ffloatio|-fno-floatio] "
          "[-fl|-flongio|-fno-longio] [-fhexio|-fno-hexio] [-foctio|-fno-octio] "
          "[-fstack-check] [-fno-narrow] [-v] [-h] [-s|-stack bytes] "
          "[-Idir] [-Dname[=value]] [-Uname] input.c -o output.mac\n")
-HELP = VERSION + """usage: dcc [options] input.c -o output.mac
+HELP = """usage: dcc [options] input.c -o output.mac
 
 options:
   -o <file>        write M80 assembly to <file> ('-' for stdout)
@@ -190,8 +190,12 @@ class Runner:
         return self.output.read_bytes(), process.stderr
 
     def cli(self):
-        for args, stdout in ((["-v"], VERSION), (["--version"], VERSION),
-                             (["-h"], HELP), (["--help"], HELP)):
+        version = subprocess.run([self.compiler, "--version"], capture_output=True,
+                                 text=True, check=True).stdout
+        expect(version.startswith(VERSION_PREFIX) and version.endswith("\n"),
+               "unexpected compiler version")
+        for args, stdout in ((["-v"], version), (["--version"], version),
+                             (["-h"], version + HELP), (["--help"], version + HELP)):
             self.run(["-o", self.output, *args], stdout=stdout)
             expect(not self.output.exists(), "early exit emitted assembly")
         invalid = [[], ["-stack"], ["--stack"], ["-s"], ["-D"], ["-U"],

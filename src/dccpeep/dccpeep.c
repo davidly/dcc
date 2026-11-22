@@ -17,6 +17,7 @@
  * solely in this file.
  */
 #include "dccpeep_internal.h"
+#include "dcc_version.h"
 
 #define MAX_PASS_STATS 160
 typedef struct PassStat {
@@ -12498,6 +12499,11 @@ int main(int argc, char **argv)
     const char *infile = NULL;
     const char *outfile = NULL;
     int ai;
+
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+        printf("dccpeep %s\n", DCC_BUILD_VERSION);
+        return 0;
+    }
 
     peep_context_init();
 

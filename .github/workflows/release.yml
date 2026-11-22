@@ -48,6 +48,9 @@ jobs:
     steps:
       - name: Checkout dcc
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.version || github.ref }}
+          fetch-depth: 0
 
       - name: Checkout ntvcm emulator
         uses: actions/checkout@v4
@@ -85,6 +88,10 @@ jobs:
       - name: Build dcc host tools
         shell: bash
         run: python scripts/build-dcc.py
+
+      - name: Check release version and assembly provenance
+        shell: bash
+        run: python scripts/test-tool-version.py --expected "$RELEASE_VERSION"
 
       - name: Sign Windows binaries
         if: runner.os == 'Windows'

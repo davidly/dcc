@@ -37,6 +37,7 @@
 #include "dcc_mir.h"
 #include "dcc_preproc_internal.h"
 #include "dcc_ast.h"
+#include "dcc_version.h"
 
 #ifdef _WIN32
 #include <direct.h>
@@ -1567,13 +1568,11 @@ void add_cmdline_define(const char *arg)
     add_define(name, value);
 }
 
-#define DCC_VERSION "dcc (DCC C89->Z80 compiler) 1.0"
-
 FILE *bank_api_file;
 
 void print_version(void)
 {
-    printf("%s\n", DCC_VERSION);
+    printf("dcc (DCC C89->Z80 compiler) %s\n", DCC_BUILD_VERSION);
 }
 
 void usage(void)
@@ -1584,7 +1583,7 @@ void usage(void)
 
 void print_help(void)
 {
-    printf("%s\n", DCC_VERSION);
+    print_version();
     printf("usage: dcc [options] input.c -o output.mac\n");
     printf("\n");
     printf("options:\n");
@@ -1832,6 +1831,7 @@ int main(int argc, char **argv)
         g_emit_sink.stream = fopen(output_name, "wb");
         if (!g_emit_sink.stream) fatal("cannot open output");
     }
+    fprintf(g_emit_sink.stream, "; built with dcc %s\n", DCC_BUILD_VERSION);
 
     add_typedef_name("FILE", TYPE_INT, 0);
 
