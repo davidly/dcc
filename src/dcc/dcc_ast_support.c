@@ -2145,12 +2145,17 @@ static int ast_const_integer_fold(const struct AstNode *n, long *out)
         if (!ast_const_integer_fold(n->a, &a))
             return 0;
         switch (n->op) {
-        case '+': *out = a; return 1;
-        case '-': *out = -a; return 1;
-        case '~': *out = ~a; return 1;
+        case '+': break;
+        case '-': a = (long)(0UL - (unsigned long)a); break;
+        case '~': a = ~a; break;
         case '!': *out = !a; return 1;
         default: return 0;
         }
+        /* Return/exit facts must use the same target width as MIR. On a
+         * 64-bit host ~0xffffffffUL otherwise looks nonzero and can make
+         * the statement after an untaken return disappear. */
+        *out = ast_const_apply_int_cast(a, ast_expr_type_for_sizeof(n));
+        return 1;
     case AST_CAST:
         if (!ast_const_integer_fold(n->a, &a))
             return 0;

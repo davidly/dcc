@@ -1,0 +1,33 @@
+; static function join_value
+_join_value:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld hl,-7
+	add hl,sp
+	ld sp,hl
+	ld hl,(_input)
+	ld (ix-3),l
+	ld (ix-2),h
+	ld (ix-5),1
+	ld (ix-4),0
+	ld hl,_bytes
+	ld (ix-7),l
+	ld (ix-6),h
+	ld a,(ix-4)
+	or (ix-5)
+	jp z,L1
+	ld l,(ix-3)
+	ld h,(ix-2)
+	ld de,5
+	add hl,de
+	ld (ix-3),l
+	ld (ix-2),h
+	jp L2
+L1:
+	ld hl,42
+L2:
+	ld sp,ix
+	pop ix
+	ret
+	end

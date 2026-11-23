@@ -1,0 +1,51 @@
+; static function union_alias
+_union_alias:
+ push ix
+ ld ix,0
+ add ix,sp
+ ld hl,-8
+ add hl,sp
+ ld sp,hl
+ ld hl,65535
+ ld (ix-8),l
+ ld (ix-7),h
+ ld (ix-6),0
+ ld (ix-5),0
+ ld hl,(_input)
+ push hl
+ push ix
+ pop hl
+ ld de,-8
+ add hl,de
+ ld a,(hl)
+ inc hl
+ ld h,(hl)
+ ld l,a
+ ex de,hl
+ pop hl
+ ld a,h
+ xor d
+ ld h,a
+ ld a,l
+ xor e
+ ld l,a
+ push ix
+ pop hl
+ ld de,-8
+ add hl,de
+ push hl
+ ld a,(hl)
+ inc hl
+ ld h,(hl)
+ ld l,a
+ ex (sp),hl
+ inc hl
+ inc hl
+ ld e,(hl)
+ inc hl
+ ld d,(hl)
+ pop hl
+ ld sp,ix
+ pop ix
+ ret
+ end

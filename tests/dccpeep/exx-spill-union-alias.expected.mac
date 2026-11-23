@@ -1,0 +1,39 @@
+; static function union_alias
+_union_alias:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld hl,-8
+	add hl,sp
+	ld sp,hl
+	ld (ix-8),255 ; peep: ix_const_store_hl_dead
+	ld (ix-7),255
+	ld (ix-6),0
+	ld (ix-5),0
+	ld hl,(_input)
+	ld e,(ix-8) ; peep: ix_pair_load_to_de
+	ld d,(ix-7)
+	ld a,h
+	xor d
+	ld a,l
+	xor e
+	push ix
+	pop hl
+	ld de,-8
+	add hl,de
+	push hl
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	ex (sp),hl
+	inc hl
+	inc hl
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	pop hl
+	ld sp,ix
+	pop ix
+	ret
+	end
