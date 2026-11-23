@@ -7,7 +7,9 @@ test functions over fixed-width integers, arrays, structs, unions, bit-fields
 and pointers, with loops, switches, nested-block locals, gotos, calls,
 recursion, calls through function pointers, comma expressions, pointer
 differences and variadic calls. The same source is compiled by the host
-compiler and by dcc, and the two outputs are compared.
+compiler and by dcc, and the two outputs are compared. Integer and float
+campaigns also run preprocessing and parser probes on up to eight
+of their seeds.
 
 A program is used only when a host build with the checking layer, ASan and
 UBSan reports nothing that is undefined or that would differ with dcc's
@@ -16,21 +18,23 @@ So a mismatch is a dcc defect, not a porting difference.
 
   clang-oracle-fuzz.py --seeds 1-200                 fuzz, production configs
   clang-oracle-fuzz.py --seeds 1-200 --configs all   also force every MIR candidate
+  clang-oracle-fuzz.py --gen frontend --seeds 1-20 fuzz preprocessing and parsing
   clang-oracle-fuzz.py --reduce 17 --config nopeep   shrink seed 17's failure
   clang-oracle-fuzz.py --generate 17 prog.c          only write seed 17's program
   clang-oracle-fuzz.py --list-configs
 
-A failing seed keeps build/clang-oracle-fuzz/<seed>/ with t.c, t.expected and
+A failing seed keeps its source, any generated headers, t.expected and
 each failing config's output. An output line is a call number and the returned
 value, or 0x4000 + the call number and a checksum of every global after that
 call. A seed names a program only together with --tests, --size, --depth and
---off; a reduced program is self-contained.
+--off.
 """
 from __future__ import annotations
 
 import argparse
 import concurrent.futures
 import copy
+from dataclasses import replace
 import os
 import re
 import shutil
@@ -40,6 +44,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import clang_oracle_gen as gen  # noqa: E402
+import clang_oracle_frontend_gen as frontend  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 # -ffp-contract=off: clang would otherwise fuse a*b+c into one rounding
@@ -133,26 +138,30 @@ def host_oracle(prog, work, repair=True, strict=True, timeout=10, rounds=40):
     """Repair prog until it is defined, then return (expected output, None),
     or (None, reason) when it cannot be used.
 
-    strict also requires -O0 and a sanitized build of the natural source to
-    agree with the -O2 build, and sanitizes the checked build; the checked
-    build must always agree. The reducer validates candidates without strict
-    and its result with it."""
+    The natural source must agree with the checked build or the frontend
+    probe expectations. Strict also requires agreement at -O0 and under
+    sanitizers. The reducer validates candidates without strict and its
+    result with it."""
     work.mkdir(parents=True, exist_ok=True)
-    for _ in range(rounds):
-        status, detail, checked_out = checked_run(prog, work, timeout, sanitize=strict)
-        if status == 'ok':
-            break
-        if status == 'invalid':
-            return None, detail
-        if not repair:
-            return None, 'trips'
-        left = gen.repair(prog, detail)
-        if left:
-            return None, 'unrepairable trips %s' % sorted(left)
+    is_frontend = isinstance(prog, frontend.Program)
+    if is_frontend:
+        checked_out = prog.expected()
     else:
-        return None, 'still tripping after %d repairs' % rounds
+        for _ in range(rounds):
+            status, detail, checked_out = checked_run(prog, work, timeout, sanitize=strict)
+            if status == 'ok':
+                break
+            if status == 'invalid':
+                return None, detail
+            if not repair:
+                return None, 'trips'
+            left = gen.repair(prog, detail)
+            if left:
+                return None, 'unrepairable trips %s' % sorted(left)
+        else:
+            return None, 'still tripping after %d repairs' % rounds
     src = work / 't.c'
-    src.write_text(gen.render(prog, title=', seed %s' % prog.seed))
+    write_program(prog, src, title=', seed %s' % prog.seed)
     # clang proves at compile time what no run can: an object modified twice,
     # or modified and read, with no sequence point between; and a value
     # returning function that can fall off its end. It also accepts newer C
@@ -175,8 +184,11 @@ def host_oracle(prog, work, repair=True, strict=True, timeout=10, rounds=40):
         if code != 0:
             return None, 'natural build (%s) failed: %s' % (tag, (err or 'timeout')[-300:])
         outputs.append(out)
-    if any(o != outputs[0] for o in outputs) or checked_out != outputs[0]:
+    if any(o != outputs[0] for o in outputs):
         return None, 'host builds disagree'
+    if checked_out != outputs[0]:
+        return None, ('host output disagrees with frontend expectations' if is_frontend
+                      else 'host builds disagree')
     (work / 't.expected').write_text(outputs[0])
     return outputs[0], None
 
@@ -208,6 +220,8 @@ def dcc_run(source, build, cfg, args):
                   or 'MIR' in ln]
         first = (errors or lines or ['build failed'])[0].strip()
         first = first.replace(str(source) + ':', '')
+        if args.gen == 'frontend':
+            first = first.replace(str(source.parent) + os.sep, '', 1)
         if 'error DCC' in first or 'dcc: fatal' in first or 'MIR' in first:
             return 'COMPILE', first[:200], log
         if 'program too large' in log or 'code segment too large' in log:
@@ -226,7 +240,7 @@ def dcc_run(source, build, cfg, args):
     return 'ok', '', run.stdout.decode('latin-1').replace('\r', '')
 
 
-def judge(kind, detail, output, expected):
+def judge(kind, detail, output, expected, max_wrong=6):
     if kind != 'ok':
         return kind, detail
     if output == expected:
@@ -242,7 +256,7 @@ def judge(kind, detail, output, expected):
     if len(got) != len(want):
         return 'MISMATCH', '%d of %d lines printed, first wrong %s' % (
             len(got), len(want), wrong[0] if wrong else 'none')
-    return 'MISMATCH', 'lines %s' % ' '.join(wrong[:6])
+    return 'MISMATCH', 'lines %s' % ' '.join(wrong[:max_wrong])
 
 
 def signature(kind, detail):
@@ -258,8 +272,28 @@ def signature(kind, detail):
 # --------------------------------------------------------------------- fuzz
 
 def make_program(seed, args):
+    if args.gen == 'frontend':
+        return frontend.generate(seed, off=args.off)
     return gen.generate(seed, tests=args.tests, size=args.size, depth=args.depth,
                         off=args.off)
+
+
+def write_program(prog, path, title='', *, export=False):
+    if isinstance(prog, frontend.Program):
+        headers = [(path.with_name(name), body) for name, body in prog.headers()]
+        if export:
+            for header, body in headers:
+                if (header == path or header.is_symlink() or
+                        (header.exists() and (not header.is_file() or
+                                              header.read_bytes() != body.encode('ascii')))):
+                    raise FileExistsError(f'generated header conflicts with {header}')
+        for header, body in headers:
+            if not export or not header.exists():
+                header.write_bytes(body.encode('ascii'))
+        source = frontend.render(prog, title=title)
+    else:
+        source = gen.render(prog, title=title)
+    path.write_text(source)
 
 
 def run_seed(seed, args, configs):
@@ -275,7 +309,8 @@ def run_seed(seed, args, configs):
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
         return seed, 'INVALID', {'-': ('INVALID', reason)}
-    logged = gen.known_shapes(prog)
+    is_frontend = isinstance(prog, frontend.Program)
+    logged = set() if is_frontend else gen.known_shapes(prog)
     if logged:
         # the generator steers round these, but a repair can rebuild one
         if not args.keep:
@@ -286,7 +321,8 @@ def run_seed(seed, args, configs):
     for cfg in configs:
         build = work / cfg.name
         kind, detail, output = dcc_run(work / 't.c', build, cfg, args)
-        kind, detail = judge(kind, detail, output, expected)
+        kind, detail = judge(kind, detail, output, expected,
+                            max_wrong=None if is_frontend else 6)
         shutil.rmtree(build, ignore_errors=True)
         if kind != 'ok':
             failures[cfg.name] = (kind, detail)
@@ -309,9 +345,8 @@ def summarize(failures):
     return '; '.join(parts)
 
 
-def fuzz(args):
+def fuzz(args, seeds, prefix=''):
     configs = select_configs(args.configs)
-    seeds = parse_seeds(args.seeds)
     counts = {}
     failing = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -319,7 +354,7 @@ def fuzz(args):
             if status in ('INVALID', 'GENERATOR'):
                 counts[status] = counts.get(status, 0) + 1
                 if args.verbose or status == 'GENERATOR':
-                    print('seed %d: %s %s' % (seed, status, failures['-'][1]))
+                    print('%sseed %d: %s %s' % (prefix, seed, status, failures['-'][1]))
                 continue
             real = {k: v for k, v in failures.items() if v[0] not in ('STACK', 'TOOBIG')}
             if any(v[0] == 'TOOBIG' for v in failures.values()):
@@ -332,10 +367,23 @@ def fuzz(args):
                 continue
             counts['FAIL'] = counts.get('FAIL', 0) + 1
             failing.append(seed)
-            print('seed %d: %s' % (seed, summarize(real)))
+            print('%sseed %d: %s' % (prefix, seed, summarize(real)))
             sys.stdout.flush()
-    print('%d programs: %s' % (len(seeds), ', '.join('%s %d' % kv for kv in sorted(counts.items()))))
+    tally = ', '.join('%s %d' % kv for kv in sorted(counts.items()))
+    print('%s%d programs: %s' % (prefix, len(seeds), tally), flush=True)
     return 1 if failing else 0
+
+
+def run_campaign(args):
+    seeds = parse_seeds(args.seeds)
+    frontend_status = 0
+    if args.gen != 'frontend' and seeds and args.frontend_off != frontend.FEATURES:
+        # Preserve expression seeds and cap duplicate artifacts from a frontend bug.
+        probes = copy.copy(args)
+        probes.gen, probes.off = 'frontend', args.frontend_off
+        probes.work = args.work / 'frontend'
+        frontend_status = fuzz(probes, seeds[:8], prefix='frontend ')
+    return max(frontend_status, fuzz(args, seeds))
 
 
 # ------------------------------------------------------------------- reduce
@@ -690,6 +738,31 @@ class Reducer:
         return True
 
 
+def frontend_signature(kind, detail):
+    if kind == 'MISMATCH' and detail.startswith('lines '):
+        return kind, detail.split()[1]
+    return signature(kind, detail)
+
+
+def reduce_frontend(prog, cfg, failure, work, args):
+    """Drop independent probes while preserving the first failing check."""
+    want = frontend_signature(*failure)
+    tests = 0
+    for probe in prog.probes:
+        if len(prog.probes) == 1:
+            break
+        cand = replace(prog, probes=tuple(p for p in prog.probes if p is not probe))
+        trial = work / f'try{tests}'
+        tests += 1
+        expected, _ = host_oracle(cand, trial, strict=False)
+        if expected is None:
+            continue
+        kind, detail, output = dcc_run(trial / 't.c', trial / 'dcc', cfg, args)
+        if frontend_signature(*judge(kind, detail, output, expected)) == want:
+            prog = cand
+    return prog, tests
+
+
 def reduce_seed(seed, cfg_name, args):
     cfg = CONFIGS[cfg_name]
     work = args.work / ('%s-reduce-%s' % (seed, cfg_name))
@@ -703,24 +776,32 @@ def reduce_seed(seed, cfg_name, args):
     kind, detail = judge(kind, detail, output, expected)
     if kind == 'ok':
         return seed, cfg_name, None, 'does not fail under %s' % cfg_name
-    reducer = Reducer(prog, cfg, signature(kind, detail), args, work)
-    if not reducer.run():
-        return seed, cfg_name, None, 'failure is not stable'
-    final = copy.deepcopy(reducer.prog)
+    known = ''
+    if isinstance(prog, frontend.Program):
+        final, tests = reduce_frontend(prog, cfg, (kind, detail), work, args)
+    else:
+        reducer = Reducer(prog, cfg, signature(kind, detail), args, work)
+        if not reducer.run():
+            return seed, cfg_name, None, 'failure is not stable'
+        final, tests = copy.deepcopy(reducer.prog), reducer.tests
+        if reducer.shapes:
+            known = ' [already has: %s]' % ','.join(sorted(reducer.shapes))
     expected, reason = host_oracle(final, work / 'final', repair=False)
     if expected is None:
         return seed, cfg_name, None, 'reduced program is not usable: %s' % reason
     out = work / 'reduced.c'
-    out.write_text(gen.render(final, title=', seed %d reduced under %s' % (seed, cfg_name)))
+    write_program(final, out, title=', seed %d reduced under %s' % (seed, cfg_name))
     (work / 'reduced.expected').write_text(expected)
     kind2, detail2, output = dcc_run(out, work / 'final' / 'dcc', cfg, args)
     (work / 'reduced.actual').write_text(output)
     kind2, detail2 = judge(kind2, detail2, output, expected)
     for sub in work.glob('try*'):
         shutil.rmtree(sub, ignore_errors=True)
-    known = ' [already has: %s]' % ','.join(sorted(reducer.shapes)) if reducer.shapes else ''
+    if isinstance(prog, frontend.Program) and (
+            frontend_signature(kind2, detail2) != frontend_signature(kind, detail)):
+        return seed, cfg_name, None, 'failure is not stable'
     return seed, cfg_name, out, '%s %s (%d lines, %d tests)%s' % (
-        kind2, detail2, len(out.read_text().splitlines()), reducer.tests, known)
+        kind2, detail2, len(out.read_text().splitlines()), tests, known)
 
 
 def parse_seeds(text):
@@ -735,10 +816,9 @@ def main():
     global gen
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--gen', default='int', choices=('int', 'float'),
-                        help='program generator: integer (clang_oracle_gen) or float '
-                             '(clang_oracle_float_gen); float defaults --work to '
-                             'build/clang-oracle-fuzz-float')
+    parser.add_argument('--gen', default='int', choices=('int', 'float', 'frontend'),
+                        help='program generator: integer, float, or preprocessing and parsing '
+                             'probes (frontend)')
     parser.add_argument('--seeds', default='1-100', help='seeds to run, e.g. 1-100,250')
     parser.add_argument('--configs', default='default',
                         help='production, default (production + no exact schedules), all, '
@@ -749,7 +829,7 @@ def main():
     parser.add_argument('--off', default='',
                         help='comma-separated generator features to leave out; `known` '
                              'leaves out every form that hits a logged dcc bug. Features: %s'
-                             % ', '.join(sorted(gen.FEATURES)))
+                             % ', '.join(sorted(gen.FEATURES | frontend.FEATURES)))
     parser.add_argument('--jobs', type=int, default=os.cpu_count() or 1)
     parser.add_argument('--reduce-jobs', type=int, default=16,
                         help='candidate edits tried at once per reduction')
@@ -762,7 +842,7 @@ def main():
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--list-configs', action='store_true')
     parser.add_argument('--generate', nargs=2, metavar=('SEED', 'C'),
-                        help='write one repaired program and FILE.expected beside it')
+                        help='write a validated program, any generated headers, and FILE.expected')
     parser.add_argument('--reduce', help='seeds whose failure to reduce')
     parser.add_argument('--config', default='nopeep', help='config to reduce under')
     args = parser.parse_args()
@@ -770,13 +850,22 @@ def main():
         import clang_oracle_float_gen
         gen = clang_oracle_float_gen
     if args.work is None:
-        args.work = REPO / 'build' / ('clang-oracle-fuzz' + ('-float' if args.gen == 'float' else ''))
+        suffix = '' if args.gen == 'int' else '-' + args.gen
+        args.work = REPO / 'build' / ('clang-oracle-fuzz' + suffix)
     args.off = frozenset(x for x in args.off.split(',') if x)
+    features = frontend.FEATURES if args.gen == 'frontend' else gen.FEATURES | frontend.FEATURES
     if 'known' in args.off:
-        args.off = (args.off - {'known'}) | frozenset(gen.KNOWN_BUGS)
-    unknown = args.off - gen.FEATURES
+        args.off -= {'known'}
+        if args.gen != 'frontend':
+            args.off |= frozenset(gen.KNOWN_BUGS)
+    unknown = args.off - features
     if unknown:
         parser.error('unknown feature: %s' % ', '.join(sorted(unknown)))
+    args.frontend_off = args.off & frontend.FEATURES
+    if args.gen != 'frontend':
+        args.off -= frontend.FEATURES
+    elif features <= args.off:
+        parser.error('all frontend features are disabled')
     if args.list_configs:
         for c in CONFIGS.values():
             print('%-48s %s' % (c.name, ' '.join('%s=%s' % kv for kv in c.env.items())))
@@ -789,7 +878,11 @@ def main():
         if expected is None:
             print('seed %d is not usable: %s' % (seed, reason))
             return 1
-        path.write_text(gen.render(prog, title=', seed %d' % seed))
+        try:
+            write_program(prog, path, title=', seed %d' % seed, export=True)
+        except FileExistsError as exc:
+            print(exc)
+            return 1
         path.with_suffix('.expected').write_text(expected)
         shutil.rmtree(work, ignore_errors=True)
         return 0
@@ -802,7 +895,7 @@ def main():
                 print('seed %d %s: %s%s' % (seed, cfg, note, ' -> %s' % path if path else ''))
                 sys.stdout.flush()
         return 0
-    return fuzz(args)
+    return run_campaign(args)
 
 
 if __name__ == '__main__':

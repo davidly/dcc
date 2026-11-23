@@ -1063,6 +1063,21 @@ int ast_expr_stmt_supported(const struct AstNode *n)
 /* Is statement node `n` within the AST-emittable subset? */
 int ast_stmt_supported(const struct AstNode *n)
 {
+    /* By this point preceding declarations in the statement's block have
+     * been replayed, so the lookup sees the array bound in this scope. */
+    switch (n->kind) {
+    case AST_EXPR_STMT:
+    case AST_RETURN:
+    case AST_IF:
+    case AST_WHILE:
+    case AST_DOWHILE:
+    case AST_SWITCH:
+        ast_normalize_vla_row_dereferences(&g_ast_arena, n->a);
+        break;
+    default:
+        break;
+    }
+
     switch (n->kind) {
     case AST_EMPTY:
         return 1;                         /* `;` emits nothing */
@@ -1225,6 +1240,10 @@ int ast_stmt_supported(const struct AstNode *n)
             if (ok && (decl_object_count == 0 || decl_saw_nonobject)) {
                 ok = 0;
             }
+            if (ok) {
+                ast_normalize_vla_row_dereferences(&g_ast_arena, n->b);
+                ast_normalize_vla_row_dereferences(&g_ast_arena, n->c);
+            }
             if (ok && n->b != NULL && !ast_cond_generic(n->b)) {
                 ok = 0;
             }
@@ -1253,6 +1272,9 @@ int ast_stmt_supported(const struct AstNode *n)
         if (rename_count != 0) {
             return 0;
         }
+        ast_normalize_vla_row_dereferences(&g_ast_arena, n->a);
+        ast_normalize_vla_row_dereferences(&g_ast_arena, n->b);
+        ast_normalize_vla_row_dereferences(&g_ast_arena, n->c);
         if (!ast_for_init_expr_supported(n->a)) {
             return 0;
         }

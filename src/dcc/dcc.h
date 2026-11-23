@@ -527,6 +527,8 @@ extern int g_main_has_args; /* final app reserves hidden argc/argv startup BSS *
 /* typedef table */
 extern struct TypeDef typedefs[MAX_TYPEDEFS];
 extern int ntypedefs;
+int enter_typedef_scope(void);
+void leave_typedef_scope(int previous_base);
 
 /* struct/union + field tables */
 extern struct StructDef struct_defs[MAX_STRUCTS];
@@ -720,6 +722,7 @@ extern int g_proto_nargs;
 extern int g_proto_variadic;
 extern int g_proto_types[MAX_PROTO_PARAMS];
 extern int g_funcptr_decl_array_len;
+extern int g_funcptr_decl_is_array;
 extern int g_funcptr_is_funcret_decl;
 extern int g_funcptr_has_proto;
 extern int g_funcptr_return_type;
@@ -1002,6 +1005,7 @@ void process_statement(void);
 /* ---- func ---- */
 int current_void_is_empty_param_list(void);
 void skip_prototype_array_suffixes(int *ptype);
+int adjust_parameter_declarator(int *type, int *direct_funcptr);
 void skip_prototype_function_suffix(void);
 void clear_parsed_prototype(void);
 void copy_parsed_prototype_to_sym(struct Sym *s);

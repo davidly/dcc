@@ -22,6 +22,7 @@
 
 static int block_scope_ids[MAX_SCOPE_DEPTH];
 static int block_scope_rename_counts[MAX_SCOPE_DEPTH];
+static int block_typedef_bases[MAX_SCOPE_DEPTH];
 
 /*
  * C99 for-init renames.  While code generation (or the frame-sizing scan) is
@@ -194,6 +195,7 @@ void enter_scope(void)
         fatal("too many nested block scopes");
     block_scope_ids[g_func_pass.scope_depth] = g_func_pass.block_seq++;
     block_scope_rename_counts[g_func_pass.scope_depth] = 0;
+    block_typedef_bases[g_func_pass.scope_depth] = enter_typedef_scope();
     g_scope_watermark[g_func_pass.scope_depth++] = g_frame.nlocals;
     /* A freshly opened scope has no VLA save slot yet. */
     if (g_func_pass.scope_depth < MAX_SCOPE_DEPTH)
@@ -435,6 +437,7 @@ void leave_scope(void)
      * storage is monotonic (slots are never reused), so the frame size still
      * equals the sum over every scope. */
     --g_func_pass.scope_depth;
+    leave_typedef_scope(block_typedef_bases[g_func_pass.scope_depth]);
     while (block_scope_rename_counts[g_func_pass.scope_depth] > 0) {
         pop_for_rename();
         --block_scope_rename_counts[g_func_pass.scope_depth];

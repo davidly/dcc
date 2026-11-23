@@ -901,9 +901,10 @@ static void parse_global_init_array_at(struct Sym *s, int elem_type, int count, 
             next_token();
             n = parse_typed_designator_index_expr();
             expect(']');
-            expect('=');
+            if (g_lex.tok.kind != '.' || !type_is_struct_object(elem_type))
+                expect('=');
         }
-        if (count > 0 && n >= count) {
+        if (n < 0 || (count > 0 && n >= count)) {
             error_here("too many initializer elements");
             skip_initializer_or_decl_tail();
             break;
@@ -1049,6 +1050,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
     int i;
     int is_union;
     int had_brace;
+    int array_member_designator;
     /* Bit-field storage units already written at this struct level; a revisit
      * via out-of-order designators must merge with the earlier value because
      * each unit write covers the whole 16-bit word. */
@@ -1066,6 +1068,7 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
         next_token();
         had_brace = 1;
     }
+    array_member_designator = !had_brace && g_lex.tok.kind == '.';
 
     if (is_union) {
         struct FieldDef *first;
@@ -1156,7 +1159,18 @@ static void parse_global_init_struct_at(struct Sym *s, int type, int baseoff)
 
         if (!had_brace && next_parent_field_index(sid, i + 1) < 0)
             break;
-        if (!accept(',')) break;
+        if (array_member_designator && g_lex.tok.kind == ',') {
+            LexState comma = lex_save();
+            next_token();
+            /* Another array designator belongs to the enclosing list.
+             * An ordinary initializer continues with the next field. */
+            if (g_lex.tok.kind == '[' || g_lex.tok.kind == '}') {
+                lex_restore(&comma);
+                break;
+            }
+        } else if (!accept(',')) {
+            break;
+        }
         if (g_lex.tok.kind == '}') break;
         if (g_lex.tok.kind == '.') i = -1;
     }

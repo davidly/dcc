@@ -80,6 +80,7 @@ and need clang, `ntvcm` and a built toolchain in the repository root.
 | `clang-oracle-fuzz.py` | The driver: generation, host proof, dcc build and run in each configuration, comparison, reduction |
 | `clang_oracle_gen.py` | The integer program model, generator, renderers and undefined-behaviour repair; `KNOWN_BUGS` maps generator features to logged bugs |
 | `clang_oracle_float_gen.py` | The float generator, built on the same model; selected with `--gen float` |
+| `clang_oracle_frontend_gen.py` | Preprocessor and parser probes, run automatically on the first eight seeds of integer and float campaigns |
 | `run-known-bugs.py` | Checks every parked reproducer: proves its baseline on the host, then reports `fails` or `FIXED` for dcc with and without `dccpeep` |
 | `bug-issue-body.py` | Writes a GitHub issue body for an entry in `compiler-bugs.md` from the reproducer, its baseline and dcc's current behaviour; `--create` opens the issue |
 | `typed-expr-fuzz.py` | The older single-expression fuzzer, checked against a Python model rather than clang |
@@ -95,6 +96,14 @@ form that hits a bug already logged:
 python3 scripts/clang-oracle-fuzz.py --seeds 1-300 --configs production --off known
 python3 scripts/clang-oracle-fuzz.py --gen float --seeds 1-300 --configs production --off known
 ```
+
+The automatic frontend probes have a separate tally and contribute to the
+campaign exit status. Eight consecutive seeds exercise the original macro and
+literal checks and rotate through token rescanning, conditional directives,
+nested headers, lexical tokens, declarators, initializers, constant
+expressions, and VLA scopes. Use `--gen frontend` to probe the full range or to
+generate or reduce a frontend failure. Keep generated headers with the source
+when replaying an include case. See `scripts/README.md` for the feature switches.
 
 A 300-seed batch takes about ten minutes on a laptop with `--jobs 6`. The
 last line is the tally, for example `300 programs: FAIL 1, INVALID 29,

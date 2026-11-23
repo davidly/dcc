@@ -213,9 +213,37 @@ their IEEE bits with `-0` folded to `0`, so a difference is a difference in
 the arithmetic rather than in formatting. Its failures and reductions go
 under `build/clang-oracle-fuzz-float/`.
 
-The same source is compiled by clang and by dcc. It can be, because it never
-spells `int` or `long`, and the renderer inserts the casts and masks that
-make an expression mean the same with a 16-bit and a 32-bit `int`. What a
+Integer and float campaigns also run standalone frontend probes for their
+first eight seeds, or all seeds in a shorter campaign. Each seed checks macro
+precedence, unsigned arithmetic in conditional directives, and integer literal
+types. It also exercises one of eight additional families. Eight consecutive
+seeds cover all eight families when they are enabled.
+
+| Feature for `--off` | Probes |
+| --- | --- |
+| `pp-macro`, `pp-unsigned`, `literal-types` | Macro precedence, unsigned conditional expressions, and value, width and signedness of integer literals |
+| `pp-rescan` | Raw and deferred token pasting, rescanning, nested variadic forwarding, and empty arguments |
+| `pp-conditional` | Branch selection, `defined`, `#undef`, and unevaluated operands |
+| `pp-includes` | Nested quoted and macro-named headers, include guards, and repeat inclusion |
+| `lex-tokens` | Stringification, adjacent string literals, character escapes, and `#line` |
+| `declarators` | Function and array typedefs, callbacks, qualified array parameters, typedef shadowing, and old-style definitions |
+| `initializers` | Sparse array and member designators, compound literals, and anonymous unions |
+| `constant-expr` | Integer expression trees in enums, array bounds, case labels, `_Static_assert`, and conversion to `_Bool` |
+| `vla-scope` | Runtime array bounds, `sizeof`, and leaving VLA scopes via control flow |
+
+The frontend results have their own tally and failure files in the campaign's
+`frontend/` subdirectory. A frontend failure makes the campaign exit nonzero.
+Use `--gen frontend` to run these probes over the full seed range, export an
+individual seed, or reduce a failure. Standalone runs use
+`build/clang-oracle-fuzz-frontend/`. The `--off` feature list filters the
+families before selection. Every frontend program uses native Clang output
+verified against the generated expectations. For include probes, keep the
+generated headers beside the C file when replaying an exported or reduced
+case.
+
+For integer and float programs, the renderer uses fixed-width types and
+inserts casts and masks so generated expressions mean the same with a 16-bit
+and a 32-bit `int`. Clang and dcc compile the same source. What a
 cast cannot fix (signed overflow at 16 bits, division by zero, and so on) is
 caught at run time: a second, host-only rendering routes every such operation
 through a checking helper, and the driver repairs the operations that trip,
@@ -236,6 +264,8 @@ python3 scripts/clang-oracle-fuzz.py --generate 17 prog.c --off known
 python3 scripts/clang-oracle-fuzz.py --list-configs
 python3 scripts/clang-oracle-fuzz.py --gen float --seeds 1-300 --off known
 python3 scripts/clang-oracle-fuzz.py --gen float --reduce 36 --config nopeep --off known
+python3 scripts/clang-oracle-fuzz.py --gen frontend --seeds 1-300 --configs production
+python3 scripts/clang-oracle-fuzz.py --gen frontend --reduce 1 --config nopeep
 ```
 
 - `--configs production` builds with and without `dccpeep` and with and

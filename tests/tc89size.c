@@ -5,6 +5,24 @@
 #include <stdint.h>
 #include <limits.h>
 
+#ifdef _DCC_
+#define OCTAL_WORD 0177777
+#define OCTAL_ALIAS OCTAL_WORD
+_Static_assert(077777 == 32767 && sizeof(077777) == 2 && 077777 > -1,
+               "octal signed int limit");
+_Static_assert(0100000 == 32768U && sizeof(0100000) == 2 && !(0100000 > -1),
+               "octal unsigned int lower boundary");
+_Static_assert(0177777 == 0xffff && sizeof(0177777) == sizeof(0xffff) &&
+               sizeof(0177777) == 2 && !(0177777 > -1),
+               "octal unsigned int upper boundary");
+_Static_assert(OCTAL_WORD == 65535UL && sizeof(OCTAL_WORD) == 2 && !(OCTAL_WORD > -1),
+               "octal literal type through macro expansion");
+_Static_assert(OCTAL_ALIAS == OCTAL_WORD && sizeof(OCTAL_ALIAS) == 2 &&
+               !(OCTAL_ALIAS > -1), "octal literal type through a macro alias");
+_Static_assert(0200000 == 65536L && sizeof(0200000) == 4 && 0200000 > -1 &&
+               sizeof(65535) == 4 && 65535 > -1, "signed long boundaries");
+#endif
+
 struct SzOne {
     char c;
     int i;

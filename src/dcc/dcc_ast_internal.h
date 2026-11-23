@@ -204,6 +204,7 @@ int ast_dead_expr_supported(const struct AstNode *e);
 int ast_for_init_expr_supported(const struct AstNode *e);
 int ast_expr_stmt_supported(const struct AstNode *n);
 int ast_stmt_supported(const struct AstNode *n);
+void ast_normalize_vla_row_dereferences(struct AstArena *ar, struct AstNode *n);
 int ast_for_decl_storage_supported(const struct AstNode *n);
 int ast_process_statement(void);
 

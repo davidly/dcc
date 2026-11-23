@@ -223,8 +223,7 @@ static int ast_value_is_plain_int_uncached(const struct AstNode *n)
         int callee_type;
         int no_deref;
         if (ast_call_star_indirect_supported(n)) {
-            s = ast_indirect_call_proto_sym(n);
-            rt = s != NULL ? type_decay_ptr(s->type) : TYPE_INT;
+            rt = ast_call_result_type(n);
             return type_ptr_depth(rt) == 0 && !type_is_struct_object(rt) &&
                    !type_is_long(rt) && !type_is_float(rt) &&
                    ast_is_plain_int_type(rt);

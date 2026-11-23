@@ -644,6 +644,21 @@ void parse_struct_definition(int struct_id)
 }
 
 
+static int typedef_scope_base;
+
+int enter_typedef_scope(void)
+{
+    int previous_base = typedef_scope_base;
+    typedef_scope_base = ntypedefs;
+    return previous_base;
+}
+
+void leave_typedef_scope(int previous_base)
+{
+    ntypedefs = typedef_scope_base;
+    typedef_scope_base = previous_base;
+}
+
 int find_typedef(const char *name)
 {
     int i;
@@ -661,7 +676,7 @@ void add_typedef_name_ex(const char *name, int type, int array_len, int is_func,
     int pi;
 
     i = find_typedef(name);
-    if (i < 0) {
+    if (i < typedef_scope_base) {
         if (ntypedefs >= MAX_TYPEDEFS) fatal("too many typedefs");
         i = ntypedefs++;
         memset(&typedefs[i], 0, sizeof(typedefs[i]));

@@ -1388,6 +1388,42 @@ void remember_proto_param_type(int type)
     g_proto_nargs++;
 }
 
+/* Apply array-to-pointer and function-to-pointer parameter adjustment in
+ * both ordinary prototypes and nested function-pointer prototypes. */
+int adjust_parameter_declarator(int *type, int *direct_funcptr)
+{
+    if (*direct_funcptr && g_funcptr_decl_is_array)
+        *type = type_add_ptr(*type);
+    if (!*direct_funcptr && g_lex.tok.kind == '(') {
+        LexState saved = lex_save();
+        next_token();
+        /* int ([4]) groups the array declarator, without a parameter name. */
+        if (g_lex.tok.kind == '[') {
+            skip_prototype_array_suffixes(type);
+            expect(')');
+            return 0;
+        }
+        lex_restore(&saved);
+    }
+    skip_prototype_array_suffixes(type);
+    if (*direct_funcptr)
+        return 0;
+    if (accept('(')) {
+        struct Sym *result = capture_funcptr_prototype(*type, 0);
+        parse_funcptr_prototype_suffix();
+        g_funcptr_return_type = *type;
+        g_funcptr_result_prototype = result;
+        *type = type_add_ptr(*type);
+        *direct_funcptr = 1;
+        return 1;
+    }
+    if (g_typedef_is_func && *type == g_typedef_base_type) {
+        *type = type_add_ptr(*type);
+        return 1;
+    }
+    return 0;
+}
+
 int old_style_param_list_starts(void)
 {
     LexState _ls;
@@ -1509,11 +1545,7 @@ void parse_old_style_param_declarations(void)
                 next_token();
             }
 
-            skip_prototype_array_suffixes(&type);
-            if (g_lex.tok.kind == '(') {
-                skip_prototype_function_suffix();
-                type = type_add_ptr(type);
-            }
+            adjust_parameter_declarator(&type, &direct_funcptr);
 
             s = find_local(name);
             if (!s || s->storage != SC_PARAM) {
@@ -1592,13 +1624,11 @@ void parse_param_list(void)
         direct_funcptr = 0;
         typedef_array_len = g_typedef_array_len;
         {
-            int typedef_element_type = type;
-            typedef_array_decay_depth = type_ptr_depth(type) > 0;
-            while (type_ptr_depth(typedef_element_type) > 0)
-                typedef_element_type = type_decay_ptr(typedef_element_type);
-            typedef_array_elem_size = type_size(typedef_element_type);
+            typedef_array_decay_depth =
+                type_ptr_depth(type) > type_ptr_depth(g_typedef_base_type);
+            typedef_array_elem_size = type_size(g_typedef_base_type);
         }
-        if (g_typedef_array_len > 0) {
+        if (g_typedef_array_dim_count > 0) {
             /* A declarator pointer over an array typedef is represented by
              * that existing pointer plus row-dimension metadata.  Adding a
              * second pointer here turns `A *p` into T ** and makes `(*p)[i]`
@@ -1618,6 +1648,7 @@ void parse_param_list(void)
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             direct_funcptr = 1;
         } else if (parse_abstract_funcptr_declarator(&type)) {
+            direct_funcptr = g_funcptr_return_type != 0;
             sprintf(name, "__p%d", g_frame.param_offset);
             unnamed_id = 1;
         } else if (g_lex.tok.kind == TOK_ID) {
@@ -1639,16 +1670,7 @@ void parse_param_list(void)
          *     char *argv[]
          *     char *[]
          */
-        skip_prototype_array_suffixes(&type);
-
-        /* Accept function-typed parameters in prototypes and treat them as
-         * pointer-sized for this compiler's simple type model.  This keeps
-         * declarations like int f(int cb(void)); from poisoning the parse. */
-        if (g_lex.tok.kind == '(') {
-            skip_prototype_function_suffix();
-            type = type_add_ptr(type);
-            bank_function_parameter = 1;
-        }
+        bank_function_parameter = adjust_parameter_declarator(&type, &direct_funcptr);
 
         remember_proto_param_type(type);
         {
@@ -2480,7 +2502,6 @@ void scan_local_decl_after_type(int base)
     base_is_volatile = g_decl.is_volatile;
     base_pointee_is_volatile = g_decl.pointee_is_volatile;
     base_volatile_mask = g_decl.pointee_volatile_mask;
-
     for (;;) {
         type = base;
         g_decl.is_volatile = base_is_volatile;
@@ -2999,6 +3020,7 @@ void scan_function_body(void)
 void parse_typedef_decl(void)
 {
     int base_type;
+    int base_is_func;
     int bank_base_const;
     int base_is_volatile;
     int base_pointee_is_volatile;
@@ -3013,6 +3035,7 @@ void parse_typedef_decl(void)
      *     typedef int A4[4], FN(int), (*PF)(int);
      */
     base_type = parse_base_type();
+    base_is_func = g_typedef_is_func;
     bank_base_const = g_decl.is_const || g_decl.bank_typedef_const;
     base_is_volatile = g_decl.is_volatile;
     base_pointee_is_volatile = g_decl.pointee_is_volatile;
@@ -3037,13 +3060,14 @@ void parse_typedef_decl(void)
         typedef_dim_count = 0;
         inherited_dim_count = g_typedef_array_dim_count;
         memcpy(inherited_dims, g_typedef_array_dims, sizeof(inherited_dims));
-        is_func = 0;
+        is_func = base_is_func;
         is_volatile = base_is_volatile;
         pointee_is_volatile = base_pointee_is_volatile;
         volatile_mask = base_volatile_mask;
         name[0] = 0;
 
         while (accept('*')) {
+            is_func = 0;
             volatile_mask = ((volatile_mask |
                 (unsigned int)(pointee_is_volatile != 0)) << 1) |
                 (unsigned int)(is_volatile != 0);
@@ -3057,6 +3081,9 @@ void parse_typedef_decl(void)
         g_decl.pointee_volatile_mask = volatile_mask;
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             /* Parenthesized function-pointer typedef. */
+            is_func = 0;
+            if (g_funcptr_decl_is_array)
+                typedef_dims[typedef_dim_count++] = g_funcptr_decl_array_len;
             is_volatile = g_decl.is_volatile;
             pointee_is_volatile = g_decl.pointee_is_volatile;
             volatile_mask = g_decl.pointee_volatile_mask;
@@ -3084,9 +3111,11 @@ void parse_typedef_decl(void)
                 else
                     error_here("too many array dimensions");
             }
-        } else if (g_lex.tok.kind == '(') {
-            skip_prototype_function_suffix();
-            is_func = (type_ptr_depth(type) == 0);
+        } else if (accept('(')) {
+            parse_funcptr_prototype_suffix();
+            g_funcptr_return_type = type;
+            g_funcptr_result_prototype = NULL;
+            is_func = 1;
         }
 
         {

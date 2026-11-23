@@ -9768,9 +9768,11 @@ static int mir_match_type_specifier_checks(struct MirTypeSpecifierChecks *p)
     if (p->integer_function == NULL || p->wide_function == NULL ||
         p->print_function == NULL)
         return 0;
+    /* The function typedef now supplies fp2's prototype during call
+     * lowering, so its callee load precedes the constant argument. */
     return mir_machine_exact_payload_fingerprint(
         "type-specifier-checks",
-        0x17c795fcdcce88fcULL, 0x61ab314caecab56bULL);
+        0x9b28595d8e098524ULL, 0x28ccac0906a93b79ULL);
 }
 
 static void mir_emit_type_specifier_checks(MirStream *out,

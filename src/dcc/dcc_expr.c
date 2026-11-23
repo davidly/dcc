@@ -138,6 +138,7 @@ void parse_funcptr_prototype_suffix(void)
     int i;
     DeclState saved_decl = g_decl;
     int saved_array_len = g_funcptr_decl_array_len;
+    int saved_is_array = g_funcptr_decl_is_array;
     int saved_funcret = g_funcptr_is_funcret_decl;
 
     nargs = 0;
@@ -153,6 +154,7 @@ void parse_funcptr_prototype_suffix(void)
 
     for (;;) {
         int type;
+        int direct_funcptr = 0;
 
         if (g_lex.tok.kind == TOK_ELLIPSIS) {
             has_proto = 1;
@@ -162,8 +164,9 @@ void parse_funcptr_prototype_suffix(void)
         }
 
         type = parse_type();
-        if (g_typedef_array_len > 0) {
-            type = type_add_ptr(type);
+        if (g_typedef_array_dim_count > 0) {
+            if (type == g_typedef_base_type)
+                type = type_add_ptr(type);
             g_typedef_array_len = 0;
         }
         while (accept('*')) {
@@ -173,9 +176,10 @@ void parse_funcptr_prototype_suffix(void)
         skip_type_qualifiers();
 
         if (g_lex.tok.kind == '(' && parse_abstract_funcptr_declarator(&type)) {
+            direct_funcptr = g_funcptr_return_type != 0;
         } else if (g_lex.tok.kind == TOK_ID && find_typedef(g_lex.tok.text) < 0)
             next_token();
-        skip_prototype_array_suffixes(&type);
+        adjust_parameter_declarator(&type, &direct_funcptr);
 
         if (type == TYPE_VOID && nargs == 0 && g_lex.tok.kind == ')') {
             has_proto = 1;
@@ -199,6 +203,7 @@ void parse_funcptr_prototype_suffix(void)
         g_funcptr_proto_types[i] = types[i];
     g_decl = saved_decl;
     g_funcptr_decl_array_len = saved_array_len;
+    g_funcptr_decl_is_array = saved_is_array;
     g_funcptr_is_funcret_decl = saved_funcret;
 }
 
@@ -216,6 +221,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     LexState _ls;
 
     g_funcptr_decl_array_len = 0;
+    g_funcptr_decl_is_array = 0;
     g_funcptr_is_funcret_decl = 0;
     g_funcptr_return_type = 0;
     g_funcptr_result_prototype = NULL;
@@ -311,7 +317,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         return 1;
     }
 
-    if (g_lex.tok.kind != TOK_ID && !(name == NULL && g_lex.tok.kind == ')')) {
+    if (g_lex.tok.kind != TOK_ID &&
+        !(name == NULL && (g_lex.tok.kind == ')' || g_lex.tok.kind == '['))) {
         lex_restore(&_ls);
         g_decl.is_volatile = save_decl_is_volatile;
         g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
@@ -327,6 +334,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     }
 
     if (accept('[')) {
+        g_funcptr_decl_is_array = 1;
         if (g_lex.tok.kind == ']') {
             g_funcptr_decl_array_len = 0;
             next_token();
