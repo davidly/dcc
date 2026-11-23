@@ -7555,6 +7555,25 @@ static int pass_cache_ix_spill_via_exx(void)
         if (ix_offset_pair_referenced_outside(off, func_start, func_end,
                                               i, i + 1, reload_line, reload_line + 1))
             continue;
+        /* Removing the store also removes the value seen through any
+         * frame pointer, including a different member of a local union. */
+        {
+            int addressed = 0;
+            for (k = func_start; k < func_end; ++k) {
+                long lowest;
+                int known_address = scan_ix_frame_addr(k, &lowest);
+                if ((known_address && lowest <= off + 1) ||
+                    (!known_address && eq(k, "push ix") && k + 1 < func_end &&
+                     !strncmp(lines[k + 1], "pop ", 4)) ||
+                    (eq(k, "add hl,sp") && k + 1 < func_end &&
+                     !eq(k + 1, "ld sp,hl"))) {
+                    addressed = 1;
+                    break;
+                }
+            }
+            if (addressed)
+                continue;
+        }
 
         save_bc = !bc_dead_on_straight_exit(
             reload_line + 2, func_end);
@@ -8814,24 +8833,145 @@ static int peep_parse_ld_de_small_const(const char *s, int *k)
  * dead after the store. INC HL preserves flags and A while the replacement
  * does not, so this stricter proof is required for that input form.
  */
-/* True if "hl" is mentioned at all - as a register or as a "(hl)"
- * dereference, read or write, no distinction - anywhere from line `from`
- * up to the next label or function marker (dcc's own "reuse
- * whatever's already in a register" convention, the same one this
- * function exists to protect, doesn't survive any of those either: a
- * label may be reached from elsewhere with hl holding something
- * unrelated). Byte-register consumers and register-ABI call inputs must
- * also be preserved until both bytes have been overwritten. Used by
- * pass_small_const_incr_carry_skip to decide whether the line right after
- * its own match could be relying on the leftover hl value the original
- * "add hl,de / store back" sequence left resident there - see that pass's
- * own comment for why. Deliberately blunt (declines even a line that's
- * itself about to load hl with something else entirely, or an "add
- * hl,de" that only extends the staleness rather than resolving it) rather
- * than trying to characterize every mention of hl as safe or not: this
- * rewrite's whole value is a cheap, purely local text substitution, not
- * worth the risk of a second miscompile in the same pass to save chasing
- * a more precise, harder-to-verify condition. */
+static int hl_observed_on_path(int start, int func_start, int func_end,
+                               unsigned pending, int return_observed, int depth);
+
+/* A private (or closed-program) function's return is dead only when every
+ * reference is a direct call whose HL result is dead. Escapes decline. */
+static int hl_return_is_observed(int func_start, int func_end)
+{
+    char name[MAX_LINE], clean[MAX_LINE], call[MAX_LINE + 8];
+    int entry, i, calls = 0;
+    size_t length;
+
+    for (entry = func_start; entry < func_end; ++entry)
+        if (starts_label(lines[entry]))
+            break;
+    if (entry == func_end)
+        return 1;
+    strip_peep_comment_copy(name, lines[entry]);
+    length = strlen(name);
+    if (length == 0 || length >= sizeof(name) || name[length - 1] != ':')
+        return 1;
+    name[--length] = 0;
+    if (!is_local_func_label(name))
+        return 1;
+    sprintf(call, "call %s", name);
+    for (i = 0; i < nlines; ++i) {
+        const char *reference;
+        if (i == entry || is_blank_or_comment(lines[i]))
+            continue;
+        strip_peep_comment_copy(clean, lines[i]);
+        if (!strncmp(clean, "public ", 7) && !strcmp(clean + 7, name)) {
+            if (!peep_context.options.closed_program)
+                return 1;
+            continue;
+        }
+        reference = clean;
+        while ((reference = strstr(reference, name)) != NULL) {
+            if ((reference == clean ||
+                 (!isalnum((unsigned char)reference[-1]) && reference[-1] != '_')) &&
+                !isalnum((unsigned char)reference[length]) && reference[length] != '_')
+                break;
+            ++reference;
+        }
+        if (reference == NULL)
+            continue;
+        if (strcmp(clean, call) != 0)
+            return 1;
+        if (!peep_registers_dead_after(i, PEEP_REG_HL)) {
+            int caller_start, caller_end;
+            find_function_bounds_any(i, &caller_start, &caller_end);
+            if (hl_observed_on_path(i + 1, caller_start, caller_end,
+                                    PEEP_REG_HL, 1, 0))
+                return 1;
+        }
+        ++calls;
+    }
+    return calls == 0;
+}
+
+/* Skip a balanced save/restore whose interior replaces HL before reading it.
+ * Its only use of the incoming value is to preserve it for later code. */
+static int hl_preservation_end(int start, int end)
+{
+    int j, balance = 1;
+    unsigned pending = PEEP_REG_HL;
+    if (!eq(start, "push hl"))
+        return -1;
+    for (j = start + 1; j < end && j < start + 16; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        if (info == NULL || info->kind == PEEP_LINE_LABEL ||
+            info->effects.unknown || info->effects.control_flow)
+            return -1;
+        if (info->opcode != PEEP_OPCODE_PUSH && info->opcode != PEEP_OPCODE_POP &&
+            (((info->effects.reads | info->effects.writes) & PEEP_REG_SP) != 0 ||
+             ((info->effects.memory_read | info->effects.memory_written) &
+              (PEEP_MEM_STACK | PEEP_MEM_INDIRECT | PEEP_MEM_OPAQUE)) != 0))
+            return -1;
+        if (info->opcode == PEEP_OPCODE_PUSH)
+            ++balance;
+        if (info->opcode == PEEP_OPCODE_POP && --balance == 0)
+            return eq(j, "pop hl") ? j : -1;
+        if (info->effects.reads & pending)
+            return -1;
+        pending &= ~info->effects.writes;
+    }
+    return -1;
+}
+
+/* Follow joins instead of assuming a label kills HL. C calls replace HL;
+ * runtime register arguments, unknown code, and unbounded paths decline. */
+static int hl_observed_on_path(int start, int func_start, int func_end,
+                               unsigned pending, int return_observed, int depth)
+{
+    int j, steps = 0;
+    char target[128], condition[16];
+    if (depth > 8)
+        return 1;
+    for (j = start; j < func_end && steps < 128; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        int label, saved;
+        if (info == NULL)
+            return 1;
+        if (info->kind == PEEP_LINE_BLANK || info->kind == PEEP_LINE_COMMENT ||
+            info->kind == PEEP_LINE_LABEL)
+            continue;
+        ++steps;
+        if (info->opcode == PEEP_OPCODE_RET)
+            return !eq(j, "ret") || return_observed;
+        if (info->opcode == PEEP_OPCODE_CALL)
+            return !peep_call_uses_stack_args_only(lines[j]);
+        saved = hl_preservation_end(j, func_end);
+        if (saved >= 0) {
+            j = saved;
+            continue;
+        }
+        if (peep_parse_jp_uncond_label(lines[j], target)) {
+            label = find_label_line_in_range(target, func_start, func_end);
+            return label < 0 || hl_observed_on_path(
+                label + 1, func_start, func_end, pending, return_observed, depth + 1);
+        }
+        if (peep_parse_any_cond_jump(lines[j], condition, target)) {
+            label = find_label_line_in_range(target, func_start, func_end);
+            if (label < 0 || hl_observed_on_path(
+                    label + 1, func_start, func_end, pending, return_observed, depth + 1))
+                return 1;
+            continue;
+        }
+        if (info->effects.unknown || info->effects.control_flow ||
+            (info->effects.reads & pending) != 0)
+            return 1;
+        pending &= ~info->effects.writes;
+        if (pending == 0)
+            return 0;
+    }
+    return 1;
+}
+
+/* Keep the incumbent conservative straight-line check. At a join or
+ * return, use the bounded path proof: labels do not kill a value held in
+ * HL, and a return can export it to a caller. */
 static int hl_relied_on_after(int from)
 {
     int j;
@@ -8841,8 +8981,13 @@ static int hl_relied_on_after(int from)
     for (j = from; j < nlines; j++) {
         const PeepLineInfo *info;
 
-        if (starts_label(lines[j]) || line_starts_function_marker(lines[j]))
-            return 0;
+        if (starts_label(lines[j]) || line_starts_function_marker(lines[j]) ||
+            eq(j, "ret")) {
+            int func_start, func_end;
+            find_function_bounds_any(from, &func_start, &func_end);
+            return hl_observed_on_path(from, func_start, func_end, pending,
+                hl_return_is_observed(func_start, func_end), 0);
+        }
         strip_peep_comment_lower_copy(clean, lines[j]);
         if (strncmp(clean, "call", 4) == 0 &&
             (clean[4] == ' ' || clean[4] == '\t'))

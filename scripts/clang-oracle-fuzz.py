@@ -101,8 +101,20 @@ def select_configs(text):
 # ------------------------------------------------------------- host oracle
 
 def host_build(source, exe, flags, timeout=120):
-    r = subprocess.run(['clang', *HOST_FLAGS, *flags, str(source), '-o', str(exe)],
-                       capture_output=True, text=True, timeout=timeout)
+    command = ['clang', *HOST_FLAGS, *flags, str(source), '-o', str(exe)]
+    try:
+        r = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Some small bounded loop nests cause pathological -O2 unrolling
+        # (float seeds 167902 and 177113). Keep the optimized oracle, but
+        # retry without that pass; O0 and sanitizer agreement still applies.
+        if '-O2' not in flags or '-fno-unroll-loops' in flags:
+            return False, 'host compiler timed out after %d s' % timeout
+        try:
+            r = subprocess.run([*command, '-fno-unroll-loops'],
+                               capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False, 'host compiler timed out after %d s with loop unrolling disabled' % timeout
     return r.returncode == 0, r.stderr
 
 

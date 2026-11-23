@@ -32,6 +32,7 @@
 #include <limits.h>
 #include "dcc.h"
 #include "dcc_ast.h"
+#include "dcc_ast_internal.h"
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 #include "dcc_mir_machine_internal.h"
@@ -26731,7 +26732,8 @@ int mir_emit_wide_operation(MirStream *out, const struct MirInsn *insn)
          * path needs. */
         if (mir_wide_operation_is_signed_const_relational(insn))
             return mir_emit_wide_signed_const_compare(
-                out, operation, right->immediate);
+                out, operation,
+                ast_const_apply_int_cast(right->immediate, right->type));
         helper = mir_wide_runtime_helper(insn);
         mir_stream_puts("\tpush de\n\tpush hl\n", out);
         mir_emit_runtime_call(out, helper);
@@ -35070,10 +35072,20 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     if (!mir_narrow_multiply_has_named_word_home(left) ||
                         !mir_emit_named_word_load_to_hl(out, left))
                         mir_emit_virtual_load(out, narrow_multiply_left);
+                    /* The fused path elides the widening casts. Preserve
+                     * their byte normalization for computed ++/-- values. */
+                    if (type_size(left->type) == 1 &&
+                        !mir_value_is_normalized_byte(
+                            narrow_multiply_left, left->type, 0))
+                        mir_emit_cast(out, TYPE_INT, left->type);
                     mir_stream_puts("\tld c,l\n\tld b,h\n", out);
                     if (!mir_narrow_multiply_has_named_word_home(right) ||
                         !mir_emit_named_word_load_to_hl(out, right))
                         mir_emit_virtual_load(out, narrow_multiply_right);
+                    if (type_size(right->type) == 1 &&
+                        !mir_value_is_normalized_byte(
+                            narrow_multiply_right, right->type, 0))
+                        mir_emit_cast(out, TYPE_INT, right->type);
                     multiply_helper = narrow_multiply_unsigned
                         ? "__m1u"
                         : (mir_instruction_is_in_cfg_cycle(i) &&
