@@ -1,12 +1,17 @@
 """Preserve the distinct findings and controls from seeds 70001-120000."""
 from pathlib import Path
+import runpy
 import sys
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 try:
     import clang_oracle_gen as integer
     import clang_oracle_float_gen as floating
+    import clang_oracle_frontend_gen as frontend
 finally:
     sys.path.pop(0)
 
@@ -60,3 +65,71 @@ class CampaignSteeringTests(unittest.TestCase):
         operands = [floating.E('incdec', [floating.E('var', a=floating.Decl(
             name, floating.F32, 'global'))], ('++', False)) for name in ('x', 'y')]
         self.assertFalse(floating.float_update_pair(floating.E('bin', operands, '>')))
+
+
+class FrontendProbeTests(unittest.TestCase):
+    def test_default_campaign_keeps_main_seeds_and_reports_frontend_failure(self):
+        driver = Path(__file__).resolve().parents[1] / 'clang-oracle-fuzz.py'
+        with mock.patch.object(sys, 'path', sys.path.copy()):
+            run_campaign = runpy.run_path(str(driver))['run_campaign']
+        args = SimpleNamespace(gen='int', seeds='120001-120012', work=Path('work'),
+                               frontend_off=frozenset({'pp-unsigned'}))
+        fuzz = mock.Mock(side_effect=(1, 0))
+        with mock.patch.dict(run_campaign.__globals__, {'fuzz': fuzz}):
+            self.assertEqual(run_campaign(args), 1)
+        probe_args, probe_seeds = fuzz.call_args_list[0].args
+        self.assertEqual(probe_args.gen, 'frontend')
+        self.assertEqual(probe_args.work, args.work / 'frontend')
+        self.assertEqual(probe_args.off, args.frontend_off)
+        self.assertEqual(probe_seeds, list(range(120001, 120009)))
+        fuzz.assert_called_with(args, list(range(120001, 120013)))
+
+    def test_each_preprocessor_family_covers_both_branches_on_each_route(self):
+        observed = {}
+        for seed in range(1, 9):
+            program = frontend.generate(seed, off=frontend.FEATURES - {'pp-unsigned', 'pp-macro'})
+            for probe in program.probes:
+                observed.setdefault(probe.name, set()).add(probe.expected[0])
+                self.assertEqual('#include' in '\n'.join(probe.prelude),
+                                 probe.name.endswith('-include'))
+        self.assertEqual(observed, {
+            f'pp-{family}-{route}': {0, 1}
+            for family in ('macro', 'unsigned')
+            for route in ('if', 'elif', 'include')
+        })
+
+    def test_literal_cases_stay_reproducible_when_preprocessor_cases_are_disabled(self):
+        full = frontend.generate(1)
+        literals = frontend.generate(1, off=frontend.FEATURES - {'literal-types'})
+        self.assertEqual(literals.probes, tuple(
+            probe for probe in full.probes if probe.name.startswith('literal-')))
+        self.assertIn('literal-word-octal 1 1 1\n', literals.expected())
+        self.assertIn('literal-word-octal-macro 1 1 1\n', literals.expected())
+        direct = next(probe for probe in literals.probes if probe.name == 'literal-word-octal')
+        self.assertIn('sizeof(int) != 2', direct.expressions[2])
+
+    def test_consecutive_seeds_rotate_through_all_broader_families(self):
+        for seed, family in enumerate(frontend.BROAD_GENERATORS, start=0):
+            with self.subTest(family=family):
+                full = frontend.generate(seed)
+                isolated = frontend.generate(seed, off=frontend.FEATURES - {family})
+                self.assertTrue(isolated.probes)
+                self.assertEqual(full.probes[-len(isolated.probes):], isolated.probes)
+                self.assertEqual(len({p.name for p in full.probes}), len(full.probes))
+
+    def test_export_keeps_nested_include_files_and_rejects_conflicts(self):
+        driver = Path(__file__).resolve().parents[1] / 'clang-oracle-fuzz.py'
+        with mock.patch.object(sys, 'path', sys.path.copy()):
+            write_program = runpy.run_path(str(driver))['write_program']
+        program = frontend.generate(9, off=frontend.FEATURES - {'pp-includes'})
+        with TemporaryDirectory() as folder:
+            source = Path(folder) / 'probe.c'
+            write_program(program, source, export=True)
+            self.assertEqual(len(program.headers()), 2)
+            for name, body in program.headers():
+                self.assertEqual(source.with_name(name).read_text(), body)
+            header = source.with_name(program.headers()[0][0])
+            header.write_text('existing file')
+            with self.assertRaises(FileExistsError):
+                write_program(program, source, export=True)
+            self.assertEqual(header.read_text(), 'existing file')

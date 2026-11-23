@@ -116,7 +116,7 @@ static void pp_out_put(struct PPOut *o, const char *s, int n)
     o->buf[o->len] = 0;
 }
 
-static int pp_expand(const char *in, struct PPOut *o, int depth);
+static int pp_expand(const char *in, struct PPOut *o, int depth, const char **tail);
 
 /* Copy `defined X` or `defined ( X )` unexpanded; p is just past "defined". */
 static const char *pp_copy_defined_operand(const char *p, struct PPOut *o)
@@ -198,7 +198,7 @@ static int pp_expand_macro(int di, const char *name, const char **pp,
     }
     pp_disabled[pp_ndisabled++] = defs[di].name;
     pp_out_put(o, " ", 1);
-    pp_expand(body, o, depth + 1);
+    pp_expand(body, o, depth + 1, pp);
     pp_out_put(o, " ", 1);
     pp_ndisabled--;
     free(body);
@@ -207,7 +207,7 @@ static int pp_expand_macro(int di, const char *name, const char **pp,
 
 /* Expand macros in `in`, appending to o. Strings, character constants and
  * numbers are copied whole so nothing inside them is taken for a name. */
-static int pp_expand(const char *in, struct PPOut *o, int depth)
+static int pp_expand(const char *in, struct PPOut *o, int depth, const char **tail)
 {
     const char *p = in;
 
@@ -259,7 +259,17 @@ static int pp_expand(const char *in, struct PPOut *o, int depth)
             di = find_define(name);
             if (di >= 0 && !pp_is_disabled(defs[di].name)) {
                 const char *after = q;
-                if (pp_expand_macro(di, name, &after, o, depth)) {
+                const char **next = &after;
+                /* The last token of a replacement can get its arguments
+                 * from the enclosing input, as in ALIAS(1) for ALIAS -> F. */
+                if (tail) {
+                    const char *end = q;
+                    while (isspace((unsigned char)*end))
+                        end++;
+                    if (!*end)
+                        next = tail;
+                }
+                if (pp_expand_macro(di, name, next, o, depth)) {
                     p = after;
                     continue;
                 }
@@ -803,7 +813,7 @@ int pp_eval_simple_expr(const char *s)
     o.buf = (char *)xmalloc((size_t)o.cap);
     o.len = 0;
     o.buf[0] = 0;
-    if (!pp_expand(s, &o, 0)) {
+    if (!pp_expand(s, &o, 0, NULL)) {
         free(o.buf);
         return 0;
     }

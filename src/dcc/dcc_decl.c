@@ -672,8 +672,8 @@ void parse_auto_struct_array_initializer(struct Sym *s, int baseoff, int elem_ty
 {
     int n;
     int maxn;
-    int total_bytes;
     int had_brace;
+    unsigned char *initialized = NULL;
 
     if (elem_size <= 0) elem_size = type_size(elem_type);
     if (elem_size <= 0) elem_size = 2;
@@ -707,11 +707,19 @@ void parse_auto_struct_array_initializer(struct Sym *s, int baseoff, int elem_ty
             expect(']');
             expect('=');
         }
-        if (count > 0 && n >= count) {
+        if (n < 0 || (count > 0 && n >= count)) {
             error_here("too many initializer elements");
             skip_initializer_or_decl_tail();
             break;
         }
+
+        if (n > maxn && count > 0 && initialized == NULL) {
+            initialized = xmalloc((size_t)count);
+            memset(initialized, 1, (size_t)maxn);
+            memset(initialized + maxn, 0, (size_t)(count - maxn));
+        }
+        if (initialized != NULL)
+            initialized[n] = 1;
 
         if ((elem_type & TYPE_STRUCT) && type_ptr_depth(elem_type) == 0)
             parse_auto_struct_initializer(s, baseoff + n * elem_size, elem_type);
@@ -731,10 +739,22 @@ void parse_auto_struct_array_initializer(struct Sym *s, int baseoff, int elem_ty
     if (had_brace)
         expect('}');
 
-    if (maxn > n) n = maxn;
-    if (count > 0 && n < count) {
-        total_bytes = (count - n) * elem_size;
-        capture_local_init_zero_bytes(s, baseoff + n * elem_size, total_bytes);
+    /* A forward designator can leave holes that a later designator fills.
+     * Emit zero stores only for the ranges that were never initialized. */
+    if (initialized != NULL) {
+        n = 0;
+        while (n < count) {
+            int first;
+            if (initialized[n++])
+                continue;
+            first = n - 1;
+            while (n < count && !initialized[n])
+                ++n;
+            capture_local_init_zero_bytes(s, baseoff + first * elem_size, (n - first) * elem_size);
+        }
+        free(initialized);
+    } else if (count > maxn) {
+        capture_local_init_zero_bytes(s, baseoff + maxn * elem_size, (count - maxn) * elem_size);
     }
 }
 

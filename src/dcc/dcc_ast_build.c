@@ -324,6 +324,40 @@ static int ast_index_root_and_count(const struct AstNode *n,
     return count;
 }
 
+void ast_normalize_vla_row_dereferences(struct AstArena *ar, struct AstNode *n)
+{
+    const struct AstNode *root;
+    const struct Sym *symbol;
+    int count;
+    int i;
+
+    if (n == NULL || !current_function_has_vla)
+        return;
+    ast_normalize_vla_row_dereferences(ar, n->a);
+    ast_normalize_vla_row_dereferences(ar, n->b);
+    ast_normalize_vla_row_dereferences(ar, n->c);
+    for (i = 0; i < n->list_len; ++i)
+        ast_normalize_vla_row_dereferences(ar, n->list[i]);
+
+    if (n->kind != AST_UNARY || n->op != '*')
+        return;
+    count = ast_index_root_and_count(n->a, &root);
+    if (count == 0 || root == NULL || root->kind != AST_IDENT)
+        return;
+    symbol = find_sym(root->sval);
+    if (symbol == NULL || !symbol->is_vla || count >= symbol->dim_count)
+        return;
+
+    /* *a[i] is a[i][0] when a[i] is an array row. Reuse subscript
+     * lowering, including the stride repair after block locals go out of
+     * scope. The original subscript expressions are evaluated once. */
+    n->kind = AST_INDEX;
+    n->op = 0;
+    n->type = symbol->type;
+    n->b = ast_int_lit(ar, 0, TYPE_INT);
+    ast_note_height(n);
+}
+
 static int ast_expr_is_array_row(const struct AstNode *n)
 {
     const struct AstNode *root;
@@ -1144,7 +1178,9 @@ struct AstNode *ast_build_expr(struct AstArena *ar)
  * acting as the comma operator. */
 struct AstNode *ast_build_assign_expr(struct AstArena *ar)
 {
-    return p_assign(ar);
+    struct AstNode *n = p_assign(ar);
+    ast_normalize_vla_row_dereferences(ar, n);
+    return n;
 }
 
 /* Build a `return [expr] ;` statement node.  The caller guarantees the current
@@ -2014,6 +2050,8 @@ void ast_scan_decl_span(const struct AstNode *n)
 static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
 {
     struct AstNode *n;
+    int typedef_base = enter_typedef_scope();
+    int enum_base = nenum_consts;
 
     next_token();                        /* consume '{' */
     n = ast_new(ar, AST_COMPOUND);
@@ -2025,26 +2063,41 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
          * by declaration codegen at emit time (which rebuilds
          * locals[] / frame offsets identically to the frame-sizing scan). */
         if (g_lex.tok.kind == TOK_STATIC_ASSERT || g_lex.tok.kind == TOK_TYPEDEF || starts_type()) {
+            int is_typedef = g_lex.tok.kind == TOK_TYPEDEF;
             child = ast_build_decl_span(ar);
             if (child == NULL)
-                return NULL;
+                goto fail;
+            if (is_typedef) {
+                /* Later expressions and declarations need the block's type
+                 * names while the AST is built, before declaration replay. */
+                DeclState saved_decl = g_decl;
+                ast_scan_decl_span(child);
+                g_decl = saved_decl;
+            }
             ast_list_push(ar, n, child);
             continue;
         }
 
         child = ast_build_stmt(ar);
         if (child == NULL)
-            return NULL;
+            goto fail;
         ast_list_push(ar, n, child);
     }
 
     if (g_lex.tok.kind != '}')
-        return NULL;
+        goto fail;
     n->end_file = ast_arena_strdup(ar, g_lex.tok.file[0] ? g_lex.tok.file :
                                    (input_name ? input_name : "<input>"));
     n->end_line = g_lex.tok_line;
     next_token();                        /* consume '}' */
+    leave_typedef_scope(typedef_base);
+    nenum_consts = enum_base;
     return n;
+
+fail:
+    leave_typedef_scope(typedef_base);
+    nenum_consts = enum_base;
+    return NULL;
 }
 
 /* Build one statement from the current lexer position.  Returns NULL (without

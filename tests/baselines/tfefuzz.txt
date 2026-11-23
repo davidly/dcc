@@ -1,0 +1,5 @@
+preprocessing 42 161
+function parameters -3 6
+typedef scope 5
+designated initializers 5 6 7 0 8 9 30
+VLA scope 18 10 14 10

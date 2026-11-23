@@ -328,7 +328,7 @@ void parse_preprocessor_line(void)
         }
 
         parent = pp_active;
-        cond = pp_eval_simple_expr(val);
+        cond = parent && pp_eval_simple_expr(val);
 
         if_parent_active[if_sp] = parent;
         if_this_active[if_sp] = cond ? 1 : 0;
@@ -375,8 +375,9 @@ void parse_preprocessor_line(void)
                     val[i++] = (char)getc_src();
                 val[i] = 0;
                 strip_macro_replacement_comments(val);
-                cond = pp_eval_simple_expr(val);
                 i = if_sp - 1;
+                cond = if_parent_active[i] && !if_branch_taken[i] &&
+                       pp_eval_simple_expr(val);
                 if (!if_branch_taken[i] && cond) {
                     if_this_active[i] = 1;
                     if_branch_taken[i] = 1;
@@ -2157,6 +2158,12 @@ int define_number_value(const char *name, long *out, int depth)
     }
 
     if (macro_value_is_integer_literal(v)) {
+        const char *digits = v + (*v == '+' || *v == '-');
+        /* Octal aliases must reach the lexer when their spelling determines
+         * the type or when their magnitude cannot fit the numeric fast path. */
+        if (digits[0] == '0' && isdigit((unsigned char)digits[1]) &&
+            macro_number_should_expand_textually(v))
+            return 0;
         out[0] = parse_number_string(v);
         return 1;
     }
@@ -2503,11 +2510,18 @@ void next_token(void)
                 v &= 0xffffffffUL;
             }
         } else {
+            unsigned long octal = 0;
+            int octal_digits = c == '0';
             int saw_float;
             v = (unsigned long)(c - '0');
             while (isdigit(peekc())) {
-                v = v * 10UL + (unsigned long)(getc_src() - '0');
+                int digit = getc_src() - '0';
+                v = v * 10UL + (unsigned long)digit;
                 v &= 0xffffffffUL;
+                if (octal_digits && digit < 8)
+                    octal = (octal * 8UL + (unsigned long)digit) & 0xffffffffUL;
+                else
+                    octal_digits = 0;
             }
 
             saw_float = 0;
@@ -2533,6 +2547,10 @@ void next_token(void)
                 g_lex.tok.text[flen] = 0;
                 g_lex.tok.val = (long)(parse_float_literal_bits(g_lex.tok.text) & 0xffffffffUL);
                 return;
+            }
+            if (octal_digits) {
+                non_decimal_literal = 1;
+                v = octal;
             }
         }
 

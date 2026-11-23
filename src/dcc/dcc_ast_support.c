@@ -1337,8 +1337,7 @@ static int ast_value_is_long_word_uncached(const struct AstNode *arg)
             return type_is_long(type_decay_ptr(callee_type));
     }
     if (arg->kind == AST_CALL && ast_call_star_indirect_supported(arg)) {
-        s = ast_indirect_call_proto_sym(arg);
-        return s != NULL && type_is_long(type_decay_ptr(s->type));
+        return type_is_long(ast_call_result_type(arg));
     }
     if (arg->kind == AST_ASSIGN && arg->a != NULL) {
         int lhs_type;
@@ -1845,8 +1844,7 @@ static int ast_value_is_float_word_uncached(const struct AstNode *arg)
             return type_is_float(type_decay_ptr(callee_type));
     }
     if (arg->kind == AST_CALL && ast_call_star_indirect_supported(arg)) {
-        s = ast_indirect_call_proto_sym(arg);
-        return s != NULL && type_is_float(type_decay_ptr(s->type));
+        return type_is_float(ast_call_result_type(arg));
     }
     if (arg->kind == AST_CAST && type_is_float(arg->type))
         return ast_expr_supported(arg);

@@ -552,7 +552,7 @@ int include_cond_update(const char *line, long n,
             expr[ei++] = *s++;
         expr[ei] = 0;
         strip_macro_replacement_comments(expr);
-        cond = pp_eval_simple_expr(expr);
+        cond = active && pp_eval_simple_expr(expr);
         if (sp < MAX_IFSTACK) {
             astk[sp] = active;
             btk[sp] = (active && cond) ? 1 : 0;
@@ -574,7 +574,7 @@ int include_cond_update(const char *line, long n,
                     expr[ei++] = *s++;
                 expr[ei] = 0;
                 strip_macro_replacement_comments(expr);
-                cond = pp_eval_simple_expr(expr);
+                cond = parent && pp_eval_simple_expr(expr);
                 active = parent && cond;
                 if (active)
                     btk[i] = 1;
@@ -781,7 +781,7 @@ static int include_extra_tokens;
 static const char *pp_skip_blank(const char *s, const char *e);
 
 int try_parse_include(const char *line, long n, const char *file, int src_line,
-                              char *name, int namesz, int *is_system)
+                              char *name, int namesz, int *is_system, int active)
 {
     long i;
     int j;
@@ -808,6 +808,10 @@ int try_parse_include(const char *line, long n, const char *file, int src_line,
     if (i + 7 > n || memcmp(line + i, "include", 7) != 0 ||
         (i + 7 < n && is_ident_char((unsigned char)line[i + 7])))
         return 0;
+
+    /* Discard the directive without expanding an inactive operand. */
+    if (!active)
+        return -1;
 
     i += 7;
 
@@ -1045,13 +1049,7 @@ char *preprocess_includes_file(const char *name, int depth, long *out_len)
                                                    src_line,
                                                    incname,
                                                    sizeof(incname),
-                                                   &is_system);
-                if (include_status > 0 && !active) {
-                    /* #include inside an inactive block: drop it instead of
-                     * recursively expanding the header (which would also mark
-                     * its #pragma once) from dead code. */
-                    include_status = -1;
-                }
+                                                   &is_system, active);
                 if (include_status > 0 && include_extra_tokens)
                     warn_at(name, src_line, "extra tokens at end of #include directive");
                 if (include_status > 0) {
@@ -1628,14 +1626,13 @@ char *filter_active_preprocessor_source(long *lenp)
                 if (msg) {
                     pp_directive_error(line_start, msg);
                     append_mem(&out, &out_len, &out_cap, "\n", 1);
-                } else if (is_linemarker) {
+                } else {
+                    /* The source-location table reads literal numbers.
+                     * Preserve the expanded operands for later lexer passes. */
                     next_logical_line = (int)lno;
                     append_mem(&out, &out_len, &out_cap, "#line ", 6);
                     append_mem(&out, &out_len, &out_cap, expanded, (long)strlen(expanded));
                     append_mem(&out, &out_len, &out_cap, "\n", 1);
-                } else {
-                    next_logical_line = (int)lno;
-                    append_mem(&out, &out_len, &out_cap, src + line_start, p - line_start);
                 }
             }
             goto next_filter_line;
@@ -1687,7 +1684,7 @@ char *filter_active_preprocessor_source(long *lenp)
             expr[ei] = 0;
             strip_macro_replacement_comments(expr);
             g_lex.line_no = logical_line;
-            cond = pp_eval_simple_expr(expr);
+            cond = active && pp_eval_simple_expr(expr);
             if (active && pp_eval_expr_malformed())
                 report_pp_expr_error(line_start, "if", expr);
             if (sp >= MAX_IFSTACK) {
@@ -1737,8 +1734,8 @@ char *filter_active_preprocessor_source(long *lenp)
                         expr[ei++] = *s++;
                     expr[ei] = 0;
                     strip_macro_replacement_comments(expr);
-                        g_lex.line_no = logical_line;
-                    cond = pp_eval_simple_expr(expr);
+                    g_lex.line_no = logical_line;
+                    cond = parent && pp_eval_simple_expr(expr);
                     if (parent && pp_eval_expr_malformed())
                         report_pp_expr_error(line_start, "elif", expr);
                     active = parent && cond;

@@ -1,5 +1,47 @@
 /* tppreg.c - preprocessor #if expression regression test */
 
+#define PP_SUM 1 + 2
+#define PP_SUM_ALIAS PP_SUM
+#define PP_ADD_TWO(x) x + 2
+#define PP_CALL_ALIAS PP_ADD_TWO
+#define PP_RECURSIVE 1 + PP_RECURSIVE
+
+#if 3 * PP_SUM != 5 || 3 * PP_CALL_ALIAS(1) != 5 || PP_RECURSIVE != 1
+#error incorrect preprocessing macro replacement
+#endif
+
+#if !defined PP_SUM || !defined(PP_SUM_ALIAS) || defined(PP_ABSENT)
+#error defined must inspect the unexpanded macro name
+#endif
+
+#if 0
+#if PP_ADD_TWO(1, 2)
+#error inactive directive was evaluated
+#endif
+#elif 3 * PP_SUM_ALIAS == 5
+#include <limits.h>
+#endif
+#if !defined CHAR_BIT
+#error macro precedence selected the wrong include
+#endif
+
+#if -1 < 1U || !(1u < -1) || (-3U % 8U) != 5U || (-1U >> 1) == -1
+#error unsigned preprocessing arithmetic was evaluated as signed
+#endif
+#if (1 ? -1 : 0U) < 0 || (-4 >> 1U) != -2 || (0xffffffffU / 2) != 0x7fffffff
+#error incorrect preprocessing operand conversions
+#endif
+#if 0
+#elif -1 > 1U
+#include <float.h>
+#endif
+#if !defined FLT_RADIX
+#error unsigned arithmetic selected the wrong include
+#endif
+#if -1 < 1U
+#include "tppreg-inactive.h"
+#endif
+
 #include <stdio.h>
 
 #define A 3

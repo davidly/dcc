@@ -3651,6 +3651,8 @@ static int mir_lower_expr_impl(const struct AstNode *node)
         insn->type = element_type;
         mir_set_node_memory(insn, node);
         insn->memory_size = type_size(element_type);
+        if (mir.has_vla)
+            insn->memory_flags |= MIR_MEMORY_FLAG_SUBSCRIPT_VALUE;
         return value;
         }
     case AST_MEMBER:
@@ -7478,6 +7480,59 @@ static int mir_declared_is_array_object(const char *name)
     return 0;
 }
 
+static void mir_repair_vla_subscript(struct MirInsn *insn)
+{
+    const struct MirInsn *base;
+    int depth;
+    int decl;
+    int type;
+    int stride;
+    int dimension;
+
+    if (insn->opcode == MIR_LOAD_INDIRECT &&
+        (insn->memory_flags & MIR_MEMORY_FLAG_SUBSCRIPT_VALUE) != 0)
+        insn->memory_flags &= ~MIR_MEMORY_FLAG_SUBSCRIPT_VALUE;
+    else if (insn->opcode != MIR_INDEX_ADDRESS)
+        return;
+    if (insn->src1 < 0)
+        return;
+    depth = insn->opcode == MIR_INDEX_ADDRESS;
+    base = mir_definition(insn->src1);
+    while (base != NULL && base->opcode == MIR_INDEX_ADDRESS) {
+        ++depth;
+        base = mir_definition(base->src1);
+    }
+    if (depth == 0 || base == NULL || base->opcode != MIR_LOAD ||
+        base->name[0] == 0)
+        return;
+    for (decl = 0; decl < mir.declared_count; ++decl)
+        if (mir.declared_is_vla[decl] &&
+            strcmp(mir.declared_names[decl], base->name) == 0)
+            break;
+    if (decl == mir.declared_count || depth > mir.declared_dim_counts[decl])
+        return;
+
+    /* An index under a deferred block declaration was built without its
+     * dimensions. An intermediate array row decays to its address. */
+    if (insn->opcode == MIR_LOAD_INDIRECT) {
+        if (depth < mir.declared_dim_counts[decl]) {
+            mir_replace_value_uses(insn->dst, insn->src1);
+            insn->opcode = MIR_NOP;
+            insn->dst = -1;
+        }
+        return;
+    }
+    type = mir.declared_types[decl];
+    stride = type_size(type);
+    if (stride <= 0)
+        return;
+    insn->memory_size = stride;
+    insn->type = type_add_ptr(type);
+    for (dimension = depth; dimension < mir.declared_dim_counts[decl]; ++dimension)
+        stride *= mir.declared_dims[decl][dimension];
+    insn->immediate = stride;
+}
+
 static int mir_declared_is_pointer_array(const char *name)
 {
     int i;
@@ -9955,6 +10010,10 @@ scoped_type_repair_done:
          * retried after it (see the second pass a few loops down). */
         (void)mir_try_resolve_deferred_member_address(insn);
     }
+
+    if (mir.has_vla)
+        for (i = 0; i < mir.count; ++i)
+            mir_repair_vla_subscript(&mir.insns[i]);
 
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
