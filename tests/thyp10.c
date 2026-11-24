@@ -47,6 +47,8 @@ int main(void)
     float tiny = frombits(0x322bcc77UL);
     float ntiny = frombits(0xb22bcc77UL);
     float minsub = frombits(0x00000001UL);
+    float inf = frombits(0x7f800000UL);
+    float nan = frombits(0x7fc12345UL);
 
     okbits("sinhf(-0)", sinhf(nzero), 0x80000000UL);
     okbits("tanhf(-0)", tanhf(nzero), 0x80000000UL);
@@ -56,6 +58,9 @@ int main(void)
     okbits("tanhf(-tiny)", tanhf(ntiny), 0xb22bcc77UL);
     okbits("sinhf(minsub)", sinhf(minsub), 0x00000001UL);
     okbits("tanhf(minsub)", tanhf(minsub), 0x00000001UL);
+    okbits("tanhf(+inf)", tanhf(inf), 0x3f800000UL);
+    okbits("tanhf(-inf)", tanhf(-inf), 0xbf800000UL);
+    okb("tanhf(NaN)", isnan(tanhf(nan)), 1);
 
     okb("sinhf(.001) ordinary",
         fabsf(sinhf(0.001f) - 0.001f) < 0.000001f, 1);

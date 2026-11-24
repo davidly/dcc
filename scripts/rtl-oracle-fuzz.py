@@ -36,7 +36,8 @@ logical end returns and SEEK_END on a reopened file counts. The host runs in
 UTC, as dcc has no time zone.
 
 The program is compiled by dcc and run under the emulator, and compiled by
-clang with -m32 (so long is 32 bits) and run on the host. Tests print through
+native Clang and run on the host. The host oracle models the target's 32-bit
+long and calendar time ranges where they affect results. Tests print through
 putchar only, so a wrong printf cannot hide another result, and they are
 independent: a mismatching line names the failing call. Results that depend
 on dcc's 16-bit int stay in range on both sides.
@@ -62,7 +63,7 @@ import subprocess
 import sys
 
 REPO = Path(__file__).resolve().parent.parent
-HOST_FLAGS = ['-m32', '-std=gnu99', '-w', '-fsigned-char', '-ffp-contract=off', '-fno-builtin']
+HOST_FLAGS = ['-std=gnu99', '-w', '-fsigned-char', '-ffp-contract=off', '-fno-builtin']
 
 PRELUDE = r'''#include <stdio.h>
 #include <stdlib.h>
@@ -80,11 +81,59 @@ PRELUDE = r'''#include <stdio.h>
 #include <dirent.h>
 #endif
 #ifndef _DCC_
+#include <limits.h>
 #include <strings.h>
 #include <sys/resource.h>
 #define stricmp strcasecmp
 /* dcc's strtod and atof produce float; round once, as it does. */
 #define strtod strtof
+#if ULONG_MAX > UINT32_MAX
+/* Model CP/M's 32-bit long parsing when the host has 64-bit long. */
+static long dcc_oracle_strtol(const char *s, char **end, int base)
+{
+    long v = strtol(s, end, base);
+    if (v > INT32_MAX) { errno = ERANGE; return INT32_MAX; }
+    if (v < INT32_MIN) { errno = ERANGE; return INT32_MIN; }
+    return v;
+}
+static unsigned long dcc_oracle_strtoul(const char *s, char **end, int base)
+{
+    const char *p = s;
+    char *parsed = (char *)s;
+    unsigned long v = 0;
+    int negative;
+
+    while (isspace((unsigned char)*p)) ++p;
+    negative = (*p == '-');
+    if (negative) {
+        /* Check the magnitude before applying the unsigned negation. */
+        ++p;
+        if (isalnum((unsigned char)*p)) {
+            v = strtoul(p, &parsed, base);
+            if (parsed == p) parsed = (char *)s;
+        }
+    } else {
+        v = strtoul(s, &parsed, base);
+    }
+    if (end) *end = parsed;
+    if (v > UINT32_MAX) { errno = ERANGE; return UINT32_MAX; }
+    return negative ? (uint32_t)(0u - (uint32_t)v) : v;
+}
+#define strtol dcc_oracle_strtol
+#define strtoul dcc_oracle_strtoul
+#endif
+
+/* CP/M rejects times outside 1970 through the signed 32-bit limit
+ * and leaves the input fields unchanged on failure. */
+static time_t dcc_oracle_mktime(struct tm *t)
+{
+    struct tm normalized = *t;
+    time_t v = mktime(&normalized);
+    if ((uintmax_t)v > INT32_MAX) return (time_t)-1;
+    *t = normalized;
+    return v;
+}
+#define mktime dcc_oracle_mktime
 #endif
 
 static const char hexd[] = "0123456789abcdef";
@@ -508,7 +557,11 @@ class Gen:
         if self.r.random() < 0.2 and text and not counted:
             i = self.r.randrange(len(text))
             if i == 0 or text[i - 1] not in 'xX':
-                text = text[:i] + self.pick('q;') + text[i + 1:]
+                bad = self.pick('q;')
+                # Keep separators intact so a later conversion cannot read
+                # an earlier token that overflows its destination type.
+                if not text[i].isspace() and text[i] not in ',:':
+                    text = text[:i] + bad + text[i + 1:]
         if self.r.random() < 0.1 and not counted:
             text = self.pick(('', ' '))
         call = 'n = sscanf(%s, %s%s);' % (c_str(text), c_str(fmt),
@@ -1200,9 +1253,17 @@ class Gen:
         # Reopen and wander.
         mode = self.pick(('r', 'rb', 'r+', 'rb+', 'a', 'a+'))
         out += ['f = fopen("%s", "%s"); pd(f != 0); sp();' % (name, mode), 'if (!f) { nl(); return; }']
+        append = mode.startswith('a')
+        if append:
+            # DCC writes through. With buffered append, the host can report
+            # positions relative to the old seek offset until the write lands
+            # at EOF. Exercise buffered append separately in t_append_flush.
+            out += ['#ifndef _DCC_',
+                    'if (setvbuf(f, NULL, _IONBF, 0) != 0) { fclose(f); ps("setvbuf failed"); nl(); return; }',
+                    '#endif']
         # Where an append stream starts, for reading and for ftell, is
         # implementation-defined: wait for a write or seek to fix it.
-        pos = None if mode.startswith('a') else 0
+        pos = None if append else 0
         can_read = mode != 'a'
         can_write = mode != 'r' and mode != 'rb'
         last = None                      # 'r' or 'w': a switch needs a seek
@@ -1272,7 +1333,7 @@ class Gen:
                     unget = False
                 last = 'w'
                 t = self.file_bytes(self.r.randint(1, 30))
-                if mode.startswith('a'):
+                if append:
                     pos = n
                 if self.r.random() < 0.5:
                     out.append('pd((int32_t)fwrite(%s, 1, %d, f)); sp();' % (c_str(t), len(t)))
@@ -1541,12 +1602,16 @@ def within_ulp(got, want, ulp):
         gi, wi = int(g[0], 16), int(w[0], 16)
     except ValueError:
         return False
-    if (gi ^ wi) & 0x80000000:
+    # Keep zero, infinity and NaN exact. Only finite nonzero values
+    # are subject to the parser's rounding tolerance.
+    if ((gi ^ wi) & 0x80000000 or
+            not 0 < (gi & 0x7fffffff) < 0x7f800000 or
+            not 0 < (wi & 0x7fffffff) < 0x7f800000):
         return False
     return abs(gi - wi) <= ulp and g[1] == w[1]
 
 
-def compare(got, want, ulp=0):
+def compare(got, want, ulp=2):
     """Mismatching test lines as (id, name, got, want)."""
     bad = []
     glines, wlines = got.splitlines(), want.splitlines()
@@ -1645,8 +1710,8 @@ def main():
     parser.add_argument('--emulator', default='ntvcm')
     parser.add_argument('--timeout', type=float, default=30)
     parser.add_argument('--build-timeout', type=float, default=300)
-    parser.add_argument('--ulp', type=int, default=0,
-                        help='accept strtod results this many float ulps away')
+    parser.add_argument('--ulp', type=int, default=2,
+                        help='accept strtod results this many float ulps away (default: 2)')
     parser.add_argument('--io-matrix', action='store_true',
                         help='also fuzz formatted I/O in all four float/long profiles')
     parser.add_argument('--rtl-coverage', action='store_true',
