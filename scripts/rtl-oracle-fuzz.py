@@ -12,14 +12,19 @@ short sequence of calls into the runtime library with random arguments:
   ctype.h           every classification and case mapping, and EOF
   qsort/bsearch     ints, strings and odd-sized records
   math.h            exact functions bit for bit, transcendental ones within
-                    the documented 5-6 significant digits
-  malloc family     allocate, grow, shrink, free and verify contents
+                    the documented 5-6 significant digits; arithmetic rounding,
+                    overflow, and the target subnormal policy
+  malloc family     allocate, grow, shrink, free, and verify live blocks
+                    survive allocation churn and failed realloc; forced coalescing
   div/ldiv/abs      quotients and remainders
   va_list printf    vsprintf, vsnprintf, vprintf, vfprintf, and printf,
                     fprintf and puts to stdout
   file I/O          create, reopen in every mode, then random reads, writes,
                     seeks, pushback and status checks against a model of the
-                    file; verify, rename and remove; tmpfile
+                    file; verify, rename and remove; tmpfile; descriptor
+                    writes across CP/M record and extent boundaries; append
+                    visibility after flush; text and binary Ctrl-Z reads; stream
+                    flag transitions; descriptor exhaustion and recovery
   time.h            gmtime, asctime, strftime, difftime, mktime round trips
                     and normalization
   properties        rand repeatability and range, setjmp/longjmp from nested
@@ -37,11 +42,15 @@ independent: a mismatching line names the failing call. Results that depend
 on dcc's 16-bit int stay in range on both sides.
 
   rtl-oracle-fuzz.py --seeds 1-200
+  rtl-oracle-fuzz.py --io-matrix                exercise all four float/long builds
+  rtl-oracle-fuzz.py --rtl-coverage             record executed DCCRTL assembly labels
   rtl-oracle-fuzz.py --generate 17 prog.c          only write seed 17's program
   rtl-oracle-fuzz.py --generate 17 prog.c --only 5,9
 """
 import argparse
 import concurrent.futures
+from collections import Counter
+import csv
 import math
 import os
 from pathlib import Path
@@ -65,8 +74,14 @@ PRELUDE = r'''#include <stdio.h>
 #include <stdarg.h>
 #include <setjmp.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
+#ifdef _DCC_
+#include <dirent.h>
+#endif
 #ifndef _DCC_
 #include <strings.h>
+#include <sys/resource.h>
 #define stricmp strcasecmp
 /* dcc's strtod and atof produce float; round once, as it does. */
 #define strtod strtof
@@ -185,6 +200,92 @@ static int check(const char *p, int n, int seed)
             return 0;
     return 1;
 }
+
+#ifdef _DCC_
+/* Use the DCC heap snapshot to leave too little tail room for the request. */
+static int heap_coalesce(int a_size, int b_size, int c_size, int order)
+{
+    meminfo_t initial, before, after;
+    char *left, *a, *b, *c, *right, *tail = 0, *merged = 0;
+    uintptr_t start;
+    int need = a_size + b_size + c_size - 8;
+    int result = 0;
+
+    meminfo(&initial);
+    left = malloc(37); a = malloc(a_size); b = malloc(b_size);
+    c = malloc(c_size); right = malloc(53);
+    if (!left || !a || !b || !c || !right) goto done;
+    fill(left, 37, 11); fill(right, 53, 29);
+    start = (uintptr_t)a;
+
+    meminfo(&before);
+    if (before.heap_growth > 48) {
+        tail = malloc(before.heap_growth - 32);
+        if (!tail) goto done;
+        fill(tail, 16, 47);
+    }
+    meminfo(&before);
+    if (before.heap_growth >= need) goto done;
+    merged = malloc(need);
+    if (merged) goto done;
+    result = 1;
+
+    if (order == 0) {
+        free(a); free(b); free(c);
+    } else if (order == 1) {
+        free(c); free(b); free(a);
+    } else {
+        free(a); free(c); free(b);
+    }
+    a = 0; b = 0; c = 0;
+    merged = malloc(need);
+    meminfo(&after);
+    if (merged && (uintptr_t)merged == start && after.heap_break == before.heap_break)
+        result |= 2;
+    if (merged) fill(merged, need, 61);
+    if (check(left, 37, 11) && check(right, 53, 29) && (!tail || check(tail, 16, 47)))
+        result |= 4;
+
+done:
+    free(merged); free(tail); free(right);
+    free(c); free(b); free(a); free(left);
+    meminfo(&after);
+    if (after.heap_break == initial.heap_break) result |= 8;
+    return result;
+}
+
+static int dir_make_file(const char *name)
+{
+    FILE *f = fopen(name, "wb");
+    int wrote, closed;
+    if (!f) return 0;
+    wrote = fputc(65, f);
+    closed = fclose(f);
+    return wrote == 65 && closed == 0;
+}
+
+static int dir_bit(const struct dirent *entry, const char *first, const char *second)
+{
+    if (!entry) return 0;
+    if (strcmp(entry->d_name, first) == 0) return 1;
+    if (strcmp(entry->d_name, second) == 0) return 2;
+    return 4;
+}
+
+static int dir_rest(DIR *dir, const char *first, const char *second, int seen)
+{
+    struct dirent *entry;
+    int bit;
+    while ((entry = readdir(dir)) != 0) {
+        bit = dir_bit(entry, first, second);
+        if (bit == 4 || (seen & bit)) return 0;
+        seen |= bit;
+    }
+    entry = readdir(dir);
+    return seen == 3 && entry == 0;
+}
+#endif
+
 '''
 
 WORDS = ['', 'a', 'ab', 'abc', 'abcab', 'b', 'ba', 'cab', 'AbC', 'ABC', 'a b', ' a', 'x,y',
@@ -713,6 +814,314 @@ class Gen:
                 lines.append('if (p[%d]) { pd(check(p[%d], %d, %d)); free(p[%d]); }' % (k, k, n, oseed, k))
         return lines + ['nl();']
 
+    def t_heap_pressure(self, tid):
+        sizes = [self.r.randint(96, 480) for _ in range(8)]
+        seed = self.r.randrange(256)
+        return ['char *p[8], *q;', 'int i, j, ok = 1;',
+                'int sizes[8] = { %s };' % ', '.join(map(str, sizes)),
+                'int seed = %d;' % seed,
+                '#ifdef _DCC_', 'volatile size_t impossible = 60000u;',
+                '#else', 'volatile size_t impossible = (size_t)-1;', '#endif',
+                'for (i = 0; i < 8; ++i) {',
+                '    p[i] = malloc(sizes[i]);',
+                '    if (p[i]) fill(p[i], sizes[i], seed + i);',
+                '    else ok = 0;',
+                '}',
+                'for (i = 1; i < 8; i += 2) {',
+                '    free(p[i]);',
+                '    sizes[i] += 17;',
+                '    p[i] = malloc(sizes[i]);',
+                '    if (p[i]) fill(p[i], sizes[i], seed + i);',
+                '    else ok = 0;',
+                '    for (j = 0; j < 8; ++j)',
+                '        if (p[j] && !check(p[j], sizes[j], seed + j)) ok = 0;',
+                '}',
+                'if (p[0]) {',
+                '    q = realloc(p[0], impossible);',
+                '    if (q) { p[0] = q; ok = 0; }',
+                '    if (!check(p[0], sizes[0], seed)) ok = 0;',
+                '}',
+                'for (i = 0; i < 8; ++i) free(p[i]);',
+                'tag(%d, "heap pressure"); pd(ok); nl();' % tid]
+
+    def t_heap_coalescing(self, tid):
+        sizes = [self.r.randint(96, 640) for _ in range(3)]
+        order = self.r.randrange(3)
+        return ['tag(%d, "heap coalescing");' % tid,
+                '#ifdef _DCC_',
+                'pd(heap_coalesce(%d, %d, %d, %d));' % (*sizes, order),
+                '#else',
+                '/* All four target heap invariants should hold. */',
+                'pd(15);',
+                '#endif', 'nl();']
+
+    def t_float_edges(self, tid):
+        magnitude = self.pick((0, 1, 0x007fffff, 0x00800000, 0x3f7fffff,
+                               0x3f800000, 0x3f800001, 0x7f7fffff, 0x7f800000))
+        bits = magnitude | self.pick((0, 0x80000000))
+        return ['volatile float x = bitsf(0x%08lxUL);' % bits,
+                'tag(%d, "float edges");' % tid,
+                'pf(fabsf(x)); sp();',
+                'pd(!!isfinite(x)); sp(); pd(!!isinf(x)); sp(); pd(!!signbit(x)); nl();']
+
+    def t_descriptor_file(self, tid):
+        boundary = self.pick((128, 16384))
+        patch = self.r.randrange(128, 256)
+        return ['char block[128], sample[3];',
+                'int fd, i, ok = 1;', 'FILE *f;',
+                'long boundary = %dL;' % boundary,
+                'memset(block, 0x1a, sizeof block);',
+                'fd = open("FD.DAT", O_CREAT | O_TRUNC | O_RDWR, 0600);',
+                'if (fd < 0) ok = 0;',
+                'else {',
+                '    for (i = 0; i <= boundary / 128; ++i)',
+                '        if (write(fd, block, sizeof block) != sizeof block) ok = 0;',
+                '    if (lseek(fd, boundary - 1, SEEK_SET) != boundary - 1) ok = 0;',
+                '    block[0] = (char)%d; block[1] = 0;' % patch,
+                '    if (write(fd, block, 2) != 2) ok = 0;',
+                '    if (close(fd) != 0) ok = 0;',
+                '}',
+                'fd = open("FD.DAT", O_RDONLY);',
+                'if (fd < 0) ok = 0;',
+                'else {',
+                '    if (lseek(fd, boundary - 1, SEEK_SET) != boundary - 1) ok = 0;',
+                '    if (read(fd, sample, sizeof sample) != sizeof sample) ok = 0;',
+                '    else if ((unsigned char)sample[0] != %d || sample[1] || sample[2] != 0x1a) ok = 0;' % patch,
+                '    if (close(fd) != 0) ok = 0;',
+                '}',
+                'f = fopen("FD.DAT", "rb");',
+                'if (!f) ok = 0;',
+                'else {',
+                '    if (fseek(f, boundary - 1, SEEK_SET) != 0) ok = 0;',
+                '    if (fgetc(f) != %d || fgetc(f) != 0 || fgetc(f) != 0x1a) ok = 0;' % patch,
+                '    if (fclose(f) != 0) ok = 0;',
+                '}',
+                'if (remove("FD.DAT") != 0) ok = 0;',
+                'tag(%d, "descriptor boundary"); pd(ok); nl();' % tid]
+
+    def t_append_flush(self, tid):
+        size = self.pick((128, 256))
+        data = self.word(8) or 'append'
+        offset = self.r.randrange(size)
+        return ['static const char suffix[] = %s;' % c_str(data),
+                'char block[%d], actual[sizeof suffix - 1];' % size,
+                'FILE *writer, *reader;', 'int ready = 0, visible = 0, prefix = 0;',
+                'memset(block, 65, sizeof block);',
+                'writer = fopen("APPEND.DAT", "wb");',
+                'if (writer) {',
+                '    ready = fwrite(block, 1, sizeof block, writer) == sizeof block;',
+                '    if (fclose(writer) != 0) ready = 0;',
+                '}',
+                'writer = fopen("APPEND.DAT", "ab");',
+                'if (writer) {',
+                '    if (fseek(writer, %dL, SEEK_SET) != 0) ready = 0;' % offset,
+                '    if (fwrite(suffix, 1, sizeof actual, writer) != sizeof actual) ready = 0;',
+                '    if (fflush(writer) != 0) ready = 0;',
+                '    reader = fopen("APPEND.DAT", "rb");',
+                '    if (reader) {',
+                '        prefix = fread(block, 1, sizeof block, reader) == sizeof block;',
+                '        if (prefix) {',
+                '            int i;',
+                '            for (i = 0; i < sizeof block; ++i) if (block[i] != 65) prefix = 0;',
+                '            visible = fread(actual, 1, sizeof actual, reader) == sizeof actual',
+                '                   && memcmp(actual, suffix, sizeof actual) == 0;',
+                '        }',
+                '        if (fclose(reader) != 0) visible = 0;',
+                '    }',
+                '    if (fclose(writer) != 0) ready = 0;',
+                '} else ready = 0;',
+                'if (remove("APPEND.DAT") != 0) ready = 0;',
+                'tag(%d, "append flush"); pd(ready); sp(); pd(prefix); sp(); pd(visible); nl();' % tid]
+
+    def t_text_eof(self, tid):
+        offset = self.pick((1, 127, 128, 129))
+        before, after = self.r.sample(range(65, 91), 2)
+        return ['char block[256], text[4] = { 0 };', 'FILE *f;',
+                'int ready = 0, got_text = 0, eof = 0, error = 0;',
+                'int binary_marker = -2, trailing = -2;',
+                'memset(block, 46, sizeof block);',
+                'block[%d] = %d; block[%d] = 26; block[%d] = %d;' %
+                (offset - 1, before, offset, offset + 1, after),
+                'f = fopen("TEXT.DAT", "wb");',
+                'if (f) {',
+                '    ready = fwrite(block, 1, sizeof block, f) == sizeof block;',
+                '    if (fclose(f) != 0) ready = 0;',
+                '}',
+                'f = fopen("TEXT.DAT", "r");',
+                'if (f) {',
+                '    if (fseek(f, %dL, SEEK_SET) == 0) {' % (offset - 1),
+                '        got_text = fgets(text, sizeof text, f) != 0;',
+                '        eof = !!feof(f); error = !!ferror(f);',
+                '        #ifndef _DCC_',
+                '        /* Model the CP/M line read using the actual bytes returned by the host. */',
+                '        if (got_text && text[1] == 26 && !eof && !error) { text[1] = 0; eof = 1; }',
+                '        #endif',
+                '    }',
+                '    if (fclose(f) != 0) ready = 0;',
+                '}',
+                'f = fopen("TEXT.DAT", "rb");',
+                'if (f) {',
+                '    if (fseek(f, %dL, SEEK_SET) == 0) {' % offset,
+                '        binary_marker = fgetc(f); trailing = fgetc(f);',
+                '    }',
+                '    if (fclose(f) != 0) ready = 0;',
+                '}',
+                'if (remove("TEXT.DAT") != 0) ready = 0;',
+                'tag(%d, "text EOF"); pd(ready); sp(); pd(got_text); sp(); pstr(text); sp();' % tid,
+                'pd(eof); sp(); pd(error); sp(); pd(binary_marker); sp(); pd(trailing); nl();']
+
+    def t_descriptor_recovery(self, tid):
+        slot = self.r.randrange(8)
+        return ['char data[128], byte;',
+                'int fds[8], i, extra, setup = 0, exhausted = 0, reopened = 0, positions = 1;',
+                'FILE *f;',
+                'for (i = 0; i < sizeof data; ++i) data[i] = (char)i;',
+                'f = fopen("LIMIT.DAT", "wb");',
+                'if (f) {',
+                '    setup = fwrite(data, 1, sizeof data, f) == sizeof data;',
+                '    if (fclose(f) != 0) setup = 0;',
+                '}',
+                '#ifndef _DCC_',
+                '/* Give the host the target budget of eight files plus standard I/O. */',
+                'struct rlimit saved, limit;',
+                'int limited = 0;',
+                'if (getrlimit(RLIMIT_NOFILE, &saved) == 0) {',
+                '    limit = saved; limit.rlim_cur = 11;',
+                '    limited = setrlimit(RLIMIT_NOFILE, &limit) == 0;',
+                '}',
+                'if (!limited) setup = 0;',
+                '#endif',
+                'for (i = 0; i < 8; ++i) {',
+                '    fds[i] = open("LIMIT.DAT", O_RDONLY);',
+                '    if (fds[i] < 0 || lseek(fds[i], (long)(i * 3), SEEK_SET) != i * 3) positions = 0;',
+                '}',
+                'errno = 0; extra = open("LIMIT.DAT", O_RDONLY);',
+                'exhausted = extra == -1 && errno == EMFILE;',
+                'if (extra >= 0) close(extra);',
+                'if (fds[%d] >= 0 && close(fds[%d]) == 0) {' % (slot, slot),
+                '    fds[%d] = -1;' % slot,
+                '    extra = open("LIMIT.DAT", O_RDONLY);',
+                '    if (extra >= 0) {',
+                '        reopened = read(extra, &byte, 1) == 1 && byte == 0;',
+                '        if (close(extra) != 0) reopened = 0;',
+                '    }',
+                '}',
+                'for (i = 0; i < 8; ++i) {',
+                '    if (fds[i] >= 0) {',
+                '        if (read(fds[i], &byte, 1) != 1 || byte != i * 3) positions = 0;',
+                '        if (close(fds[i]) != 0) positions = 0;',
+                '    }',
+                '}',
+                '#ifndef _DCC_',
+                'if (limited && setrlimit(RLIMIT_NOFILE, &saved) != 0) setup = 0;',
+                '#endif',
+                'if (remove("LIMIT.DAT") != 0) setup = 0;',
+                'tag(%d, "descriptors"); pd(setup); sp(); pd(exhausted); sp();' % tid,
+                'pd(reopened); sp(); pd(positions); nl();']
+
+    def t_float_rounding(self, tid):
+        return ['volatile float even = bitsf(0x3f800000UL), odd = bitsf(0x3f800001UL);',
+                'volatile float half_ulp = bitsf(0x33800000UL), half = bitsf(0x3f000000UL);',
+                'volatile float small = bitsf(0x00800000UL), large = bitsf(0x7f7fffffUL);',
+                'volatile float result;',
+                'tag(%d, "rounding");' % tid,
+                'result = even + half_ulp; pf(result); sp();',
+                'result = odd + half_ulp; pf(result); sp();',
+                'result = small * half;',
+                '#ifndef _DCC_',
+                '/* DCC multiply flushes subnormal results to signed zero. */',
+                'if (fbits(result) == 0x00400000UL) result = 0.0f;',
+                '#endif',
+                'pf(result); sp(); pf(ldexpf(small, -1)); sp();',
+                'result = large + large; pf(result); nl();']
+
+    def t_stream_flags(self, tid):
+        size = self.pick((128, 256))
+        return ['char data[%d];' % size, 'FILE *f;', 'int ready = 0, c;',
+                'memset(data, 65, sizeof data);',
+                'f = fopen("FLAGS.DAT", "wb");',
+                'if (f) {',
+                '    ready = fwrite(data, 1, sizeof data, f) == sizeof data;',
+                '    if (fclose(f) != 0) ready = 0;',
+                '}',
+                'f = fopen("FLAGS.DAT", "rb");',
+                'tag(%d, "stream flags"); pd(ready); sp();' % tid,
+                'if (f) {',
+                '    pd(fseek(f, 0L, SEEK_END)); sp();',
+                '    c = fgetc(f); pd(c == EOF); sp(); pd(!!feof(f)); sp(); pd(!!ferror(f)); sp();',
+                '    c = ungetc(90, f); pd(c); sp(); pd(!!feof(f)); sp(); pd(fgetc(f)); sp();',
+                '    c = fgetc(f); pd(c == EOF); sp(); pd(!!feof(f)); sp();',
+                '    pd(fseek(f, 0L, SEEK_SET)); sp(); pd(!!feof(f)); sp(); pd(fgetc(f)); sp();',
+                '    c = fputc(42, f); pd(c == EOF); sp(); pd(!!ferror(f)); sp();',
+                '    clearerr(f); pd(!!feof(f)); sp(); pd(!!ferror(f)); sp();',
+                '    pd(fgetc(f)); sp(); pd(fclose(f)); sp();',
+                '}',
+                'pd(remove("FLAGS.DAT")); nl();']
+
+    def t_directory_scan(self, tid):
+        files = ['OR1A.TMP', 'OR2A.TMP', 'OR1B.TMP', 'OR2B.TMP']
+        self.r.shuffle(files)
+        return ['#ifdef _DCC_',
+                'DIR *a, *b; struct dirent *entry; int first, setup = 1;',
+                'int busy = 0, resumed = 0, switched = 0, restarted = 0;'] + [
+                'if (!dir_make_file(%s)) setup = 0;' % c_str(name) for name in files] + [
+                'a = opendir("OR?A.TMP");',
+                'if (a) {',
+                '    entry = readdir(a);',
+                '    first = dir_bit(entry, "OR1A.TMP", "OR2A.TMP");',
+                '    errno = 0; b = opendir("OR?B.*");',
+                '    busy = b == 0 && errno == EMFILE;',
+                '    if (b) closedir(b);',
+                '    if (first == 1 || first == 2) resumed = dir_rest(a, "OR1A.TMP", "OR2A.TMP", first);',
+                '    if (closedir(a) != 0) resumed = 0;',
+                '}',
+                'b = opendir("OR?B.*");',
+                'if (b) {',
+                '    switched = dir_rest(b, "OR1B.TMP", "OR2B.TMP", 0);',
+                '    if (closedir(b) != 0) switched = 0;',
+                '}',
+                'a = opendir("OR?A.TMP");',
+                'if (a) {',
+                '    restarted = dir_rest(a, "OR1A.TMP", "OR2A.TMP", 0);',
+                '    if (closedir(a) != 0) restarted = 0;',
+                '}',
+                ] + ['if (remove(%s) != 0) setup = 0;' % c_str(name) for name in files] + [
+                'tag(%d, "directory scan");' % tid,
+                'pd(setup); sp(); pd(busy); sp(); pd(resumed); sp(); pd(switched); sp(); pd(restarted);',
+                '#else', 'tag(%d, "directory scan");' % tid,
+                '/* CP/M permits one active wildcard search; validate against its contract. */',
+                'ps("1 1 1 1 1");', '#endif', 'nl();']
+
+    def t_format_edges(self, tid, floatio=False, longio=False):
+        width = self.pick((-12, -8, 8, 12))
+        precision = self.r.randint(1, 6)
+        limit = self.r.randint(1, 8)
+        fmt = '%%%d.%dd' % (width, precision)
+        values = ['42']
+        if longio:
+            fmt += ':%ld'
+            values.append(c_long(self.r.randint(-1000000000, 1000000000)))
+        if floatio:
+            fmt += ':%.2f'
+            values.append(c_float(self.r.randint(-1000, 1000) / 8))
+        call_args = ', '.join([c_str(fmt), *values])
+        return ['char b[64];', 'int n, a = -1, c;', 'FILE *f;',
+                'memset(b, 35, sizeof b);',
+                'n = sprintf(b, %s);' % call_args,
+                'tag(%d, "format sprintf"); pd(n); sp(); pstr(b); nl();' % tid,
+                'memset(b, 35, sizeof b);',
+                'n = snprintf(b, %d, %s);' % (limit, call_args),
+                'tag(%d, "format edges"); pd(n); sp(); pmem(b, 16); sp();' % tid,
+                'f = fopen("SCAN.DAT", "w");',
+                'if (f) { fputs("42X", f); fclose(f); }',
+                'f = fopen("SCAN.DAT", "r");',
+                'if (f) {',
+                '    n = fscanf(f, "%d%d", &a, &c);',
+                '    pd(n); sp(); pd(a); sp(); pd(fgetc(f));',
+                '    fclose(f);',
+                '}',
+                'remove("SCAN.DAT"); nl();']
+
     # ---------------------------------------------------------- va_list
 
     def t_vprintf(self, tid):
@@ -966,8 +1375,11 @@ class Gen:
 
     def t_setjmp(self, tid):
         depth, val = self.r.randint(0, 6), self.pick((0, 1, 2, -1, 255, 32767))
-        return ['volatile int n = 0;', 'int r;', 'r = setjmp(jb);',
-                'if (r == 0) { n = %d; jdeep(%d, %d); n = -99; }' % (depth + 10, depth, val),
+        expected = val or 1
+        return ['volatile int n = 0;', 'int r;', 'switch (setjmp(jb)) {',
+                'case 0: n = %d; jdeep(%d, %d); n = -99; r = 0; break;' % (depth + 10, depth, val),
+                'case %d: r = %d; break;' % (expected, expected),
+                'default: r = -99; break;', '}',
                 'tag(%d, "setjmp");' % tid, 'pd(r); sp(); pd(n); nl();']
 
     def t_mb(self, tid):
@@ -988,8 +1400,12 @@ class Gen:
     def program(self, count, only=None):
         names = [n for n, w in self.TESTS for _ in range(w)]
         body, calls = [], []
-        for tid in range(1, count + 1):
-            lines = getattr(self, self.pick(names))(tid)
+        extra = ('t_heap_pressure', 't_float_edges', 't_descriptor_file', 't_format_edges',
+                 't_append_flush', 't_text_eof', 't_descriptor_recovery',
+                 't_float_rounding', 't_stream_flags', 't_directory_scan', 't_heap_coalescing')
+        for tid in range(1, count + len(extra) + 1):
+            name = self.pick(names) if tid <= count else extra[tid - count - 1]
+            lines = getattr(self, name)(tid)
             if only is not None and tid not in only:
                 continue
             body.append('static void t%d(void)\n{\n%s\n}\n' % (tid, '\n'.join('    ' + ln for ln in lines)))
@@ -1020,11 +1436,57 @@ def host_expected(source, work, timeout):
     return run.stdout.decode('latin-1'), ''
 
 
-def dcc_output(source, build, peep, args):
+def runtime_label_lines():
+    source = (REPO / 'DCCRTL.MAC').read_text(encoding='latin-1')
+    return {match.group(1).upper(): number
+            for number, line in enumerate(source.splitlines(), 1)
+            for match in [re.match(r'([_a-zA-Z]\w*):', line)] if match}
+
+
+def runtime_label_hits(build):
+    with (build / 'rtl-pc.csv').open(newline='') as profile:
+        counts = {int(row['pc']): int(row['count']) for row in csv.DictReader(profile)}
+    with (build / 'RTLMIN.SYM').open(encoding='latin-1') as symbols:
+        for line in symbols:
+            fields = line.split()
+            if len(fields) < 3 or fields[2] != 'code':
+                continue
+            name, offset = fields[:2]
+            # dccmake links RTLMIN first at the CP/M COM load address.
+            count = counts.get(0x100 + int(offset, 16), 0)
+            if count:
+                yield name.upper(), count
+
+
+def report_rtl_coverage(work, seeds):
+    labels = runtime_label_lines()
+    builds_hit, counts = Counter(), Counter()
+    builds = 0
+    for seed in seeds:
+        for profile in (Path(work) / str(seed)).glob('**/rtl-pc.csv'):
+            if not (profile.parent / 'RTLMIN.SYM').is_file():
+                continue
+            builds += 1
+            for name, count in runtime_label_hits(profile.parent):
+                if name in labels:
+                    builds_hit[name] += 1
+                    counts[name] += count
+    path = Path(work) / 'rtl-coverage.tsv'
+    with path.open('w', newline='') as report:
+        writer = csv.writer(report, delimiter='\t', lineterminator='\n')
+        writer.writerow(('source_line', 'label', 'builds_hit', 'executions'))
+        for name in sorted(counts, key=labels.get):
+            writer.writerow((labels[name], name, builds_hit[name], counts[name]))
+    print('%d DCCRTL labels reached across %d emulator profiles (%s)' % (len(counts), builds, path))
+    return bool(counts)
+
+
+def dcc_output(source, build, peep, args, floatio=True, longio=True):
     shutil.rmtree(build, ignore_errors=True)
     cmd = [str(REPO / 'dccmake'), 'dcc-input=%s' % source, 'dcc-output=T',
            'dcc-build-dir=%s' % build, 'dcc-peep=%s' % ('true' if peep else 'false'),
-           'dcc-stack-bytes=2048', 'dcc-floatio=true', 'dcc-flongio=true',
+           'dcc-stack-bytes=2048', 'dcc-floatio=%s' % str(floatio).lower(),
+           'dcc-flongio=%s' % str(longio).lower(),
            'ntvcm-tool=%s' % args.emulator]
     try:
         r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, stdin=subprocess.DEVNULL,
@@ -1033,13 +1495,26 @@ def dcc_output(source, build, peep, args):
         return None, 'build timed out'
     if r.returncode != 0:
         log = [ln for ln in (r.stdout + r.stderr).splitlines() if not ln.startswith('+')]
-        errors = [ln for ln in log if 'error' in ln.lower() or 'fatal' in ln.lower()]
+        errors = [ln for ln in log if any(term in ln.lower() for term in
+                                         ('error', 'fatal', 'undefined symbol'))
+                  and not ln.startswith('No Fatal error')]
         return None, 'build failed: ' + ((errors or log or ['?'])[0].replace(str(source) + ':', ''))[:160]
+    emulator_cmd = [args.emulator, '-s:0']
+    if args.rtl_coverage:
+        emulator_cmd.append('-g:rtl-pc.csv')
     try:
-        run = subprocess.run([args.emulator, '-s:0', 'T.COM'], cwd=build, capture_output=True,
+        run = subprocess.run([*emulator_cmd, 'T.COM'], cwd=build, capture_output=True,
                              timeout=args.timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return None, 'run timed out'
+    if run.returncode != 0:
+        detail = run.stderr.decode('latin-1').strip().splitlines()
+        why = 'emulator exited with status %d' % run.returncode
+        if detail:
+            why += ': ' + detail[0][:160]
+        return None, why
+    if args.rtl_coverage and not (build / 'rtl-pc.csv').is_file():
+        return None, 'emulator did not write its per-PC profile'
     return run.stdout.decode('latin-1').replace('\r', ''), ''
 
 
@@ -1048,13 +1523,15 @@ def close_enough(got, want):
     try:
         g = struct.unpack('<f', struct.pack('<I', int(got, 16)))[0]
         w = struct.unpack('<f', struct.pack('<I', int(want, 16)))[0]
-    except ValueError:
+    except (ValueError, struct.error):
         return False
     if math.isnan(w) or math.isnan(g):
         return math.isnan(w) and math.isnan(g)
     if math.isinf(w) or math.isinf(g):
-        return g == w or (math.isinf(w) and abs(g) > 1e37)
-    return abs(g - w) <= 3e-5 * max(abs(w), 1.0)
+        return g == w
+    if w == 0:
+        return g == 0 and math.copysign(1.0, g) == math.copysign(1.0, w)
+    return abs(g - w) <= 3e-5 * abs(w)
 
 
 def within_ulp(got, want, ulp):
@@ -1077,16 +1554,16 @@ def compare(got, want, ulp=0):
         g = glines[i] if i < len(glines) else '<missing>'
         if g == w:
             continue
-        m = re.match(r'(\d+) (~?)([^:]*): (.*)$', w)
+        m = re.match(r'(\d+) ([~^]?)([^:]*): (.*)$', w)
         if m and m.group(2):
-            gm = re.match(r'(\d+) ~[^:]*: (.*)$', g)
-            if gm and close_enough(gm.group(2), m.group(4)):
-                continue
-        if m and m.group(3).startswith('^') and ulp:
-            gm = re.match(r'(\d+) \^[^:]*: (.*)$', g)
-            if gm and within_ulp(gm.group(2), m.group(4), ulp):
-                continue
-        bad.append((m.group(1) if m else '?', (m.group(3) if m else w).split()[0].lstrip('^'), g, w))
+            prefix = w[:m.start(4)]
+            if g.startswith(prefix):
+                result = g[len(prefix):]
+                if m.group(2) == '~' and close_enough(result, m.group(4)):
+                    continue
+                if m.group(2) == '^' and ulp and within_ulp(result, m.group(4), ulp):
+                    continue
+        bad.append((m.group(1) if m else '?', (m.group(3) if m else w).split()[0], g, w))
     if len(glines) > len(wlines):
         bad.append(('?', 'extra output', glines[len(wlines)], ''))
     return bad
@@ -1098,18 +1575,32 @@ def run_seed(seed, args):
     work.mkdir(parents=True)
     source = work / 't.c'
     source.write_text(Gen(seed).program(args.tests), encoding='latin-1')
-    want, why = host_expected(source, work, args.timeout)
-    if want is None:
-        return seed, 'INVALID', why, []
-    results = []
-    for peep in (False, True):
-        got, why = dcc_output(source, work / ('peep' if peep else 'nopeep'), peep, args)
-        if got is None:
-            return seed, 'BUILD', why, []
-        results.append(('peep' if peep else 'nopeep', compare(got, want, args.ulp)))
-    bad = [(cfg, b) for cfg, rows in results for b in rows]
+    profiles = [(work, True, True)]
+    if args.io_matrix:
+        for name, floatio, longio in (('plain', False, False), ('float', True, False),
+                                     ('long', False, True), ('float-long', True, True)):
+            profile = work / name
+            profile.mkdir()
+            lines = Gen(seed).t_format_edges(1, floatio, longio)
+            (profile / 't.c').write_text(PRELUDE + '\nint main(void)\n{\n' +
+                                         '\n'.join('    ' + line for line in lines) +
+                                         '\n    return 0;\n}\n', encoding='latin-1')
+            profiles.append((profile, floatio, longio))
+    bad = []
+    for profile, floatio, longio in profiles:
+        source = profile / 't.c'
+        prefix = '' if profile == work else profile.name + '/'
+        want, why = host_expected(source, profile, args.timeout)
+        if want is None:
+            return seed, 'INVALID', prefix + why, []
+        for peep in (False, True):
+            cfg = 'peep' if peep else 'nopeep'
+            got, why = dcc_output(source, profile / cfg, peep, args, floatio, longio)
+            if got is None:
+                return seed, 'BUILD', prefix + cfg + ': ' + why, []
+            bad.extend((prefix + cfg, row) for row in compare(got, want, args.ulp))
     if not bad:
-        if not args.keep:
+        if not args.keep and not args.rtl_coverage:
             shutil.rmtree(work, ignore_errors=True)
         return seed, 'ok', '', []
     return seed, 'FAIL', '', bad
@@ -1141,13 +1632,14 @@ def fuzz(args):
     print('\n%d programs: %s' % (len(seeds), ', '.join('%s %d' % (k, counts[k]) for k in sorted(counts))))
     for name, where in sorted(names.items()):
         print('  %-12s %4d mismatches, first seed %d test %s' % (name, len(where), where[0][0], where[0][1]))
-    return 1 if names or counts.get('BUILD') else 0
+    coverage_ok = not args.rtl_coverage or report_rtl_coverage(args.work, seeds)
+    return 1 if not coverage_ok or any(kind != 'ok' for kind in counts) else 0
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--seeds', default='1-50')
-    parser.add_argument('--tests', type=int, default=40, help='tests per program')
+    parser.add_argument('--tests', type=int, default=40, help='random tests per program, plus additional boundary cases')
     parser.add_argument('--jobs', type=int, default=os.cpu_count() or 4)
     parser.add_argument('--work', default=str(REPO / 'build' / 'rtl-oracle-fuzz'))
     parser.add_argument('--emulator', default='ntvcm')
@@ -1155,6 +1647,10 @@ def main():
     parser.add_argument('--build-timeout', type=float, default=300)
     parser.add_argument('--ulp', type=int, default=0,
                         help='accept strtod results this many float ulps away')
+    parser.add_argument('--io-matrix', action='store_true',
+                        help='also fuzz formatted I/O in all four float/long profiles')
+    parser.add_argument('--rtl-coverage', action='store_true',
+                        help='keep builds and write a DCCRTL label-hit report using NTVMC per-PC profiling')
     parser.add_argument('--keep', action='store_true', help='keep passing seeds too')
     parser.add_argument('--verbose', action='store_true', help='print every mismatch')
     parser.add_argument('--generate', nargs=2, metavar=('SEED', 'C'))
