@@ -1046,14 +1046,14 @@ static int ast_other_supported_uncached(const struct AstNode *n)
         /* Short-circuit `a && b` / `a || b`: pure test-and-branch producing a
          * 0/1 int, no arithmetic conversion.  The builder nests these
          * left-associatively, so a recursive walk emits a flat short-circuit
-         * chain label-for-label.  A wholly constant logical is folded by the
-         * constant evaluator -> decline.  Operands are required to be supported
-         * plain-int values so the tested type stays 16-bit. */
+         * chain label-for-label. Constant operands need not fold: a guarded
+         * division by zero can remain unevaluated. */
         if (ast_node_is_const(n)) {
             /* A wholly constant logical (`A || B` of macros) still has to be
              * a value where nothing folds it first; accept the foldable ones. */
             long cv;
-            return ast_const_scalar_fold(n, &cv);
+            if (ast_const_scalar_fold(n, &cv))
+                return 1;
         }
         if (!ast_logical_operand_ok(n->a) || !ast_logical_operand_ok(n->b))
             return 0;
@@ -2347,8 +2347,14 @@ static int ast_const_scalar_extended(const struct AstNode *n, long *out, int dep
         return 1;
     case AST_LOGAND:
     case AST_LOGOR:
-        if (!ast_const_float_value(n->a, &fa, depth + 1) ||
-            !ast_const_float_value(n->b, &fb, depth + 1))
+        if (!ast_const_float_value(n->a, &fa, depth + 1))
+            return 0;
+        if ((n->kind == AST_LOGAND && fa == 0.0f) ||
+            (n->kind == AST_LOGOR && fa != 0.0f)) {
+            *out = n->kind == AST_LOGOR;
+            return 1;
+        }
+        if (!ast_const_float_value(n->b, &fb, depth + 1))
             return 0;
         *out = n->kind == AST_LOGAND ? (fa != 0.0f && fb != 0.0f) :
                                       (fa != 0.0f || fb != 0.0f);

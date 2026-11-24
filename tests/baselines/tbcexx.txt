@@ -1,0 +1,5 @@
+constant 294 31
+loaded 43713
+carry 65536 65536
+zero 65536
+control 0 0 10

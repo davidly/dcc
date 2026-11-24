@@ -556,7 +556,10 @@ static int pass_elim_dead_ix_stores(void)
         /* A direct store to escaped frame storage remains removable until an
          * indirect access or call could observe it. */
         if (may_access_escaped_frame(tmp)) {
-            int first_escaped = escaped_from < -128 ? 0 : escaped_from + 128;
+            /* MIR uses IY as a second frame base for large frames. Such reads
+             * alias IX slots without constructing an address in HL. */
+            int first_escaped = strstr(tmp, "(iy") != NULL || escaped_from < -128
+                                ? 0 : escaped_from + 128;
             for (idx = first_escaped; idx < 256; ++idx)
                 last_store[idx] = -1;
         }
@@ -11090,7 +11093,9 @@ static int pass_hoist_index_ptr_to_bc(void)
             if (eq(k, pat_l) || eq(k, pat_h))
                 continue;
             if (strstr(lines[k], probe_p) != NULL || strstr(lines[k], probe_p1) != NULL) { ok = 0; break; }
-            if (line_touches_bc(lines[k])) { ok = 0; break; }
+            /* EXX replaces BC implicitly; a reload in the alternate bank
+             * cannot use the BC primed before the loop. */
+            if (line_touches_bc(lines[k]) || line_clobbers_bc(lines[k])) { ok = 0; break; }
         }
         if (!ok)
             continue;
