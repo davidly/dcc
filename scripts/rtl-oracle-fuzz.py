@@ -490,7 +490,7 @@ class Gen:
             if k:
                 fmt += sep if sep.strip() else ' '
                 text += sep if sep else ' '
-            text += self.pick(('', '', ' ', '  ', '\t'))
+            leading = self.pick(('', '', ' ', '  ', '\t'))
             kind = self.pick(('d', 'd', 'i', 'u', 'x', 'X', 'o', 'c', 'nc', 's', 'ns',
                               'ld', 'lu', 'lx', 'skip'))
             v = 'v%d' % k
@@ -540,6 +540,11 @@ class Gen:
             elif kind in ('c', 'nc'):
                 n = 1 if kind == 'c' else self.r.randint(1, 4)
                 tok = ''.join(self.pick('abcxyz') for _ in range(n))
+                # Without format whitespace, %c reads the padding as part of
+                # its field. Keep the whole field within the conversion width.
+                if not fmt[-1:].isspace():
+                    tok = (leading + tok)[:n]
+                    leading = ''
                 counted = counted or kind == 'nc'
                 decls.append("char %s[6] = \"?????\";" % v)
                 fmt += '%c' if kind == 'c' else '%%%dc' % n
@@ -553,7 +558,7 @@ class Gen:
                 fmt += '%11s' if kind == 's' else '%%%ds' % width
                 args.append(v)
                 outs.append('pstr(%s); sp();' % v)
-            text += tok
+            text += leading + tok
         if self.r.random() < 0.2 and text and not counted:
             i = self.r.randrange(len(text))
             if i == 0 or text[i - 1] not in 'xX':
