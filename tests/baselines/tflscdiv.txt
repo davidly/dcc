@@ -1,0 +1,5 @@
+logical 1 0
+compound 8
+nested 1 0
+effects 2 guarded 7
+controls 1 1

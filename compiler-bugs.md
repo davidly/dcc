@@ -1,30 +1,30 @@
 # dcc compiler bugs
 
-Defects found by differential testing against the host C compiler (Apple
-clang). Every entry reproduced with a shipped configuration: no diagnostic
-environment variables (some required `dccpeep`), except BUG-056/059, latent
-wrong-code findings from withdrawn BUG-041 admission experiments. Fixed
-entries and their historical diagnoses are retained below.
+## Current status
 
-- **Compiler under test:** `6ef8e575` plus the local issue fixes below (2026-11-22).
-- **Reproducers:** one program per open entry, `tests/known-bugs/bugNNN.c`,
-  with the output it should print in `tests/known-bugs/baselines/bugNNN.txt`.
-  Each baseline is the host compiler's output, and the program also runs
-  clean under ASan and UBSan, so it is defined C whose result does not depend
-  on `int` being 16 or 32 bits.
-- **Check them:** `python3 scripts/run-known-bugs.py` builds each reproducer
-  with clang and with dcc and reports `fails` or `FIXED`.
-- **How they were found:** `scripts/clang-oracle-fuzz.py` (see
-  `scripts/README.md`), then narrowed by hand with one-statement probes.
-- **Reported:** each open entry is an issue on `davidly/dcc` (the Issue
-  column below), with the full reproducer and expected and actual output.
-- **Fixing them:** [fix-plan.md](fix-plan.md) groups the open entries by
-  probable root cause, with the acceptance test for each fix.
+**Open production compiler bugs: none.** On 25 November 2026, the local
+working tree passed the full extended suite with 650 apps passing, 24 skipped,
+and no performance regressions. The known-bug runner found zero parked
+reproducers. The four most recent oracle seeds passed all four production
+configurations.
 
-## Summary
+One [diagnostic performance finding](#diagnostic-performance-finding) remains
+reproducible when the regional emitter is forced for `a1`.
+
+Most entries were found by differential testing against clang using
+`scripts/clang-oracle-fuzz.py`, then reduced by hand. Confirmed open bugs
+are parked under `tests/known-bugs/` with host-proven output baselines and
+checked with `python3 scripts/run-known-bugs.py`. See
+[scripts/README.md](scripts/README.md) for the testing workflow and
+[fix-plan.md](fix-plan.md) for the historical fix groups.
+
+## Fixed findings index
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
+| [Seeds 212413/228464](#seeds-212413228464) | — | fixed | Loop-invariant BC hoisting ignores an EXX bank switch |
+| [Seed 206531](#seed-206531) | — | fixed | Dead IX stores are removed before an aliasing IY frame read |
+| [Seed 206417](#seed-206417) | — | fixed | Constant float logical expressions reject unevaluated division by zero |
 | [BUG-016](#bug-016) | #236 | fixed | Local initializer signedness still leaks into word shifts and long division |
 | [BUG-093](#bug-093) | #386 | fixed | Unsigned right shift of a signed bit-field uses an arithmetic shift |
 | [BUG-094](#bug-094) | #387 | fixed | Unreachable float constant division by zero is rejected as an if condition |
@@ -48,9 +48,10 @@ entries and their historical diagnoses are retained below.
 | [BUG-091](#bug-091) | #384 | fixed | A widened parameter postincrement multiplies the incremented value |
 | [BUG-092](#bug-092) | #385 | fixed | A logical not over a constant division by zero is rejected |
 
-**Open: none.** Seven
-failures from the production campaigns over seeds 70001–120000 map to these
-four entries. Original sources were generated at `3cf4788d` and preserved
+## Earlier oracle campaign validation
+
+Seven failures from production seeds 70001–120000 map to BUG-016 and
+BUG-093 through BUG-095. Original sources were generated at `3cf4788d` and preserved
 under `build/`; all seven failed with the rebuilt upstream `6ef8e575` before
 these fixes. The upstream generator added new shapes, so regenerating these
 seed numbers now does not identify the original programs. Integer seed
@@ -116,6 +117,78 @@ stale parameter home read by a widening multiply, from the seeds
 by zero, from the seeds 46001–51000 run, is fixed too. BUG-013's unsigned
 bit-field promotion, BUG-009's hang and BUG-022's masked diagnostic are
 fixed below.
+
+## Seeds 212413/228464
+
+**Fixed locally; covered by `tests/tbcexx.c`.** Both integer findings from
+the production seeds 180001–250000 campaign reduce to an invariant word
+bound reloaded between `exx` instructions. `pass_hoist_index_ptr_to_bc`
+primed BC before the loop but replaced the alternate-bank load with
+`ld l,c / ld h,b`, reading BC' instead. The loops could execute zero times:
+the new regression printed `constant 293 198` instead of `constant 294 31`
+and `loaded 43605` instead of `loaded 43713` with the original binaries.
+
+The hoisting proof now checks implicit BC clobbers as well as textual
+register references, retaining the existing BC-preserving helper whitelist.
+New Python controls prove ordinary invariant loads still hoist in speed
+and size modes, while alternate-bank loads retain their frame reloads.
+The C test also covers a zero bound and carry into the high word.
+
+## Seed 206531
+
+**Fixed locally; covered by `tests/tfiyals.c`.** The float finding reduces
+to a frame larger than 128 bytes, where MIR addresses spill slots through
+both IX and IY. `pass_elim_dead_ix_stores` did not recognize IY reads as
+observers of pending IX stores unless an HL frame address had escaped.
+It removed the constant spill feeding `s0.m2[1] = 32768.0f` before the IY
+reload; the reduced C regression stored 65538 instead of 32768 with the
+original binaries.
+
+IY-indexed accesses now preserve pending IX stores. Ordinary non-aliasing
+IX reads still permit elimination, and stores that are never observed
+remain removable. New Python controls cover negative frame biases,
+positive offsets and local labels; the C regression retains the large
+frame and reused spill slots, with a small-frame control.
+
+## Seed 206417
+
+**Fixed locally; covered by `tests/tflscdiv.c`.** The float compile failure
+reduces to `(-1.0f < 123.456f) || (1e6f / 0.0f);`. The constant logical
+admission gate required folding both operands, including the division
+that C leaves unevaluated. This is a further admission facet beside
+[BUG-094](#bug-094)'s controlling-expression case.
+
+The extended scalar folder now short-circuits before visiting the RHS.
+Constant logical expressions that cannot fold are admitted when both
+operands are supported, allowing an enclosing runtime guard to leave
+them unevaluated. New tests cover discarded and consumed values, nested
+logicals, compound assignment, skipped side effects and runtime guards.
+Code-generation checks require skipped zero divisions to emit the same
+two-instruction result as nonzero-denominator controls, including `-gline`.
+
+For all three fixes, the original four saved programs pass all four
+production configurations. No existing C test, output baseline or
+performance row is changed; the three new C tests add measured rows.
+Both existing 4,222-function compiler censuses and all 1,294 runnable
+app/stack peephole inputs produce identical output before and after.
+The new baselines agree under clang at `-O0`, `-O2`, ASan and UBSan,
+and under the host baseline validator. Release, `-gline` and full-debug
+execution pass with and without peephole optimization; the `-gline`
+executables are byte-identical to release.
+
+Full extended runs pass in both stack modes: **650 passed, 24 skipped**,
+including checked performance in the stack-checked run. Python discovery
+with the generated version header on `CPATH` runs 488 tests with one
+failure, four subtest errors and two skips. All failures are pre-existing
+campaign assembly-hash baselines: the saved pre-fix compiler reproduces
+the same failures, and all 80 campaign assembly outputs are byte-identical
+before and after. Existing tests and hash baselines remain unchanged.
+
+Fresh production campaigns over seeds **250001–250300** are clean with
+`--off known`: integer **297 ok, 3 INVALID**; float **296 ok, 4 INVALID**;
+zero failures. Logs are `build/oracle-fix-fuzz-{int,float}.log`; original
+saved-program results, census comparisons and suite logs use the same
+`build/oracle-fix-` prefix.
 
 ## BUG-016
 
@@ -4711,7 +4784,7 @@ they were reported. Their reproducers now pass.
 - **BUG-001:** compound assignment of a 32-bit value to an 8- or 16-bit
   member, array element or pointer target (`p->w ^= r`, `a8[i] += r`,
   `*q <<= r`) was rejected with `DCC-E1002`. Bit-field targets and elements
-  of array members are still rejected: BUG-018.
+  of array members were handled separately in [BUG-018](#bug-018).
 - **BUG-005:** `{ uint16_t b = 1; s.m3 /= b; }` with a 32-bit member `m3` and
   a nested-block divisor zeroed the member's high word.
 
@@ -4731,13 +4804,18 @@ address space. Low-origin relocation-bootstrap limits are checked before
 creating a COM file. Boundary regressions cover both code and data segments,
 exactly fitting images, and one-byte overflows.
 
-## Not yet confirmed
+## Diagnostic performance finding
 
-- **`a1` is 5.7 times slower with the regional emitter forced.** With
-  `DCC_MIR_PREFER_REGIONAL=1`, at `83dc7a91`, `runall.py -apps a1 -mode=full`
-  no longer hangs and the output is correct, but it is a performance
-  regression: peep 10,329,123 -> 67,385,816 cycles and nopeep 12,162,933 ->
-  69,161,297 cycles, with `.COM` 19,072 -> 22,400 and 21,120 -> 24,576 bytes.
-  The `6502fun` scenario runs well inside 30 s. That variable is
-  diagnostic-only, so this is latent at most, and it has not been
-  investigated further.
+**Confirmed on 25 November 2026.** Forcing the regional emitter with
+`DCC_MIR_PREFER_REGIONAL=1` produces correct output for `a1`, but increases
+cycle counts and executable size. The comparison uses the checked-in
+production performance baselines.
+
+| Mode | Baseline cycles | Forced regional cycles | Baseline bytes | Forced regional bytes |
+|---|---:|---:|---:|---:|
+| Peephole | 10,188,168 | 67,313,788 | 18,944 | 22,272 |
+| No peephole | 11,858,777 | 69,141,765 | 20,992 | 24,576 |
+
+Recheck with
+`DCC_MIR_PREFER_REGIONAL=1 python3 scripts/runall.py --apps a1 --mode full`.
+The default production suite passes its performance checks.
