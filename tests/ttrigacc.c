@@ -18,6 +18,10 @@ static const struct trig_case cases[] = {
     { 0, -1.5f, 0.0707372017f },
     { 0, 3.0f, -0.989992497f },
     { 0, 5.0f, 0.283662185f },
+    { 0, 1.57079637f, -4.37113883e-08f },
+    { 0, 4.71238899f, 1.19248806e-08f },
+    { 0, -32.9799995f, 0.00672326982f },
+    { 0, 252.898209f, -4.18570689e-09f },
     { 1, 0.5f, 0.54630249f },
     { 1, 0.75f, 0.93159646f },
     { 1, 0.800000012f, 1.02963858f },
@@ -61,7 +65,7 @@ int main(void)
         float want = cases[i].want;
         float err = fabsf(got - want);
 
-        if (err > 2e-5f * fabsf(want)) {
+        if (!(err <= 2e-5f * fabsf(want))) {
             printf("%s(%f) = %f, expected %f\n", names[cases[i].fn], cases[i].x, got, want);
             ++fails;
         }

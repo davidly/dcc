@@ -19288,8 +19288,6 @@ _sinhf:
         push    de
         push    hl
         push    bc
-        ld      (__hyp_xlo),hl
-        ld      (__hyp_xhi),de
 
         ; sinh(x) rounds to x for |x| < 2^-13.  This also preserves either
         ; signed zero and avoids exp(x)-exp(-x) cancellation for tiny inputs.
@@ -19297,6 +19295,13 @@ _sinhf:
         add     a,a
         cp      72h
         ret     c
+        cp      7ah                     ; |x| < 1/32
+        jr      nc,sinh_exp
+        ld      bc,3e2ah                ; +1/6
+        jp      __hyps
+sinh_exp:
+        ld      (__hyp_xlo),hl
+        ld      (__hyp_xhi),de
         ld      a,d
         and     7fh
         cp      42h
@@ -19407,15 +19412,13 @@ cosh_regular:
 
         public _tanhf
 _tanhf:
-        ; Preserve x while retaining the public caller-cleanup convention.
+        ; Retain the public caller-cleanup convention.
         pop     bc
         pop     hl
         pop     de
         push    de
         push    hl
         push    bc
-        ld      (__hyp_xlo),hl
-        ld      (__hyp_xhi),de
 
         ; tanh(x) rounds to x for |x| < 2^-13.  Preserve signed zero and
         ; bypass the exp(2*x)-1 cancellation that otherwise flushes tiny x.
@@ -19423,61 +19426,58 @@ _tanhf:
         add     a,a
         cp      72h
         ret     c
-        ; Keep the compiler-generated saturation thresholds exactly:
-        ; x < 10.0f => continue, otherwise return +1.0f.
-        push    de
-        push    hl
-        ld      hl,0
-        ld      de,16752
-        call    __fltf
-        pop     bc
-        pop     bc
-        ld      a,h
+        cp      7ah                     ; |x| < 1/32
+        jr      nc,tanh_exp
+        ld      bc,0beaah               ; -1/3
+        jp      __hyps
+tanh_exp:
+        ; Magnitude bits are ordered for finite floats. 10.0 has high
+        ; word 4120h and a zero low word, so the low word is immaterial.
+        ld      a,d
+        and     7fh
+        cp      41h
+        jr      c,tanh_calculate
+        jr      nz,tanh_saturate
+        ld      a,e
+        cp      20h
+        jr      c,tanh_calculate
+tanh_saturate:
+        ; Both infinities saturate, but a NaN must remain a NaN.
+        ld      a,d
+        add     a,a
+        cp      0feh
+        jr      nz,tanh_unit
+        ld      a,e
+        add     a,a
+        jr      nc,tanh_unit
+        or      h
         or      l
-        jr      z,tanh_check_negative
-        ld      hl,0
-        ld      de,16256
+        jr      z,tanh_unit
+        set     6,e                     ; quiet a signaling NaN
         ret
-
-tanh_check_negative:
-        ; x > -10.0f => continue, otherwise return -1.0f.
-        ld      hl,(__hyp_xlo)
-        ld      de,(__hyp_xhi)
-        push    de
-        push    hl
+tanh_unit:
         ld      hl,0
-        ld      de,16752
         ld      a,d
-        xor     80h
+        and     80h
+        or      3fh
         ld      d,a
-        call    __fgtf
-        pop     bc
-        pop     bc
-        ld      a,h
-        or      l
-        jr      z,tanh_calculate
-        ld      hl,0
-        ld      de,16256
-        ld      a,d
-        xor     80h
-        ld      d,a
+        ld      e,80h
         ret
 
 tanh_calculate:
-        ; y = expf(2*x)
-        ld      hl,(__hyp_xlo)
-        ld      de,(__hyp_xhi)
-        ld      b,1
-        call    __fscale_pow2
+        ; y = expf(2*x). x is normal here and doubling cannot overflow.
+        ld      bc,0080h
+        ex      de,hl
+        add     hl,bc
+        ex      de,hl
         push    de
         push    hl
         call    _expf
         pop     bc
         pop     bc
-        ld      (__hyp_alo),hl
-        ld      (__hyp_ahi),de
-
         ; numerator = y - 1.0f
+        push    de                      ; save another copy for y + 1.0
+        push    hl
         push    de
         push    hl
         ld      hl,0
@@ -19489,26 +19489,50 @@ tanh_calculate:
         ld      (__hyp_bhi),de
 
         ; denominator = y + 1.0f
-        ld      hl,(__hyp_alo)
-        ld      de,(__hyp_ahi)
-        push    de
-        push    hl
         ld      hl,0
         ld      de,16256
         call    __faf
         pop     bc
         pop     bc
 
-        ; numerator / denominator. Preserve generated push order.
-        ld      (__hyp_xlo),hl
-        ld      (__hyp_xhi),de
-        ld      hl,(__hyp_blo)
-        ld      de,(__hyp_bhi)
+        ; numerator / denominator, with the denominator still in DE:HL.
+        ld      bc,(__hyp_bhi)
+        push    bc
+        ld      bc,(__hyp_blo)
+        push    bc
+        call    __fdf
+        pop     bc
+        pop     bc
+        ret
+
+        public __hyps
+__hyps:
+        ; x + x*(c*x*x), with c = +1/6 (sinh) or -1/3 (tanh).
+        ; Both coefficients have low word AAABh. The omitted terms
+        ; contribute less than 2e-7 relative error for |x| < 1/32.
+        push    de                      ; x for the final addition
+        push    hl
+        push    de                      ; x for the final multiplication
+        push    hl
+        push    bc                      ; coefficient high word
         push    de
         push    hl
-        ld      hl,(__hyp_xlo)
-        ld      de,(__hyp_xhi)  ; denominator, live for __fdf
-        call    __fdf
+        call    __fmf                   ; x*x
+        pop     bc
+        pop     bc
+        pop     bc                      ; coefficient high word
+        push    de
+        push    hl
+        ld      d,b
+        ld      e,c
+        ld      hl,0aaabh
+        call    __fmf                   ; c*x*x
+        pop     bc
+        pop     bc
+        call    __fmf                   ; x*(c*x*x)
+        pop     bc
+        pop     bc
+        call    __faf                   ; x + x*(c*x*x)
         pop     bc
         pop     bc
         ret
@@ -19547,6 +19571,198 @@ trg_nan:
         ld      de,7fc0h
         ret
 
+        public __trgp
+__trgp:
+        ; Reduce finite |x| < 65536 to x - n*pi, with n the nearest
+        ; integer to x/pi. Return the remainder in DE:HL. In A, bit 7
+        ; is the parity of |n| and bit 0 is the next bit of |n|.
+        ; Skip reduction when |x| < the high word of pi/2.
+        ld      a,d
+        and     7fh
+        cp      3fh
+        jp      c,trg_pi_zero
+        jr      nz,trg_pi_reduce
+        ld      a,e
+        cp      0c9h
+        jp      c,trg_pi_zero
+        jr      trg_pi_one
+trg_pi_reduce:
+        cp      40h
+        jr      nz,trg_pi_general
+        ld      a,e
+        cp      96h                     ; first 16 bits of 3*pi/2
+        jr      nc,trg_pi_general
+trg_pi_one:
+        ; One period: (x - copysign(pi_float, x)) plus the signed
+        ; rounding error of pi_float. The first subtraction is exact.
+        ld      a,d
+        and     80h
+        push    af
+        push    de
+        push    hl
+        or      40h
+        ld      d,a
+        ld      e,49h
+        ld      hl,0fdbh
+        call    __fsf
+        pop     bc
+        pop     bc
+        pop     af
+        push    de
+        push    hl
+        or      33h
+        ld      d,a
+        ld      e,0bbh
+        ld      hl,0bd2eh
+        call    __faf
+        pop     bc
+        pop     bc
+        ld      a,80h
+        ret
+trg_pi_general:
+        ld      (trg_r),hl
+        ld      (trg_r+2),de
+        push    de
+        push    hl
+        ld      de,3ea2h
+        ld      hl,0f983h                ; 1/pi
+        call    __fmf
+        pop     bc
+        pop     bc
+
+        ; Round x/pi to the nearest integer, ties away from zero. Here
+        ; 1 <= |x/pi| < 32768, so the top 16 significand bits include
+        ; the half-unit bit. Save the sign and shift that bit into carry.
+        ld      a,d
+        and     80h
+        push    af
+        ld      a,e
+        add     a,a
+        ld      a,d
+        rla                             ; biased exponent
+        ld      c,a
+        ld      a,142
+        sub     c                       ; number of right shifts
+        ld      b,a
+        ld      l,h
+        ld      a,e
+        and     7fh
+        or      80h
+        ld      h,a
+trg_pi_round:
+        srl     h
+        rr      l
+        djnz    trg_pi_round
+        jr      nc,trg_pi_magnitude
+        inc     hl
+trg_pi_magnitude:
+        ld      a,l
+        and     3
+        rrca
+        ld      (trg_quadrant),a
+        pop     af
+        jr      z,trg_pi_signed
+        ex      de,hl
+        ld      hl,0
+        or      a
+        sbc     hl,de
+trg_pi_signed:
+        call    __fif                   ; n fits in a signed 16-bit int
+        ld      (trg_n),hl
+        ld      (trg_n+2),de
+
+        ; Split pi so n*hi and n*mid are exact even at the range limit.
+        ; Subtract the pieces in order to preserve the phase near zeros.
+        ld      de,4049h
+        ld      hl,0                    ; hi = 3.140625
+        call    trg_sub_product
+        ld      de,3a7dh
+        ld      hl,8000h                ; mid = 0.0009670257568359375
+        call    trg_sub_product
+        ld      a,d
+        add     a,a
+        cp      7ah                     ; refine when |remainder| < 1/32
+        jr      c,trg_pi_refine
+        ld      de,3528h
+        ld      hl,885ah                ; low = pi - hi - mid
+        jr      trg_pi_finish
+trg_pi_refine:
+        ; n*low is below 0.014 in magnitude. When the first two
+        ; subtractions leave a small remainder, split low as well.
+        ; Its head product is exact and the tail is too small for
+        ; its rounding to spoil the phase near a zero or pole.
+        ld      de,3528h
+        ld      hl,8000h
+        call    trg_sub_product
+        ld      de,2f05h
+        ld      hl,0a309h
+trg_pi_finish:
+        call    trg_sub_product
+        ld      a,(trg_quadrant)
+        ret
+trg_pi_zero:
+        xor     a
+        ret
+trg_sub_product:
+        push    de
+        push    hl
+        ld      hl,(trg_n)
+        ld      de,(trg_n+2)
+        call    __fmf
+        pop     bc
+        pop     bc
+        ld      bc,(trg_r+2)
+        push    bc
+        ld      bc,(trg_r)
+        push    bc
+        call    __fsf
+        pop     bc
+        pop     bc
+        ld      (trg_r),hl
+        ld      (trg_r+2),de
+        ret
+trg_r:  ds      4
+trg_n:  ds      4
+trg_quadrant: db 0
+
+        public __trgh
+__trgh:
+        ; Reduce by pi/2 for cosf and tanf: use the pi reducer on 2*x
+        ; and halve its remainder. The quadrant encoding is unchanged.
+        ld      a,d
+        and     7fh
+        cp      3fh
+        jr      c,trg_half_zero
+        jr      nz,trg_half_reduce
+        ld      a,e
+        cp      49h                     ; high word of pi/4
+        jr      c,trg_half_zero
+trg_half_reduce:
+        ; The caller's magnitude guard keeps 2*x normal and below 65536.
+        ld      bc,0080h
+        ex      de,hl
+        add     hl,bc
+        ex      de,hl
+        call    __trgp
+        push    af
+        ld      a,d
+        add     a,a
+        jr      z,trg_half_small
+        ld      bc,0ff80h               ; halve a normal remainder
+        ex      de,hl
+        add     hl,bc
+        ex      de,hl
+        pop     af
+        ret
+trg_half_small:
+        ld      b,-1
+        call    __fscale_pow2
+        pop     af
+        ret
+trg_half_zero:
+        xor     a
+        ret
+
         public _sinf
 _sinf:
         ; float sinf(float x)
@@ -19559,145 +19775,33 @@ _sinf:
         push de                 ; restore x high word
         push hl                 ; restore x low word
         push bc                 ; restore return address
-        ld (__sinf_x),hl
-        ld (__sinf_x+2),de
 
-        ; Preserve either signed zero before polynomial evaluation.
+        ; sin(x) rounds to x for |x| < 2^-13, including signed zero.
         ld a,d
         add a,a
-        or e
-        or h
-        or l
-        ret z
+        cp 72h
+        ret c
 
         call __trg
         ret nc
 
-        ld hl,4059
-        ld de,16585
+        call    __trgp
+        and     80h
+        xor     d                       ; sin(x + n*pi) = (-1)^n sin(x)
+        ld      d,a
+        jp      __sinp
+
+        public __sinp
+__sinp:
+        ; Evaluate sine of an already reduced angle in DE:HL.
+        ld      a,d
+        add     a,a
+        cp      72h
+        ret     c                       ; same shortcut close to a root
+        ld      (__sinf_x),hl
+        ld      (__sinf_x+2),de
         push de
         push hl
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
-        push de
-        push hl
-        call _fmodf
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld (__sinf_x),hl
-        ld (__sinf_x+2),de
-        push de
-        push hl
-        ld hl,4059
-        ld de,16457
-        call __fltf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL38 ; peep: jp_to_jr
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16585
-        call __fsf
-        pop bc
-        pop bc
-        ld (__sinf_x),hl
-        ld (__sinf_x+2),de
-MFL38:
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16457
-        ld a,d
-        xor 80h
-        ld d,a
-        call __fgtf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL40 ; peep: jp_to_jr
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16585
-        call __faf
-        pop bc
-        pop bc
-        ld (__sinf_x),hl
-        ld (__sinf_x+2),de
-MFL40:
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16329
-        call __fltf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL41 ; peep: jp_to_jr
-        ld hl,4059
-        ld de,16457
-        push de
-        push hl
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
-        call __fsf
-        pop bc
-        pop bc
-        ld (__sinf_x),hl
-        ld (__sinf_x+2),de
-        jr      MFL42 ; peep: jp_to_jr
-MFL41:
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16329
-        ld a,d
-        xor 80h
-        ld d,a
-        call __fgtf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL42 ; peep: jp_to_jr
-        ld hl,4059
-        ld de,16457
-        ld a,d
-        xor 80h
-        ld d,a
-        push de
-        push hl
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
-        call __fsf
-        pop bc
-        pop bc
-        ld (__sinf_x),hl
-        ld (__sinf_x+2),de
-MFL42:
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
-        push de
-        push hl
-        ld hl,(__sinf_x)
-        ld de,(__sinf_x+2)
         call __fmf
         pop bc
         pop bc
@@ -19767,275 +19871,91 @@ __sinf_x2:      ds      4
 
         public _cosf
 _cosf:
-        ; float cosf(float x)
-        ; IX-free; x is a mutable range-reduction working value throughout
-        ; this function (not just a fetched argument), so it is kept as a
-        ; static (already non-reentrant) rather than only read once.
-        pop bc                  ; return address
-        pop hl                  ; x low word
-        pop de                  ; x high word
-        push de                 ; restore x high word
-        push hl                 ; restore x low word
-        push bc                 ; restore return address
-        ld (__cosf_x),hl
-        ld (__cosf_x+2),de
+        ; cos is even. Reduce |x| directly around multiples of pi/2 so
+        ; values near a root do not lose the small residual to rounding.
+        pop     bc
+        pop     hl
+        pop     de
+        push    de
+        push    hl
+        push    bc
+        call    __trg
+        ret     nc
+        res     7,d
+        call    __trgh
+        rlca                            ; A = quadrant, carry set if odd
+        jr      c,cos_odd
 
-        call __trg
-        ret nc
-
-        ld hl,0
-        ld de,16256
-        ld (__cosf_sign),hl
-        ld (__cosf_sign+2),de
-        ld hl,4059
-        ld de,16585
-        push de
-        push hl
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        push de
-        push hl
-        call _fmodf
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld (__cosf_x),hl
-        ld (__cosf_x+2),de
-        push de
-        push hl
-        ld hl,4059
-        ld de,16457
-        call __fltf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL47 ; peep: jp_to_jr
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16585
-        call __fsf
-        pop bc
-        pop bc
-        ld (__cosf_x),hl
-        ld (__cosf_x+2),de
-MFL47:
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16457
-        ld a,d
-        xor 80h
-        ld d,a
-        call __fgtf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL49 ; peep: jp_to_jr
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16585
-        call __faf
-        pop bc
-        pop bc
-        ld (__cosf_x),hl
-        ld (__cosf_x+2),de
-MFL49:
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16329
-        call __fltf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL50 ; peep: jp_to_jr
-        ld hl,4059
-        ld de,16457
-        push de
-        push hl
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        call __fsf
-        pop bc
-        pop bc
-        ld (__cosf_x),hl
-        ld (__cosf_x+2),de
-        ld hl,0
-        ld de,16256
-        ld a,d
-        xor 80h
-        ld d,a
-        ld (__cosf_sign),hl
-        ld (__cosf_sign+2),de
-        jr      MFL51 ; peep: jp_to_jr
-MFL50:
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16329
-        ld a,d
-        xor 80h
-        ld d,a
-        call __fgtf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL51 ; peep: jp_to_jr
-        ld hl,4059
-        ld de,16457
-        ld a,d
-        xor 80h
-        ld d,a
-        push de
-        push hl
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        call __fsf
-        pop bc
-        pop bc
-        ld (__cosf_x),hl
-        ld (__cosf_x+2),de
-        ld hl,0
-        ld de,16256
-        ld a,d
-        xor 80h
-        ld d,a
-        ld (__cosf_sign),hl
-        ld (__cosf_sign+2),de
-MFL51:
-        ; Above pi/4 the polynomial below is short of float accuracy (it was
-        ; off by 5e-4 near pi/2), so use cos x = sin(pi/2 - |x|) there.
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        res 7,d                 ; |x|; cos is even
-        ld (__cosf_x),hl
-        ld (__cosf_x+2),de
-        push de
-        push hl
-        ld hl,4059
-        ld de,16201             ; pi/4
-        call __fltf             ; pi/4 < |x|
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jp z,MFL51P
-        ld hl,4059
-        ld de,16329             ; pi/2
-        push de
-        push hl
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        call __fsf              ; pi/2 - |x|
-        pop bc
-        pop bc
-        push de
-        push hl
-        call _sinf
-        pop bc
-        pop bc
-        jp MFL51S
-MFL51P:
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        push de
-        push hl
-        ld hl,(__cosf_x)
-        ld de,(__cosf_x+2)
-        call __fmf
-        pop bc
-        pop bc
-        ld (__cosf_x2),hl
-        ld (__cosf_x2+2),de
-        ld hl,0
-        ld de,16256
-        push de
-        push hl
-        ld hl,(__cosf_x2)
-        ld de,(__cosf_x2+2)
-        ld c,e ; peep: global_word_cache_store_de
-        ld b,d
-        push de
-        push hl
-        ld hl,65296
-        ld de,16127
-        ld a,d
-        xor 80h
-        ld d,a
-        push de
-        push hl
-        ld hl,(__cosf_x2)
-        ld e,c ; peep: global_word_cache_load_de
-        ld d,b
-        push de
-        push hl
-        ld hl,34790
-        ld de,15658
-        push de
-        push hl
-        ld hl,(__cosf_x2)
-        ld e,c ; peep: global_word_cache_load_de
-        ld d,b
-        push de
-        push hl
-        ld hl,27383
-        ld de,15026
-        ld a,d
-        xor 80h
-        ld d,a
-        call __fmf
-        pop bc
-        pop bc
-        call __faf
-        pop bc
-        pop bc
-        call __fmf
-        pop bc
-        pop bc
-        call __faf
-        pop bc
-        pop bc
-        call __fmf
-        pop bc
-        pop bc
-        call __faf
-        pop bc
-        pop bc
-MFL51S:
-        ld (__cosf_poly),hl
-        ld (__cosf_poly+2),de
-        ld hl,(__cosf_sign)
-        ld de,(__cosf_sign+2)
-        push de
-        push hl
-        ld hl,(__cosf_poly)
-        ld de,(__cosf_poly+2)
-        call __fmf
-        pop bc
-        pop bc
+        ; Quadrant 0 returns cos(r), quadrant 2 returns -cos(r).
+        rrca
+        rrca
+        push    af                      ; 0 or 80h for the result sign
+        ld      a,d
+        add     a,a
+        cp      72h
+        jr      nc,cos_poly
+        ld      de,3f80h               ; cos(r) rounds to 1 for |r| < 2^-13
+        ld      hl,0
+        jr      cos_sign
+cos_poly:
+        ; Even polynomial through degree six, evaluated only on |r| <= pi/4.
+        push    de
+        push    hl
+        call    __fmf                  ; z = r*r
+        pop     bc
+        pop     bc
+        ld      bc,3f80h
+        push    bc
+        ld      bc,0
+        push    bc                     ; constant term, +1
+        push    de
+        push    hl                     ; z
+        ld      bc,0beffh
+        push    bc
+        ld      bc,0ff10h
+        push    bc                     ; coefficient of z
+        push    de
+        push    hl                     ; z
+        ld      bc,3d2ah
+        push    bc
+        ld      bc,87e6h
+        push    bc                     ; coefficient of z*z
+        push    de
+        push    hl                     ; z
+        ld      de,0bab2h
+        ld      hl,6af7h               ; coefficient of z*z*z
+        call    __fmf
+        pop     bc
+        pop     bc
+        call    __faf
+        pop     bc
+        pop     bc
+        call    __fmf
+        pop     bc
+        pop     bc
+        call    __faf
+        pop     bc
+        pop     bc
+        call    __fmf
+        pop     bc
+        pop     bc
+        call    __faf
+        pop     bc
+        pop     bc
+cos_sign:
+        pop     af
+        xor     d
+        ld      d,a
         ret
 
-__cosf_x:       ds      4
-__cosf_sign:    ds      4
-__cosf_x2:      ds      4
-__cosf_poly:    ds      4
+cos_odd:
+        ; Quadrant 1 returns -sin(r), quadrant 3 returns sin(r).
+        bit     1,a
+        jp      nz,__sinp
+        ld      a,d
+        xor     80h
+        ld      d,a
+        jp      __sinp
 
         public _tanf
 _tanf:
@@ -20044,162 +19964,42 @@ _tanf:
         pop bc                  ; return address
         pop hl                  ; x low word
         pop de                  ; x high word
-        ld (__tanf_x),hl
-        ld (__tanf_x+2),de
 
         push de                 ; restore x high word
         push hl                 ; restore x low word
         push bc                 ; restore return address
 
-        call __trg
-        ret nc
+        call    __trg
+        ret     nc
+        ld      a,d
+        add     a,a
+        cp      72h
+        ret     c               ; tan(x) rounds to x for |x| < 2^-13
 
-        ld hl,0
-        ld (__tanf_sign),hl
-        ld hl,4059
-        ld de,16457
+        ; In odd quadrants tan(x) = -1/tan(r).
+        call    __trgh
+        and     80h
+        ld      (__tanf_sign),a
+        xor     d                       ; negate r before a reciprocal
+        ld      d,a
+        add     a,a
+        cp      72h
+        jr      nc,tanf_pade
+        ; The rounded tan(r) is r. Near poles divide 1 by that
+        ; residual directly, without introducing polynomial rounding.
+        ld      a,(__tanf_sign)
+        or      a
+        ret     z
+        ld      bc,3f80h
+        push    bc
+        ld      bc,0
+        push    bc
+        jp      tanf_divide
+tanf_pade:
+        ld      (__tanf_r),hl
+        ld      (__tanf_r+2),de
         push de
         push hl
-        ld hl,(__tanf_x)
-        ld de,(__tanf_x+2)
-        push de
-        push hl
-        call _fmodf
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld (__tanf_r),hl
-        ld (__tanf_r+2),de
-        push de
-        push hl
-        ld hl,4059
-        ld de,16329
-        call __fltf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL55 ; peep: jp_to_jr
-        ld hl,(__tanf_r)
-        ld de,(__tanf_r+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16457
-        call __fsf
-        pop bc
-        pop bc
-        ld (__tanf_r),hl
-        ld (__tanf_r+2),de
-        jr      MFL56 ; peep: jp_to_jr
-MFL55:
-        ld hl,(__tanf_r)
-        ld de,(__tanf_r+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16329
-        ld a,d
-        xor 80h
-        ld d,a
-        call __fgtf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL56 ; peep: jp_to_jr
-        ld hl,(__tanf_r)
-        ld de,(__tanf_r+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16457
-        call __faf
-        pop bc
-        pop bc
-        ld (__tanf_r),hl
-        ld (__tanf_r+2),de
-MFL56:
-        ld hl,(__tanf_r)
-        ld de,(__tanf_r+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16201
-        call __fltf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL59 ; peep: jp_to_jr
-        ld hl,4059
-        ld de,16329
-        push de
-        push hl
-        ld hl,(__tanf_r)
-        ld de,(__tanf_r+2)
-        call __fsf
-        pop bc
-        pop bc
-        push de
-        push hl
-        ld hl,48430
-        ld de,45883
-        call __faf
-        pop bc
-        pop bc
-        ld (__tanf_r),hl
-        ld (__tanf_r+2),de
-        ld hl,1
-        ld (__tanf_sign),hl
-        jr      MFL60 ; peep: jp_to_jr
-MFL59:
-        ld hl,(__tanf_r)
-        ld de,(__tanf_r+2)
-        push de
-        push hl
-        ld hl,4059
-        ld de,16201
-        ld a,d
-        xor 80h
-        ld d,a
-        call __fgtf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL60 ; peep: jp_to_jr
-        ld hl,4059
-        ld de,16329
-        ld a,d
-        xor 80h
-        ld d,a
-        push de
-        push hl
-        ld hl,(__tanf_r)
-        ld de,(__tanf_r+2)
-        call __fsf
-        pop bc
-        pop bc
-        push de
-        push hl
-        ld hl,48430
-        ld de,13115
-        call __faf
-        pop bc
-        pop bc
-        ld (__tanf_r),hl
-        ld (__tanf_r+2),de
-        ld hl,1
-        ld (__tanf_sign),hl
-MFL60:
-        ld hl,(__tanf_r)
-        ld de,(__tanf_r+2)
-        push de
-        push hl
-        ld hl,(__tanf_r)
-        ld de,(__tanf_r+2)
         call __fmf
         pop bc
         pop bc
@@ -20270,50 +20070,31 @@ MFL60:
         call __faf
         pop bc
         pop bc
-        ld (__tanf_den),hl
-        ld (__tanf_den+2),de
-        ; Range reduction guarantees |r| <= pi/4, so the denominator is
-        ; above 690 and cannot be zero.  Divide directly; the old dead zero return also
-        ; masked pole residuals as tangent zero.
+        ; DE:HL holds the positive denominator. Choose the order of
+        ; operands so the even and odd quadrants each use one divide.
+        ld a,(__tanf_sign)
+        or a
+        jr      z,tanf_even
+        push de
+        push hl
         ld hl,(__tanf_num)
         ld de,(__tanf_num+2)
-        push de
-        push hl
-        ld hl,(__tanf_den)
-        ld de,(__tanf_den+2)    ; denominator, live for __fdf
+        jr      tanf_divide
+tanf_even:
+        ld      bc,(__tanf_num+2)
+        push    bc
+        ld      bc,(__tanf_num)
+        push    bc
+tanf_divide:
         call __fdf
         pop bc
         pop bc
-        ld (__tanf_result),hl
-        ld (__tanf_result+2),de
-        ld hl,(__tanf_sign)
-        ld a,h
-        or l
-        jr      z,MFL66 ; peep: jp_to_jr
-        ld hl,0
-        ld de,16256
-        push de
-        push hl
-        ld hl,(__tanf_result)
-        ld de,(__tanf_result+2)        ; denominator, live for __fdf
-        call __fdf
-        pop bc
-        pop bc
-        ld (__tanf_result),hl
-        ld (__tanf_result+2),de
-MFL66:
-        ld hl,(__tanf_result)
-        ld de,(__tanf_result+2)
-MFL54:
         ret
 
-__tanf_x:       ds      4
 __tanf_r:       ds      4
-__tanf_sign:    dw      0
+__tanf_sign:    db      0
 __tanf_r2:      ds      4
 __tanf_num:     ds      4
-__tanf_den:     ds      4
-__tanf_result:  ds      4
 
         public _atanf
 _atanf:
