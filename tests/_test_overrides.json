@@ -9,7 +9,8 @@
       "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.pas", "fixtures": ["TTT.PAS"] },
-        { "suffix": "sieve", "args": "sieve.pas", "fixtures": ["SIEVE.PAS"] }
+        { "suffix": "sieve", "args": "sieve.pas", "fixtures": ["SIEVE.PAS"] },
+        { "suffix": "mm", "args": "mm.pas", "fixtures": ["MM.PAS"] }
       ] },
     { "name": "cobint", "args": "e.cob", "stack_size": 1536, "fixtures": ["E.COB"],
       "dcc_floatio": false, "dcc_longio": false,
