@@ -33,13 +33,16 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+from contextlib import contextmanager
 import copy
 from dataclasses import replace
+from datetime import datetime
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -357,16 +360,69 @@ def summarize(failures):
     return '; '.join(parts)
 
 
+@contextmanager
+def progress_terminal():
+    if sys.stdout.isatty():
+        yield sys.stdout
+        return
+    try:
+        terminal = open('/dev/tty', 'w', encoding='utf-8')
+    except OSError:
+        yield None
+    else:
+        with terminal:
+            yield terminal
+
+
 def fuzz(args, seeds, prefix=''):
     configs = select_configs(args.configs)
     counts = {}
     failing = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        for seed, status, failures in pool.map(lambda s: run_seed(s, args, configs), seeds):
+    total = len(seeds)
+    progress = ''
+    started = time.monotonic()
+
+    def update_progress(completed):
+        nonlocal progress
+        filled = 24 * completed // total
+        finish = 'ETA --:--:--'
+        if completed:
+            now = time.time()
+            remaining = (time.monotonic() - started) * (total - completed) / completed
+            finish_at = datetime.fromtimestamp(now + remaining)
+            clock_format = '%H:%M:%S'
+            if finish_at.date() != datetime.fromtimestamp(now).date():
+                clock_format = '%Y-%m-%d ' + clock_format
+            label = 'Finished' if completed == total else 'ETA'
+            finish = '%s %s' % (label, finish_at.strftime(clock_format))
+        progress = '\r%s[%-24s] %d/%d programs  %s\033[K' % (
+            prefix, '#' * filled, completed, total, finish)
+        print(progress, end='', file=terminal, flush=True)
+
+    def report(message):
+        nonlocal progress
+        if progress:
+            print('\r\033[K', end='', file=terminal, flush=True)
+            if terminal is not sys.stdout:
+                # tee may display this message after the next worker finishes.
+                progress = ''
+        print(message, flush=True)
+        if progress:
+            print(progress, end='', file=terminal, flush=True)
+
+    with progress_terminal() as terminal, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        show_progress = total > 0 and terminal is not None
+        results = pool.map(lambda s: run_seed(s, args, configs), seeds)
+        if show_progress:
+            update_progress(0)
+        for completed, (seed, status, failures) in enumerate(results, 1):
+            if show_progress and completed % 10 == 0 and completed < total:
+                update_progress(completed)
             if status in ('INVALID', 'GENERATOR'):
                 counts[status] = counts.get(status, 0) + 1
                 if args.verbose or status == 'GENERATOR':
-                    print('%sseed %d: %s %s' % (prefix, seed, status, failures['-'][1]))
+                    report('%sseed %d: %s %s' % (prefix, seed, status, failures['-'][1]))
                 continue
             real = {k: v for k, v in failures.items() if v[0] not in ('STACK', 'TOOBIG')}
             if any(v[0] == 'TOOBIG' for v in failures.values()):
@@ -379,15 +435,16 @@ def fuzz(args, seeds, prefix=''):
                 continue
             counts['FAIL'] = counts.get('FAIL', 0) + 1
             failing.append(seed)
-            print('%sseed %d: %s' % (prefix, seed, summarize(real)))
-            sys.stdout.flush()
+            report('%sseed %d: %s' % (prefix, seed, summarize(real)))
+        if show_progress:
+            update_progress(total)
+            print(file=terminal, flush=True)
     tally = ', '.join('%s %d' % kv for kv in sorted(counts.items()))
-    print('%s%d programs: %s' % (prefix, len(seeds), tally), flush=True)
+    print('%s%d programs: %s' % (prefix, total, tally), flush=True)
     return 1 if failing else 0
 
 
-def run_campaign(args):
-    seeds = parse_seeds(args.seeds)
+def run_campaign(args, seeds):
     frontend_status = 0
     if args.gen != 'frontend' and seeds and args.frontend_off != frontend.FEATURES:
         # Preserve expression seeds and cap duplicate artifacts from a frontend bug.
@@ -819,8 +876,16 @@ def reduce_seed(seed, cfg_name, args):
 def parse_seeds(text):
     seeds = []
     for part in text.split(','):
-        low, _, high = part.partition('-')
-        seeds.extend(range(int(low), int(high or low) + 1))
+        low, separator, high = part.partition('-')
+        try:
+            start = int(low)
+            end = int(high) if separator else start
+        except ValueError:
+            raise ValueError('invalid seed or range %r' % part) from None
+        if separator and end <= start:
+            raise ValueError('seed range %r must end above its starting seed; '
+                             'use a single seed for one run' % part)
+        seeds.extend(range(start, end + 1))
     return seeds
 
 
@@ -898,8 +963,12 @@ def main():
         path.with_suffix('.expected').write_text(expected)
         shutil.rmtree(work, ignore_errors=True)
         return 0
-    if args.reduce:
-        seeds = parse_seeds(args.reduce)
+    seed_option = '--reduce' if args.reduce is not None else '--seeds'
+    try:
+        seeds = parse_seeds(args.reduce if args.reduce is not None else args.seeds)
+    except ValueError as exc:
+        parser.error('%s: %s' % (seed_option, exc))
+    if args.reduce is not None:
         outer = max(1, args.jobs // args.reduce_jobs)
         with concurrent.futures.ThreadPoolExecutor(max_workers=outer) as pool:
             for seed, cfg, path, note in pool.map(
@@ -907,7 +976,7 @@ def main():
                 print('seed %d %s: %s%s' % (seed, cfg, note, ' -> %s' % path if path else ''))
                 sys.stdout.flush()
         return 0
-    return run_campaign(args)
+    return run_campaign(args, seeds)
 
 
 if __name__ == '__main__':
