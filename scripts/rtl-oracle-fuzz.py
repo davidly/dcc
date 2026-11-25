@@ -50,6 +50,8 @@ on dcc's 16-bit int stay in range on both sides.
 """
 import argparse
 import concurrent.futures
+from contextlib import contextmanager
+from datetime import datetime
 from collections import Counter
 import csv
 import math
@@ -61,8 +63,57 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+@contextmanager
+def progress_terminal():
+    if sys.stdout.isatty():
+        yield sys.stdout
+        return
+    try:
+        terminal = open('/dev/tty', 'w', encoding='utf-8')
+    except OSError:
+        yield None
+    else:
+        with terminal:
+            yield terminal
+
+
+def progress_reporter(total, terminal):
+    started = time.monotonic()
+    progress = ''
+
+    def update(completed):
+        nonlocal progress
+        filled = 24 * completed // total
+        finish = 'ETA --:--:--'
+        if completed:
+            now = time.time()
+            remaining = (time.monotonic() - started) * (total - completed) / completed
+            finish_at = datetime.fromtimestamp(now + remaining)
+            clock_format = '%H:%M:%S'
+            if finish_at.date() != datetime.fromtimestamp(now).date():
+                clock_format = '%Y-%m-%d ' + clock_format
+            label = 'Finished' if completed == total else 'ETA'
+            finish = '%s %s' % (label, finish_at.strftime(clock_format))
+        progress = '\r[%-24s] %d/%d programs  %s\033[K' % (
+            '#' * filled, completed, total, finish)
+        print(progress, end='', file=terminal, flush=True)
+
+    def report(message):
+        nonlocal progress
+        if progress:
+            print('\r\033[K', end='', file=terminal, flush=True)
+            if terminal is not sys.stdout:
+                progress = ''
+        print(message, flush=True)
+        if progress:
+            print(progress, end='', file=terminal, flush=True)
+
+    return update, report
 HOST_FLAGS = ['-std=gnu99', '-w', '-fsigned-char', '-ffp-contract=off', '-fno-builtin']
 
 PRELUDE = r'''#include <stdio.h>
@@ -1688,17 +1739,28 @@ def fuzz(args):
     seeds = sorted(parse_ids(args.seeds))
     counts = {}
     names = {}
-    with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        for seed, kind, why, bad in pool.map(lambda s: run_seed(s, args), seeds):
+    with progress_terminal() as terminal, concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
+        total = len(seeds)
+        show_progress = total > 0 and terminal is not None
+        update_progress, report = progress_reporter(total, terminal) if show_progress else (None, print)
+        results = pool.map(lambda s: run_seed(s, args), seeds)
+        if show_progress:
+            update_progress(0)
+        for completed, (seed, kind, why, bad) in enumerate(results, 1):
+            if show_progress and completed % 10 == 0 and completed < total:
+                update_progress(completed)
             counts[kind] = counts.get(kind, 0) + 1
             if kind in ('INVALID', 'BUILD'):
-                print('seed %d: %s %s' % (seed, kind, why), flush=True)
+                report('seed %d: %s %s' % (seed, kind, why))
             for cfg, (tid, name, got, want) in bad:
                 first = name not in names
                 names.setdefault(name, []).append((seed, tid))
                 if first or args.verbose:
-                    print('seed %d test %s %s [%s]\n  dcc:  %s\n  host: %s' % (
-                        seed, tid, name, cfg, got[:200], want[:200]), flush=True)
+                    report('seed %d test %s %s [%s]\n  dcc:  %s\n  host: %s' % (
+                        seed, tid, name, cfg, got[:200], want[:200]))
+        if show_progress:
+            update_progress(total)
+            print(file=terminal, flush=True)
     print('\n%d programs: %s' % (len(seeds), ', '.join('%s %d' % (k, counts[k]) for k in sorted(counts))))
     for name, where in sorted(names.items()):
         print('  %-12s %4d mismatches, first seed %d test %s' % (name, len(where), where[0][0], where[0][1]))

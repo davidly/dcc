@@ -32,14 +32,65 @@ with dcc's output beside them; one input per distinct signature is listed.
 import argparse
 import collections
 import concurrent.futures
+from contextlib import contextmanager
+from datetime import datetime
 import os
 from pathlib import Path
 import random
 import re
 import subprocess
 import sys
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextmanager
+def progress_terminal():
+    if sys.stdout.isatty():
+        yield sys.stdout
+        return
+    try:
+        terminal = open('/dev/tty', 'w', encoding='utf-8')
+    except OSError:
+        yield None
+    else:
+        with terminal:
+            yield terminal
+
+
+def progress_reporter(total, terminal):
+    started = time.monotonic()
+    progress = ''
+
+    def update(completed):
+        nonlocal progress
+        filled = 24 * completed // total
+        finish = 'ETA --:--:--'
+        if completed:
+            now = time.time()
+            remaining = (time.monotonic() - started) * (total - completed) / completed
+            finish_at = datetime.fromtimestamp(now + remaining)
+            clock_format = '%H:%M:%S'
+            if finish_at.date() != datetime.fromtimestamp(now).date():
+                clock_format = '%Y-%m-%d ' + clock_format
+            label = 'Finished' if completed == total else 'ETA'
+            finish = '%s %s' % (label, finish_at.strftime(clock_format))
+        progress = '\r[%-24s] %d/%d programs  %s\033[K' % (
+            '#' * filled, completed, total, finish)
+        print(progress, end='', file=terminal, flush=True)
+
+    def report(message):
+        nonlocal progress
+        if progress:
+            print('\r\033[K', end='', file=terminal, flush=True)
+            if terminal is not sys.stdout:
+                progress = ''
+        print(message, flush=True)
+        if progress:
+            print(progress, end='', file=terminal, flush=True)
+
+    return update, report
 
 PUNCTUATORS = sorted((
     '...', '<<=', '>>=', '->', '++', '--', '<<', '>>', '<=', '>=', '==', '!=', '&&',
@@ -302,17 +353,30 @@ def fuzz(args):
     counts = collections.Counter()
     signatures = collections.OrderedDict()
     messages = collections.Counter()
-    with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        jobs = [pool.submit(check, s, args.dcc, work, args.timeout, args.accepts) for s in parse_seeds(args.seeds)]
+    seeds = parse_seeds(args.seeds)
+    total = len(seeds)
+    with progress_terminal() as terminal, concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
+        show_progress = total > 0 and terminal is not None
+        update_progress, report = progress_reporter(total, terminal) if show_progress else (None, print)
+        jobs = [pool.submit(check, s, args.dcc, work, args.timeout, args.accepts) for s in seeds]
+        if show_progress:
+            update_progress(0)
+        completed = 0
         for job in concurrent.futures.as_completed(jobs):
+            completed += 1
+            if show_progress and completed % 10 == 0 and completed < total:
+                update_progress(completed)
             seed, name, kind, signature, seen = job.result()
             counts[kind or 'ok'] += 1
             messages.update(seen)
             if kind is not None:
                 key = (kind, signature)
                 if key not in signatures:
-                    print('seed %d (%s): %s: %s' % (seed, name, kind, signature), flush=True)
+                    report('seed %d (%s): %s: %s' % (seed, name, kind, signature))
                 signatures.setdefault(key, []).append(seed)
+        if show_progress:
+            update_progress(total)
+            print(file=terminal, flush=True)
     print('\n%d inputs: %s' % (sum(counts.values()),
           ', '.join('%s %d' % (k, counts[k]) for k in sorted(counts))))
     for (kind, signature), seeds in signatures.items():
