@@ -83,11 +83,14 @@ and need clang, `ntvcm` and a built toolchain in the repository root.
 | `clang_oracle_frontend_gen.py` | Preprocessor and parser probes, run automatically on the first eight seeds of integer and float campaigns |
 | `run-known-bugs.py` | Checks every parked reproducer: proves its baseline on the host, then reports `fails` or `FIXED` for dcc with and without `dccpeep` |
 | `bug-issue-body.py` | Writes a GitHub issue body for an entry in `compiler-bugs.md` from the reproducer, its baseline and dcc's current behaviour; `--create` opens the issue |
-| `typed-expr-fuzz.py` | The older single-expression fuzzer, checked against a Python model rather than clang |
+| `typed-expr-fuzz.py` | Integer expressions and small programs checked against a Python model of dcc's integer types |
 
 The full option list is in `scripts/README.md` and `--help`.
 
 ## Running a campaign
+
+See [Fuzz testing](07-fuzz-testing.md) for logged campaign examples and the
+other fuzzers.
 
 Fuzz a range of seeds in the production configurations, leaving out every
 form that hits a bug already logged:
