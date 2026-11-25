@@ -148,6 +148,9 @@ int  pending_asm_len;
 int  asm_suppress_depth;
 int  g_diag_error_count;
 char g_current_compiling_func[64];
+/* Where that function's body starts, for whole-function diagnostics. */
+char g_current_compiling_func_file[256];
+int  g_current_compiling_func_line;
 
 /* User-defined goto labels (function-scoped) */
 char ulabel_names[MAX_USER_LABELS][64];
@@ -159,10 +162,12 @@ int  ulabel_vla_snap_off[MAX_USER_LABELS][MAX_SCOPE_DEPTH];
 int  ulabel_shallow_fwd_ref[MAX_USER_LABELS];
 int  nulabels;
 
-/* Enum constants (file-scoped) */
+/* Enum constants; those from enum_scope_base on belong to the innermost
+ * open block, and a block's constants are dropped when it closes. */
 char enum_const_names[MAX_ENUM_CONSTS][64];
 int  enum_const_values[MAX_ENUM_CONSTS];
 int  nenum_consts;
+int  enum_scope_base;
 
 /* Communicates array length from array-typedef through parse_base_type to declarators */
 int g_typedef_array_len;

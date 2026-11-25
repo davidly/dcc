@@ -1350,6 +1350,8 @@ int ast_stmt_supported(const struct AstNode *n)
             int s_static_seq = g_func_pass.static_local_seq;
             int s_has_call = current_function_has_call;
             int s_scan_mode = scan_mode;
+            /* Replayed enum declarations add their constants too. */
+            int s_nenum_consts = nenum_consts;
 
             scan_mode = 1;
             enter_scope();
@@ -1385,6 +1387,7 @@ int ast_stmt_supported(const struct AstNode *n)
             nulabels = s_nulabels;
             g_func_pass.static_local_seq = s_static_seq;
             current_function_has_call = s_has_call;
+            nenum_consts = s_nenum_consts;
             return ok;
         }
     }

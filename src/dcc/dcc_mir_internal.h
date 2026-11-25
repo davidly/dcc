@@ -56,6 +56,12 @@
 #include "dcc_mir.h"
 #include "dcc_mir_stream.h"
 
+/* The largest frame (locals, aggregate temps and spill slots) a MIR code
+ * generator accepts. */
+#define MIR_MAX_FRAME_BYTES 30000
+/* The frame size a code generator rejected for this function, or 0. */
+extern int mir_oversized_frame_bytes;
+
 #define MIR_AGGREGATE_FORWARD_OFFSET (-32768L)
 #define MIR_AGGREGATE_VALUE_DEST_OFFSET (-32767L)
 #define MIR_AGGREGATE_GLOBAL_DEST_OFFSET (-32766L)

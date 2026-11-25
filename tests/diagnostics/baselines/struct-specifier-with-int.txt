@@ -1,0 +1,4 @@
+<source>:4: error DCC-E0532: conflicting type specifiers near 'struct'
+    void p(int struct C *r)
+               ^
+dcc: 1 error(s)

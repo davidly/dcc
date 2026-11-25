@@ -1,0 +1,2 @@
+<source>:4: error DCC-E0605: function 'main' needs a 32769-byte stack frame for its local variables; dcc allows 30000
+dcc: 1 error(s)

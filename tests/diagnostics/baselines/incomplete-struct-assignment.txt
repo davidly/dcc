@@ -1,0 +1,4 @@
+<source>:5: error DCC-E0541: expression has incomplete type 'struct Missing'
+        *to = *from;
+                   ^
+dcc: 1 error(s)

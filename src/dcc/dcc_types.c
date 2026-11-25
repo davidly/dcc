@@ -23,7 +23,8 @@
 int find_enum_const(const char *name)
 {
     int i;
-    for (i = 0; i < nenum_consts; ++i)
+    /* Newest first, so an inner block's constant shadows an outer one. */
+    for (i = nenum_consts - 1; i >= 0; --i)
         if (!strcmp(enum_const_names[i], name))
             return i;
     return -1;
@@ -335,6 +336,29 @@ void infer_omitted_first_dim_from_init(struct Sym *s, int init_elems)
     }
 }
 
+
+/* A struct or union object type whose member list has not been seen. */
+int type_is_incomplete_struct(int type)
+{
+    int sid;
+
+    if (!type_is_struct_object(type))
+        return 0;
+    sid = type_struct_id(type);
+    return sid > 0 && sid <= nstruct_defs && !struct_defs[sid - 1].is_complete;
+}
+
+/* Reports a block-scope object declared with an incomplete struct type. */
+void check_local_object_complete(const char *name, int type)
+{
+    char msg[160];
+
+    if (scan_mode || g_decl.is_extern || !type_is_incomplete_struct(type))
+        return;
+    snprintf(msg, sizeof(msg), "variable '%s' has incomplete type 'struct %s'",
+             name, struct_defs[type_struct_id(type) - 1].name);
+    error_here(msg);
+}
 
 int find_struct_def(const char *name)
 {
@@ -725,6 +749,8 @@ int parse_base_type(void)
     int saw_void;
     int saw_float;
     int saw_bool;
+    int saw_signed;
+    int saw_tag;
     int storage_class_seen;
 
     t = 0;
@@ -738,6 +764,8 @@ int parse_base_type(void)
     saw_void = 0;
     saw_float = 0;
     saw_bool = 0;
+    saw_signed = 0;
+    saw_tag = 0;
     storage_class_seen = 0;
     g_typedef_array_len = 0;
     g_typedef_array_dim_count = 0;
@@ -802,8 +830,22 @@ int parse_base_type(void)
             next_token();
             continue;
         }
+        /* A struct, union or enum specifier stands alone: `int struct S`
+         * and `struct S long` are errors. */
+        if (saw_tag &&
+            (g_lex.tok.kind == TOK_UNSIGNED || g_lex.tok.kind == TOK_SIGNED ||
+             g_lex.tok.kind == TOK_LONG || g_lex.tok.kind == TOK_SHORT ||
+             g_lex.tok.kind == TOK_INT || g_lex.tok.kind == TOK_FLOAT ||
+             g_lex.tok.kind == TOK_BOOL || g_lex.tok.kind == TOK_CHAR ||
+             g_lex.tok.kind == TOK_VOID))
+            error_here("conflicting type specifiers");
+        if ((g_lex.tok.kind == TOK_STRUCT || g_lex.tok.kind == TOK_UNION ||
+             g_lex.tok.kind == TOK_ENUM) &&
+            (saw_tag || saw_unsigned || saw_signed || saw_long || saw_short ||
+             saw_int || saw_float || saw_bool || saw_char || saw_void))
+            error_here("conflicting type specifiers");
         if (g_lex.tok.kind == TOK_UNSIGNED) { saw_unsigned = 1; saw_any = 1; next_token(); continue; }
-        if (g_lex.tok.kind == TOK_SIGNED) { saw_any = 1; next_token(); continue; }
+        if (g_lex.tok.kind == TOK_SIGNED) { saw_signed = 1; saw_any = 1; next_token(); continue; }
         if (g_lex.tok.kind == TOK_LONG) {
             if (saw_long && !saw_long_long) {
                 error_here("long long is not supported by dcc's CP/M/Z80 target; use long");
@@ -863,12 +905,14 @@ int parse_base_type(void)
             if (is_union_kw) struct_defs[sid - 1].is_union = 1;
             if (g_lex.tok.kind == '{') {
                 parse_struct_definition(sid);
+                struct_defs[sid - 1].is_complete = 1;
                 g_decl.is_volatile = struct_is_volatile;
                 g_decl.pointee_is_volatile = struct_pointee_is_volatile;
                 g_decl.pointee_volatile_mask = struct_volatile_mask;
             }
             t = make_struct_type(sid);
             saw_any = 1;
+            saw_tag = 1;
             /* Declaration specifiers are order-independent.  Keep scanning so
              * standard forms such as `struct S static object` and
              * `struct S const object` accept storage classes and qualifiers
@@ -914,7 +958,7 @@ int parse_base_type(void)
                     }
 
                     dup = 0;
-                    for (ei = 0; ei < nenum_consts; ++ei) {
+                    for (ei = enum_scope_base; ei < nenum_consts; ++ei) {
                         if (!strcmp(enum_const_names[ei], ename)) {
                             error_here("duplicate enum constant");
                             dup = 1;
@@ -937,6 +981,7 @@ int parse_base_type(void)
             t = TYPE_INT;
             g_parse_type_was_enum = 1;
             saw_any = 1;
+            saw_tag = 1;
             break;
         }
 

@@ -469,6 +469,7 @@ struct StructDef {
     int field_count;
     int size;
     int is_union; /* 1 = union: all fields at offset 0, size = max(field_sizes) */
+    int is_complete; /* 1 once its member list has been parsed */
 };
 
 /* Constant-folding value: a raw 32-bit payload plus the dcc type it carries. */
@@ -671,6 +672,8 @@ void pp_reset_asm_dedupe(void);
 
 /* ---- whole-file global-write pre-scan (dcc_global_scan.c) -------------- */
 extern char g_current_compiling_func[64];
+extern char g_current_compiling_func_file[256];
+extern int  g_current_compiling_func_line;
 void scan_global_write_info(void);
 void reset_preproc_scan_state(void);
 int global_text_write_count(const char *name);
@@ -699,6 +702,7 @@ extern int  nulabels;
 extern char enum_const_names[MAX_ENUM_CONSTS][64];
 extern int  enum_const_values[MAX_ENUM_CONSTS];
 extern int  nenum_consts;
+extern int  enum_scope_base;
 
 /* communicates array length from array-typedef through parse_base_type */
 extern int g_typedef_array_len;
@@ -907,6 +911,8 @@ void emit_deferred_extrns(void);
 int sym_can_ix_direct(struct Sym *s);
 int is_global_word_sym(struct Sym *s);
 int base_struct_id_from_type(int type);
+int type_is_incomplete_struct(int type);
+void check_local_object_complete(const char *name, int type);
 void skip_balanced_bracket(int open_ch, int close_ch);
 int parse_offsetof_value(void);
 int sizeof_common_type(int a, int b, int op);

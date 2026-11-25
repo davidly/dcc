@@ -1,0 +1,4 @@
+<source>:6: error DCC-E0541: variable 'm' has incomplete type 'struct Missing' near ';'
+        struct Missing m;
+                        ^
+dcc: 1 error(s)

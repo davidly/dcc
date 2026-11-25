@@ -1,0 +1,3 @@
+case 9
+scoped 230
+reused 19

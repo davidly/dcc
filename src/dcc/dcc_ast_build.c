@@ -112,6 +112,7 @@ struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n)
 
 static int ast_index_root_and_count(const struct AstNode *n,
                                     const struct AstNode **root);
+static int ast_block_enum_value(const char *name, long *value);
 static int ast_expr_is_array_row(const struct AstNode *n);
 
 int ast_call_result_type(const struct AstNode *n)
@@ -746,6 +747,15 @@ static struct AstNode *p_primary(struct AstArena *ar)
             n->type = TYPE_CHAR | TYPE_PTR;
             next_token();
             return n;
+        }
+        {
+            long enum_value;
+
+            if (find_sym(g_lex.tok.text) == NULL &&
+                ast_block_enum_value(g_lex.tok.text, &enum_value)) {
+                next_token();
+                return ast_int_lit(ar, enum_value, TYPE_INT);
+            }
         }
         n = ast_new(ar, AST_IDENT);
         n->sval = cur_text(ar);
@@ -2041,6 +2051,76 @@ void ast_scan_decl_span(const struct AstNode *n)
     lex_restore(&saved);
 }
 
+/* Block declarations being built, innermost last, and for each enum
+ * constant a block declaration defined, how many of them were open then.
+ * A reference to such a constant folds to its value while the AST is built:
+ * lowering runs before the block's declarations are replayed, and the
+ * constants leave scope with the block. A later block declaration of the
+ * same name shadows the constant, so its references are left alone. */
+#define AST_BLOCK_DECL_MAX 256
+static const struct AstNode *ast_block_decls[AST_BLOCK_DECL_MAX];
+static int ast_block_decl_count;
+static int ast_block_enum_floor = -1;
+static int ast_block_enum_decl_depth[MAX_ENUM_CONSTS];
+
+/* Registers the constants of every enum a block declaration defines. */
+static void ast_decl_span_register_enums(const struct AstNode *n)
+{
+    struct DeclSpanSave save;
+    int depth = 0;
+    int first = nenum_consts;
+    int i;
+
+    if (!ast_decl_span_seek(n, &save))
+        return;
+    while (g_lex.tok.kind != TOK_EOF) {
+        if (g_lex.tok.kind == TOK_ENUM) {
+            LexState at = lex_save();
+
+            next_token();
+            if (g_lex.tok.kind == TOK_ID)
+                next_token();
+            if (g_lex.tok.kind == '{') {
+                DeclState saved_decl = g_decl;
+
+                lex_restore(&at);
+                (void)parse_base_type();
+                g_decl = saved_decl;
+                continue;
+            }
+        }
+        if (g_lex.tok.kind == '(' || g_lex.tok.kind == '[' ||
+            g_lex.tok.kind == '{')
+            depth++;
+        else if (g_lex.tok.kind == ')' || g_lex.tok.kind == ']' ||
+                 g_lex.tok.kind == '}') {
+            if (depth > 0)
+                depth--;
+        } else if (g_lex.tok.kind == ';' && depth == 0)
+            break;
+        next_token();
+    }
+    ast_decl_span_restore(&save);
+    for (i = first; i < nenum_consts; ++i)
+        ast_block_enum_decl_depth[i] = ast_block_decl_count;
+}
+
+/* The value of a block enum constant `name` names here, if it does. */
+static int ast_block_enum_value(const char *name, long *value)
+{
+    int index;
+    int i;
+
+    if (ast_block_enum_floor < 0 ||
+        (index = find_enum_const(name)) < ast_block_enum_floor)
+        return 0;
+    for (i = ast_block_enum_decl_depth[index]; i < ast_block_decl_count; ++i)
+        if (ast_decl_span_declares_name(ast_block_decls[i], name))
+            return 0;
+    *value = enum_const_values[index];
+    return 1;
+}
+
 /* Build a brace-delimited block `{ stmt* }`.  Local declarations (and
  * typedefs) are captured as AST_DECL span nodes that the emitter re-runs
  * through declaration codegen, so the symbol scope/frame the
@@ -2052,7 +2132,13 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
     struct AstNode *n;
     int typedef_base = enter_typedef_scope();
     int enum_base = nenum_consts;
+    int decl_base = ast_block_decl_count;
+    int enum_floor = ast_block_enum_floor;
+    int enum_scope = enum_scope_base;
 
+    if (ast_block_enum_floor < 0)
+        ast_block_enum_floor = nenum_consts;
+    enum_scope_base = nenum_consts;
     next_token();                        /* consume '{' */
     n = ast_new(ar, AST_COMPOUND);
 
@@ -2067,13 +2153,16 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
             child = ast_build_decl_span(ar);
             if (child == NULL)
                 goto fail;
+            if (ast_block_decl_count < AST_BLOCK_DECL_MAX)
+                ast_block_decls[ast_block_decl_count++] = child;
             if (is_typedef) {
                 /* Later expressions and declarations need the block's type
                  * names while the AST is built, before declaration replay. */
                 DeclState saved_decl = g_decl;
                 ast_scan_decl_span(child);
                 g_decl = saved_decl;
-            }
+            } else
+                ast_decl_span_register_enums(child);
             ast_list_push(ar, n, child);
             continue;
         }
@@ -2092,11 +2181,17 @@ static struct AstNode *ast_build_compound_stmt(struct AstArena *ar)
     next_token();                        /* consume '}' */
     leave_typedef_scope(typedef_base);
     nenum_consts = enum_base;
+    ast_block_decl_count = decl_base;
+    ast_block_enum_floor = enum_floor;
+    enum_scope_base = enum_scope;
     return n;
 
 fail:
     leave_typedef_scope(typedef_base);
     nenum_consts = enum_base;
+    ast_block_decl_count = decl_base;
+    ast_block_enum_floor = enum_floor;
+    enum_scope_base = enum_scope;
     return NULL;
 }
 

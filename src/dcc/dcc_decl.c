@@ -1616,6 +1616,7 @@ void parse_local_decl_after_type(int base)
                                      total_elems > 0 || g_last_array_dim_count > 0);
         freshly_allocated = 0;
         if (!s) {
+            check_local_object_complete(source_name, type);
             bytes = type_size(type);
             if (g_vla_pending)
                 bytes = 2;              /* VLA: reserve only a pointer slot */

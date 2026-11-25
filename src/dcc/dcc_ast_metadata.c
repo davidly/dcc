@@ -140,6 +140,26 @@ static int ast_member_complete_struct_id(const struct AstNode *n)
     return 0;
 }
 
+/* An assignment, subscript or sizeof that needs the size of an incomplete
+ * struct type. */
+static int ast_expr_is_incomplete_object(const struct AstNode *n)
+{
+    int type;
+
+    if (n->a == NULL)
+        return 0;
+    if (n->kind == AST_ASSIGN)
+        return type_is_incomplete_struct(ast_expr_type_for_sizeof(n->a));
+    if (n->kind == AST_SIZEOF_EXPR)
+        return type_is_incomplete_struct(ast_expr_type_for_sizeof(n->a));
+    if (n->kind == AST_INDEX) {
+        type = ast_expr_type_for_sizeof(n->a);
+        return type_ptr_depth(type) == 1 &&
+               type_is_incomplete_struct(type_decay_ptr(type));
+    }
+    return 0;
+}
+
 static void ast_validate_symbols_in(const struct AstNode *node,
                                     const struct AstNode *scope,
                                     int members)
@@ -149,6 +169,24 @@ static void ast_validate_symbols_in(const struct AstNode *node,
 
     if (node == NULL || node->kind == AST_DECL)
         return;
+    if (members && ast_expr_is_incomplete_object(node)) {
+        int type = node->kind == AST_INDEX
+            ? type_decay_ptr(ast_expr_type_for_sizeof(node->a))
+            : ast_expr_type_for_sizeof(node->kind == AST_ASSIGN ? node->a : node);
+        char message[160];
+
+        if (node->kind == AST_SIZEOF_EXPR)
+            type = ast_expr_type_for_sizeof(node->a);
+        snprintf(message, sizeof(message),
+                 "expression has incomplete type 'struct %s'",
+                 struct_defs[type_struct_id(type) - 1].name);
+        dcc_error_at(node->file != NULL && node->file[0] != 0
+                         ? node->file
+                         : (input_name ? input_name : "<input>"),
+                     node->line > 0 ? node->line : g_lex.tok_line,
+                     node->line > 0 ? node->pos : -1, message, NULL);
+        return;
+    }
     if (members && node->kind == AST_MEMBER && node->sval != NULL &&
         node->a != NULL &&
         (sid = ast_member_complete_struct_id(node)) != 0 &&

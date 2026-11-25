@@ -31808,9 +31808,11 @@ static int mir_spilled_dimensions_valid(void)
     effective_local_bytes =
         (int64_t)mir.local_bytes - mir.dead_local_suffix_bytes;
     base_frame_bytes = effective_local_bytes + mir.aggregate_temp_bytes;
+    if (base_frame_bytes > MIR_MAX_FRAME_BYTES && base_frame_bytes <= INT_MAX)
+        mir_oversized_frame_bytes = (int)base_frame_bytes;
     return effective_local_bytes >= 0 &&
            mir.aggregate_temp_bytes >= 0 &&
-           base_frame_bytes >= 0 && base_frame_bytes <= 30000;
+           base_frame_bytes >= 0 && base_frame_bytes <= MIR_MAX_FRAME_BYTES;
 }
 
 static int mir_spilled_text_metadata_valid(int *invalid_instruction)
@@ -32806,8 +32808,11 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 mir_effective_local_bytes() + mir.aggregate_temp_bytes,
                 mir.local_bytes + mir.aggregate_temp_bytes,
                 mir.backend_slot_count, frame_bytes);
-    if (frame_bytes < 0 || frame_bytes > 30000)
+    if (frame_bytes < 0 || frame_bytes > MIR_MAX_FRAME_BYTES) {
+        if (frame_bytes > MIR_MAX_FRAME_BYTES)
+            mir_oversized_frame_bytes = frame_bytes;
         return mir_scalar_cfg_preflight_reject("frame-size", -1);
+    }
     if ((getenv("DCC_MIR_UNUSED_SLOT_REPORT") != NULL ||
          getenv("DCC_MIR_SLOT_ACCESS_REPORT") != NULL) &&
         mir.next_value > 0) {

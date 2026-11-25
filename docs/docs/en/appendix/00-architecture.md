@@ -291,7 +291,7 @@ lock these messages and carets against exact baselines.
 | Name lookup | `DCC-E0201` | undeclared identifiers |
 | Preprocessor and include handling | `DCC-E0301`-`DCC-E0345` | malformed or too deeply nested `#include`, unknown directives, unmatched `#elif`/`#else`/`#endif`, malformed `#if` expressions, malformed `#define` names and parameter lists, `#` and `##` misuse, malformed `#line`, over-long macro bodies, bad macro arity or an unterminated macro call |
 | Constant expressions | `DCC-E0401`-`DCC-E0403` | non-constant expressions, division by zero, missing expression operands |
-| Struct/union/enum/type semantics | `DCC-E0501`-`DCC-E0540` | field designators, `offsetof`, bit-fields, duplicate enum constants, missing type names, conflicting type specifiers, multiple storage classes |
+| Struct/union/enum/type semantics | `DCC-E0501`-`DCC-E0541` | field designators, `offsetof`, bit-fields, duplicate enum constants, missing type names, conflicting type specifiers, multiple storage classes, incomplete struct types |
 | Array and pointer constraints | `DCC-E0601`-`DCC-E0605` | unsupported variable inner dimensions, invalid bounds/object sizes, scalar subscripting |
 | Statement control flow | `DCC-E0701`-`DCC-E0706` | `break`/`continue` outside valid contexts, stray `case`/`default`, duplicate or undefined labels |
 | Functions and declarations | `DCC-E0801`-`DCC-E0808` | parameter declaration errors, redefinitions, too few or too many function-call arguments, a bare `return;` in a non-void function, calling an object that is not a function |

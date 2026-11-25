@@ -2,12 +2,12 @@
 
 ## Current status
 
-**Open production compiler bugs: one,** [BUG-096](#bug-096): an enum
-declared in a nested block is rejected. It is parked as
-`tests/known-bugs/bug096.c`. The fixes from the
-[24-hour fuzz campaign](#24-hour-fuzz-campaign-seeds-1000000) pass the full
-suite (653 apps) in both stack modes on Linux and Windows, with no
-performance regressions after one measured row update.
+**Open production compiler bugs: none.** [BUG-096](#bug-096) and the
+remaining findings from the
+[24-hour fuzz campaign](#24-hour-fuzz-campaign-seeds-1000000) are fixed. The
+full suite (654 apps) passes in both stack modes on Linux and Windows with
+no performance regressions, and the known-bug runner has no parked
+reproducers.
 
 One [diagnostic performance finding](#diagnostic-performance-finding) remains
 reproducible when the regional emitter is forced for `a1`.
@@ -23,7 +23,8 @@ checked with `python3 scripts/run-known-bugs.py`. See
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
-| [BUG-096](#bug-096) | — | open | An enum declared in a nested block is rejected as a duplicate |
+| [BUG-096](#bug-096) | — | fixed | An enum declared in a nested block is rejected as a duplicate |
+| [Campaign follow-ups](#campaign-follow-ups) | — | fixed | Incomplete structs and oversized frames reach code generation; `int struct` is accepted |
 | [Phi homes](#phi-homes-seeds-1003410-1007032-1009308-1013071) | — | fixed | A PHI homed in a local's frame slot is clobbered or left stale |
 | [Narrow extension](#narrow-extension-seeds-1016069-2002344) | — | fixed | A narrow block local or constant widens with the wrong signedness |
 | [Macro runaway](#macro-runaway-seeds-1001181-1009619-1123395-1137640) | — | fixed | Self-referencing object-like macros expand without bound |
@@ -126,32 +127,49 @@ roughly 8,000 legitimate splices copies a 3.4 MB buffer.
   reports `unknown struct field` (`member-unknown-field-in-store`).
   Rejected statements keep their `unsupported ...` messages.
 
-### Remaining campaign findings
+### Campaign follow-ups
 
-These are open and not fixed here:
+**Fixed locally; covered by four diagnostics tests.**
 
-- An object of incomplete struct type is accepted as a local, and assigning
-  one ends in `fatal: MIR emission is required` (directive seeds 1014233,
-  1123337, 1124253, 1128489).
-- Local frames above roughly 25 KB end in the same fatal, not a size
-  diagnostic (directive seed 1038463).
-- `int struct C *r` is accepted.
-- `too many structs` and `#asm block too large for pending buffer` are
-  clearly worded limits (directive seeds 1038833, 1104494, 1086232).
-- About 60 syntax inputs report an error one line past the end of the file
-  after the mutation left a macro undeclared or a brace unbalanced.
+- Struct definitions record when their member list is parsed. A
+  block-scope object of an incomplete struct type is now an error
+  (`local-incomplete-struct`), as are an assignment, subscript or `sizeof`
+  that needs one's size (`incomplete-struct-assignment`). Before, the
+  declaration was accepted and the assignment ended in `fatal: MIR emission
+  is required` (directive seeds 1014233, 1123337, 1124253, 1128489).
+- A function whose frame exceeds the code generators' 30,000-byte limit,
+  now the shared `MIR_MAX_FRAME_BYTES`, is reported at the function with its
+  frame size (`local-frame-too-large`, directive seed 1038463).
+- A struct, union or enum specifier combined with another type specifier,
+  such as `int struct C *r`, is rejected (`struct-specifier-with-int`).
+
+Still open, and not compiler defects: `too many structs` and `#asm block
+too large for pending buffer` are clearly worded limits (directive seeds
+1038833, 1104494, 1086232). About 60 syntax inputs report an error one
+line past the end of the file after the mutation left a macro undeclared
+or a brace unbalanced.
 
 The RTL oracle's `strtod` and `sscanf` mismatches were addressed upstream
 in `c3057947` and `1005699a`.
 
 ## BUG-096
 
-**Open; parked as `tests/known-bugs/bug096.c`.** An enum declared inside a
-nested block, including a `case` block, is rejected with `duplicate enum
-constant`. Enum constants have no block scope, and the block's declarations
-are parsed again after the frame-sizing scan, so they meet their own
-constants. Restoring the constant count on scope exit is not enough: MIR
-lowering then resolves the constants after the scope has closed and fails.
+**Fixed locally; promoted from `tests/known-bugs/bug096.c` to
+`tests/tblkenum.c`.** An enum declared inside a nested block, including a
+`case` block, was rejected with `duplicate enum constant`. The support gate
+replayed the block's declarations and restored every counter except the
+enum constants, so the real replay met its own constants.
+
+Restoring them is not enough on its own, because MIR lowers a block before
+its declarations are replayed. The AST builder now registers a block
+declaration's enum constants as it captures it, like typedefs, and folds
+references to them into literals. A later block declaration of the same
+name shadows the constant and is not folded. Enum constants are now
+block-scoped: duplicates are checked only within the innermost block, lookup
+finds the innermost definition, and leaving a block drops its constants.
+The test covers `case` blocks, sibling and cross-function reuse of names,
+array bounds, `case` labels, shadowing by an inner local and an inner enum,
+and `for` bodies.
 
 ## Earlier oracle campaign validation
 

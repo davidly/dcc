@@ -3481,6 +3481,11 @@ void parse_function_or_global(int base_type)
                  * allocates. */
                 strncpy(g_current_compiling_func, name, sizeof(g_current_compiling_func) - 1);
                 g_current_compiling_func[sizeof(g_current_compiling_func) - 1] = 0;
+                dcc_copy_str(g_current_compiling_func_file,
+                             sizeof(g_current_compiling_func_file),
+                             g_lex.tok.file[0] ? g_lex.tok.file
+                                 : (input_name ? input_name : "<input>"));
+                g_current_compiling_func_line = g_lex.tok_line;
 
                 /* Capture the stack-check state in effect at the function's
                  * opening brace.  This is the value baked into THIS function's

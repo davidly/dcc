@@ -48,6 +48,10 @@ and the single source-of-truth runtime.
   overflow exit cleanly with a `?stack overflow` message instead of silently
   corrupting the heap. See [Building and linking](02-build-and-link.md) for the
   flag and the `stacksize` utility that measures the reserve an app needs.
+- **A function's stack frame is at most 30,000 bytes.** That covers its local
+  variables and the compiler's temporaries. A larger frame is a compile error
+  (`DCC-E0605`) that names the function and its frame size; make the largest
+  arrays `static` or global instead.
 - **CP/M 2.2 is the baseline, not the only usable system.** Ordinary console
   and file I/O use BDOS. Optional services include BIOS wrappers, BDOS 105
   for `time()`, BDOS 108 for exit status, and BDOS 48 for disk flushing.

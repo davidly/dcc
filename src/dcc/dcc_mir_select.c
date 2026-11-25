@@ -58,6 +58,8 @@ static int mir_cost_policy_selects_alternative(void)
  * keeps each at the same 64MB the byte-per-cell matrices were bounded to. */
 #define MIR_MAX_LIVENESS_CELLS (8UL * MIR_MAX_DENSE_ANALYSIS_CELLS)
 
+int mir_oversized_frame_bytes;
+
 static int mir_dense_analysis_is_bounded(void)
 {
     size_t instructions;
@@ -4224,6 +4226,7 @@ void mir_end_function(void)
 
     if (!mir.active)
         return;
+    mir_oversized_frame_bytes = 0;
     if (errors > 0) {
         goto finish;
     }
@@ -4416,6 +4419,19 @@ void mir_end_function(void)
              mir.opaque_count != 0))
             goto finish;
         mir_require_emitted_function(failure_reason);
+        /* Every code generator caps the frame; say so rather than fail. */
+        if (mir_oversized_frame_bytes > 0) {
+            char message[256];
+
+            snprintf(message, sizeof(message),
+                     "function '%s' needs a %d-byte stack frame for its "
+                     "local variables; dcc allows %d",
+                     mir.name, mir_oversized_frame_bytes,
+                     MIR_MAX_FRAME_BYTES);
+            dcc_error_at(g_current_compiling_func_file,
+                         g_current_compiling_func_line, -1, message, NULL);
+            goto finish;
+        }
         fatal("MIR emission is required");
     }
     if (opt_debug_lines &&

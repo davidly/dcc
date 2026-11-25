@@ -3305,7 +3305,8 @@ static int mir_homed_scalar_dag_preflight(int *uses_iy_out,
         mir.aggregate_temp_bytes != 0)
         return 0;
     if ((long)mir.local_bytes - (long)mir.dead_local_suffix_bytes < 0 ||
-        (long)mir.local_bytes - (long)mir.dead_local_suffix_bytes > 30000 ||
+        (long)mir.local_bytes - (long)mir.dead_local_suffix_bytes >
+            MIR_MAX_FRAME_BYTES ||
         (mir.return_type & 15) != TYPE_INT ||
         type_ptr_depth(mir.return_type) != 0 ||
         !mir_scalar_dag_type_is_emittable(mir.return_type))
