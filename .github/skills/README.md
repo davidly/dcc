@@ -5,8 +5,8 @@ This folder holds **project-scoped** agent skills that ship with the dcc repo
 `dcc-project/` for developing the compiler, runtime, debugger host, and related
 toolchain components, `mir-migration/` for coordinating the staged MIR backend
 rollout, `mkdocs-stdlib-docs/` for maintaining generated standard-library
-reference pages, and `clang-oracle-testing/` for finding, logging and closing
-compiler bugs with the clang-oracle differential fuzzer). Any clone of this repo picks them up
+reference pages, and `dcc-fuzz-testing/` for running the standalone fuzzers,
+triaging findings, and verifying fixes). Any clone of this repo picks them up
 automatically when opened in an agent that supports skills (e.g. GitHub
 Copilot in VS Code).
 

@@ -171,8 +171,9 @@ the bug's feature from `KNOWN_BUGS` so the fuzzer generates that form again.
 `tests/known-bugs/README.md` has the exact steps. `fix-plan.md` in the
 repository root groups the open bugs by probable root cause so that related
 ones are fixed together, and the project skill
-`.github/skills/clang-oracle-testing` is the step-by-step procedure for
-running a campaign, triaging a failure and accepting a fix.
+`.github/skills/dcc-fuzz-testing/references/clang-oracle.md` has the
+procedure for running a clang oracle campaign, triaging a failure and
+verifying a fix.
 
 ## What this does and does not find
 

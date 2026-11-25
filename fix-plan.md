@@ -1,7 +1,7 @@
 # Fix plan for the logged compiler bugs
 
 [compiler-bugs.md](compiler-bugs.md) tracks the open bugs found by the
-clang-oracle fuzzer (`.github/skills/clang-oracle-testing/SKILL.md`,
+clang-oracle fuzzer (`.github/skills/dcc-fuzz-testing/references/clang-oracle.md`,
 `docs/docs/en/appendix/06-differential-testing.md`). Many are one defect seen
 from several angles. This plan groups them by *probable root cause* so that
 one fix, made in the right place, closes several issues, and so that the
@@ -4753,7 +4753,7 @@ the **Task** line.
 ````text
 You are fixing a cluster of logged compiler bugs in dcc, a C compiler that
 emits Z80 assembly for CP/M 2.2. Use the `dcc-project` and
-`clang-oracle-testing` skills, and the `mir-migration` skill if you touch
+`dcc-fuzz-testing` skills, and the `mir-migration` skill if you touch
 MIR selection, schedules, or allocation.
 
 ## Task
