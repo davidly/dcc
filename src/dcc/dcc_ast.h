@@ -184,6 +184,7 @@ void ast_scan_decl_span(const struct AstNode *n);
 void ast_replay_compound_literal(const struct AstNode *n);
 void ast_process_expr_metadata(const struct AstNode *n);
 void ast_validate_expr_symbols(const struct AstNode *n);
+void ast_validate_stmt_symbols(const struct AstNode *n);
 int ast_process_inline_call_metadata(
     const struct AstNode *call, int result_dead);
 void ast_process_stmt_metadata(const struct AstNode *n);

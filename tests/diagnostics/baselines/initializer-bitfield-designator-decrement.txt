@@ -1,0 +1,4 @@
+<source>:8: error DCC-E1107: expected '=' near '--'
+        struct V v = { .major -- 7 };
+                              ^
+dcc: 1 error(s)

@@ -532,10 +532,10 @@ int ast_process_statement(void)
         g_func_pass.block_seq = sv_block_seq;
         /* A discarded `zz;` passes the gate; report zz rather than fail
          * later in code generation. */
-        if (!ast_stmt_has_decl(n)) {
+        {
             int errors_checked = errors;
 
-            ast_validate_expr_symbols(n);
+            ast_validate_stmt_symbols(n);
             if (errors != errors_checked) {
                 ast_arena_reset(&g_ast_arena);
                 return 1;

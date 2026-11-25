@@ -6157,6 +6157,27 @@ static int mir_phi_edge_stores_object_value(
     return found;
 }
 
+/* Whether value is live where the block starting at label ends, which is
+ * where a PHI's copies for that incoming edge run. An unknown block is
+ * treated as live. */
+static int mir_value_live_leaving_label_block(int label, int value)
+{
+    int instruction = mir_find_label(label);
+
+    if (instruction < 0)
+        return 1;
+    for (++instruction; instruction < mir.count; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode == MIR_LABEL)
+            return mir_value_live_out_of_instruction(value, instruction - 1);
+        if (opcode == MIR_JUMP || opcode == MIR_BRANCH_FALSE ||
+            opcode == MIR_RETURN)
+            return mir_value_live_out_of_instruction(value, instruction);
+    }
+    return mir_value_live_out_of_instruction(value, mir.count - 1);
+}
+
 /* Only store-only adjustments can require a PHI's named home without
  * following another PHI proof recursively through a loop backedge. */
 static int mir_phi_is_word_selfstore_source(int value)
@@ -6222,6 +6243,18 @@ static int mir_phi_uses_scalar_object_home(int value)
                 insn->src1 != value &&
                 mir_value_live_out_of_instruction(value, instruction) &&
                 !mir_store_is_dead(instruction))
+                return 0;
+            /* Another PHI of the object may be homed there too; its edge
+             * copies overwrite the slot even when the source store is dead.
+             * They run where each edge leaves its predecessor, which can be
+             * after this value's last use when the PHI itself sits later. */
+            if (insn->opcode == MIR_PHI &&
+                insn->object == definition->object &&
+                insn->dst != value &&
+                ((insn->src1 != value &&
+                  mir_value_live_leaving_label_block(insn->phi_pred1, value)) ||
+                 (insn->src2 != value &&
+                  mir_value_live_leaving_label_block(insn->phi_pred2, value))))
                 return 0;
         }
         return 1;
@@ -26535,6 +26568,23 @@ static int mir_emit_nested_truth_comparison_branch(MirStream *out,
  * the dead constant pushed for src1 is simply discarded via pop bc/pop
  * bc). Returns 0 (emits nothing) if neither operand is a compile-time
  * constant, leaving the caller to fall back to the generic AND path. */
+/* A narrow constant operand is widened by its own type: `(short)-16 & x`
+ * masks with 0xfffffff0, not 0x0000fff0. */
+static unsigned long mir_wide_and_constant_mask(
+    const struct MirInsn *constant)
+{
+    unsigned long bits = (unsigned long)constant->immediate;
+    int size = type_size(constant->type);
+
+    if (constant->type == 0 || size >= 4 || type_ptr_depth(constant->type) != 0)
+        return bits;
+    bits &= size == 1 ? 0xffUL : 0xffffUL;
+    if ((constant->type & TYPE_UNSIGNED) == 0 && !type_is_bool(constant->type) &&
+        (bits & (size == 1 ? 0x80UL : 0x8000UL)) != 0)
+        bits |= size == 1 ? 0xffffff00UL : 0xffff0000UL;
+    return bits;
+}
+
 static int mir_emit_wide_and_constant_fastpath(MirStream *out,
                                                 const struct MirInsn *insn)
 {
@@ -26543,13 +26593,15 @@ static int mir_emit_wide_and_constant_fastpath(MirStream *out,
 
     if (src2_definition != NULL && src2_definition->opcode == MIR_CONST) {
         mir_stream_puts("\tpop hl\n\tpop de\n", out);
-        mir_emit_wide_and_constant(out, (unsigned long)src2_definition->immediate);
+        mir_emit_wide_and_constant(
+            out, mir_wide_and_constant_mask(src2_definition));
         return 1;
     }
 
     if (src1_definition != NULL && src1_definition->opcode == MIR_CONST) {
         mir_stream_puts("\tpop bc\n\tpop bc\n", out);
-        mir_emit_wide_and_constant(out, (unsigned long)src1_definition->immediate);
+        mir_emit_wide_and_constant(
+            out, mir_wide_and_constant_mask(src1_definition));
         return 1;
     }
     return 0;
@@ -29562,6 +29614,15 @@ static int mir_phi_copy_is_slot_identity(int source, int destination)
 {
     int source_base, source_width;
     int destination_base, destination_width;
+    int source_homed = mir_phi_uses_scalar_object_home(source);
+    int destination_homed = mir_phi_uses_scalar_object_home(destination);
+
+    /* A PHI homed in its object lives there, not in its backend slot, so a
+     * shared slot number proves nothing unless both share that object. */
+    if (source_homed || destination_homed)
+        return source_homed && destination_homed &&
+               mir_definition(source)->object ==
+                   mir_definition(destination)->object;
 
     /* A parameter/load with a stable named home is read from that IX-relative
      * home even when force_slot assigned it a backend slot for phi planning.

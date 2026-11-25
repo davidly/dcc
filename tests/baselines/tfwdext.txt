@@ -1,0 +1,4 @@
+ushort 10000 10000 -1
+chain 10000
+short 7
+wide 12345670 fffffff8 edcba988 12345668 12345670 fffffff8 edcba988 12345688

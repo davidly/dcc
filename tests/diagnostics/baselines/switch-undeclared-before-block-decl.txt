@@ -1,0 +1,4 @@
+<source>:8: error DCC-E0201: use of undeclared identifier 'foo'
+            foo;
+            ^
+dcc: 1 error(s)

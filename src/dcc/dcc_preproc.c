@@ -1056,19 +1056,25 @@ int parse_charlit_string_value(const char *s, long *out)
  *     #define words G->words
  * where the member name in the replacement is intentionally the macro name.
  */
-#define MAX_DISABLED_MACRO_RANGES 64
-static long disabled_macro_start[MAX_DISABLED_MACRO_RANGES];
-static long disabled_macro_end[MAX_DISABLED_MACRO_RANGES];
-static char disabled_macro_name[MAX_DISABLED_MACRO_RANGES][64];
+/* The set grows as needed: dropping a range would let its text expand the
+ * macro again, and a later rescan of it then expands without bound. */
+struct DisabledMacroRange {
+    long start;
+    long end;
+    char name[64];
+};
+static struct DisabledMacroRange *disabled_macro_ranges;
 static int ndisabled_macro_ranges;
+static int disabled_macro_range_capacity;
 
 static int macro_disabled_here(const char *name, long at)
 {
     int i;
 
     for (i = ndisabled_macro_ranges - 1; i >= 0; --i) {
-        if (at >= disabled_macro_start[i] && at < disabled_macro_end[i] &&
-            !strcmp(disabled_macro_name[i], name)) {
+        if (at >= disabled_macro_ranges[i].start &&
+            at < disabled_macro_ranges[i].end &&
+            !strcmp(disabled_macro_ranges[i].name, name)) {
             return 1;
         }
     }
@@ -1077,25 +1083,30 @@ static int macro_disabled_here(const char *name, long at)
 
 static void add_disabled_macro_range(long start, long end, const char *name)
 {
-    int i;
+    struct DisabledMacroRange *range;
 
     if (!name || !name[0] || end <= start)
         return;
 
-    if (ndisabled_macro_ranges >= MAX_DISABLED_MACRO_RANGES) {
-        for (i = 1; i < ndisabled_macro_ranges; ++i) {
-            disabled_macro_start[i - 1] = disabled_macro_start[i];
-            disabled_macro_end[i - 1] = disabled_macro_end[i];
-            strcpy(disabled_macro_name[i - 1], disabled_macro_name[i]);
-        }
-        ndisabled_macro_ranges--;
+    if (ndisabled_macro_ranges >= disabled_macro_range_capacity) {
+        int capacity = disabled_macro_range_capacity
+            ? disabled_macro_range_capacity * 2 : 64;
+        struct DisabledMacroRange *grown = (struct DisabledMacroRange *)
+            xmalloc((size_t)capacity * sizeof(*grown));
+
+        if (ndisabled_macro_ranges > 0)
+            memcpy(grown, disabled_macro_ranges,
+                   (size_t)ndisabled_macro_ranges * sizeof(*grown));
+        free(disabled_macro_ranges);
+        disabled_macro_ranges = grown;
+        disabled_macro_range_capacity = capacity;
     }
 
-    i = ndisabled_macro_ranges++;
-    disabled_macro_start[i] = start;
-    disabled_macro_end[i] = end;
-    strncpy(disabled_macro_name[i], name, sizeof(disabled_macro_name[i]) - 1);
-    disabled_macro_name[i][sizeof(disabled_macro_name[i]) - 1] = 0;
+    range = &disabled_macro_ranges[ndisabled_macro_ranges++];
+    range->start = start;
+    range->end = end;
+    strncpy(range->name, name, sizeof(range->name) - 1);
+    range->name[sizeof(range->name) - 1] = 0;
 }
 
 /* Both disabled_macro_ranges (source-position-keyed, see above) and the
@@ -1138,11 +1149,11 @@ static void shift_disabled_ranges(long start, long end, long delta)
     int i;
 
     for (i = 0; i < ndisabled_macro_ranges; i++) {
-        if (disabled_macro_start[i] >= end) {
-            disabled_macro_start[i] += delta;
-            disabled_macro_end[i] += delta;
-        } else if (disabled_macro_end[i] > start) {
-            disabled_macro_end[i] += delta;
+        if (disabled_macro_ranges[i].start >= end) {
+            disabled_macro_ranges[i].start += delta;
+            disabled_macro_ranges[i].end += delta;
+        } else if (disabled_macro_ranges[i].end > start) {
+            disabled_macro_ranges[i].end += delta;
         }
     }
 }
@@ -1165,6 +1176,9 @@ void replace_source_range(long start, long end, const char *text)
     memcpy(nsrc + start, text, (size_t)n);
     memcpy(nsrc + start + n, src + end, (size_t)rest);
     nsrc[start + n + rest] = 0;
+    /* Each splice copies the whole buffer; keeping the old copies made
+     * memory quadratic in the number of expansions. */
+    free(src);
     src = nsrc;
     src_len = start + n + rest;
     g_src_generation++;
@@ -2419,13 +2433,14 @@ void next_token(void)
                 rv_base = rv;
 
                 if (macro_value_is_float_literal(rv)) {
-                    replace_source_range(g_lex.tok_start_pos, g_lex.posi, rv);
+                    replace_source_range_disabled(g_lex.tok_start_pos, g_lex.posi, rv, defs[di].name);
                     next_token();
                     return;
                 }
 
+                /* Disabled like the general path: `#define np -1 np`. */
                 if (macro_number_should_expand_textually(rv)) {
-                    replace_source_range(g_lex.tok_start_pos, g_lex.posi, rv);
+                    replace_source_range_disabled(g_lex.tok_start_pos, g_lex.posi, rv, defs[di].name);
                     next_token();
                     return;
                 }

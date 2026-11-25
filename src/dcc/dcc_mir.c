@@ -3738,6 +3738,8 @@ static int mir_lower_expr_impl(const struct AstNode *node)
                                      node != mir_discarded_expr);
             if (value >= 0)
                 return value;
+            /* The unary chain below would lower this same node again. */
+            break;
         }
         if (node->kind == AST_UNARY && node->op == '&') {
             value = mir_lower_lvalue_address(node->a);
@@ -11728,7 +11730,11 @@ static int mir_forwarded_load_widened_type(const struct MirInsn *load,
         source->immediate != 0 || source->type == 0 ||
         type_ptr_depth(source->type) != 0 || type_is_float(source->type) ||
         type_ptr_depth(load->type) != 0 || type_is_float(load->type) ||
-        (type_size(load->type) != 1 && type_size(load->type) != 2))
+        (type_size(load->type) != 1 && type_size(load->type) != 2) ||
+        /* Widening the stored value stands for widening the object only
+         * when the two agree: `unsigned short u = (i = -1);` stores an int. */
+        type_size(source->type) != type_size(load->type) ||
+        (source->type & TYPE_UNSIGNED) != (load->type & TYPE_UNSIGNED))
         return 0;
     converted = mir_definition(source->src1);
     if (converted == NULL || converted->type == 0 ||
@@ -11792,7 +11798,11 @@ static int mir_forwarded_constant_widened(const struct MirInsn *load,
     if ((constant->type & TYPE_UNSIGNED) != 0 ||
         (bits & (bytes == 1 ? 0x80UL : 0x8000UL)) == 0)
         return 0;
-    bits |= ~(bytes == 1 ? 0xffUL : 0xffffUL);
+    /* The loaded object's type, not the stored constant's, decides the
+     * extension: `unsigned short u = -1;` reads back as 0xffff. */
+    if ((load->type & TYPE_UNSIGNED) == 0 ||
+        type_size(load->type) != bytes)
+        bits |= ~(bytes == 1 ? 0xffUL : 0xffffUL);
     *widened = (long)(bits & 0xffffffffUL);
     *operation_type = use->secondary_offset;
     return 1;

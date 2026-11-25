@@ -94,22 +94,86 @@ void ast_process_expr_metadata(const struct AstNode *node)
         ast_process_expr_metadata(node->list[i]);
 }
 
-void ast_validate_expr_symbols(const struct AstNode *node)
+/* Whether a declaration anywhere in statement n declares or mentions name. */
+static int ast_stmt_decl_touches_name(const struct AstNode *n,
+                                      const char *name)
 {
     int i;
 
-    if (node == NULL)
+    if (n == NULL)
+        return 0;
+    if (n->kind == AST_DECL)
+        return ast_decl_span_touches_name(n, name);
+    if (ast_stmt_decl_touches_name(n->a, name) ||
+        ast_stmt_decl_touches_name(n->b, name) ||
+        ast_stmt_decl_touches_name(n->c, name) ||
+        ast_stmt_decl_touches_name(n->d, name))
+        return 1;
+    for (i = 0; i < n->list_len; ++i)
+        if (ast_stmt_decl_touches_name(n->list[i], name))
+            return 1;
+    return 0;
+}
+
+/* The struct a member access names when it is a complete struct object
+ * (through one pointer for `->`), or 0 when that is not known. */
+static int ast_member_complete_struct_id(const struct AstNode *n)
+{
+    int base = ast_expr_type_for_sizeof(n->a);
+    int sid;
+    int i;
+
+    if (n->op == TOK_ARROW) {
+        if (type_ptr_depth(base) != 1)
+            return 0;
+        base = type_decay_ptr(base);
+    }
+    if (!type_is_struct_object(base) || type_ptr_depth(base) != 0)
+        return 0;
+    sid = base_struct_id_from_type(base);
+    if (sid <= 0 || sid > nstruct_defs)
+        return 0;
+    /* Fields are recorded by parent; a struct with none is incomplete. */
+    for (i = 0; i < nfield_defs; ++i)
+        if (field_defs[i].parent_struct_id == sid)
+            return sid;
+    return 0;
+}
+
+static void ast_validate_symbols_in(const struct AstNode *node,
+                                    const struct AstNode *scope,
+                                    int members)
+{
+    int i;
+    int sid;
+
+    if (node == NULL || node->kind == AST_DECL)
         return;
+    if (members && node->kind == AST_MEMBER && node->sval != NULL &&
+        node->a != NULL &&
+        (sid = ast_member_complete_struct_id(node)) != 0 &&
+        find_field_def(sid, node->sval) == NULL) {
+        char message[MAX_TOK_TEXT + 64];
+
+        sprintf(message, "unknown struct field '%s'", node->sval);
+        dcc_error_at(node->file != NULL && node->file[0] != 0
+                         ? node->file
+                         : (input_name ? input_name : "<input>"),
+                     node->line > 0 ? node->line : g_lex.tok_line,
+                     node->line > 0 ? node->pos : -1, message, NULL);
+        return;
+    }
     if (node->kind == AST_CALL) {
         if (node->a == NULL || node->a->kind != AST_IDENT)
-            ast_validate_expr_symbols(node->a);
+            ast_validate_symbols_in(node->a, scope, members);
         for (i = 0; i < node->list_len; ++i)
-            ast_validate_expr_symbols(node->list[i]);
+            ast_validate_symbols_in(node->list[i], scope, members);
         return;
     }
     if (node->kind == AST_IDENT &&
         find_sym(node->sval) == NULL &&
-        find_enum_const(node->sval) < 0) {
+        find_enum_const(node->sval) < 0 &&
+        !ast_stmt_decl_touches_name(scope, node->sval)) {
         char message[MAX_TOK_TEXT + 64];
         const char *source_file =
             node->file != NULL && node->file[0] != 0
@@ -123,12 +187,26 @@ void ast_validate_expr_symbols(const struct AstNode *node)
                      node->line > 0 ? node->pos : -1, message, NULL);
         return;
     }
-    ast_validate_expr_symbols(node->a);
-    ast_validate_expr_symbols(node->b);
-    ast_validate_expr_symbols(node->c);
-    ast_validate_expr_symbols(node->d);
+    ast_validate_symbols_in(node->a, scope, members);
+    ast_validate_symbols_in(node->b, scope, members);
+    ast_validate_symbols_in(node->c, scope, members);
+    ast_validate_symbols_in(node->d, scope, members);
     for (i = 0; i < node->list_len; ++i)
-        ast_validate_expr_symbols(node->list[i]);
+        ast_validate_symbols_in(node->list[i], scope, members);
+}
+
+void ast_validate_expr_symbols(const struct AstNode *node)
+{
+    ast_validate_symbols_in(node, NULL, 0);
+}
+
+/* Checks a statement the AST gate accepted before it reaches code
+ * generation. Locals its own declarations introduce are not in the symbol
+ * table yet, so any name one of them touches is taken as declared; member
+ * names are checked too, since this statement will not be rejected later. */
+void ast_validate_stmt_symbols(const struct AstNode *node)
+{
+    ast_validate_symbols_in(node, node, 1);
 }
 
 static void replay_declaration(const struct AstNode *node)

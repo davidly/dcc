@@ -2,11 +2,12 @@
 
 ## Current status
 
-**Open production compiler bugs: none.** On 25 November 2026, the local
-working tree passed the full extended suite with 650 apps passing, 24 skipped,
-and no performance regressions. The known-bug runner found zero parked
-reproducers. The four most recent oracle seeds passed all four production
-configurations.
+**Open production compiler bugs: one,** [BUG-096](#bug-096): an enum
+declared in a nested block is rejected. It is parked as
+`tests/known-bugs/bug096.c`. The fixes from the
+[24-hour fuzz campaign](#24-hour-fuzz-campaign-seeds-1000000) pass the full
+suite (653 apps) in both stack modes on Linux and Windows, with no
+performance regressions after one measured row update.
 
 One [diagnostic performance finding](#diagnostic-performance-finding) remains
 reproducible when the regional emitter is forced for `a1`.
@@ -22,6 +23,11 @@ checked with `python3 scripts/run-known-bugs.py`. See
 
 | ID | Issue | Kind | Defect |
 |---|---|---|---|
+| [BUG-096](#bug-096) | — | open | An enum declared in a nested block is rejected as a duplicate |
+| [Phi homes](#phi-homes-seeds-1003410-1007032-1009308-1013071) | — | fixed | A PHI homed in a local's frame slot is clobbered or left stale |
+| [Narrow extension](#narrow-extension-seeds-1016069-2002344) | — | fixed | A narrow block local or constant widens with the wrong signedness |
+| [Macro runaway](#macro-runaway-seeds-1001181-1009619-1123395-1137640) | — | fixed | Self-referencing object-like macros expand without bound |
+| [Error paths](#error-paths-seeds-1196576-1123277-1177552) | — | fixed | Erroneous code crashes dcc or reaches code generation |
 | [Seeds 212413/228464](#seeds-212413228464) | — | fixed | Loop-invariant BC hoisting ignores an EXX bank switch |
 | [Seed 206531](#seed-206531) | — | fixed | Dead IX stores are removed before an aliasing IY frame read |
 | [Seed 206417](#seed-206417) | — | fixed | Constant float logical expressions reject unevaluated division by zero |
@@ -47,6 +53,105 @@ checked with `python3 scripts/run-known-bugs.py`. See
 | [BUG-090](#bug-090) | #383 | fixed | A comparison with a for-init long index widens a constant as unsigned |
 | [BUG-091](#bug-091) | #384 | fixed | A widened parameter postincrement multiplies the incremented value |
 | [BUG-092](#bug-092) | #385 | fixed | A logical not over a constant division by zero is rejected |
+
+## 24-hour fuzz campaign (seeds 1000000+)
+
+A detached 24-hour run (22–23 November 2026, snapshot `7d2bd774`) cycled
+every fuzzer over fresh seed ranges: 761 chunks in 70 rounds. Re-run on
+`e3c0bdd1`, the upstream fixes had already resolved oracle seeds 900018 and
+1017037, typed-prog seed 1003041, typed-mixed seed 1000690, most crashes and
+44 of the 51 "MIR emission is required" fatals. The rest are below. Each
+fix has a regression test that fails before the fix and passes after, the
+original seeds pass, and the full suite passes in both stack modes on Linux
+and Windows. Two ASan campaigns of 2,000 syntax and 2,000 directive inputs
+found no sanitizer report, and the whole test corpus compiles clean under
+ASan.
+
+### Phi homes (seeds 1003410, 1007032, 1009308, 1013071)
+
+**Fixed locally; covered by `tests/tphihome.c`.** The phi-slot candidate
+keeps a PHI in its local's frame slot. Three facets broke that:
+
+- A byte PHI was homed in the slot although another PHI of the same local
+  is written there on an edge while it is still live. `a3 = k0` after a
+  loop then read `k0`'s later value. `mir_phi_uses_scalar_object_home` now
+  tests liveness at the end of each incoming block whose value differs,
+  which also covers a join PHI placed after the copy's last use.
+- `mir_phi_copy_is_slot_identity` compared backend slot numbers, which a
+  slot-homed PHI does not live in, so a loop-exit edge never stored `l1`
+  where `++l1` updated it in place. Object-homed PHIs are now an identity
+  only when both share the object.
+
+The second facet adds one edge copy to `tmerge16` (101,454 to 101,459 peep
+cycles). Before, that copy was skipped only because two unrelated slot
+numbers happened to match.
+
+### Narrow extension (seeds 1016069, 2002344)
+
+**Fixed locally; covered by `tests/tfwdext.c`.**
+
+- Load forwarding extended a narrow constant, or a stored `int` value, by
+  the stored value's type, not the local's. So `uint16_t l3 = -1;` widened
+  to `0xffffffff` and `uint16_t l3 = x1 = ...` sign-extended.
+- The 32-bit AND fast path used a narrow constant operand's raw bits as its
+  mask. `(int16_t)-16 & x` masked with `0x0000fff0`.
+
+### Macro runaway (seeds 1001181, 1009619, 1123395, 1137640)
+
+**Fixed locally; covered by `tests/tmacself.c`.** These used tens of
+gigabytes before being killed. Valid programs fail the same way: a macro
+used more than 64 times as `#define v G.v` produces a cascade of errors, and
+`#define N -1 * N` runs out of memory.
+
+- Bodies starting with a number or a float were spliced without disabling
+  the macro.
+- The disabled-range table held 64 entries and dropped the oldest, letting
+  a rescan expand that text again. It now grows as needed.
+- Each splice leaked the previous source buffer, making memory quadratic.
+
+Seed 1123395 now uses 21 MB but still takes about 15 s, because each of its
+roughly 8,000 legitimate splices copies a 3.4 MB buffer.
+
+### Error paths (seeds 1196576, 1123277, 1177552)
+
+**Fixed locally; covered by three diagnostics tests.**
+
+- A failed `--` lowering fell into the unary-chain lowering, which lowered
+  the same node again and recursed until the stack overflowed
+  (`initializer-bitfield-designator-decrement`).
+- Statements that contain a declaration skipped undeclared-name checking
+  (`switch-undeclared-before-block-decl`). They are now checked, treating
+  any name a declaration in the statement touches as declared.
+- A gate-accepted statement naming a field its complete struct lacks now
+  reports `unknown struct field` (`member-unknown-field-in-store`).
+  Rejected statements keep their `unsupported ...` messages.
+
+### Remaining campaign findings
+
+These are open and not fixed here:
+
+- An object of incomplete struct type is accepted as a local, and assigning
+  one ends in `fatal: MIR emission is required` (directive seeds 1014233,
+  1123337, 1124253, 1128489).
+- Local frames above roughly 25 KB end in the same fatal, not a size
+  diagnostic (directive seed 1038463).
+- `int struct C *r` is accepted.
+- `too many structs` and `#asm block too large for pending buffer` are
+  clearly worded limits (directive seeds 1038833, 1104494, 1086232).
+- About 60 syntax inputs report an error one line past the end of the file
+  after the mutation left a macro undeclared or a brace unbalanced.
+
+The RTL oracle's `strtod` and `sscanf` mismatches were addressed upstream
+in `c3057947` and `1005699a`.
+
+## BUG-096
+
+**Open; parked as `tests/known-bugs/bug096.c`.** An enum declared inside a
+nested block, including a `case` block, is rejected with `duplicate enum
+constant`. Enum constants have no block scope, and the block's declarations
+are parsed again after the frame-sizing scan, so they meet their own
+constants. Restoring the constant count on scope exit is not enough: MIR
+lowering then resolves the constants after the scope has closed and fails.
 
 ## Earlier oracle campaign validation
 

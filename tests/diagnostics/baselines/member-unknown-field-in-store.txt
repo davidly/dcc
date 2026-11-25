@@ -1,0 +1,4 @@
+<source>:8: error DCC-E0509: unknown struct field 'c'
+            G->t[i] = (char)G->c;
+                             ^
+dcc: 1 error(s)
