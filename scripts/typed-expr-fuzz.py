@@ -26,11 +26,14 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+from contextlib import contextmanager
+from datetime import datetime
 import os
 import random
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -50,6 +53,54 @@ SHIFT_COUNT_TYPES = ['int', 'unsigned char', 'unsigned', 'signed char', 'long', 
 STORES = ['param', 'local', 'block', 'global', 'static', 'array', 'member', 'ptr', 'const']
 CONTEXTS = ['return', 'if', 'ifnot', 'compound', 'arg', 'global', 'ternary', 'loop']
 INPUTS = 4
+
+
+@contextmanager
+def progress_terminal():
+    if sys.stdout.isatty():
+        yield sys.stdout
+        return
+    try:
+        terminal = open('/dev/tty', 'w', encoding='utf-8')
+    except OSError:
+        yield None
+    else:
+        with terminal:
+            yield terminal
+
+
+def progress_reporter(total, terminal, prefix=''):
+    started = time.monotonic()
+    progress = ''
+
+    def update(completed):
+        nonlocal progress
+        filled = 24 * completed // total
+        finish = 'ETA --:--:--'
+        if completed:
+            now = time.time()
+            remaining = (time.monotonic() - started) * (total - completed) / completed
+            finish_at = datetime.fromtimestamp(now + remaining)
+            clock_format = '%H:%M:%S'
+            if finish_at.date() != datetime.fromtimestamp(now).date():
+                clock_format = '%Y-%m-%d ' + clock_format
+            label = 'Finished' if completed == total else 'ETA'
+            finish = '%s %s' % (label, finish_at.strftime(clock_format))
+        progress = '\r%s[%-24s] %d/%d programs  %s\033[K' % (
+            prefix, '#' * filled, completed, total, finish)
+        print(progress, end='', file=terminal, flush=True)
+
+    def report(message):
+        nonlocal progress
+        if progress:
+            print('\r\033[K', end='', file=terminal, flush=True)
+            if terminal is not sys.stdout:
+                progress = ''
+        print(message, flush=True)
+        if progress:
+            print(progress, end='', file=terminal, flush=True)
+
+    return update, report
 
 
 def bits(t): return TYPES[t][0]
@@ -1252,14 +1303,26 @@ def main():
     seeds = parse_seeds(args.seeds)
     failures = 0
     skipped = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        for seed, outcome in zip(seeds, pool.map(lambda s: run_seed(s, args), seeds)):
+    total = len(seeds)
+    with progress_terminal() as terminal, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        show_progress = total > 0 and terminal is not None
+        update_progress, report = progress_reporter(total, terminal) if show_progress else (None, print)
+        results = pool.map(lambda s: run_seed(s, args), seeds)
+        if show_progress:
+            update_progress(0)
+        for completed, (seed, outcome) in enumerate(results, 1):
+            if show_progress and completed % 10 == 0 and completed < total:
+                update_progress(completed)
             if outcome.startswith('SKIP'):
                 skipped += 1
-                print('seed %d: %s' % (seed, outcome))
+                report('seed %d: %s' % (seed, outcome))
             elif outcome != 'ok':
                 failures += 1
-                print('seed %d: %s (%s)' % (seed, outcome, args.work / str(seed)))
+                report('seed %d: %s (%s)' % (seed, outcome, args.work / str(seed)))
+        if show_progress:
+            update_progress(total)
+            print(file=terminal, flush=True)
     print('%d of %d programs passed%s' % (
         len(seeds) - failures - skipped, len(seeds) - skipped,
         ' (%d too large, skipped)' % skipped if skipped else ''))
