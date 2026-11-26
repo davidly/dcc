@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from scripts.tests.version_header import version_include
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +28,7 @@ class StartupLayoutTests(unittest.TestCase):
                 "-O2",
                 "-I",
                 str(REPO_ROOT / "src" / "dcc"),
+                *version_include(cls.workspace),
                 *map(str, sources),
                 "-o",
                 str(cls.compiler),
