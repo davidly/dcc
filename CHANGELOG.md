@@ -1,5 +1,24 @@
 # Changelog
 
+## Boolean leaves and one-iteration loops (2026-11-26)
+
+Tiny boolean comparison leaves can inline in callers that declare a local,
+enum, or typedef with the global's name. Synthesized global references retain
+the callee's binding and stay outside object forwarding, preserving volatile
+reads and memory changes across calls. Function-pointer bodies remain available.
+
+Proven one-iteration signed-int loops omit their tests and backedge while
+retaining the body, increment, final counter value, and break/continue paths.
+Counter writes, address escapes, volatile counters, uncertain declarations,
+VLA frames, and possible entry through labels or switch cases decline the proof.
+Constant-left multiplication of comparison results is canonicalized before
+allocation so existing shift/add lowering can apply. Unused leaf frames can
+also disappear around explicitly recognized register-only rotates and exchange.
+
+With stack checks disabled, `tboolin` takes 870,733 Z80 cycles with peephole
+optimization, down from 1,536,277 (43.3% fewer cycles) and below zsdcc's 904,103.
+Stack-checked peephole/nopeephole baselines are 1,034,143 / 1,188,936 cycles.
+
 ## Constant division and predicate/byte lowering (2026-11-26)
 
 Unsigned word division and remainder by powers of two are normalized to

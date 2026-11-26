@@ -1238,6 +1238,8 @@ static struct Sym *mir_ident_symbol(const struct AstNode *node)
 
     if (node == NULL)
         return NULL;
+    if (node->bound_global)
+        return node->sym;
     name = mir_ident_name(node);
     symbol = find_sym(name);
     if (symbol != NULL)
@@ -1483,12 +1485,26 @@ static struct AstNode *mir_clone_inline_expr(struct AstArena *arena,
     dst->uval = src->uval;
     dst->str_index = src->str_index;
     dst->sym = src->sym;
+    dst->bound_global = src->bound_global;
+    if (fn->auto_inline_boolean && src->kind == AST_IDENT &&
+        src->sval != NULL && !strcmp(src->sval, fn->inline_boolean_global) &&
+        (find_local(src->sval) != NULL || local_name_declared_in_function(src->sval))) {
+        /* The cloned expression belongs to the callee, even inside a caller
+         * block that declares a local, enum constant, or typedef of this name. */
+        dst->sym = find_global(fn->inline_boolean_global);
+        dst->bound_global = 1;
+    }
     if (src->sval == NULL)
         dst->sval = NULL;
     else if (src->kind == AST_STR_LIT)
         dst->sval = ast_arena_memdup(arena, src->sval, (int)src->uval);
     else
         dst->sval = ast_arena_strdup(arena, src->sval);
+    if (dst->bound_global) {
+        char qualified[80];
+        snprintf(qualified, sizeof(qualified), "#global#%s", dst->sym->name);
+        dst->sval = ast_arena_strdup(arena, qualified);
+    }
     dst->peek_type = src->peek_type;
     dst->operand_type = src->operand_type;
     dst->line = src->line;
@@ -1683,8 +1699,10 @@ static int mir_try_lower_inline_call_common(const struct AstNode *call,
         mir_inline_substitution_body(fn_sym) == NULL)
         return 0;
     if (fn_sym->auto_inline_boolean &&
-        (call->list_len!=0 || find_local(fn_sym->inline_boolean_global)!=NULL ||
-         local_name_declared_in_function(fn_sym->inline_boolean_global)))
+        (call->list_len != 0 ||
+         (strlen(fn_sym->inline_boolean_global) > 55 &&
+          (find_local(fn_sym->inline_boolean_global) != NULL ||
+           local_name_declared_in_function(fn_sym->inline_boolean_global)))))
         return 0;
     if (fn_sym->auto_inline_byte && !fn_sym->is_inline) {
         /* Byte-return callers already have compact leaf/call candidates. */
@@ -3662,7 +3680,10 @@ static int mir_lower_expr_impl(const struct AstNode *node)
             : symbol != NULL ? symbol->type : node->type;
         mir_copy_name(insn->name, name);
         insn->inline_temp_id = mir_current_inline_temp_id(insn->name);
-        insn->object = mir_get_object(symbol, insn->name);
+        insn->object = node->bound_global ? -1 : mir_get_object(symbol, insn->name);
+        /* Qualified and ordinary names may refer to the same global. Keep
+         * these loads outside object forwarding, including nonvolatile ones. */
+        if (node->bound_global) insn->memory_flags |= 1;
         return value;
         }
     case AST_INDEX:
@@ -4633,6 +4654,58 @@ static int mir_lower_statement_condition(const struct AstNode *node)
     return result;
 }
 
+/* A one-trip loop needs no header test or backedge if its private counter
+ * cannot change in the body. Keep the body and increment intact so reads,
+ * break/continue, return, and the final counter value retain C semantics. */
+static int mir_one_trip_body_safe(const struct AstNode *node, const char *name)
+{
+    int i;
+    if (node == NULL) return 1;
+    if (node->kind == AST_NONE || node->kind == AST_LABEL ||
+        node->kind == AST_GOTO || node->kind == AST_CASE ||
+        node->kind == AST_DEFAULT || node->kind == AST_DIVMOD_CALL) return 0;
+    if (node->kind == AST_DECL)
+        return !ast_decl_span_touches_name(node, name) &&
+               !ast_decl_span_declares_name(node, name);
+    if ((node->kind == AST_ASSIGN || node->kind == AST_POSTFIX ||
+         (node->kind == AST_UNARY &&
+          (node->op == TOK_INC || node->op == TOK_DEC || node->op == '&'))) &&
+        node->a != NULL && node->a->kind == AST_IDENT &&
+        (node->a->sval == NULL || !strcmp(node->a->sval, name))) return 0;
+    if (!mir_one_trip_body_safe(node->a, name) ||
+        !mir_one_trip_body_safe(node->b, name) ||
+        !mir_one_trip_body_safe(node->c, name) ||
+        !mir_one_trip_body_safe(node->d, name)) return 0;
+    for (i = 0; i < node->list_len; ++i)
+        if (!mir_one_trip_body_safe(node->list[i], name)) return 0;
+    return 1;
+}
+
+static int mir_for_is_one_trip(const struct AstNode *node)
+{
+    const struct AstNode *init = node->a, *cond = node->b, *step = node->c;
+    const char *name;
+    struct Sym *counter;
+    long first;
+    if (opt_debug || mir.has_vla || init == NULL || cond == NULL || step == NULL ||
+        init->kind != AST_ASSIGN || init->op != '=' || init->a == NULL ||
+        init->a->kind != AST_IDENT || init->b == NULL || init->b->kind != AST_INT_LIT || init->b->type != TYPE_INT ||
+        cond->kind != AST_BINARY || cond->op != '<' || cond->a == NULL ||
+        cond->a->kind != AST_IDENT || cond->b == NULL || cond->b->kind != AST_INT_LIT || cond->b->type != TYPE_INT ||
+        (step->kind != AST_POSTFIX && step->kind != AST_UNARY) || step->op != TOK_INC ||
+        step->a == NULL || step->a->kind != AST_IDENT) return 0;
+    name = init->a->sval;
+    if (name == NULL || cond->a->sval == NULL || step->a->sval == NULL) return 0;
+    counter = mir_ident_symbol(init->a);
+    first = init->b->ival;
+    if (counter == NULL || counter->storage != SC_LOCAL || counter->type != TYPE_INT ||
+        counter->is_volatile || strchr(counter->name, '#') != NULL ||
+        first < -32768 || first >= 32767 ||
+        cond->b->ival != first + 1 || strcmp(cond->a->sval, name) ||
+        strcmp(step->a->sval, name) || local_name_address_taken_in_function(name)) return 0;
+    return mir_one_trip_body_safe(node->d, name);
+}
+
 static void mir_lower_stmt(const struct AstNode *node)
 {
     struct MirInsn *insn;
@@ -4646,6 +4719,7 @@ static void mir_lower_stmt(const struct AstNode *node)
     int case_value;
     int compare_value;
     int counter_proof;
+    int one_trip;
     struct MirSwitchContext *switch_context;
     int i;
 
@@ -4856,6 +4930,7 @@ static void mir_lower_stmt(const struct AstNode *node)
                 }
         return;
     case AST_FOR:
+        one_trip = mir_for_is_one_trip(node);
         top_label = mir_new_label();
         end_label = mir_new_label();
         continue_label = mir_new_label();
@@ -4869,9 +4944,11 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir.continue_labels[mir.flow_depth] = continue_label;
         ++mir.flow_depth;
         counter_proof = ast_sizeof_loop_push(node);
-        mir_emit_label(top_label);
-        mir_emit_object_merges();
-        if (node->b != NULL) {
+        if (!one_trip) {
+            mir_emit_label(top_label);
+            mir_emit_object_merges();
+        }
+        if (!one_trip && node->b != NULL) {
             condition = mir_lower_statement_condition(node->b);
             insn = mir_emit(MIR_BRANCH_FALSE);
             insn->src1 = condition;
@@ -4887,7 +4964,7 @@ static void mir_lower_stmt(const struct AstNode *node)
             mir_lower_discarded_expr(node->c);
         if (counter_proof)
             ast_sizeof_loop_pop();
-        mir_emit_jump(top_label);
+        if (!one_trip) mir_emit_jump(top_label);
         mir_emit_label(end_label);
         --mir.flow_depth;
         if (node->a != NULL && node->a->kind == AST_DECL)
@@ -16891,6 +16968,29 @@ static int mir_fold_guarded_equality_arithmetic(void)
     return changed;
 }
 
+/* Keep a small constant on the right of a comparison-result multiply.
+ * This runs before allocation/forwarding: swapping during emission can
+ * invalidate a planned stack handoff for the original operand order. */
+static int mir_canonicalize_boolean_multiplication(void)
+{
+    int i, changed = 0;
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *d = &mir.insns[i];
+        const struct MirInsn *constant, *boolean;
+        int tmp;
+        if (d->opcode != MIR_BINARY || d->immediate != '*' ||
+            type_size(d->secondary_offset) != 2 || type_is_float(d->secondary_offset)) continue;
+        constant = mir_definition(d->src1); boolean = mir_definition(d->src2);
+        if (constant == NULL || constant->opcode != MIR_CONST ||
+            boolean == NULL || boolean->opcode != MIR_BINARY ||
+            !is_cmp_op((int)boolean->immediate) ||
+            !mir_mul_const_fast_path_eligible((unsigned long)constant->immediate & 65535UL, d->dst)) continue;
+        tmp = d->src1; d->src1 = d->src2; d->src2 = tmp; ++changed;
+    }
+    if (changed) mir_invalidate_use_cache();
+    return changed;
+}
+
 int mir_optimize_integer_expressions(void)
 {
     int changed = 0;
@@ -16909,6 +17009,7 @@ int mir_optimize_integer_expressions(void)
         }
         changed += mir_fold_repaired_integer_binary(&mir.insns[i]);
     }
+    changed += mir_canonicalize_boolean_multiplication();
     changed += mir_forward_named_byte_stores();
     changed += mir_reuse_repeated_byte_folds();
     changed += mir_fold_dominated_predicate_facts();

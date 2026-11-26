@@ -113,6 +113,7 @@ struct AstNode {
     long ival;              /* integer/char literal, case value, label id  */
     unsigned long uval;     /* float bits or other unsigned payload        */
     int str_index;          /* string-literal / label-name table index     */
+    int bound_global;       /* synthesized inline IDENT keeps callee binding */
     struct Sym *sym;        /* resolved symbol for IDENT/DECL/CALL/GOTO     */
     char *sval;             /* identifier / string / member-name text       */
 
@@ -233,6 +234,8 @@ int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
  * subtree reference a given identifier anywhere, and does it contain any
  * observable side effect anywhere. Used together to prove a candidate
  * lvalue address is loop-invariant (see ast_for_hoist_lvalue_addr_supported). */
+/* Comparison-token classification is shared by AST, function capture and MIR. */
+int is_cmp_op(int op);
 int ast_expr_references_ident(const struct AstNode *n, const char *name);
 int ast_expr_has_side_effects(const struct AstNode *n);
 

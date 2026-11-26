@@ -36,7 +36,6 @@ extern int ast_switch_gate_depth;
 
 
 int ident_supported(const char *name);
-int is_cmp_op(int op);
 int is_shift_op(int op);
 int is_float_arith_op(int op);
 int is_supported_binary_op(int op);

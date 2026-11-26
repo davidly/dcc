@@ -2083,6 +2083,13 @@ static int pass_elim_dead_leaf_allocation(void)
             info=peep_line_info(j);
             if(info==NULL) { valid=0;break; }
             if(info->kind==PEEP_LINE_BLANK || info->kind==PEEP_LINE_COMMENT) continue;
+            /* These exact register-only instructions remain opaque to the
+             * general effects model, but cannot observe the discarded frame.
+             * Do not relax the model for other optimization passes. */
+            if (info->kind == PEEP_LINE_INSTRUCTION &&
+                (eq(j,"rla") || eq(j,"rra") || eq(j,"ccf") || eq(j,"ex de,hl") ||
+                 eq(j,"rl a") || eq(j,"rl b") || eq(j,"rl c") || eq(j,"rl d") ||
+                 eq(j,"rl e") || eq(j,"rl h") || eq(j,"rl l"))) continue;
             if(info->kind!=PEEP_LINE_INSTRUCTION || info->effects.unknown || info->effects.control_flow ||
                ((info->effects.reads|info->effects.writes)&(PEEP_REG_SP|PEEP_REG_IX))!=0) { valid=0;break; }
         }

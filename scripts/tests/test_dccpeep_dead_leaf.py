@@ -29,12 +29,20 @@ class DeadLeafAllocationTests(unittest.TestCase):
 
     def test_calls_saved_values_and_stack_addresses_keep_the_allocation(self):
         for body in (' call _observe\n ld hl,0',
-                     ' push hl\n pop de\n ld hl,0',
+                     ' push hl\n ld hl,0\n ex (sp),hl\n pop de',
                      ' ld hl,0\n add hl,sp',
                      ' ld l,(ix-1)\n ld h,0',
                      ' push ix\n pop hl'):
             with self.subTest(body=body):
                 self.assertIn('ix', self.optimize(body))
+
+    def test_register_rotates_and_exchange_do_not_observe_the_frame(self):
+        output = self.optimize(' ld hl,(_value)\n ld a,l\n sub 20\n ld a,h\n'
+                               ' rla\n ccf\n rra\n sbc a,128\n ld hl,0\n rl l\n'
+                               ' ld de,7\n ex de,hl\n add hl,de')
+        self.assertNotIn('ix', output)
+        self.assertIn('rl l', output)
+        self.assertIn('ex de,hl', output)
 
     def test_live_allocation_result_remains_observable(self):
         output = self.optimize(' ld (_escaped),hl', ' ld hl,-4\n add hl,sp\n ld sp,hl\n')

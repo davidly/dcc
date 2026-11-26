@@ -531,8 +531,12 @@ static void global_hash_insert(int index)
 
 struct Sym *find_global(const char *name)
 {
-    unsigned h = global_name_hash(name);
-    int slot = global_hash_buckets[h];
+    unsigned h;
+    int slot;
+    /* Compiler-only qualification used by inlined callee global references. */
+    if (!strncmp(name, "#global#", 8)) name += 8;
+    h = global_name_hash(name);
+    slot = global_hash_buckets[h];
 
     while (slot) {
         int index = slot - 1;

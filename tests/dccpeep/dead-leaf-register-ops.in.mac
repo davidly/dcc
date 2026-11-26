@@ -1,0 +1,48 @@
+; dcc stage-1d output
+	cseg
+	public _compare
+_compare:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	dec sp
+	ld hl,(_value)
+	ld a,l
+	sub 20
+	ld a,h
+	rla
+	ccf
+	rra
+	sbc a,128
+	ld hl,0
+	rl l
+	ld de,7
+	ex de,hl
+	add hl,de
+	ld sp,ix
+	pop ix
+	ret
+	public _stack_exchange
+_stack_exchange:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	dec sp
+	ex (sp),hl
+	ld sp,ix
+	pop ix
+	ret
+	public _indexed_rotate
+_indexed_rotate:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	dec sp
+	rl (ix-1)
+	ld sp,ix
+	pop ix
+	ret
+	end

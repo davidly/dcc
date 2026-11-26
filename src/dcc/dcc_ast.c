@@ -114,6 +114,7 @@ struct AstNode *ast_new(struct AstArena *ar, int kind)
     n->ival = 0;
     n->uval = 0;
     n->str_index = -1;
+    n->bound_global = 0;
     n->sym = NULL;
     n->sval = NULL;
     n->a = NULL;
