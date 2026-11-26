@@ -72,6 +72,7 @@ static int mir_register_iy_offset;
 static int mir_register_iy_parameter = -1;
 static int mir_register_iy_slot = -1;
 static int mir_register_iy_address_root = -1;
+static int mir_register_iy_row_consumer = -1;
 static int mir_register_iy_frame_shift;
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_const_zero_lhs(int compare_index);
@@ -15620,6 +15621,71 @@ static int mir_address_chain_root(int value)
     return -1;
 }
 
+/* Reuse one global-array row address for another array with the same
+ * SSA induction value and row stride. A label-free span ensures the cache
+ * is always written before it is read; only same-module array roots admit
+ * an absolute linker-resolved difference between their bases. */
+static int mir_choose_iy_row_pair(int *consumer_out)
+{
+    int first, second;
+    if (!mir_stable_pointer_local_homes_enabled || mir.has_vla ||
+        !mir_has_cfg_backedge())
+        return -1;
+    for (first = 0; first < mir.count; ++first) {
+        const struct MirInsn *row = &mir.insns[first];
+        const struct MirInsn *base = mir_definition(row->src1);
+        const struct MirInsn *index = mir_definition(row->src2);
+        struct Sym *array;
+        int header = first, backedge = 0;
+        if (row->opcode != MIR_INDEX_ADDRESS || row->immediate < 16 ||
+            row->immediate > 256 || row->base_name[0] != 0 ||
+            base == NULL || base->opcode != MIR_ADDRESS ||
+            index == NULL || index->opcode != MIR_PHI ||
+            type_size(index->type) > 2 ||
+            mir_mul_const_op_count((unsigned long)row->immediate) < 4)
+            continue;
+        array = find_global(base->name);
+        if (array == NULL || array->storage != SC_GLOBAL || !array->is_array)
+            continue;
+        while (header >= 0 && mir.insns[header].opcode != MIR_LABEL)
+            --header;
+        if (header < 0)
+            continue;
+        for (second = first + 1; second < mir.count && second < first + 40; ++second) {
+            const struct MirInsn *other = &mir.insns[second];
+            const struct MirInsn *other_base = mir_definition(other->src1);
+            struct Sym *other_array;
+            int instruction;
+            if (other->opcode == MIR_LABEL || other->opcode == MIR_JUMP ||
+                other->opcode == MIR_BRANCH_FALSE || other->opcode == MIR_RETURN ||
+                other->opcode == MIR_OPAQUE || other->opcode == MIR_CALL ||
+                other->opcode == MIR_CALL_AGGREGATE)
+                break;
+            if (other->opcode != MIR_INDEX_ADDRESS ||
+                other->src2 != row->src2 || other->immediate != row->immediate ||
+                other->type != row->type || other->base_name[0] != 0 ||
+                other_base == NULL || other_base->opcode != MIR_ADDRESS ||
+                mir_value_use_count(other_base->dst) != 1)
+                continue;
+            other_array = find_global(other_base->name);
+            if (other_array == NULL || other_array->storage != SC_GLOBAL ||
+                !other_array->is_array || other_array == array)
+                continue;
+            for (instruction = second + 1; instruction < mir.count; ++instruction)
+                if (mir.insns[instruction].opcode == MIR_JUMP &&
+                    mir.insns[instruction].label == mir.insns[header].label) {
+                    backedge = 1;
+                    break;
+                }
+            if (!backedge)
+                continue;
+            *consumer_out = second;
+            return row->dst;
+        }
+    }
+    return -1;
+}
+
 static int mir_choose_iy_address_root(int *saving_out)
 {
     int best_root = -1;
@@ -16577,6 +16643,9 @@ static void mir_emit_virtual_store(MirStream *out, int value)
     int offset;
     int iy_offset;
     int pending_planned_consumer;
+    if (value == mir_register_iy_address_root &&
+        mir_register_iy_row_consumer >= 0)
+        mir_stream_puts("\tpush hl\n\tpop iy\n", out);
     if (mir_phi_uses_scalar_object_home(value)) {
         int home_storage;
         int home_offset;
@@ -33723,6 +33792,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     mir_register_iy_slot = -1;
     mir_register_iy_parameter = -1;
     mir_register_iy_address_root = -1;
+    mir_register_iy_row_consumer = -1;
     /*
      * A register-valued IY home adds two bytes ahead of the local frame.
      * Do not let that shift move an otherwise IX-addressable word below
@@ -33742,7 +33812,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         int slot_saving = slot_accesses * 3 - 8;
         int parameter_saving = parameter_uses * 3 - 17;
 
-        if (address_candidate >= 0 &&
+        int row_candidate = mir_choose_iy_row_pair(&mir_register_iy_row_consumer);
+        if (row_candidate >= 0) {
+            mir_register_iy_address_root = row_candidate;
+        } else if (address_candidate >= 0 &&
             address_saving > slot_saving &&
             address_saving > parameter_saving)
             mir_register_iy_address_root = address_candidate;
@@ -33800,7 +33873,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     "\tpush hl\n\tpop iy\n",
                     mir_register_iy_offset,
                     mir_register_iy_offset + 1);
-        } else if (mir_register_iy_address_root >= 0) {
+        } else if (mir_register_iy_address_root >= 0 &&
+                   mir_register_iy_row_consumer < 0) {
             const struct MirInsn *root =
                 mir_definition(mir_register_iy_address_root);
 
@@ -34271,6 +34345,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             mir_emit_virtual_store(out, insn->dst);
             break;
         case MIR_ADDRESS:
+            if (mir_register_iy_row_consumer >= 0 &&
+                mir.insns[mir_register_iy_row_consumer].src1 == insn->dst)
+                break;
             {
             struct MirLocalConstantByteStore byte_store;
 
@@ -34324,6 +34401,21 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             break;
         case MIR_INDEX_ADDRESS:
             {
+            if (i == mir_register_iy_row_consumer) {
+                const struct MirInsn *row = mir_definition(mir_register_iy_address_root);
+                const struct MirInsn *first_base = mir_definition(row->src1);
+                const struct MirInsn *next_base = mir_definition(insn->src1);
+                char first_name[128], next_name[128];
+                snprintf(first_name, sizeof(first_name), "%s",
+                         asm_name_for(sym_asm_name(find_global(first_base->name))));
+                snprintf(next_name, sizeof(next_name), "%s",
+                         asm_name_for(sym_asm_name(find_global(next_base->name))));
+                mir_stream_printf(out, "\tpush iy\n\tpop hl\n"
+                                  "\tld de,%s-%s\n\tadd hl,de\n",
+                                  next_name, first_name);
+                mir_emit_virtual_store(out, insn->dst);
+                break;
+            }
             struct MirWideBytePackReturn wide_byte_pack;
             struct MirWideByteStore wide_byte_store;
             const struct MirInsn *index_definition =
@@ -37235,6 +37327,7 @@ done:
     mir_register_iy_parameter = -1;
     mir_register_iy_slot = -1;
     mir_register_iy_address_root = -1;
+    mir_register_iy_row_consumer = -1;
     mir_register_iy_offset = 0;
     mir_emit_instruction_index = -1;
     mir_forwarded_hl_value = -1;

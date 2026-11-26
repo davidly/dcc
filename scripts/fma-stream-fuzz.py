@@ -6,7 +6,8 @@ Run after building the current compiler:
 
 The isolated control compiler disables float operand streaming, or with
 --integer the word address handoff, multiply operand forwarding and signed
-byte-constant comparison changes. Both sides use the current runtime. Programs print every pool's raw float
+byte-constant comparison changes. --row-reuse instead disables only the
+IY row-address cache, for global-matrix cases. Both sides use the current runtime. Programs print every pool's raw float
 bits plus side effects and frame guards, rather than relying on float printf
 or a host's different floating-point rules. Four builds cover peephole on/off
 and stack checks on/off. Sources and a JSON report are retained; failing
@@ -45,7 +46,7 @@ def run(argv, cwd, log, timeout, environment=None):
     return result['Output'].replace('\r', '')
 
 
-def build_control(work, jobs, integer=False):
+def build_control(work, jobs, integer=False, row_reuse=False):
     base = work / 'control-source'
     if base.exists():
         raise RuntimeError('control-source already exists; choose a fresh --work directory')
@@ -55,7 +56,12 @@ def build_control(work, jobs, integer=False):
     shutil.copy2(str(ROOT / 'scripts/generate-version.py'), str(base / 'scripts'))
     source = base / 'src/dcc/dcc_mir_spilled_cfg.c'
     text = source.read_text()
-    if integer:
+    if row_reuse:
+        signature = 'static int mir_choose_iy_row_pair(int *consumer_out)\n{'
+        if text.count(signature) != 1:
+            raise RuntimeError('row reuse selector signature changed')
+        text = text.replace(signature, signature + '\n    return -1; /* fuzz control */', 1)
+    elif integer:
         guards = (
             ('static int mir_compound_address_stack_consumer(int value, int producer)\n{', -1),
             ('static int mir_fused_compare_is_signed_byte_constant(int compare_index)\n{', 0),
@@ -171,9 +177,76 @@ def integer_program(seed):
     return text
 
 
-def stream_loads(assembly, integer=False):
+def row_program(seed, integer):
+    rng = random.Random(seed)
+    size = rng.choice((9, 10, 12, 15, 17, 20, 21, 24))
+    rows = rng.randrange(2, 5)
+    offset = rng.randrange(size)
+    dtype = 'uint16_t' if integer else 'float'
+    bodies = [
+        'C[i][j] += A[i][j] * B[i][j];',
+        'C[i][j] += A[i][(j+%d)%%N] * B[i][j];' % offset,
+        'C[i][j] += A[i][j] * fetch(i,j);',
+        'C[i][j] += (i&1) ? A[i][j] : B[i][j];',
+        'vi=i; C[vi][j] += A[vi][j] * B[vi][j];',
+        '{ T v=A[i][j]; C[i][j] += v * B[i][j]; }',
+        '{ int p=(j+3)%N; T v=B[i][p]; C[i][j] += A[i][j]*B[i][j]; C[i][p]+=v; }',
+        'C[i][j] += A[i][j] * B[i][j];',
+        'C[i][j] += A[i][j]*B[i][j]; C[i][(j+1)%N] += A[i][j]*B[i][(j+1)%N];',
+        'for(k=0;k<N;++k) C[i][j] += A[i][k] * B[k][j];',
+        'C[i][j] += A[i][choose(j)] * B[i][j];',
+        'C[0][j] += A[0][j] * B[0][j];'
+    ]
+    lines = ['#include <stdio.h>', '#include <stdint.h>', '#define N %d' % size,
+             '#define R %d' % rows, 'typedef %s T;' % dtype,
+             'T A[N][N],B[N][N],C[N][N]; unsigned int effects,guards;',
+             'volatile unsigned char vi;', 'union Bits { float f; uint32_t u; };',
+             'T fetch(int i,int j) { effects++; return B[i][j]; }',
+             'int choose(int j) { effects+=3; return j; }']
+    for number, body in enumerate(bodies):
+        lines.append('void f%d(int enabled) { unsigned char i; int j,k;' % number)
+        if number == 7:
+            lines.append('volatile T frame[96]; for(j=0;j<96;++j) frame[j]=(T)j;')
+        lines.append('if(!enabled) return; for(i=0;i<R;++i) for(j=0;j<N;++j) { %s }' % body)
+        if number == 7:
+            lines.append('if(frame[0]!=(T)0 || frame[95]!=(T)95) guards++;')
+        lines.append('}')
+    lines += ['int main(void) { int f,i,j; union Bits v;',
+              'for(f=0;f<12;++f) { effects=0; guards=0;',
+              'for(i=0;i<N;++i) for(j=0;j<N;++j) {']
+    # Random signed binary fractions stay exactly representable at setup;
+    # subsequent float rounding is compared against the same runtime.
+    multiplier = rng.randrange(1, 9)
+    if integer:
+        lines.append('A[i][j]=(uint16_t)(i*%d+j+%d);' % (multiplier, rng.randrange(256)))
+        lines.append('B[i][j]=(uint16_t)(j*7-i+%d);' % rng.randrange(256))
+        lines.append('C[i][j]=(uint16_t)(i*3+j);')
+    else:
+        lines.append('A[i][j]=(float)(i*%d+j-%d)/4.0f;' % (multiplier, rng.randrange(40)))
+        lines.append('B[i][j]=(float)(j*7-i-%d)/8.0f;' % rng.randrange(40))
+        lines.append('C[i][j]=(float)(i*3-j)/2.0f;')
+    lines += ['}', 'switch(f) {']
+    for number in range(12):
+        lines.append('case %d: f%d(0); f%d(1); f%d(1); break;' % (number,number,number,number))
+    lines += ['}', 'printf("case %d %u %u\\n",f,effects,guards);',
+              'for(i=0;i<N;++i) for(j=0;j<N;++j) {']
+    if integer:
+        lines.append('printf("%u %u %u\\n",(unsigned int)A[i][j],(unsigned int)B[i][j],(unsigned int)C[i][j]);')
+    else:
+        lines.append('v.f=A[i][j]; printf("%08lx ",(unsigned long)v.u); '
+                     'v.f=B[i][j]; printf("%08lx ",(unsigned long)v.u); '
+                     'v.f=C[i][j]; printf("%08lx\\n",(unsigned long)v.u);')
+    lines += ['}', '} return 0; }']
+    # The C strings above contain escaped newlines, not source line breaks.
+    return '\n'.join(lines) + '\n'
+
+
+def stream_loads(assembly, integer=False, row_reuse=False):
     instructions = [line.split(';', 1)[0].strip().lower() for line in assembly.splitlines()]
     instructions = [line for line in instructions if line]
+    if row_reuse:
+        return sum(bool(re.fullmatch(r'ld de,[_a-z0-9]+-[_a-z0-9]+', line))
+                   for line in instructions)
     pattern = ('push hl', 'ld a,(hl)', 'inc hl', 'ld h,(hl)', 'ld l,a') if integer else WIDE_LOAD
     return sum(tuple(instructions[i:i+len(pattern)]) == pattern
                for i in range(len(instructions)))
@@ -196,7 +269,7 @@ def build_run(source, directory, compiler, peep, stack, args):
     for number, family in enumerate(FAMILIES):
         match = re.search(r';@dcc.lto begin _f%d\s(.*?);@dcc.lto end _f%d\b' %
                           (number, number), assembly, re.S)
-        counts[family] = stream_loads(match.group(1), args.integer) if match else 0
+        counts[family] = stream_loads(match.group(1), args.integer, args.row_reuse) if match else 0
     return output, counts
 
 
@@ -204,7 +277,8 @@ def check_seed(seed, control, args):
     directory = args.work / ('seed-%06d' % seed)
     directory.mkdir()
     source = directory / 'case.c'
-    source.write_text(integer_program(seed) if args.integer else program(seed))
+    source.write_text(row_program(seed, args.integer) if args.row_reuse else
+                      integer_program(seed) if args.integer else program(seed))
     result = {'seed': seed, 'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
               'builds': 0, 'active_variants': 0, 'active_families': [], 'outputs': {}}
     try:
@@ -219,7 +293,7 @@ def check_seed(seed, control, args):
                 active = [family for family in FAMILIES if new_loads[family] > old_loads[family]]
                 result['active_variants'] += bool(active)
                 result['active_families'] = sorted(set(result['active_families']) | set(active))
-                fallbacks = {'branch', 'volatile'} if args.integer else {'calls', 'branch', 'volatile', 'reuse', 'indexcall'}
+                fallbacks = {'branch', 'volatile', 'frame', 'absolute'} if args.row_reuse else {'branch', 'volatile'} if args.integer else {'calls', 'branch', 'volatile', 'reuse', 'indexcall'}
                 forbidden = set(active) & fallbacks
                 if forbidden:
                     raise RuntimeError('streaming used in fallback families: ' + ','.join(sorted(forbidden)))
@@ -227,7 +301,7 @@ def check_seed(seed, control, args):
                 if old != new:
                     raise RuntimeError('output mismatch: ' + label)
                 # Independently check guards instead of trusting control.
-                headers = re.findall(r'^\d+ \d+ (\d+)$', new, re.M)
+                headers = re.findall(r'^case (?:\d+) \d+ (\d+)$', new, re.M) if args.row_reuse else re.findall(r'^\d+ \d+ (\d+)$', new, re.M)
                 if len(headers) != 12 or any(int(x) for x in headers):
                     raise RuntimeError('missing family output or damaged frame guard: ' + label)
         if not result['active_variants']:
@@ -246,6 +320,8 @@ def check_seed(seed, control, args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seeds', type=int, default=100)
+    parser.add_argument('--row-reuse', action='store_true',
+                        help='exercise repeated global-array row address calculations')
     parser.add_argument('--integer', action='store_true',
                         help='exercise word compound-assignment address handoffs')
     parser.add_argument('--start', type=int, default=1)
@@ -265,7 +341,7 @@ def main():
     args.work = args.work.resolve()
     args.compiler = args.compiler.resolve()
     args.work.mkdir(parents=True, exist_ok=True)
-    control = args.control_compiler.resolve() if args.control_compiler else build_control(args.work, args.jobs, args.integer)
+    control = args.control_compiler.resolve() if args.control_compiler else build_control(args.work, args.jobs, args.integer, args.row_reuse)
     results = []
     started = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -284,6 +360,7 @@ def main():
                'active_variants': sum(r['active_variants'] for r in results),
                'force_spilled': args.force_spilled,
                'integer': args.integer,
+               'row_reuse': args.row_reuse,
                'active_families': sorted(set(f for r in results for f in r['active_families'])),
                'failures': sum(not r['passed'] for r in results),
                'elapsed_seconds': round(time.monotonic() - started, 3),

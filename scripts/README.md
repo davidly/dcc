@@ -130,6 +130,18 @@ may retain the saved address because their argument stacks are balanced.
 python3 scripts/fma-stream-fuzz.py --integer --seeds 200 --jobs 8
 ```
 
+`--row-reuse` targets the IY row-address cache using global matrices of
+varying widths. The control disables only row-address reuse. Combine it
+with `--integer` for 16-bit values, or omit that flag for floating point.
+Cases include skipped loops, repeated calls, changed column indices,
+volatile row indices, conditional paths and frames too large for the cache.
+Assembly checks require the new global-base difference and verify declines.
+
+```sh
+python3 scripts/fma-stream-fuzz.py --row-reuse --integer --seeds 100 --jobs 8
+python3 scripts/fma-stream-fuzz.py --row-reuse --force-spilled --seeds 100 --jobs 8
+```
+
 ## `printf-float-oracle.py`
 
 Compares DCC fixed-decimal formatting against Clang using 6,000 seeded and
