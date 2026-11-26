@@ -143,12 +143,6 @@ DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
   --timeout 30 --failures-only
 ```
 
-The exhaustive `python scripts/prepush.py` proof suite adds compiler mutants,
-sanitizers, and instrumented coverage and can take about five hours. It is a
-periodic manual check run by the maintainer, not a required gate for every
-commit or push. Do not run it automatically or substitute it for the regular
-unit and regression tests above; run it only when explicitly requested.
-
 ## Tests and baselines
 
 - Expected stdout is `tests/baselines/<app>.txt`.

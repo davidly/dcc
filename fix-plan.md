@@ -61,16 +61,6 @@ baseline approval, documented in its scoped exceptions below.
   `.github/skills/dcc-project/SKILL.md`).
 - A fix that flips a reproducer outside its cluster is information: record
   which, and move that bug into the cluster in this file.
-- Cluster pull requests are **not** gated on `python scripts/prepush.py`.
-  That exhaustive proof suite (compiler mutants, sanitizers, instrumented
-  coverage) takes five to six hours and is the maintainer's periodic manual
-  check, run on `main` after a batch of clusters has merged. The gate for a
-  cluster PR is the acceptance list above plus the regular script unit
-  tests; do not run or wait for prepush. Two of those unit tests
-  (`test_mir_campaign_baselines`, `test_mir_exact_controls`) fail on `main`
-  today for reasons unrelated to any cluster (#277); report them as
-  pre-existing, do not refresh their expectations in a cluster PR.
-
 ## Oracle seeds 70001–120000
 
 Work locally on `fix/oracle-70001-120000`, one issue per commit. Existing
@@ -4033,7 +4023,7 @@ correction or a fixed guard epsilon cannot distinguish true decimal ties and
 would retain the root double-rounding error; a general bignum/64-bit library
 would be larger than this bounded vector.
 
-Proof: `python3 scripts/printf-float-proof.py` links and runs **6000 exact
+Proof: `python3 scripts/printf-float-oracle.py` links and runs **6000 exact
 finite patterns** (5972 normals, 26 subnormals, two zeroes; 2999 negative)
 in each mode at `%f` and `%.Nf`, N=0..6: **48000 matching
 conversions/mode**. Patterns cover all finite biased exponents, randomized
@@ -4845,10 +4835,8 @@ Work on a new branch from `main`, one branch for this cluster only.
    to describe the coverage, add a NEW row to `tests/perf_baselines.csv`
    measured on the normal stack-check runall path, and confirm with
    `python scripts/validate-unit-test.py -App <name>`.
-5. Run `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`. Do
-   NOT run `scripts/prepush.py`; it takes five to six hours and is the
-   maintainer's periodic check on `main`, not a gate for this PR. If a test
-   fails, confirm it fails identically on an unchanged `main` checkout
+5. Run `python3 -m unittest discover -s scripts/tests -p 'test_*.py'`.
+   If a test fails, confirm it fails identically on an unchanged `main` checkout
    before reporting it as pre-existing; never refresh its expectation here.
 6. Close each entry in `compiler-bugs.md` (move it under the closed section,
    update the summary table and open count), and update the Tracking table

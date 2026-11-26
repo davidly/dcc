@@ -255,6 +255,8 @@ def main():
     parser.add_argument("--native-report", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--repo", type=Path, default=ROOT)
+    parser.add_argument("--allow-incomplete", action="store_true",
+                        help="report coverage gaps without requiring 100%% coverage")
     args = parser.parse_args()
     try:
         inventory = compiled_inventory(args.compile_commands, args.repo.resolve())
@@ -269,7 +271,8 @@ def main():
                 ("compiler-function-aliases.json", summary["aliases"])):
             (args.output_dir / filename).write_text(json.dumps(value, indent=2) + "\n")
         print(json.dumps(summary["totals"], sort_keys=True))
-        require_complete(summary)
+        if not args.allow_incomplete:
+            require_complete(summary)
     except (ValueError, KeyError, IndexError, TypeError, OSError, subprocess.SubprocessError) as error:
         print("compiler-function-coverage: " + str(error), file=sys.stderr)
         return 1

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run MIR emission-clobber regressions using Python 3.7+."""
+"""Run generated MIR differential tests using Python 3.7+."""
 try:
     from .mir_clobber import main
 except ImportError:

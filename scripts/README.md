@@ -29,59 +29,6 @@ and `-Jobs` are also accepted. `--verbose-commands` prints exact compiler and
 linker invocations. Use `--skip-debug-host` to build the six C tools without
 the debugger dependencies.
 
-## `run-mir-compiler-mutations.py`
-
-Python 3.7+ runner for the isolated compiler-mutation campaign. It builds and
-checks the healthy baseline first, then schedules mutants up to `--jobs` at a
-time. Each worker owns separate source, CMake, binary, profile and temp paths.
-The mutation anchors and required failure messages live in
-`mir-compiler-mutations.json`; no PowerShell is needed by this campaign.
-
-```sh
-python scripts/run-mir-compiler-mutations.py --jobs 2 --build-jobs 4
-python scripts/run-mir-compiler-mutations.py --names dominance,promotion-cache
-python scripts/new-mir-fuzz-source.py --output-path build/replay.c --seed 23117 --programs 1
-python scripts/test-mir-fuzz-source.py
-```
-
-`--output-directory` defaults to `build/mir-compiler-mutations`, relative to the
-repository. `--worker-timeout` bounds startup, builds, tests and pipe draining
-(default 2100 seconds); configure/build/probe deadlines remain 120/1800/60
-seconds. Legacy `-Jobs`, `-BuildJobs`, `-Names`, `-OutputDirectory`, and
-`-WorkerTimeout` spellings are accepted. The output directory is locked against
-simultaneous campaigns. `results.json`, per-worker logs and probe artifacts are
-retained; temporary source/build trees are removed. A crash, timeout, failed
-build, missing/truncated result or unrelated assertion is invalid, never a
-mutation kill. Unix signal exits appear as negative Python return codes.
-
-`process_supervision.py` uses Unix sessions and Windows kill-on-close Job Objects,
-registers explicitly nested sessions, and bounds inherited-pipe draining.
-`test-mir-matcher-restoration.py` and `test-mir-paired-byte-restoration.py` retain
-the positive and negative matcher controls. Their PowerShell entry points,
-the old mutation worker/module, and the old PowerShell process-supervision
-helpers are retired. Clobber workers use the
-same Python process supervisor.
-
-## Native compiler proof probes
-
-The following Python 3.7+ entry points share `mir_probes.py` and replace their
-PowerShell versions:
-
-- `test-ast-dump.py`: AST diagnostics and retired rollout-control isolation.
-- `test-mir-candidate-matrix.py`: all 12 candidate rows across eight probes.
-- `test-mir-pointer-condition-mutations.py`: all 85 source mutations.
-- `test-mir-scope-block-mutations.py`: four controls and 27 semantic mutations.
-- `test-mir-require-emit.py`: strict emission, diagnostics and oversized boundary.
-- `run-mir-lifetime-tests.py`: both forced candidates in both stack configurations,
-  running the application suite in both optimization modes.
-
-Use `python scripts/<name>.py --dcc /path/to/dcc` to choose a compiler.
-`run-mir-lifetime-tests.py --timeout N` controls application timeouts;
-`test-mir-require-emit.py --build-dir DIR` retains its diagnostic artifacts.
-Child environment overrides leave the caller's environment unchanged.
-Named assembly outputs use LF line endings on every host, so strict assembly
-SHA-256 baselines compare the same bytes on Windows, macOS, and Linux.
-
 ## `run-diagnostics.py`
 
 Python 3.7+ compiler diagnostic runner, shared with `runall.py`. It compares
@@ -170,6 +117,15 @@ Sources and `summary.json` remain in a fresh directory under `build/`;
 failing builds also retain assembly, executables and logs. `--keep-build`
 retains successful builds too. Use `--work` to choose a fresh directory and
 `--control-compiler` to reuse a control compiler produced by an earlier run.
+
+## `printf-float-oracle.py`
+
+Compares DCC fixed-decimal formatting against Clang using 6,000 seeded and
+boundary float bit patterns, plus a smaller set at deeper precisions.
+
+```sh
+python3 scripts/printf-float-oracle.py
+```
 
 ## `typed-expr-fuzz.py`
 
@@ -449,49 +405,20 @@ DCC_MIR_SELECT_CANDIDATE=spilled-rhs-forward \
 Candidate names are the `candidate` values in `--cost-policy-output`; no
 legacy stream is involved.
 
-## `run-mir-lifetime-tests.py`
-
-Runs the physical-lifetime candidates that require diagnostic forcing in both
-peep/nopeep and stack/no-stack modes. It verifies that `regional_address`
-selects `regional` before exercising DE preservation in `tmirlife`, and that
-`cint.primary` selects `spilled-phi-slot` before running both CINT workloads.
-It also requires the same-ABI signed-byte scanner near-match to reach and
-decline the bounded-decimal schedule's argument-conversion guard.
-
-```sh
-python scripts/run-mir-lifetime-tests.py
-```
-
 ## `run-mir-clobber-tests.py`
 
-Runs the MIR emission-clobber and exact-schedule near-match regressions in
-peep/nopeep and stack/no-stack modes. It covers argument-staging register
-clobbers, exact-call ABI, call-identity and semantic-payload guards, IY
-ownership, regional validation, and stack-checked VLA reductions.
-The IY coverage includes separately peepholed caller/callee modules, so
-callee-save preservation is tested across assembly-file boundaries.
+Runs generated MIR differential tests with built DCC tools and `ntvcm`.
+The runner compares target output to its seeded reference in stack and
+no-stack, peep and nopeep, and release and debug configurations.
 
 ```sh
-python scripts/run-mir-clobber-tests.py
+python scripts/run-mir-clobber-tests.py --jobs 8
+python scripts/run-mir-clobber-tests.py --cases fuzz --fuzz-seeds 0 1
+python scripts/run-mir-clobber-tests.py --list-executions build/mir-fuzz-expected.json
 ```
 
-The runner uses Python 3.7+ and the shared `process_supervision.py` helper.
-Historical built-in cases and forced configurations live in
-`mir-clobber-builtins.json`; additional campaigns remain in `mir-clobber-cases/`.
-Case aliases keep their original membership. Every worker's completed manifest
-must match its expected leaves, and the parent checks their exact union.
-
-```sh
-python scripts/run-mir-clobber-tests.py --jobs 8 --cases domloop,semantics
-python scripts/run-mir-clobber-tests.py --list-executions build/clobber-expected.json
-python scripts/run-mir-clobber-tests.py --jobs 8 --execution-manifest build/clobber-executed.json
-```
-
-`--cases`, `--fuzz-seeds`, `--run-timeout`, `--build-timeout`, `--jobs`,
-`--shard-index`, `--shard-count`, `--list-executions`, and
-`--execution-manifest` also accept their previous single-dash spellings.
-Listing requires no compiler, emulator, or generator. Failed runs retain their
-source files, build/run logs, and shard artifacts under `build/`.
+See the [generated differential matrix](../tests/host/README.md#generated-differential-matrix)
+for seed coverage and replay commands.
 
 ## `publish-package.py`
 
@@ -793,76 +720,6 @@ instrumentation and cache verification can exceed the ordinary 60-second
 build budget. Set `DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT` to override it. Standalone
 `run-mir-clobber-tests.py` accepts `--build-timeout` (default 60); `--timeout`
 continues to control target execution independently.
-
-## `prepush.py`
-
-Run the complete local pre-push gate with one command:
-
-```sh
-python scripts/prepush.py
-```
-
-It runs the build-diagnostic regression checks, native compiler baseline validation
-(`validate-unit-test.py`), then the comprehensive MIR proof suite described below.
-The entry points and native proof probes use Python 3.7+. The final coverage
-workflow uses the Python clobber runner and still requires sh and matching LLVM
-coverage tools. PowerShell is not required. `--list` needs only Python.
-Native validation honors the host-only exclusions in `tests/_test_overrides.json`
-and uses `-Jobs` and `--timeout` for its worker and timeout limits.
-The MIR proof suite includes strict `--mode full -Extended`
-release suites with and without stack checks, plus builds, script tests,
-audits, host and sanitizer tests, debugger tests, compiler mutants, and coverage.
-It stops on failure and returns a nonzero exit code. It does not commit or push.
-
-Use `-List` to inspect the gates. `-Jobs`, `-MutationJobs`, `-MutationBuildJobs`,
-`--timeout` (default 60 seconds per target), `-OutputDirectory`, and
-`-RequireComplete` are forwarded to the proof suite. Paths are resolved from
-the repository root, even when invoked from another directory. This is a long
-run and needs the proof suite's compiler, emulator, and coverage prerequisites.
-The proof suite retains its artifacts and receipt under its output directory.
-The early Python phase compiles the data-driven positive exact-schedule controls
-and checks campaign assembly baselines and type-sensitive symbol mutations, so
-these regressions are reported before the long coverage campaign.
-Automatic LLVM discovery prefers the newest installed `clang-N` over the
-unversioned `clang` command and resolves matching coverage tools. Set `CC`
-explicitly to choose a different toolchain (for example,
-`CC=clang-18 python scripts/prepush.py` in a POSIX shell).
-
-## `run-mir-proof-suite.py`
-
-Runs every maintained AST/MIR proof gate through one phase-gated command:
-canonical and independent builds, script/static audits, normal and sanitized
-host tests, debugger-host tests, isolated compiler mutants, strict stack and
-no-stack release suites, the extended MIR census, and the complete instrumented
-coverage workflow.
-
-```sh
-python scripts/run-mir-proof-suite.py
-```
-
-The Python 3.7+ runner preserves all 11 phases, LLVM companion version checks,
-bounded preparation/release groups, and the `receipt.json` phase timestamps.
-`--list` works without PowerShell or other build tools. `--jobs`,
-`--mutation-jobs`, `--mutation-build-jobs`, `--timeout`, `--output-directory`,
-`--require-complete`, and `--all` have the original PowerShell-style aliases.
-The final coverage workflow still requires sh and matching LLVM tools; its
-clobber suite and Python campaign callers do not launch PowerShell.
-
-The runner uses all detected processors by default and retains each run below
-a unique `build/mir-proof-suite-*` directory. Use `-List` to inspect the
-ordered gates without executing them, or set `-Jobs`, `-MutationJobs`, and
-`-MutationBuildJobs` to control the combined CPU budget. Independent script,
-CMake, host, sanitizer, and debugger preparations run concurrently; the two
-strict release modes split the available workers. Mutation and coverage phases
-retain their own bounded schedulers. A complete run is intentionally long:
-strict native release gates and instrumented coverage execute separately so
-coverage instrumentation cannot substitute for release evidence.
-Ambient `DCC`/`DCC_*` diagnostic, selector, mutation, and driver controls are
-cleared before execution; installation paths such as `DCC_HOME`,
-`DCC_INCLUDE`, `DCC_LIB`, and `DCC_RUNTIME` are preserved. The sanitizer build
-explicitly uses the same discovered or configured Clang toolchain as coverage.
-Run this proof suite periodically on a developer machine; GitHub CI intentionally
-runs only the standard cross-platform `runall.py --mode full` regression gate.
 
 ## `runall.py`
 

@@ -9055,8 +9055,7 @@ static void verify_diamond_mutations(void)
 }
 
 /* Reproduces a real fatal DCC_MIR_CACHE_VERIFY=1 divergence found compiling
- * a genuinely empty void helper (tests/mir-clobber/cmpw4.c's
- * cmpw45_extra_helper) immediately after a normal-sized function.
+ * an empty void helper immediately after a normal-sized function.
  * mir_use_cache_count_capacity/mir_use_cache_arg_head_capacity are
  * high-water marks that never shrink between functions, and
  * mir_definition/mir_value_use_count/mir_call_uses_value all bounds-check

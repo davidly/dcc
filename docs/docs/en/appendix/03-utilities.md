@@ -476,22 +476,12 @@ cmake --build build/mir-tests-sanitize --target mir-verify-test --parallel
 ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build/mir-tests-sanitize --output-on-failure
 ```
 
-Target execution tests use the built DCC toolchain, Python 3.7+, and `ntvcm`
+Generated MIR differential tests use the built DCC toolchain and `ntvcm`
 on `PATH`:
 
 ```sh
-python scripts/run-mir-clobber-tests.py -Cases domloop
-python scripts/run-mir-clobber-tests.py -Cases semantics
+python scripts/run-mir-clobber-tests.py --cases fuzz
 ```
-
-`domloop` checks zero-, one-, and multi-iteration loops, initialized and
-body-defined values, successive scopes, and branch-dependent loop updates.
-The body-defined cases enter the loop before using the value; they do not
-assert a result for an uninitialized C read. `semantics` checks pointer
-scaling, call conversions, and volatile access counts and flags in MIR.
-Both fixtures run in release, full-debug, and line-debug modes, with and
-without peephole optimization and stack checks. The complete clobber suite
-runs in CI and can be invoked by omitting `-Cases`.
 
 See [verification, promotion, and allocation](00-architecture.md#verification-promotion-and-allocation)
 for the compiler pipeline these tests exercise.

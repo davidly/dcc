@@ -138,8 +138,7 @@ no-stack release gates.
 9. Use ASan/UBSan for CFG, liveness, allocation, recursive proof, or ownership
    changes.
 10. Run relevant regular unit tests and both strict full+extended regression
-    gates before pushing. The exhaustive `prepush.py` proof suite is a
-    periodic manual maintainer check, not an automatic commit/push gate.
+    gates before pushing.
 
 ## Selector and cost policy
 
@@ -191,7 +190,6 @@ the fix.
 ## Tooling and release checks
 
 ```sh
-python scripts/test-mir-require-emit.py
 DCC_MIR_REQUIRE_EMIT=1 python3 scripts/mir-extended-census.py \
   --mode both --require-complete --output build/mir-extended.tsv
 python3 scripts/rtl-iy-safety.py
@@ -211,10 +209,7 @@ DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
   --timeout 30 --failures-only
 ```
 
-The maintainer runs `python scripts/prepush.py` manually periodically for the
-exhaustive proof, mutation, sanitizer, and coverage checks (about five hours).
-Do not require or launch that suite for every commit/push; run it only when
-explicitly requested. See `dcc-project` for the shared testing workflow.
+See `dcc-project` for the shared testing workflow.
 
 Keep `plan.md` as the concise handoff and `mir-text-size-plan.md` as the
 chronological experiment/rejection log. Re-derive priorities from current

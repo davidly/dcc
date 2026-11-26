@@ -1365,7 +1365,7 @@ or libm implementation changes; IX/IY and printf's character-count ABI survive.
 and `5.666667`, matching clang. The regression is promoted as
 [`tfpround.c`](tests/tfpround.c), with precision-zero/decimal ties, a decimal
 carry, signed zero and a subnormal fraction. The reproducible linked proof is
-[`scripts/printf-float-proof.py`](scripts/printf-float-proof.py): 6000 finite
+[`scripts/printf-float-oracle.py`](scripts/printf-float-oracle.py): 6000 finite
 patterns at `%f`/precisions 0..6 plus 227 patterns at precisions
 7/9/16/32/64/149/150/255 agree in peep and nopeep (99632 conversions).
 `%e` and `%g` are pre-existing unsupported conversions, not formatter failures.
