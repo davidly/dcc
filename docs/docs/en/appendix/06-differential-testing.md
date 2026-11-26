@@ -1,20 +1,61 @@
-# Appendix: differential testing against clang
+# Fuzz testing
 
-The regression suite in `tests/` checks that programs people have written
-still behave. It cannot find a bug in a shape nobody has written yet. This
-appendix describes the second line of testing: a *differential fuzzer* that
-generates C programs, lets the host C compiler say what each one should
-print, and reports where the DCC C Compiler disagrees.
+Fuzz testing automatically generates or mutates many inputs and checks the results. For dcc, it explores unusual combinations of C features and malformed inputs, revealing miscompilations, crashes, and hangs that tests written by hand can miss.
 
-The host compiler is the oracle. clang is a mature, heavily tested compiler,
-so when it and dcc print different things for a program that is defined C,
-the fault is almost always dcc's. The method is the same one Csmith and
-similar tools use for mainstream compilers, adapted to a target whose `int` is
-16 bits wide and whose only floating type is `float`.
+## How seeds work
+
+A seed is an integer that controls the fuzzer's random choices. Each seed generates a test program or selects and mutates an existing C file. Use `--seeds 17` to run one seed, `--seeds 1-20` to try an inclusive range, or `--seeds 1-20,250` to combine ranges and individual seeds.
+
+To replay a failure, run the reported seed with the same checkout and options. Save the generated C file and any headers with the failure log, since changes to the generator or its inputs can change what a seed produces.
+
+## Running a campaign
+
+Run these commands from the repository root with Python 3.9 or later and a built [DCC toolchain](../00-setup-toolchain.md). Put `ntvcm` on `PATH` for the Clang oracle, typed expression, and runtime library fuzzers. `clang` is required by the Clang and runtime fuzzers and by the syntax fuzzer's `--accepts` option. Use `--help` on any driver to see all its options.
+
+All four fuzzers take `--seeds` to select inputs and `--jobs` to set the number of parallel workers. Run this setup in Bash or Zsh before using the examples below in the same shell. `tee` displays and saves the output, and `pipefail` preserves a failure status from the fuzzer. A typical campaign runs tens of thousands of seeds. For a quick check, use `--seeds 1-20`.
+
+```bash
+set -o pipefail
+JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
+mkdir -p build
+```
+
+## Clang oracle (`clang-oracle-fuzz.py`)
+
+Generates C programs and compares dcc's output with Clang's. The `int` generator exercises integer code generation, `float` covers floating point arithmetic and conversions, and `frontend` targets preprocessing and parsing.
+
+```bash
+python3 scripts/clang-oracle-fuzz.py --gen int \
+  --seeds 260001-300000 --configs production --jobs "$JOBS" \
+  2>&1 | tee build/fuzz-int.log
+
+python3 scripts/clang-oracle-fuzz.py --gen float \
+  --seeds 260001-300000 --configs production --jobs "$JOBS" \
+  2>&1 | tee build/fuzz-float.log
+
+python3 scripts/clang-oracle-fuzz.py --gen frontend \
+  --seeds 300000-400000 --configs production --jobs "$JOBS" \
+  2>&1 | tee build/fuzz-frontend.log
+```
+
+`--configs production` tests combinations of peephole optimization and stack checking. Add `--off known` to skip generated forms associated with logged bugs.
+
+Integer and float campaigns also run frontend probes on up to eight seeds. The probes have a separate tally and contribute to the campaign exit status. Eight consecutive seeds cover macro and literal checks, token rescanning, conditional directives, nested headers, lexical tokens, declarators, initializers, constant expressions, and VLA scopes. Use `--gen frontend` to probe the full range or to generate or reduce a frontend failure. Keep generated headers with the source when replaying an include case.
+
+The final tally reports failures, passes, and `INVALID` inputs rejected by the host checks. Two consecutive clean batches after the last generator change are a reasonable stopping point.
+
+Use `--configs all` to also force every MIR candidate emitter. This takes roughly ten times the work, so use a smaller batch. Record the configuration if a failure occurs only when an emitter is forced. Use `--list-configs` to list the available configurations.
+
+```sh
+python3 scripts/clang-oracle-fuzz.py --gen int --seeds 1-150 --configs all --off known --jobs 3
+python3 scripts/clang-oracle-fuzz.py --list-configs
+```
+
+### How it works
+
+The host compiler is the oracle. This method adapts the approach used by Csmith and similar tools to a target where `int` is 16 bits and `float` is the only floating point type.
 
 [![How dcc is tested against clang: generate, prove defined, build on both, compare, reduce, confirm, park, log](../images/clang-oracle-testing.svg)](../images/clang-oracle-testing.svg)
-
-## How it works
 
 1. **Generate a program.** One seed produces one self-contained C program:
    helper and test functions over fixed-width integers, arrays, structs,
@@ -70,10 +111,9 @@ are printed as their IEEE bits with `-0` folded to `0`, so a difference is a
 difference in the arithmetic, not in formatting, and a one-ulp error is
 visible.
 
-## Tools
+### Tools
 
-All of these live in `scripts/`, run on the host with Python 3.9 or later,
-and need clang, `ntvcm` and a built toolchain in the repository root.
+The Clang oracle and its companion scripts live in `scripts/`.
 
 | Tool | Role |
 | --- | --- |
@@ -83,62 +123,21 @@ and need clang, `ntvcm` and a built toolchain in the repository root.
 | `clang_oracle_frontend_gen.py` | Preprocessor and parser probes, run automatically on the first eight seeds of integer and float campaigns |
 | `run-known-bugs.py` | Checks every parked reproducer: proves its baseline on the host, then reports `fails` or `FIXED` for dcc with and without `dccpeep` |
 | `bug-issue-body.py` | Writes a GitHub issue body for an entry in `compiler-bugs.md` from the reproducer, its baseline and dcc's current behaviour; `--create` opens the issue |
-| `typed-expr-fuzz.py` | Integer expressions and small programs checked against a Python model of dcc's integer types |
 
 The full option list is in `scripts/README.md` and `--help`.
 
-## Running a campaign
-
-See [Fuzz testing](07-fuzz-testing.md) for logged campaign examples and the
-other fuzzers.
-
-Fuzz a range of seeds in the production configurations, leaving out every
-form that hits a bug already logged:
-
-```sh
-python3 scripts/clang-oracle-fuzz.py --seeds 1-300 --configs production --off known
-python3 scripts/clang-oracle-fuzz.py --gen float --seeds 1-300 --configs production --off known
-```
-
-The automatic frontend probes have a separate tally and contribute to the
-campaign exit status. Eight consecutive seeds exercise the original macro and
-literal checks and rotate through token rescanning, conditional directives,
-nested headers, lexical tokens, declarators, initializers, constant
-expressions, and VLA scopes. Use `--gen frontend` to probe the full range or to
-generate or reduce a frontend failure. Keep generated headers with the source
-when replaying an include case. See `scripts/README.md` for the feature switches.
-
-A 300-seed batch takes about ten minutes on a laptop with `--jobs 6`. The
-last line is the tally, for example `300 programs: FAIL 1, INVALID 29,
-ok 270`; an `INVALID` rate of ten to fifteen percent is normal and means the
-host proof rejected programs that were not defined C.
+### Reducing a failure
 
 Reduce a failure under one configuration, with a short timeout so a hang
 reduces quickly:
 
 ```sh
-python3 scripts/clang-oracle-fuzz.py --reduce 4750 --config nopeep --off known --timeout 3
+python3 scripts/clang-oracle-fuzz.py --gen int --reduce 4750 --config nopeep --off known --timeout 3
 ```
 
-The result is `build/clang-oracle-fuzz/4750-reduce-nopeep/reduced.c` with
-`reduced.expected` and `reduced.actual` beside it. Keep the reduced program,
-not the seed: a seed names a program only together with the generator version
-and the `--tests`, `--size`, `--depth` and `--off` options.
+The result is `build/clang-oracle-fuzz/4750-reduce-nopeep/reduced.c` with `reduced.expected` and `reduced.actual` beside it. Keep the reduced program and record the generator version and the `--gen`, `--tests`, `--size`, `--depth` and `--off` options used in the run.
 
-Force every MIR candidate emitter as well. This is roughly ten times the
-work, so use smaller batches, and remember that a failure only in a forced
-configuration is latent rather than shipped behaviour:
-
-```sh
-python3 scripts/clang-oracle-fuzz.py --seeds 1-150 --configs all --off known --jobs 3
-python3 scripts/clang-oracle-fuzz.py --list-configs
-```
-
-A reasonable stop rule for a campaign is two consecutive clean batches after
-the last change to the generator. Changing the generator re-randomises every
-seed, so the count restarts.
-
-## Logging a bug
+### Logging a bug
 
 1. Confirm the reduced program by hand with one-statement variants, and check
    `compiler-bugs.md` for an entry with the same root shape. A new shape of
@@ -165,7 +164,7 @@ seed, so the count restarts.
    rewrite that avoids it. Confirm that no program over a few thousand seeds
    still contains a known shape with `--off known`, then rerun the campaign.
 
-## When a bug is fixed
+### When a bug is fixed
 
 `run-known-bugs.py` reports the reproducer as `FIXED`. Promote it to a
 regular test — move it to `tests/<name>.c` with its baseline, add its row to
@@ -178,7 +177,7 @@ ones are fixed together, and the project skill
 procedure for running a clang oracle campaign, triaging a failure and
 verifying a fix.
 
-## What this does and does not find
+### What this does and does not find
 
 The fuzzer finds wrong code, rejected valid C, verifier diagnostics,
 compile-time crashes and hangs in the shapes the generator can produce.
@@ -191,3 +190,30 @@ generated programs use, or behaviour that depends on CP/M. It cannot judge
 performance. And it only explores the language surface the generators know
 about, so extending a generator — a new statement form, a new lvalue kind, a
 new conversion — is how the search is widened.
+
+## Typed expressions (`typed-expr-fuzz.py`)
+
+Checks integer expressions and small programs against a Python model of dcc's integer widths and conversions, with and without peephole optimization. Use `--mode tree` for nested expressions, `store` for updates to stored values, or `prog` and `scope` for small programs with calls and control flow.
+
+```bash
+python3 scripts/typed-expr-fuzz.py --seeds 1-20000 --jobs "$JOBS" \
+  2>&1 | tee build/fuzz-typed-expr.log
+```
+
+## Runtime library (`rtl-oracle-fuzz.py`)
+
+Compares dcc's runtime results with a native Clang build for cases such as formatted I/O, strings, math, allocation and file operations. Add `--io-matrix` to exercise all four combinations of float and long formatted I/O support.
+
+```bash
+python3 scripts/rtl-oracle-fuzz.py --seeds 1-20000 --jobs "$JOBS" \
+  2>&1 | tee build/fuzz-rtl.log
+```
+
+## Syntax and diagnostics (`syntax-crash-fuzz.py`)
+
+Mutates C files from `tests/` and checks for crashes, hangs and diagnostic failures. Add `--directives` to focus on preprocessor directives or `--accepts` to flag syntax dcc accepts that Clang rejects. Pass an AddressSanitizer and UndefinedBehaviorSanitizer build with `--dcc PATH` to detect sanitizer errors too.
+
+```bash
+python3 scripts/syntax-crash-fuzz.py --seeds 1-20000 --jobs "$JOBS" \
+  2>&1 | tee build/fuzz-syntax.log
+```
