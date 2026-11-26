@@ -1,9 +1,9 @@
 # Known-bug reproducers
 
 There are currently no open known-bug reproducers in this directory. The
-reproducers have been fixed and promoted to the regular test suite; the bug
-history and fix details are recorded in [compiler-bugs.md](../../compiler-bugs.md)
-and [fix-plan.md](../../fix-plan.md).
+reproducers have been fixed and promoted to the regular test suite. Current
+status is summarized in [compiler-bugs.md](../../compiler-bugs.md); the fix
+history is in [fix-plan.md](../../fix-plan.md).
 
 ## Adding a reproducer
 
