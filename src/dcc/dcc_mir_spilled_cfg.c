@@ -13818,12 +13818,16 @@ static int mir_match_wide_byte_store(
         return 0;
     index_constant = mir_definition(index->src2);
     base = mir_definition(index->src1);
+    /* The emitter reloads both operands from their declared frame homes.
+     * A promoted value such as a PHI can still carry its object's name and
+     * offset while its current value lives in a separate backend slot. */
     if (index_constant == NULL ||
         index_constant->opcode != MIR_CONST ||
         index_constant->immediate < 0 ||
         index_constant->immediate > 3 ||
         mir_value_use_count(index_constant->dst) != 1 ||
         base == NULL ||
+        (base->opcode != MIR_LOAD && base->opcode != MIR_PARAM) ||
         !mir_scalar_memory_location(base, &base_type, &base_storage,
                                     &base_offset) ||
         type_ptr_depth(base_type) == 0 || type_size(base_type) != 2 ||
@@ -13887,6 +13891,7 @@ static int mir_match_wide_byte_store(
     }
     source = mir_definition(source_value);
     if (source == NULL || type_size(source->type) != 4 ||
+        (source->opcode != MIR_LOAD && source->opcode != MIR_PARAM) ||
         !mir_scalar_memory_location(source, &source_type, &source_storage,
                                     &source_offset) ||
         type_size(source_type) != 4 ||
