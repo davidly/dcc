@@ -2445,9 +2445,9 @@ __mulu:
         ; HL = multiplier, DE = multiplicand, product returned in HL.
         ; Multiplication is commutative and the result is taken mod 2^16, so
         ; pick an operand with a zero high byte as the multiplier and run only
-        ; 8 iterations, or four unrolled iterations when its high nibble is
-        ; also zero. The multiplicand is shifted with sla e/rl d, which is
-        ; cheaper than ex de,hl/add hl,hl/ex de,hl.
+        ; 8 bits in two-bit groups, or four unrolled bits when either
+        ; operand fits a nibble. The byte path shifts the product left;
+        ; the nibble path shifts DE and rotates the remaining bits in A.
         ld      a,h
         or      a
         jr      z,mul8          ; HL fits in 8 bits -> use it as multiplier
@@ -2461,14 +2461,33 @@ mul8:
         ld      a,c
         and     0f0h
         jr      z,mul4
-        ld      b,8
+        ; The first byte operand need not be the smaller one. When the
+        ; other operand fits four bits, use that existing short path.
+        ld      a,d
+        or      a
+        jr      nz,mul8f
+        ld      a,e
+        cp      16
+        jr      nc,mul8f
+        ld      e,c
+        ld      c,a
+        jr      mul4
+mul8f:
+        ; Shift the product left instead of shifting the multiplicand.
+        ; A carries the multiplier bits; ADD A,A is cheaper than SRL C,
+        ; and ADD HL,HL replaces the two byte shifts of DE. Process two
+        ; bits per backedge to balance speed with shared-runtime size.
+        ld      a,c
+        ld      b,4
 mul8l:
-        srl     c
-        jr      nc,mul8s
+        add     hl,hl
+        add     a,a
+        jr      nc,$+3
         add     hl,de
-mul8s:
-        sla     e
-        rl      d
+        add     hl,hl
+        add     a,a
+        jr      nc,$+3
+        add     hl,de
         djnz    mul8l
         jr      muldone
 
@@ -2477,21 +2496,25 @@ mul4:
         jr      nc,mul4s0
         add     hl,de
 mul4s0:
+        ; SRL C sets Z when the remaining multiplier is zero. ADD HL,DE
+        ; preserves Z, so zero and one can finish before any further shifts.
+        jr      z,muldone
+        ld      a,c
         sla     e
         rl      d
-        srl     c
+        rrca
         jr      nc,mul4s1
         add     hl,de
 mul4s1:
         sla     e
         rl      d
-        srl     c
+        rrca
         jr      nc,mul4s2
         add     hl,de
 mul4s2:
         sla     e
         rl      d
-        srl     c
+        rrca
         jr      nc,muldone
         add     hl,de
 muldone:

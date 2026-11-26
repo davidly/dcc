@@ -118,6 +118,18 @@ failing builds also retain assembly, executables and logs. `--keep-build`
 retains successful builds too. Use `--work` to choose a fresh directory and
 `--control-compiler` to reuse a control compiler produced by an earlier run.
 
+`--integer` generates unsigned 16-bit variants and builds a control compiler
+without the word compound-assignment address handoff, multiply operand
+forwarding and signed byte-constant comparison changes. It also restores
+the original stack-handoff depth and interval rules in that control build.
+Raw word values, side effects and guards are compared; branches and volatile
+destinations must decline the address handoff. Calls on the right-hand side
+may retain the saved address because their argument stacks are balanced.
+
+```sh
+python3 scripts/fma-stream-fuzz.py --integer --seeds 200 --jobs 8
+```
+
 ## `printf-float-oracle.py`
 
 Compares DCC fixed-decimal formatting against Clang using 6,000 seeded and

@@ -4,8 +4,9 @@
 Run after building the current compiler:
   python3 scripts/fma-stream-fuzz.py --seeds 1000 --jobs 8
 
-An isolated control compiler disables only mir_float_madd_stream_loads.
-Both sides use the current runtime. Programs print every pool's raw float
+The isolated control compiler disables float operand streaming, or with
+--integer the word address handoff, multiply operand forwarding and signed
+byte-constant comparison changes. Both sides use the current runtime. Programs print every pool's raw float
 bits plus side effects and frame guards, rather than relying on float printf
 or a host's different floating-point rules. Four builds cover peephole on/off
 and stack checks on/off. Sources and a JSON report are retained; failing
@@ -44,7 +45,7 @@ def run(argv, cwd, log, timeout, environment=None):
     return result['Output'].replace('\r', '')
 
 
-def build_control(work, jobs):
+def build_control(work, jobs, integer=False):
     base = work / 'control-source'
     if base.exists():
         raise RuntimeError('control-source already exists; choose a fresh --work directory')
@@ -54,11 +55,33 @@ def build_control(work, jobs):
     shutil.copy2(str(ROOT / 'scripts/generate-version.py'), str(base / 'scripts'))
     source = base / 'src/dcc/dcc_mir_spilled_cfg.c'
     text = source.read_text()
-    signature = 'static int mir_float_madd_stream_loads(int add_index, int loads[3])\n{'
-    if text.count(signature) != 1:
-        raise RuntimeError('streaming selector signature changed')
-    # This guard is the sole semantic difference between the two compilers.
-    source.write_text(text.replace(signature, signature + '\n    return 0; /* fuzz control */', 1))
+    if integer:
+        guards = (
+            ('static int mir_compound_address_stack_consumer(int value, int producer)\n{', -1),
+            ('static int mir_fused_compare_is_signed_byte_constant(int compare_index)\n{', 0),
+        )
+        for signature, result in guards:
+            if text.count(signature) != 1:
+                raise RuntimeError('integer selector signature changed')
+            text = text.replace(signature, signature +
+                                '\n    return %d; /* fuzz control */' % result, 1)
+        signature = "    if (consumer->immediate == '+') {"
+        if text.count(signature) != 1:
+            raise RuntimeError('DE forwarding selector changed')
+        text = text.replace(signature,
+                            "    if (consumer->immediate == '*') return -1;\n" + signature, 1)
+        text = text.replace('if (++depth > 4)', 'if (++depth > 3)', 1)
+        text = text.replace('if (depth > 4)', 'if (depth > 3)', 1)
+        text = text.replace('if (existing_consumer <= producer)',
+                            'if (existing_consumer < producer)', 1)
+        text = text.replace('if (consumer <= other_producer ||\n                other_consumer <= producer)',
+                            'if (consumer < other_producer ||\n                other_consumer < producer)', 1)
+    else:
+        signature = 'static int mir_float_madd_stream_loads(int add_index, int loads[3])\n{'
+        if text.count(signature) != 1:
+            raise RuntimeError('streaming selector signature changed')
+        text = text.replace(signature, signature + '\n    return 0; /* fuzz control */', 1)
+    source.write_text(text)
     binary = work / 'control-bin'
     run(['cmake', '-S', str(base / 'src/dcc'), '-B', str(work / 'control-build'),
          '-DCMAKE_BUILD_TYPE=Release', '-DDCC_RUNTIME_OUTPUT_DIRECTORY=' + str(binary)],
@@ -135,10 +158,24 @@ def program(seed):
     return '\n'.join(lines) + '\n'
 
 
-def stream_loads(assembly):
+def integer_program(seed):
+    text = program(seed).replace('float', 'uint16_t')
+    text = text.replace('*v = b; d[', '*v = d; v[').replace('* v[', '* b[')
+    text = text.replace('v.u=initial[j]; pool[j]=v.f;',
+                        'pool[j]=(uint16_t)initial[j];')
+    text = text.replace('frame[48]', 'frame[96]').replace('j<48', 'j<96')
+    text = text.replace('frame[0] != -12.0f || frame[47] != 35.0f',
+                        'frame[0] != (uint16_t)-12 || frame[95] != 83')
+    text = text.replace('v.f=pool[j]; printf("%08lx\\n",(unsigned long)v.u);',
+                        'printf("%u\\n",(unsigned int)pool[j]);')
+    return text
+
+
+def stream_loads(assembly, integer=False):
     instructions = [line.split(';', 1)[0].strip().lower() for line in assembly.splitlines()]
     instructions = [line for line in instructions if line]
-    return sum(tuple(instructions[i:i+len(WIDE_LOAD)]) == WIDE_LOAD
+    pattern = ('push hl', 'ld a,(hl)', 'inc hl', 'ld h,(hl)', 'ld l,a') if integer else WIDE_LOAD
+    return sum(tuple(instructions[i:i+len(pattern)]) == pattern
                for i in range(len(instructions)))
 
 
@@ -159,7 +196,7 @@ def build_run(source, directory, compiler, peep, stack, args):
     for number, family in enumerate(FAMILIES):
         match = re.search(r';@dcc.lto begin _f%d\s(.*?);@dcc.lto end _f%d\b' %
                           (number, number), assembly, re.S)
-        counts[family] = stream_loads(match.group(1)) if match else 0
+        counts[family] = stream_loads(match.group(1), args.integer) if match else 0
     return output, counts
 
 
@@ -167,7 +204,7 @@ def check_seed(seed, control, args):
     directory = args.work / ('seed-%06d' % seed)
     directory.mkdir()
     source = directory / 'case.c'
-    source.write_text(program(seed))
+    source.write_text(integer_program(seed) if args.integer else program(seed))
     result = {'seed': seed, 'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
               'builds': 0, 'active_variants': 0, 'active_families': [], 'outputs': {}}
     try:
@@ -182,7 +219,8 @@ def check_seed(seed, control, args):
                 active = [family for family in FAMILIES if new_loads[family] > old_loads[family]]
                 result['active_variants'] += bool(active)
                 result['active_families'] = sorted(set(result['active_families']) | set(active))
-                forbidden = set(active) & {'calls', 'branch', 'volatile', 'reuse', 'indexcall'}
+                fallbacks = {'branch', 'volatile'} if args.integer else {'calls', 'branch', 'volatile', 'reuse', 'indexcall'}
+                forbidden = set(active) & fallbacks
                 if forbidden:
                     raise RuntimeError('streaming used in fallback families: ' + ','.join(sorted(forbidden)))
                 result['outputs'][label] = hashlib.sha256(new.encode()).hexdigest()
@@ -208,6 +246,8 @@ def check_seed(seed, control, args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--seeds', type=int, default=100)
+    parser.add_argument('--integer', action='store_true',
+                        help='exercise word compound-assignment address handoffs')
     parser.add_argument('--start', type=int, default=1)
     parser.add_argument('--jobs', type=int, default=min(8, os.cpu_count() or 1))
     parser.add_argument('--compiler', type=Path, default=ROOT / ('dcc.exe' if os.name == 'nt' else 'dcc'))
@@ -225,7 +265,7 @@ def main():
     args.work = args.work.resolve()
     args.compiler = args.compiler.resolve()
     args.work.mkdir(parents=True, exist_ok=True)
-    control = args.control_compiler.resolve() if args.control_compiler else build_control(args.work, args.jobs)
+    control = args.control_compiler.resolve() if args.control_compiler else build_control(args.work, args.jobs, args.integer)
     results = []
     started = time.monotonic()
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -243,6 +283,7 @@ def main():
                'builds': sum(r['builds'] for r in results),
                'active_variants': sum(r['active_variants'] for r in results),
                'force_spilled': args.force_spilled,
+               'integer': args.integer,
                'active_families': sorted(set(f for r in results for f in r['active_families'])),
                'failures': sum(not r['passed'] for r in results),
                'elapsed_seconds': round(time.monotonic() - started, 3),

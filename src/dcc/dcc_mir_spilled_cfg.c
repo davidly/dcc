@@ -76,6 +76,7 @@ static int mir_register_iy_frame_shift;
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_const_zero_lhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
+static int mir_fused_compare_is_signed_byte_constant(int compare_index);
 static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
 static int mir_selfstore_result_materializes_phi_home(
@@ -6838,11 +6839,13 @@ static int mir_planned_stack_interval_fits(int producer, int consumer)
         if (definition == NULL)
             return 0;
         existing_producer = (int)(definition - mir.insns);
-        if (existing_consumer < producer)
+        /* Operand handoffs are consumed before this instruction pushes
+         * its result, so adjacent intervals may share that instruction. */
+        if (existing_consumer <= producer)
             continue;
         if (existing_producer < producer &&
             consumer < existing_consumer) {
-            if (++depth > 3)
+            if (++depth > 4)
                 return 0;
             continue;
         }
@@ -6869,6 +6872,41 @@ static int mir_binary_const_rhs_mask_fast_path(
                (unsigned long)rhs->immediate & 0xffffUL) >= 0;
 }
 
+/* Keep a compound assignment's address below its expression temporaries.
+ * The immediate word load consumes the address in HL without popping its
+ * saved copy; the final indirect store consumes that copy. Restrict this
+ * two-use exception to one straight-line interval with no other address use.
+ */
+static int mir_compound_address_stack_consumer(int value, int producer)
+{
+    const struct MirInsn *load;
+    int instruction;
+    if (producer + 1 >= mir.count || mir_value_use_count(value) != 2)
+        return -1;
+    load = &mir.insns[producer + 1];
+    if (load->opcode != MIR_LOAD_INDIRECT || load->src1 != value ||
+        load->memory_size != 2 || load->bit_width != 0 ||
+        (load->memory_flags & MIR_MEMORY_FLAG_VOLATILE) != 0 ||
+        mir_constant_absolute_access_supported(load))
+        return -1;
+    for (instruction = producer + 2; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->src1 == value || insn->src2 == value ||
+            mir_call_uses_value(insn, value)) {
+            if (insn->opcode == MIR_STORE_INDIRECT && insn->src1 == value &&
+                insn->memory_size == 2 && insn->bit_width == 0 &&
+                (insn->memory_flags & MIR_MEMORY_FLAG_VOLATILE) == 0 &&
+                mir_planned_stack_interval_fits(producer, instruction))
+                return instruction;
+            return -1;
+        }
+        if (!mir_planned_stack_interval_instruction_safe(instruction)) {
+            return -1;
+        }
+    }
+    return -1;
+}
+
 static int mir_planned_stack_consumer(int value, int producer)
 {
     const struct MirInsn *definition;
@@ -6878,9 +6916,15 @@ static int mir_planned_stack_consumer(int value, int producer)
     int instruction;
 
     if (!mir_planned_stack_handoffs_enabled || mir.has_vla ||
-        value < 0 || producer < 0 || producer >= mir.count ||
-        mir_value_use_count(value) != 1)
+        value < 0 || producer < 0 || producer >= mir.count)
         return -1;
+    if (mir_value_use_count(value) != 1) {
+        const struct MirInsn *address = mir_definition(value);
+        if (address != NULL && address->opcode == MIR_INDEX_ADDRESS &&
+            type_ptr_depth(address->type) > 0)
+            return mir_compound_address_stack_consumer(value, producer);
+        return -1;
+    }
     definition = mir_definition(value);
     if (definition == NULL || definition->opcode == MIR_PARAM ||
         definition->opcode == MIR_PHI ||
@@ -6974,8 +7018,8 @@ static void mir_verify_planned_stack_handoffs(void)
                 fatal("missing MIR planned stack producer");
             other_producer =
                 (int)(other_definition - mir.insns);
-            if (consumer < other_producer ||
-                other_consumer < producer)
+            if (consumer <= other_producer ||
+                other_consumer <= producer)
                 continue;
             if (other_producer < producer &&
                 consumer < other_consumer) {
@@ -6987,7 +7031,7 @@ static void mir_verify_planned_stack_handoffs(void)
                 continue;
             fatal("crossing MIR planned stack handoffs");
         }
-        if (depth > 3)
+        if (depth > 4)
             fatal("excessive MIR planned stack depth");
     }
 }
@@ -16374,8 +16418,7 @@ static int mir_indirect_load_de_consumer(
     const struct MirInsn *conversion;
     int consumer_index;
 
-    if (!mir_runtime_stride_schedule_is_active() ||
-        instruction < 0 || instruction >= mir.count)
+    if (instruction < 0 || instruction >= mir.count)
         return -1;
     load = &mir.insns[instruction];
     address = mir_definition(load->src1);
@@ -16386,10 +16429,7 @@ static int mir_indirect_load_de_consumer(
         (load->memory_size != 1 && load->memory_size != 2) ||
         type_is_bool(load->type) ||
         mir_value_use_count(load->dst) != 1 ||
-        address == NULL || address->opcode != MIR_INDEX_ADDRESS ||
-        (address->base_name[0] == 0 &&
-         (base == NULL || base->opcode != MIR_INDEX_ADDRESS ||
-          base->base_name[0] == 0)))
+        address == NULL || address->opcode != MIR_INDEX_ADDRESS)
         return -1;
     consumer_index = mir_forward_skip_target(instruction);
     if (consumer_index < 0 || consumer_index >= mir.count)
@@ -16409,7 +16449,7 @@ static int mir_indirect_load_de_consumer(
         conversion = NULL;
     }
     if (consumer->opcode != MIR_BINARY ||
-        consumer->immediate != '+' ||
+        (consumer->immediate != '+' && consumer->immediate != '*') ||
         consumer->src2 != (conversion != NULL
                             ? conversion->dst : load->dst) ||
         type_size(consumer->secondary_offset) != 2 ||
@@ -16418,6 +16458,17 @@ static int mir_indirect_load_de_consumer(
          !mir_planned_stack_matches_consumer(
              consumer->src1, consumer_index)))
         return -1;
+    if (consumer->immediate == '+') {
+        if (!mir_runtime_stride_schedule_is_active() ||
+            (address->base_name[0] == 0 &&
+             (base == NULL || base->opcode != MIR_INDEX_ADDRESS ||
+              base->base_name[0] == 0)))
+            return -1;
+    } else if (load->memory_size != 2 || conversion != NULL ||
+               !mir_planned_stack_matches_consumer(
+                   consumer->src1, consumer_index)) {
+        return -1;
+    }
     if (forwarded_value_out != NULL)
         *forwarded_value_out = conversion != NULL
             ? conversion->dst : load->dst;
@@ -16664,6 +16715,13 @@ static void mir_emit_virtual_store(MirStream *out, int value)
             mir_spilled_cfg_used_planned_index_base_handoff = 1;
         mir.planned_stack_emitted[value] = 1;
         ++mir_planned_stack_emit_count;
+        if (mir_value_use_count(value) == 2 &&
+            mir_emit_instruction_index + 1 < mir.count &&
+            mir.insns[mir_emit_instruction_index + 1].opcode == MIR_LOAD_INDIRECT &&
+            mir.insns[mir_emit_instruction_index + 1].src1 == value) {
+            mir_forwarded_hl_value = value;
+            mir_forwarded_hl_instruction = mir_emit_instruction_index;
+        }
         return;
     }
     compact_unary_consumer =
@@ -26103,6 +26161,23 @@ static int mir_fused_compare_is_signed_zero_sign_test(int compare_index)
     return 1;
 }
 
+/* Signed word comparisons against a positive byte constant need the
+ * low byte only when H is zero; otherwise H's sign bit decides the result.
+ * Keep widened bytes and register-backed phis on their existing paths. */
+static int mir_fused_compare_is_signed_byte_constant(int compare_index)
+{
+    const struct MirInsn *compare = &mir.insns[compare_index];
+    const struct MirInsn *left = mir_definition(compare->src1);
+    const struct MirInsn *right = mir_definition(compare->src2);
+    return (compare->immediate == '<' || compare->immediate == TOK_GE) &&
+        !mir_type_uses_unsigned_comparison(compare->secondary_offset) &&
+        type_size(compare->secondary_offset) == 2 &&
+        left != NULL && type_size(left->type) == 2 &&
+        left->opcode == MIR_LOAD &&
+        right != NULL && right->opcode == MIR_CONST &&
+        right->immediate > 0 && right->immediate <= 255;
+}
+
 static int mir_emit_fused_comparison_branch(MirStream *out, const int *labels,
                                              int compare_index, int negate,
                                              int de_holds_biased_constant)
@@ -26124,6 +26199,18 @@ static int mir_emit_fused_comparison_branch(MirStream *out, const int *labels,
     target = mir_find_label(branch->label);
     if (target < 0)
         return 0;
+    if (mir_fused_compare_is_signed_byte_constant(compare_index)) {
+        int low = new_label();
+        int ready = new_label();
+        mir_stream_printf(out,
+                "\tld a,h\n\tor a\n\tjr z,L%d\n\trlca\n\tjr L%d\n"
+                "L%d:\n\tld a,l\n\tcp %ld\nL%d:\n",
+                low, ready, low, right->immediate, ready);
+        true_condition = operation == '<' ? "c" : "nc";
+        return mir_emit_conditional_branch_with_phi_copies(
+            out, labels, true_condition, compare_index + 1 + negate,
+            target, branch->label);
+    }
     if ((operation == TOK_EQ || operation == TOK_NE) &&
         (mir_fused_compare_is_const_zero_rhs(compare_index) ||
          mir_fused_compare_is_const_zero_lhs(compare_index))) {
@@ -35606,8 +35693,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 if (stack_forwarded_left &&
                     right_definition != NULL &&
                     right_definition->opcode == MIR_CONST &&
-                    mir_binary_const_rhs_mask_fast_path(insn)) {
-                    /* The `& const` / unsigned `% pow2` mask fast paths
+                    (mir_binary_const_rhs_mask_fast_path(insn) ||
+                     (mir_binary_is_fusable_comparison(i) > 0 &&
+                      mir_fused_compare_is_signed_byte_constant(i)))) {
+                    /* Immediate mask and byte-constant comparison paths
                      * below need the lhs in HL; nothing was emitted
                      * between the push and this consumer, so pop it here
                      * instead of falling back to the generic dance. */
@@ -35630,7 +35719,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                       mir_binary_const_rhs_mask_fast_path(insn)) ||
                      (mir_binary_is_fusable_comparison(i) > 0 &&
                       (mir_fused_compare_is_const_zero_rhs(i) ||
-                       mir_fused_compare_is_signed_zero_sign_test(i))))) {
+                       mir_fused_compare_is_signed_zero_sign_test(i) ||
+                       mir_fused_compare_is_signed_byte_constant(i))))) {
                     /* Most binary instructions consume a forwarded lhs
                      * through their existing "load rhs / pop lhs" path.
                      * These direct-HL special cases need the lhs before
@@ -35949,6 +36039,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                      * the fused branch emitter tests the sign bit of HL
                      * directly with "bit 7,h" instead of loading 0 into DE
                      * for a 16-bit sbc. */
+                } else if (mir_binary_is_fusable_comparison(i) > 0 &&
+                           mir_fused_compare_is_signed_byte_constant(i)) {
+                    /* The fused branch compares H and L with immediates. */
                 } else if (!mir.has_vla && !stack_forwarded_left &&
                            !planned_stack_forwarded_left &&
                            (insn->immediate == '<' ||
