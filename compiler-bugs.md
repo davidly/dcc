@@ -32,6 +32,21 @@ Verification on upstream `4754d505` passed: 300-seed production batches for
 both generators, the full suite in both stack modes, and Python and debugger
 checks. Existing performance baselines are unchanged.
 
+## Float seed 418814
+
+**Fixed locally.** The float production campaign over seeds 400001–450000
+reported state mismatches at IDs `4001` through `4003` in all four
+configurations. After scoped type repair, two prefix updates of float
+fields temporarily had integer result types. MIR used those provisional
+types to change their enclosing float division to integer division
+before it resolved the field types.
+
+MIR now preserves the parsed float division until the operand types are
+known. The regression in `tests/tfincdiv.c` checks the quotient and both
+updated fields. It printed `-4 10 8` before the fix and now matches Clang's
+`5 10 8`. The original seed also agrees with Clang in all four production
+configurations.
+
 ## Performance follow-up
 
 Forcing the regional emitter with `DCC_MIR_PREFER_REGIONAL=1` produces correct

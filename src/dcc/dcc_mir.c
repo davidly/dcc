@@ -9699,11 +9699,13 @@ scoped_type_repair_done:
             !type_is_float(left->type) && !type_is_float(right->type))
             insn->secondary_offset =
                 common_arith_type(left->type, right->type);
-        /* An operand still untyped here (a member load not yet typed)
-         * would derive int; keep the operation's type instead. */
+        /* Indirect updates can still have a provisional int type here.
+         * Keep parsed float division until lvalue repair types its operands. */
         if (left != NULL && right != NULL &&
             (insn->immediate == '/' || insn->immediate == '%') &&
             left->type != 0 && right->type != 0 &&
+            (!type_is_float(insn->secondary_offset) ||
+             type_is_float(left->type) || type_is_float(right->type)) &&
             type_ptr_depth(left->type) == 0 &&
             type_ptr_depth(right->type) == 0) {
             insn->type = common_arith_type(left->type, right->type);
