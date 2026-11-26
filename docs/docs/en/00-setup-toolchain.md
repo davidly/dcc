@@ -66,7 +66,7 @@ standard library.
     runtime:
 
     ```bash
-    sudo apt-get install --no-install-recommends clang libclang-rt-21-dev
+    sudo apt-get update && sudo apt-get install clang libclang-rt-dev
     ```
 
 === "Windows ARM64"
