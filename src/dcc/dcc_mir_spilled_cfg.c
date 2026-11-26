@@ -15621,6 +15621,28 @@ static int mir_address_chain_root(int value)
     return -1;
 }
 
+/* The global array defined in this module that a row-pair base names, or
+ * NULL. The instruction's own binding must be global first: a local or
+ * parameter array can share its name with an unrelated global, and
+ * find_global() alone would then hand back that global's label (the
+ * hazard described at mir_emit_named_address_root_to_hl). Extern arrays
+ * are excluded because the difference of two bases must be known when the
+ * module is assembled. */
+static struct Sym *mir_row_pair_global_array(const struct MirInsn *base)
+{
+    int memory_type, memory_storage, memory_offset;
+    struct Sym *array;
+
+    if (!mir_scalar_memory_location(base, &memory_type, &memory_storage,
+                                    &memory_offset) ||
+        memory_storage != SC_GLOBAL || memory_offset != 0)
+        return NULL;
+    array = find_global(base->name);
+    if (array == NULL || array->storage != SC_GLOBAL || !array->is_array)
+        return NULL;
+    return array;
+}
+
 /* Reuse one global-array row address for another array with the same
  * SSA induction value and row stride. A label-free span ensures the cache
  * is always written before it is read; only same-module array roots admit
@@ -15644,8 +15666,8 @@ static int mir_choose_iy_row_pair(int *consumer_out)
             type_size(index->type) > 2 ||
             mir_mul_const_op_count((unsigned long)row->immediate) < 4)
             continue;
-        array = find_global(base->name);
-        if (array == NULL || array->storage != SC_GLOBAL || !array->is_array)
+        array = mir_row_pair_global_array(base);
+        if (array == NULL)
             continue;
         while (header >= 0 && mir.insns[header].opcode != MIR_LABEL)
             --header;
@@ -15667,9 +15689,8 @@ static int mir_choose_iy_row_pair(int *consumer_out)
                 other_base == NULL || other_base->opcode != MIR_ADDRESS ||
                 mir_value_use_count(other_base->dst) != 1)
                 continue;
-            other_array = find_global(other_base->name);
-            if (other_array == NULL || other_array->storage != SC_GLOBAL ||
-                !other_array->is_array || other_array == array)
+            other_array = mir_row_pair_global_array(other_base);
+            if (other_array == NULL || other_array == array)
                 continue;
             for (instruction = second + 1; instruction < mir.count; ++instruction)
                 if (mir.insns[instruction].opcode == MIR_JUMP &&

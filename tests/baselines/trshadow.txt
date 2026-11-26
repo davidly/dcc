@@ -1,0 +1,6 @@
+second_local 240
+first_local 120
+both_local 400
+second_static 400
+globals 80
+global C 80
