@@ -4595,8 +4595,9 @@ void mir_end_function(void)
             (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL &&
              mir.opaque_count != 0))
             goto finish;
-        mir_require_emitted_function(failure_reason);
-        /* Every code generator caps the frame; say so rather than fail. */
+        /* Every code generator caps the frame; say so rather than fail.
+         * This is an error in the source, so report it before
+         * DCC_MIR_REQUIRE_EMIT treats the function as an emission gap. */
         if (mir_oversized_frame_bytes > 0) {
             char message[256];
 
@@ -4609,6 +4610,7 @@ void mir_end_function(void)
                          g_current_compiling_func_line, -1, message, NULL);
             goto finish;
         }
+        mir_require_emitted_function(failure_reason);
         fatal("MIR emission is required");
     }
     if (opt_debug_lines &&

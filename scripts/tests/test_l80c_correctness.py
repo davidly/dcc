@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from scripts.tests.version_header import version_include
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,7 @@ class L80cCorrectnessTests(unittest.TestCase):
                 CC,
                 "-std=c89",
                 "-O2",
+                *version_include(cls.workspace),
                 str(REPO_ROOT / "src" / "m80c" / "m80c.c"),
                 "-o",
                 str(cls.m80c),
@@ -44,6 +46,7 @@ class L80cCorrectnessTests(unittest.TestCase):
                 CC,
                 "-std=c89",
                 "-O2",
+                *version_include(cls.workspace),
                 str(REPO_ROOT / "src" / "l80c" / "l80c.c"),
                 "-o",
                 str(cls.l80c),

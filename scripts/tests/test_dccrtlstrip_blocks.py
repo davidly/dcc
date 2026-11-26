@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import unittest
 from pathlib import Path
+from scripts.tests.version_header import version_include
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +24,7 @@ class DccRtlStripBlockTests(unittest.TestCase):
             [
                 "cc",
                 "-O2",
+                *version_include(cls.workspace),
                 str(SOURCE),
                 str(APP_STRIP_SOURCE),
                 "-o",
