@@ -724,6 +724,34 @@ emulator flags for emulated assembly/linking. Standalone builds ignore a
 nearby `dccmake.txt`; invoke `dccmake` directly for project builds.
 Run `python scripts/ma.py --help` for all options.
 
+## `prepush.py`
+
+Runs the local pre-push validation steps and reports how long each takes. It
+never commits or pushes. Steps include the canonical tool build, host baseline
+validation, the Python script tests and audits, the CMake MIR and debugger host
+tests (also under ASan/UBSan), the strict full+extended suite with and without
+stack checks, and the extended MIR census. Instrumented coverage is not part of
+it; run `compiler-coverage.sh` separately.
+
+```sh
+python3 scripts/prepush.py --list
+python3 scripts/prepush.py
+python3 scripts/prepush.py --skip mir-census
+python3 scripts/prepush.py --only build,host-baselines --keep-going
+python3 scripts/prepush.py --parallel 1   # time each step on its own
+```
+
+The canonical build runs first; the other steps only read the built tools and
+use their own build directories, so they then run concurrently, up to
+`--parallel` at a time (default 4), longest first. Step times measured this way
+include contention with the other steps. After a failure no new steps start
+unless `--keep-going` is given; a failing step's log tail is printed. Logs,
+CMake build trees and `timings.json` go under `build/prepush-<time>/` (or
+`--output-directory`). By default the build uses every CPU and each concurrent
+step gets an equal share (CPUs divided by `--parallel`), so per-test timeouts
+aren't hit through oversubscription; `--jobs` overrides both. `--timeout` sets
+the per-test run timeout (default 60 seconds).
+
 ## `compiler-coverage.sh`
 
 Builds a separate Clang-instrumented `dcc`, runs the main suite and the C89,
