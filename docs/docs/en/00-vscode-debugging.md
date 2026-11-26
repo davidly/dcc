@@ -39,8 +39,7 @@ itself is generated automatically.
 
 Before configuring a project:
 
-1. [Build and configure the DCC toolchain](00-setup-toolchain.md). The normal
-  `scripts/build-dcc.py` build includes `dcc-debug-host`.
+1. [Build DCC with the debugger host](00-setup-toolchain.md#build-dcc-c-compiler).
 2. Install the [Microsoft C/C++ extensions for VS Code](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpp-devtools){: target="_blank" }.
 3. Make `dccmake` available on `PATH`, or use its absolute path in the build
    task.
@@ -70,16 +69,15 @@ my-project/
 └── module.c
 ```
 
-Build DCC once with `scripts/build-dcc.py`, then set `DCC_DIR` in the
-environment inherited by VS Code to the DCC repository directory. For example,
-on macOS or Linux:
+On macOS and Linux, set `DCC_DIR` to the DCC checkout and start VS Code from
+the same terminal.
 
 ```sh
 export DCC_DIR="$HOME/GitHub/dcc"
 code my-project
 ```
 
-In PowerShell on Windows:
+On Windows, run the equivalent commands in PowerShell.
 
 ```powershell
 $env:DCC_DIR = "C:\GitHub\dcc"

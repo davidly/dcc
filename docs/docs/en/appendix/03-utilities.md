@@ -386,6 +386,8 @@ appends historical measurements to a CSV and disables the stack check.
 
 ### Usage
 
+Use `python3` on macOS and Linux or `python` on Windows.
+
 ```sh
 python3 ./scripts/runall.py [options]
 ```

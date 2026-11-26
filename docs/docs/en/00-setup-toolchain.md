@@ -1,418 +1,200 @@
 # The toolchain
 
-To build CP/M apps, you need the native DCC tools (`dcc`, `dccmake`,
-`dccpeep`, `dccrtlstrip`, `m80c`, and `l80c`), the bundled headers, and
-`DCCRTL.MAC`. Normal builds run entirely on the host. Use
-[`ntvcm`](appendix/03-utilities.md#toolchain-commands) to run the resulting
-programs, or transfer them to another CP/M emulator or real hardware.
-The original `m80.com` and `l80.com` are needed only for the optional emulated
-assembler/linker path. Source debugging uses the separate
-[`dcc-debug-host`](00-debug-host.md).
-
-You build these tools once. After that, use them from any CP/M app project.
-
-Setup flow:
-
-- Install the host prerequisites for Windows, macOS, or Linux.
-- Clone the DCC C Compiler (`dcc`) and `ntvcm` repositories.
-- Build the DCC C Compiler host tools with `sh m.sh` on Unix or `m.bat`
-  on Windows. Use `--skip-debug-host` to build just the C tools on minimal
-  systems; the builder supports Python 3.7 and newer.
-- Build the ntvcm emulator.
-- Add the DCC C Compiler and ntvcm directories to your `PATH`.
-- Verify the setup with a sample CP/M program.
+Build DCC once to compile and link CP/M programs on your host. This guide also
+builds [ntvcm](appendix/03-utilities.md#toolchain-commands) so you can run those
+programs locally. Use the same terminal from cloning through verification.
 
 ## Install prerequisites
 
-Building and testing DCC C Compiler requires **Python 3.7 or newer** and a
-native C compiler. **3.7 is the minimum supported version, not the version to
-install specifically.** An existing Python 3.7+ installation is sufficient;
-for a new installation, choose the current stable Python 3 supported by your
-operating system. The build and test drivers use Python's standard library,
-so they do not require a separate `pip install` step.
-
-The debugger host and example adapter also require CMake and a C++17 compiler.
-The same Python drivers run on Windows, macOS, Linux, and Raspberry Pi.
+Reuse your existing tools if available. The DCC build needs Python 3.7 or
+newer and a native C compiler. The debugger host and example adapter also
+need a C++17 compiler and CMake 3.16 or newer. The build scripts use Python's
+standard library.
 
 === "Windows"
 
-    1. If `python --version` already reports Python 3.7 or later, keep that
-       installation. Otherwise, download the **Python install manager** from
-       [Python's Windows downloads](https://www.python.org/downloads/windows/)
-       and open the downloaded installer. The Microsoft Store version is also
-       supported by Python's [Windows installation guide](https://docs.python.org/3/using/windows.html).
-    2. Open a new Command Prompt and install the default runtime with the
-       manager, then verify it:
+    Install [Git for Windows](https://git-scm.com/install/windows){: target="_blank" }
+    if Git is not already installed.
 
-        ```bat
-        py install default
-        python --version
-        python -c "import sys; print(sys.executable)"
-        ```
+    If you need Python, install the
+    [Python install manager](https://www.python.org/downloads/windows/){: target="_blank" }.
+    Open a new PowerShell window and run `py install default`. If the older
+    Python launcher owns the command, run `pymanager install default` instead.
+    Use `python --version` to check the interpreter.
 
-       `py install` is a command of the install manager, not the older `py`
-       launcher. If an existing `py` command does not recognize `install`, use
-       the manager's `pymanager install default` command instead. If `python`
-       opens the Store or is not found, check **Manage app execution aliases**
-       for the manager's **Python (default)** alias, then reopen the terminal.
-       The Python guide above has the corresponding troubleshooting steps.
-    3. Install Visual Studio or Visual Studio Build Tools with **Desktop
-       development with C++** and its CMake component. For Windows ARM64,
-       include the ARM64/ARM64EC build tools. The Python builder locates MSVC
-       and initializes its environment itself.
+    Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio){: target="_blank" }
+    through WinGet in PowerShell:
 
-    Run DCC scripts with `python`, for example `python scripts/build-dcc.py`.
-    The `m.bat` wrapper also expects `python` to be available on `PATH`.
+    ```powershell
+    winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+    ```
+
+    The command installs the **Desktop development with C++** workload and
+    its recommended **C++ CMake tools for Windows** component. Restart
+    PowerShell when installation finishes. Check that the C++ workload and
+    CMake are present by running:
+
+    ```powershell
+    $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+    $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    Test-Path (Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat')
+    Test-Path (Join-Path $vsPath 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe')
+    ```
+
+    Both commands should print `True`.
 
 === "macOS"
 
-    1. Download the current stable **macOS installer** from
-       [Python's macOS downloads](https://www.python.org/downloads/macos/).
-       Open the `.pkg` and follow the installer with its default options.
-       The universal2 installer supports both Apple Silicon and Intel Macs
-       within that release's supported macOS versions. Python's
-       [macOS installation guide](https://docs.python.org/3/using/mac.html)
-       describes the installer and supported systems.
-    2. Open a new Terminal window and verify the installed interpreter:
-
-        ```sh
-        python3 --version
-        python3 -c "import sys; print(sys.executable)"
-        ```
-
-       Confirm the version is at least 3.7. An existing suitable installation
-       can be used; installing another copy is not required.
-    3. Install the native compiler tools:
-
-        ```sh
-        xcode-select --install
-        ```
-
-       Install CMake separately if building the debugger host, and verify
-       `clang` and `cmake` are on `PATH`.
-
-    Run DCC scripts with `python3`, for example `python3 scripts/build-dcc.py`.
-
-=== "Ubuntu / Raspberry Pi OS"
-
-    Install the distribution's Python 3, native build tools, and CMake:
+    Run `xcode-select --install` if you need the Xcode Command Line Tools,
+    which provide Git and Clang. If you need Python, use the
+    [macOS installer](https://www.python.org/downloads/macos/){: target="_blank" } and check
+    `python3 --version`. Install [CMake](https://cmake.org/download/){: target="_blank" } if needed.
+    If you installed `CMake.app` in Applications, add its command-line tools to
+    the current terminal.
 
     ```sh
-    sudo apt update
-    sudo apt install build-essential python3 cmake
-    python3 --version
-    python3 -c "import sys; print(sys.executable)"
+    export PATH="/Applications/CMake.app/Contents/bin:$PATH"
     ```
 
-    Confirm the reported version is at least 3.7. Existing Python 3.7+
-    installations on older Raspberry Pi 4 systems are supported; a newer
-    Python is not required just to run DCC's build and test scripts.
-    Run scripts with `python3`, for example `python3 scripts/build-dcc.py`.
+=== "Ubuntu (x64 and ARM64)"
 
-Documentation examples that use `python` mean the selected Python 3.7+
-interpreter. On macOS, Ubuntu, and Raspberry Pi OS, use `python3` instead.
-The version and executable-path checks above help confirm which interpreter
-will run the scripts. PowerShell is not required on any platform.
+    ```bash
+    sudo apt update && sudo apt install git build-essential python3 cmake
+    ```
 
-Full local proof/coverage runs additionally require sh,
-`ntvcm`, Clang, and matching `llvm-cov` / `llvm-profdata` tools.
+    Optional, for differential fuzz testing, install Clang and its sanitizer
+    runtime:
 
-Release packaging and specialized test utilities also use Python. Native
-installer creation additionally requires the platform's packaging tools; see
-[`scripts/README.md`](https://github.com/davidly/dcc/blob/main/scripts/README.md).
+    ```bash
+    sudo apt-get install --no-install-recommends clang libclang-rt-21-dev
+    ```
+
+=== "Windows ARM64"
+
+    Install [Git for Windows](https://git-scm.com/install/windows){: target="_blank" }
+    if Git is not already installed.
+
+    If you need Python, install the
+    [Python install manager](https://www.python.org/downloads/windows/){: target="_blank" }.
+    Open a new PowerShell window and run `py install default`. If the older
+    Python launcher owns the command, run `pymanager install default` instead.
+    Use `python --version` to check the interpreter.
+
+    Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio){: target="_blank" }
+    through WinGet in PowerShell:
+
+    ```powershell
+    winget install --id Microsoft.VisualStudio.2022.BuildTools --exact --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --add Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+    ```
+
+    This installs the **Desktop development with C++** workload, its
+    recommended **C++ CMake tools for Windows** component, and the MSVC
+    ARM64 tools. Restart PowerShell when installation finishes. To select
+    ARM64EC as well, choose it in the Visual Studio Installer.
+    Confirm the C++ workload and CMake are present:
+
+    ```powershell
+    $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+    $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+    Test-Path (Join-Path $vsPath 'VC\Auxiliary\Build\vcvarsarm64.bat')
+    Test-Path (Join-Path $vsPath 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe')
+    ```
+
+    Both commands should print `True`.
 
 ## Clone the repositories
 
-    # Clone DCC C Compiler
-    git clone https://github.com/davidly/dcc.git
+Run these commands from the directory where you keep your projects.
 
-    # Clone the ntvcm z80 emulator
-    git clone https://github.com/davidly/ntvcm.git
+```sh
+git clone https://github.com/davidly/dcc.git
+git clone https://github.com/davidly/ntvcm.git
+```
 
-## Build DCC C Compiler
+<span id="build-dcc-c-compiler"></span>
+<span id="build-ntvcm"></span>
 
-The cross-platform Python build driver is in the `scripts` directory. It
-builds `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, `l80c`,
-`dcc-debug-host`, and its example I/O adapter, using MSVC on Windows, clang on
-macOS, and gcc on Linux by default. Run it from the cloned `dcc` directory:
+## Build DCC and ntvcm
 
-    cd dcc
-    python scripts/build-dcc.py
+From the directory containing both checkouts, run the build block for your
+platform. On Windows, the scripts initialize MSVC automatically.
 
-
-## Build ntvcm
-
-ntvcm is a C++ project. Build it from its own directory. The commands below
-start from the parent directory containing both checkouts; from `dcc`, first
-return to that parent with `cd ..`.
-
-Use the `m.bat` / `mmac.sh` / `m.sh` scripts below, not `m.bat` / `mmac.sh`
-/ `m.sh`. The `r` versions build release configurations of the emulator with
-asserts compiled out, so the resulting `ntvcm` runs faster.
+Each build writes its executables to its own checkout. The DCC build also
+includes the [debugger host and example adapter](00-debug-host.md). Add
+`--skip-debug-host` to the Python command if you only need the DCC command-line
+tools.
 
 === "Windows"
 
-    Open a Developer PowerShell or Developer Command Prompt so the Microsoft
-    C/C++ compiler (`cl`) is on your `PATH`, then run the Windows release build
-    script:
-
     ```powershell
-    cd ntvcm
-    .\m.bat
+    Set-Location dcc -ErrorAction Stop; python scripts/build-dcc.py; if ($LASTEXITCODE -eq 0) { Set-Location ../ntvcm -ErrorAction Stop; .\m.bat }; Set-Location ..
     ```
-
-    Produces `ntvcm.exe`.
 
 === "macOS"
 
-    Open a terminal where the Xcode Command Line Tools are available, then run
-    the macOS release build script:
-
     ```bash
-    cd ntvcm
-    chmod +x mmac.sh
-    ./mmac.sh
+    cd dcc && python3 scripts/build-dcc.py &&
+    cd ../ntvcm && bash mmac.sh
     ```
 
-    Produces the `ntvcm` executable.
-
-=== "Ubuntu"
-
-    Open a terminal where `g++` is available, then run the Linux release build
-    script:
+=== "Ubuntu (x64 and ARM64)"
 
     ```bash
-    cd ntvcm
-    chmod +x m.sh
-    ./m.sh
+    cd dcc && python3 scripts/build-dcc.py &&
+    cd ../ntvcm && bash m.sh
     ```
-
-    Produces the `ntvcm` executable.
-
-=== "Ubuntu ARM64"
-
-    Open a terminal where `g++` is available, then run the Linux release build
-    script:
-
-    ```bash
-    cd ntvcm
-    chmod +x m.sh
-    ./m.sh
-    ```
-
-    Produces the `ntvcm` executable.
 
 === "Windows ARM64"
-
-    Open a Developer PowerShell or Developer Command Prompt for ARM64 so the
-    Microsoft C/C++ compiler (`cl`) is on your `PATH`, then run the Windows
-    release build script:
 
     ```powershell
-    cd ntvcm
-    .\m.bat
+    Set-Location dcc -ErrorAction Stop; python scripts/build-dcc.py; if ($LASTEXITCODE -eq 0) { Set-Location ../ntvcm -ErrorAction Stop; .\m.bat }; Set-Location ..
     ```
 
-    Produces `ntvcm.exe`.
-
-## Set up your environment
-
-Use `dccmake` to build application projects with the source-built tools.
-Use `scripts/runall.py` to build and verify the test suite.
-
-The tools use an environment variable if you set one; otherwise they look on
-your `PATH`. The relevant tools are:
-
-- [`dcc`](appendix/03-utilities.md#toolchain-commands) — compiler
-- [`dccmake`](appendix/03-utilities.md#build-pipeline-helper-dccmake) — build pipeline helper
-- [`dccpeep`](appendix/03-utilities.md#toolchain-commands) — peephole optimizer
-- [`dccrtlstrip`](appendix/03-utilities.md#toolchain-commands) — application/runtime stripper
-- [`ntvcm`](appendix/03-utilities.md#toolchain-commands) — CP/M emulator
-- [`m80c`](appendix/03-utilities.md#native-assembler-m80c) / [`l80c`](appendix/03-utilities.md#native-linker-l80c) — native assembler and linker
-
-Recommended setup, especially when building apps in a project *outside* the DCC C Compiler
-repo, is to add the directories containing the built `dcc` and `ntvcm`
-binaries to your `PATH`. The DCC C Compiler directory also provides `dccpeep`,
-`dccmake`, `dccrtlstrip`, `m80c`, `l80c`, the standard headers, and
-`DCCRTL.MAC`. For a `dccmake` build outside that directory, configure
-`dcc-runtime` and `dcc-include-directory` as shown in
-[Building and linking](02-build-and-link.md#build-with-dccmake); putting a
-directory on `PATH` alone does not configure header lookup.
-
-=== "Windows"
-
-    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current PowerShell
-       session:
-
-        ```powershell
-        $env:PATH += ";C:\path\to\dcc;C:\path\to\ntvcm"
-        ```
-
-    2. To make that permanent for your Windows user account, update the user
-       `PATH` and then open a new terminal:
-
-        ```powershell
-        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        [Environment]::SetEnvironmentVariable("Path", "$userPath;C:\path\to\dcc;C:\path\to\ntvcm", "User")
-        ```
-
-    3. Replace `C:\path\to\dcc` and `C:\path\to\ntvcm` with the actual
-       directories. With this on your `PATH`, the scripts find `dcc`,
-       `dccpeep`, `dccrtlstrip`, and `ntvcm` automatically.
-
-       To pin specific binaries instead (for example, when juggling multiple
-    DCC C Compiler builds), set the environment variables to explicit paths and only
-       put ntvcm on `PATH`:
-
-        ```powershell
-        $env:PATH += ";C:\path\to\ntvcm"
-        $env:DCC = "C:\path\to\dcc\dcc.exe"
-        $env:DCCPEEP = "C:\path\to\dcc\dccpeep.exe"
-        $env:DCCRTLSTRIP = "C:\path\to\dcc\dccrtlstrip.exe"
-        ```
-
-=== "macOS"
-
-    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current shell
-       session:
-
-        ```bash
-        export PATH="$PATH:/path/to/dcc:/path/to/ntvcm"
-        ```
-
-    2. To make that permanent for the default zsh shell, append the same setting
-       to `~/.zshrc`, then open a new terminal or reload the file:
-
-        ```bash
-        printf '\nexport PATH="$PATH:/path/to/dcc:/path/to/ntvcm"\n' >> ~/.zshrc
-        source ~/.zshrc
-        ```
-
-    3. Replace `/path/to/dcc` and `/path/to/ntvcm` with the actual directories
-       (e.g. `~/GitHub/dcc` and `~/GitHub/ntvcm`). With this on your `PATH`,
-       the scripts find `dcc`, `dccpeep`, `dccrtlstrip`, and `ntvcm`
-       automatically.
-
-       To pin specific binaries instead (for example, when juggling multiple
-    DCC C Compiler builds), set the environment variables to explicit paths and only
-       put ntvcm on `PATH`:
-
-        ```bash
-        export PATH="$PATH:/path/to/ntvcm"
-        export DCC=/path/to/dcc/dcc
-        export DCCPEEP=/path/to/dcc/dccpeep
-        export DCCRTLSTRIP=/path/to/dcc/dccrtlstrip
-        ```
-
-=== "Ubuntu"
-
-    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current shell
-       session:
-
-        ```bash
-        export PATH="$PATH:/path/to/dcc:/path/to/ntvcm"
-        ```
-
-    2. To make that permanent for bash, append the same setting to `~/.bashrc`,
-       then open a new terminal or reload the file:
-
-        ```bash
-        printf '\nexport PATH="$PATH:/path/to/dcc:/path/to/ntvcm"\n' >> ~/.bashrc
-        source ~/.bashrc
-        ```
-
-    3. Replace `/path/to/dcc` and `/path/to/ntvcm` with the actual directories
-       (e.g. `~/GitHub/dcc` and `~/GitHub/ntvcm`). With this on your `PATH`,
-       the scripts find `dcc`, `dccpeep`, `dccrtlstrip`, and `ntvcm`
-       automatically.
-
-       To pin specific binaries instead (for example, when juggling multiple
-    DCC C Compiler builds), set the environment variables to explicit paths and only
-       put ntvcm on `PATH`:
-
-        ```bash
-        export PATH="$PATH:/path/to/ntvcm"
-        export DCC=/path/to/dcc/dcc
-        export DCCPEEP=/path/to/dcc/dccpeep
-        export DCCRTLSTRIP=/path/to/dcc/dccrtlstrip
-        ```
-
-=== "Ubuntu ARM64"
-
-    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current shell
-       session:
-
-        ```bash
-        export PATH="$PATH:/path/to/dcc:/path/to/ntvcm"
-        ```
-
-    2. To make that permanent for bash, append the same setting to `~/.bashrc`,
-       then open a new terminal or reload the file:
-
-        ```bash
-        printf '\nexport PATH="$PATH:/path/to/dcc:/path/to/ntvcm"\n' >> ~/.bashrc
-        source ~/.bashrc
-        ```
-
-    3. Replace `/path/to/dcc` and `/path/to/ntvcm` with the actual directories
-       (e.g. `~/GitHub/dcc` and `~/GitHub/ntvcm`). With this on your `PATH`,
-       the scripts find `dcc`, `dccpeep`, `dccrtlstrip`, and `ntvcm`
-       automatically.
-
-       To pin specific binaries instead (for example, when juggling multiple
-    DCC C Compiler builds), set the environment variables to explicit paths and only
-       put ntvcm on `PATH`:
-
-        ```bash
-        export PATH="$PATH:/path/to/ntvcm"
-        export DCC=/path/to/dcc/dcc
-        export DCCPEEP=/path/to/dcc/dccpeep
-        export DCCRTLSTRIP=/path/to/dcc/dccrtlstrip
-        ```
-
-=== "Windows ARM64"
-
-    1. Add the DCC C Compiler and ntvcm directories to `PATH` for the current PowerShell
-       session:
-
-        ```powershell
-        $env:PATH += ";C:\path\to\dcc;C:\path\to\ntvcm"
-        ```
-
-    2. To make that permanent for your Windows user account, update the user
-       `PATH` and then open a new terminal:
-
-        ```powershell
-        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        [Environment]::SetEnvironmentVariable("Path", "$userPath;C:\path\to\dcc;C:\path\to\ntvcm", "User")
-        ```
-
-    3. Replace `C:\path\to\dcc` and `C:\path\to\ntvcm` with the actual
-       directories. With this on your `PATH`, the scripts find `dcc`,
-       `dccpeep`, `dccrtlstrip`, and `ntvcm` automatically.
-
-       To pin specific binaries instead (for example, when juggling multiple
-    DCC C Compiler builds), set the environment variables to explicit paths and only
-       put ntvcm on `PATH`:
-
-        ```powershell
-        $env:PATH += ";C:\path\to\ntvcm"
-        $env:DCC = "C:\path\to\dcc\dcc.exe"
-        $env:DCCPEEP = "C:\path\to\dcc\dccpeep.exe"
-        $env:DCCRTLSTRIP = "C:\path\to\dcc\dccrtlstrip.exe"
-        ```
+<span id="set-up-your-environment"></span>
 
 ## Verify the setup
 
-With the tools on your `PATH`, run the full extended unit-test suite. From your
-operating-system terminal or the VS Code terminal, first change to your local
-DCC checkout directory:
+Run your platform's block from the directory containing both checkouts. It adds both tools to
+`PATH` for this terminal and future sessions, then prints both versions.
 
-```powershell
-cd C:\path\to\dcc
-python3 ./scripts/runall.py --mode full --extended
-```
+=== "Windows"
 
-The suite builds and runs the repository's tests with and without the peephole
-optimizer. Once it passes, move on to [Building and linking](02-build-and-link.md)
-for the day-to-day workflow.
+    ```powershell
+    $toolDirs = @((Resolve-Path dcc).Path, (Resolve-Path ntvcm).Path); foreach ($scope in 'User', 'Process') { $existing = [Environment]::GetEnvironmentVariable('Path', $scope) -split ';'; $otherDirs = @($existing | Where-Object { $_ -and $_ -notin $toolDirs }); [Environment]::SetEnvironmentVariable('Path', (($toolDirs + $otherDirs) -join ';'), $scope) }; ntvcm -V; dcc --version
+    ```
+
+=== "macOS"
+
+    ```zsh
+    tool_dirs="$(cd dcc && pwd):$(cd ntvcm && pwd)"
+    printf -v path_line 'export PATH=%q:"$PATH"' "$tool_dirs"
+    grep -Fqx -- "$path_line" ~/.zshrc 2>/dev/null ||
+        printf '\n%s\n' "$path_line" >> ~/.zshrc
+    export PATH="$tool_dirs:$PATH"
+    ntvcm -V
+    dcc --version
+    ```
+
+=== "Ubuntu (x64 and ARM64)"
+
+    ```bash
+    tool_dirs="$(cd dcc && pwd):$(cd ntvcm && pwd)"
+    printf -v path_line 'export PATH=%q:"$PATH"' "$tool_dirs"
+    grep -Fqx -- "$path_line" ~/.bashrc 2>/dev/null ||
+        printf '\n%s\n' "$path_line" >> ~/.bashrc
+    export PATH="$tool_dirs:$PATH"
+    ntvcm -V
+    dcc --version
+    ```
+
+=== "Windows ARM64"
+
+    ```powershell
+    $toolDirs = @((Resolve-Path dcc).Path, (Resolve-Path ntvcm).Path); foreach ($scope in 'User', 'Process') { $existing = [Environment]::GetEnvironmentVariable('Path', $scope) -split ';'; $otherDirs = @($existing | Where-Object { $_ -and $_ -notin $toolDirs }); [Environment]::SetEnvironmentVariable('Path', (($toolDirs + $otherDirs) -join ';'), $scope) }; ntvcm -V; dcc --version
+    ```
+
+The macOS commands use zsh and the Ubuntu commands use Bash. If you use another
+shell, save the two directory paths in that shell's startup file. For builds
+outside the DCC checkout, configure `dcc-runtime` and `dcc-include-directory`
+as shown in
+[Building and linking](02-build-and-link.md#build-with-dccmake).

@@ -5,15 +5,9 @@ CP/M 2.2 image and executes CCP, BDOS, BIOS, disk-controller, and Z80 code.
 It preserves the disk and console behavior seen by a program on the target
 runtime.
 
-The source project is under `src/dcc_debug_host`. The normal cross-platform
-DCC build includes the host and example I/O adapter:
-
-```powershell
-python scripts/build-dcc.py
-```
-
-The script explicitly builds, verifies, and publishes both targets in the
-repository root as:
+The source project is under `src/dcc_debug_host`. The
+[standard DCC build](00-setup-toolchain.md#build-dcc-c-compiler) builds the host
+and example I/O adapter and places them in the checkout:
 
 - `dcc-debug-host` on macOS/Linux or `dcc-debug-host.exe` on Windows; and
 - `libdcc-debug-io-adapter-example.dylib` on macOS;

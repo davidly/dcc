@@ -1,11 +1,9 @@
 # Building and linking
 
-This page covers the path from a `.c` file to a runnable CP/M `.COM` program and
-the compiler options that most affect the result. You typically do this in your
-**own project directory** — DCC C Compiler and ntvcm are general-purpose tools for building
-CP/M / Z80 C apps anywhere, not just inside the DCC C Compiler repo. As long as the tools
-are on your `PATH` (see [Setting up the toolchain](00-setup-toolchain.md)), the
-commands below work from any folder that holds your `.c` sources.
+Put DCC and ntvcm on your `PATH`, then run the build commands from the project
+directory that holds your `.c` sources. For projects outside the DCC checkout,
+configure the headers and runtime as shown below. See
+[Setting up the toolchain](00-setup-toolchain.md) for the one-time build.
 
 ## Build with dccmake
 
@@ -224,17 +222,7 @@ against an app/test name (and pass any program arguments after `--`):
     scripts/stacksize.sh cobint -- e.cob
     ```
 
-=== "Ubuntu"
-
-    ```sh
-    # simple app
-    scripts/stacksize.sh triangle
-
-    # app that needs a data-file argument
-    scripts/stacksize.sh cobint -- e.cob
-    ```
-
-=== "Ubuntu ARM64"
+=== "Ubuntu (x64 and ARM64)"
 
     ```sh
     # simple app

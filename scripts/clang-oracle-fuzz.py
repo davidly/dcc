@@ -319,7 +319,7 @@ def run_seed(seed, args, configs):
         prog = make_program(seed, args)
         expected, reason = host_oracle(prog, work)
     except Exception as exc:  # a generator defect must not stop the campaign
-        return seed, 'GENERATOR', {'-': ('GENERATOR', repr(exc)[:200])}
+        return seed, 'GENERATOR', {'-': ('GENERATOR', str(exc)[:200] or repr(exc))}
     if expected is None:
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
@@ -441,7 +441,7 @@ def fuzz(args, seeds, prefix=''):
             print(file=terminal, flush=True)
     tally = ', '.join('%s %d' % kv for kv in sorted(counts.items()))
     print('%s%d programs: %s' % (prefix, total, tally), flush=True)
-    return 1 if failing else 0
+    return 1 if failing or counts.get('GENERATOR') else 0
 
 
 def run_campaign(args, seeds):
@@ -947,6 +947,19 @@ def main():
         for c in CONFIGS.values():
             print('%-48s %s' % (c.name, ' '.join('%s=%s' % kv for kv in c.env.items())))
         return 0
+    if shutil.which('clang') is None:
+        parser.error('host Clang compiler not found on PATH. Install clang with '
+                     'AddressSanitizer and UndefinedBehaviorSanitizer support and rerun.')
+    if not args.generate:
+        dccmake = REPO / 'dccmake'
+        if shutil.which(str(dccmake)) is None:
+            parser.error(f'dccmake is missing or not executable at {dccmake}. '
+                         'Build the repository tools with python3 scripts/build-dcc.py.')
+        emulator = shutil.which(args.emulator)
+        if emulator is None:
+            parser.error(f'emulator {args.emulator!r} is missing or not executable. '
+                         'Add ntvcm to PATH or pass its path with --emulator.')
+        args.emulator = os.path.abspath(emulator)
     if args.generate:
         seed, path = int(args.generate[0]), Path(args.generate[1])
         work = args.work / ('%d-generate' % seed)

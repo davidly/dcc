@@ -24,6 +24,10 @@ mkdir -p build
 
 Generates C programs and compares dcc's output with Clang's. The `int` generator exercises integer code generation, `float` covers floating point arithmetic and conversions, and `frontend` targets preprocessing and parsing.
 
+The oracle needs `clang` with AddressSanitizer and UndefinedBehaviorSanitizer
+support. On Ubuntu, install the optional Clang fuzzing dependencies listed in
+[the toolchain setup](../00-setup-toolchain.md#install-prerequisites).
+
 ```bash
 python3 scripts/clang-oracle-fuzz.py --gen int \
   --seeds 260001-300000 --configs production --jobs "$JOBS" \

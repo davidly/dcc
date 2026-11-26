@@ -53,12 +53,7 @@ Copy the skill folder into one personal skills root, for example
     mkdir -p ~/.agents/skills
     cp -R .github/skills/dcc-cpm-z80 ~/.agents/skills/
 
-=== "Ubuntu"
-
-    mkdir -p ~/.agents/skills
-    cp -R .github/skills/dcc-cpm-z80 ~/.agents/skills/
-
-=== "Ubuntu ARM64"
+=== "Ubuntu (x64 and ARM64)"
 
     mkdir -p ~/.agents/skills
     cp -R .github/skills/dcc-cpm-z80 ~/.agents/skills/

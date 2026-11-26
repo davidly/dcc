@@ -15,14 +15,11 @@ DCCRTL.MAC is the dcc C Runtime Library. It's written in Z80 assembly for size a
 
 dccrtlstrip.c is an app that examines the code of your .c file and strips portions of the DCCRTL.MAC C runtime so only the parts needed are linked into the .COM file. It's not necessary to run this program for your app to work. But the resulting .COM file may be smaller if you do.
 
-The complete host toolchain builds and runs on Windows, Linux, and macOS with
-`python scripts/build-dcc.py`. It builds `dcc`, `dccpeep`, `dccrtlstrip`,
-`dccmake`, `m80c`, `l80c`, `dcc-debug-host`, and the example debugger I/O
-adapter. The host tools are too large to run on CP/M. `sh m.sh` on Unix and
-`m.bat` on Windows invoke the same Python builder. Python 3.7 and newer are
-supported, including the older Python installations on Raspberry Pi OS. Python
-3.7 is the minimum; newer Python 3 releases work too. See the
-[platform-specific Python installation steps](docs/docs/en/00-setup-toolchain.md#install-prerequisites).
+The complete host toolchain builds on Windows, Linux, and macOS using Python
+3.7 or newer. It includes `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`,
+`l80c`, `dcc-debug-host`, and the example debugger I/O adapter. The host tools
+are too large to run on CP/M. See the
+[platform-specific setup guide](docs/docs/en/00-setup-toolchain.md).
 
 Dcc has been built and had regression tests run on AMD64 (Linux and Windows), Arm64(Linux, Windows, MacOS), Arm32 (Linux), and RISC-V 64 (Linux).
 

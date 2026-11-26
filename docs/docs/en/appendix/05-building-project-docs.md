@@ -35,18 +35,7 @@ editing experience:
     mkdocs serve
     ```
 
-=== "Ubuntu"
-
-    ```bash
-    cd docs/docs
-    python3 -m venv .venv
-    source .venv/bin/activate
-    python -m pip install --upgrade pip
-    python -m pip install -r requirements.txt
-    mkdocs serve
-    ```
-
-=== "Ubuntu ARM64"
+=== "Ubuntu (x64 and ARM64)"
 
     ```bash
     cd docs/docs
