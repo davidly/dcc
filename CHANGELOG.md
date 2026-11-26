@@ -1,5 +1,26 @@
 # Changelog
 
+## Wide scalar loops, constants, and comparisons (2026-11-26)
+
+Integer long operations with immediate operands avoid unnecessary constant
+frame slots and operand stack copies. This includes arithmetic, bit masks,
+zero comparisons, and multiplication by 3, 5, or 9. Variable long shifts use
+a zero-safe DJNZ loop. Captured long equality operands can compare directly
+against frame bytes or a just-produced register value; volatile snapshots
+retain their original reads, and comparisons preserve PHI edge copies.
+
+A proven backedge permits in-place long increments/decrements even when the
+loop-exit edge returns the updated value. Up to four constant iterations can
+expand for small private long-scalar bodies or a single volatile long update.
+Calls, declarations, escaped objects, pointer/array accesses, uncertain control
+flow, and debug metadata restrict this expansion; each volatile update remains.
+
+Without stack checks, peephole-optimized `tphibyte` drops from 99,287 to
+82,967 cycles, below zsdcc's 89,416. `tlongphi` drops from 197,654 to 116,369,
+below zsdcc's 117,366. The `taggordr` control costs 113 more cycles with
+peephole optimization (0.6%), and 67 fewer without it; its binary sizes are
+unchanged. Target and new boundary-test performance baselines are updated.
+
 ## Boolean leaves and one-iteration loops (2026-11-26)
 
 Tiny boolean comparison leaves can inline in callers that declare a local,

@@ -4654,9 +4654,9 @@ static int mir_lower_statement_condition(const struct AstNode *node)
     return result;
 }
 
-/* A one-trip loop needs no header test or backedge if its private counter
- * cannot change in the body. Keep the body and increment intact so reads,
- * break/continue, return, and the final counter value retain C semantics. */
+/* A private constant-trip counter can eliminate loop tests and backedges.
+ * Keep each body and increment intact so reads, break/continue, return,
+ * and the final counter value retain C semantics. */
 static int mir_one_trip_body_safe(const struct AstNode *node, const char *name)
 {
     int i;
@@ -4681,12 +4681,48 @@ static int mir_one_trip_body_safe(const struct AstNode *node, const char *name)
     return 1;
 }
 
-static int mir_for_is_one_trip(const struct AstNode *node)
+/* Bound both code growth and metadata complexity for tiny constant loops.
+ * Declaration replay and nested loop/call schedules are left untouched. */
+static int mir_small_loop_body(const struct AstNode *node, const char *counter, int *budget)
+{
+    int i;
+    if (node == NULL) return 1;
+    if (--*budget < 0 || node->kind == AST_DECL || node->kind == AST_CALL ||
+        node->kind == AST_FOR || node->kind == AST_WHILE || node->kind == AST_DOWHILE ||
+        node->kind == AST_SWITCH || node->kind == AST_INDEX || node->kind == AST_MEMBER ||
+        type_is_float(node->type)) return 0;
+    if (node->kind == AST_IDENT && (node->sval == NULL || strcmp(node->sval,counter))) {
+        struct Sym *s = node->sval ? find_sym(node->sval) : NULL;
+        if (s == NULL || s->storage != SC_LOCAL || !type_is_long(s->type) || s->is_volatile ||
+            s->is_array || local_name_address_taken_in_function(s->name)) return 0;
+    }
+    if (!mir_small_loop_body(node->a,counter,budget) || !mir_small_loop_body(node->b,counter,budget) ||
+        !mir_small_loop_body(node->c,counter,budget) || !mir_small_loop_body(node->d,counter,budget)) return 0;
+    for (i=0;i<node->list_len;++i)
+        if (!mir_small_loop_body(node->list[i],counter,budget)) return 0;
+    return 1;
+}
+
+static int mir_volatile_unit_loop_body(const struct AstNode *node)
+{
+    struct Sym *s;
+    if (node != NULL && node->kind == AST_COMPOUND && node->list_len == 1)
+        node = node->list[0];
+    if (node != NULL && node->kind == AST_EXPR_STMT) node = node->a;
+    if (node == NULL || (node->kind != AST_UNARY && node->kind != AST_POSTFIX) ||
+        (node->op != TOK_INC && node->op != TOK_DEC) || node->a == NULL ||
+        node->a->kind != AST_IDENT) return 0;
+    s = mir_ident_symbol(node->a);
+    return s != NULL && s->is_volatile && type_is_long(s->type);
+}
+
+static int mir_for_constant_trips(const struct AstNode *node)
 {
     const struct AstNode *init = node->a, *cond = node->b, *step = node->c;
     const char *name;
     struct Sym *counter;
-    long first;
+    long first, trips;
+    int budget = 24;
     if (opt_debug || mir.has_vla || init == NULL || cond == NULL || step == NULL ||
         init->kind != AST_ASSIGN || init->op != '=' || init->a == NULL ||
         init->a->kind != AST_IDENT || init->b == NULL || init->b->kind != AST_INT_LIT || init->b->type != TYPE_INT ||
@@ -4698,12 +4734,20 @@ static int mir_for_is_one_trip(const struct AstNode *node)
     if (name == NULL || cond->a->sval == NULL || step->a->sval == NULL) return 0;
     counter = mir_ident_symbol(init->a);
     first = init->b->ival;
-    if (counter == NULL || counter->storage != SC_LOCAL || counter->type != TYPE_INT ||
+    if (counter == NULL || counter->storage != SC_LOCAL ||
+        (counter->type != TYPE_INT &&
+         !(counter->is_narrowed_for_counter && counter->type == (TYPE_CHAR|TYPE_UNSIGNED))) ||
         counter->is_volatile || strchr(counter->name, '#') != NULL ||
         first < -32768 || first >= 32767 ||
-        cond->b->ival != first + 1 || strcmp(cond->a->sval, name) ||
+        strcmp(cond->a->sval, name) ||
         strcmp(step->a->sval, name) || local_name_address_taken_in_function(name)) return 0;
-    return mir_one_trip_body_safe(node->d, name);
+    trips = cond->b->ival - first;
+    if (trips < 1 || trips > 4 ||
+        (trips > 1 && (first != 0 || opt_debug_lines ||
+         ((!type_is_long(mir.return_type) || !mir_small_loop_body(node->d,name,&budget)) &&
+          !mir_volatile_unit_loop_body(node->d)))) ||
+        !mir_one_trip_body_safe(node->d, name)) return 0;
+    return (int)trips;
 }
 
 static void mir_lower_stmt(const struct AstNode *node)
@@ -4719,7 +4763,7 @@ static void mir_lower_stmt(const struct AstNode *node)
     int case_value;
     int compare_value;
     int counter_proof;
-    int one_trip;
+    int constant_trips;
     struct MirSwitchContext *switch_context;
     int i;
 
@@ -4930,7 +4974,7 @@ static void mir_lower_stmt(const struct AstNode *node)
                 }
         return;
     case AST_FOR:
-        one_trip = mir_for_is_one_trip(node);
+        constant_trips = mir_for_constant_trips(node);
         top_label = mir_new_label();
         end_label = mir_new_label();
         continue_label = mir_new_label();
@@ -4944,11 +4988,11 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir.continue_labels[mir.flow_depth] = continue_label;
         ++mir.flow_depth;
         counter_proof = ast_sizeof_loop_push(node);
-        if (!one_trip) {
+        if (!constant_trips) {
             mir_emit_label(top_label);
             mir_emit_object_merges();
         }
-        if (!one_trip && node->b != NULL) {
+        if (!constant_trips && node->b != NULL) {
             condition = mir_lower_statement_condition(node->b);
             insn = mir_emit(MIR_BRANCH_FALSE);
             insn->src1 = condition;
@@ -4956,15 +5000,23 @@ static void mir_lower_stmt(const struct AstNode *node)
         }
         if (counter_proof)
             ast_sizeof_loop_set_header(0);
-        mir_lower_stmt(node->d);
-        if (counter_proof)
-            ast_sizeof_loop_set_header(1);
-        mir_emit_label(continue_label);
-        if (node->c != NULL)
-            mir_lower_discarded_expr(node->c);
+        {
+            int iteration, trips = constant_trips ? constant_trips : 1;
+            for (iteration = 0; iteration < trips; ++iteration) {
+                if (iteration > 0) {
+                    continue_label = mir_new_label();
+                    mir.continue_labels[mir.flow_depth - 1] = continue_label;
+                    if (counter_proof) ast_sizeof_loop_set_header(0);
+                }
+                mir_lower_stmt(node->d);
+                if (counter_proof) ast_sizeof_loop_set_header(1);
+                mir_emit_label(continue_label);
+                if (node->c != NULL) mir_lower_discarded_expr(node->c);
+            }
+        }
         if (counter_proof)
             ast_sizeof_loop_pop();
-        if (!one_trip) mir_emit_jump(top_label);
+        if (!constant_trips) mir_emit_jump(top_label);
         mir_emit_label(end_label);
         --mir.flow_depth;
         if (node->a != NULL && node->a->kind == AST_DECL)
