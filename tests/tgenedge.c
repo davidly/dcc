@@ -1,6 +1,7 @@
 /* Boundary controls for byte/word sums, signed-bound narrowing, division,
  * constant outer loops, and unsigned-word additions to long accumulators. */
 #include <stdio.h>
+#include <stdint.h>
 static unsigned char byte;
 static volatile unsigned char observed;
 static int equal32(unsigned char *p, unsigned char x)
@@ -15,7 +16,7 @@ static int limits(int x, int y, int z)
     if (((long)x >= -32768L) != 1 || ((long)x > 32767L) != 0) return 2;
     return y != z;
 }
-static unsigned long wide(unsigned long a, unsigned int b, unsigned int c)
+static uint32_t wide(uint32_t a, unsigned int b, unsigned int c)
 { return a + (unsigned long)b + (unsigned long)c; }
 #define DIVIDE(D) do { \
     unsigned int q = v / (D), r = v % (D); \

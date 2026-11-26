@@ -56,6 +56,7 @@
       ] },
     { "name": "texfile", "fixtures": ["DATA.TXT"] },
     { "name": "tfilero", "host": true, "host-skip-reason": "CP/M permits opening a read-only file for update and reports failure on write; native hosts may reject the open.", "fixtures": [{ "name": "READONLY.TXT", "read_only": true }] },
+    { "name": "tvalong", "host": true, "host-skip-reason": "Uses DCC's 32-bit float variadic ABI; native hosts promote float to double and va_arg(ap, float) is undefined." },
     { "name": "tfpspec", "host": true, "host-skip-reason": "Checks DCC's canonical NaN bit patterns; native NaN payloads and signs differ." },
     { "name": "tppreg", "host": true, "host-skip-reason": "Checks DCC's unsigned high-byte preprocessor character constants; signed native plain char differs." },
     {"name": "tblkcnv", "host": true, "host-skip-reason": "Requires 16-bit unsigned int and 32-bit long conversion and complement semantics in nested blocks."},
