@@ -16,6 +16,7 @@
 #include <string.h>
 #include "dcc.h"
 #include "dcc_ast.h"
+#include "dcc_ast_internal.h"
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
@@ -3671,6 +3672,22 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
             target = mir_find_label(insn->label);
             if (target < 0)
                 goto done;
+            {
+                const struct MirInsn *condition = mir_definition(insn->src1);
+                if (condition != NULL && condition->opcode == MIR_CONST &&
+                    !type_is_float(condition->type) && !type_ptr_depth(condition->type) &&
+                    type_size(condition->type) <= 2) {
+                    int truth = ast_const_apply_int_cast(
+                        condition->immediate, condition->type) != 0;
+                    int edge = truth ? i + 1 : target;
+                    if (edge < mir.count && !mir_emit_homed_phi_copies(out, i, edge))
+                        goto done;
+                    if (!truth &&
+                        !mir_target_is_noop_fallthrough(i, target))
+                        mir_stream_printf(out, "\tjp L%d\n", labels[insn->label]);
+                    break;
+                }
+            }
             {
                 int compare_index = mir_compare_definition_for_branch(i);
                 if (compare_index >= 0 &&

@@ -2082,7 +2082,9 @@ static double mir_cost_v1_helper_tstates(const char *name)
 {
     if (name == NULL || name[0] != '_' || name[1] != '_')
         return 0.0;
-    if (strstr(name, "div") != NULL || strstr(name, "mod") != NULL)
+    if (strstr(name, "div") != NULL || strstr(name, "mod") != NULL ||
+        ((name[2] == 'q' || name[2] == 'r') &&
+         (name[3] == '1' || name[3] == '2') && name[4] != 0 && name[5] == 0))
         return MIR_COST_HELPER_DIVMOD_TSTATES;
     if (strstr(name, "mul") != NULL || !strncmp(name, "__m1", 4))
         return MIR_COST_HELPER_MULSHIFT_TSTATES;
@@ -4352,6 +4354,15 @@ static int mir_normalized_alternative_dominates(
 
     mir_estimate_stream_cost(candidate, &candidate_cost);
     mir_estimate_stream_cost(incumbent, &incumbent_cost);
+    /* Removing an out-of-line arithmetic helper can require a few more
+     * inline instructions while saving hundreds of cycles per execution. */
+    if (candidate_cost.helper_calls < incumbent_cost.helper_calls &&
+        candidate_cost.helper_tstates < incumbent_cost.helper_tstates &&
+        candidate_cost.tstates + candidate_cost.helper_tstates + 128.0 <
+            incumbent_cost.tstates + incumbent_cost.helper_tstates &&
+        candidate_cost.bytes <= incumbent_cost.bytes + 32 &&
+        candidate_cost.instructions <= incumbent_cost.instructions + 32)
+        return 1;
     return candidate_cost.bytes <= incumbent_cost.bytes &&
            mir_stream_instruction_count(candidate) <=
                mir_stream_instruction_count(incumbent) &&
@@ -4616,6 +4627,15 @@ void mir_end_function(void)
     generated_size = mir_stream_size(generated);
     generated_instructions = mir_stream_instruction_count(generated);
     mir_mark_selected_inline_call_bodies_needed(generated);
+    {
+        int parameter;
+        for(parameter=0;parameter<mir.count;++parameter)
+            if(mir.insns[parameter].opcode==MIR_PARAM &&
+               (mir.insns[parameter].memory_flags & MIR_MEMORY_FLAG_VOLATILE)) {
+                fputs(";@dcc.volatile-parameter\n",destination);
+                break;
+            }
+    }
     selected_hash = mir_copy_selected_stream(generated, destination);
 
     if (mir.report_mode)

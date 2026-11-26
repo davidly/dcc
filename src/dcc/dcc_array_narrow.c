@@ -20,6 +20,7 @@
 
 #include "dcc.h"
 #include "dcc_ast.h"
+#include "dcc_ast_internal.h"
 
 #define MAX_NARROW_GROUP 16
 #define MAX_NARROW_CALL_DEPTH 16
@@ -1178,15 +1179,15 @@ static int narrow_for_cond_bound(const struct AstNode *cond, const char *name,
     if (cond == NULL || cond->kind != AST_BINARY)
         return 0;
     if (cond->a != NULL && cond->a->kind == AST_IDENT && cond->a->sval != NULL &&
-        !strcmp(cond->a->sval, name) && cond->b != NULL && cond->b->kind == AST_INT_LIT) {
-        if (cond->op == '<') { *out_bound = (long)cond->b->ival; *out_inclusive = 0; return 1; }
-        if (cond->op == TOK_LE) { *out_bound = (long)cond->b->ival; *out_inclusive = 1; return 1; }
+        !strcmp(cond->a->sval, name) && cond->b != NULL && ast_const_scalar_fold(cond->b, out_bound)) {
+        if (cond->op == '<') { *out_inclusive = 0; return 1; }
+        if (cond->op == TOK_LE) { *out_inclusive = 1; return 1; }
         return 0;
     }
     if (cond->b != NULL && cond->b->kind == AST_IDENT && cond->b->sval != NULL &&
-        !strcmp(cond->b->sval, name) && cond->a != NULL && cond->a->kind == AST_INT_LIT) {
-        if (cond->op == '>') { *out_bound = (long)cond->a->ival; *out_inclusive = 0; return 1; }
-        if (cond->op == TOK_GE) { *out_bound = (long)cond->a->ival; *out_inclusive = 1; return 1; }
+        !strcmp(cond->b->sval, name) && cond->a != NULL && ast_const_scalar_fold(cond->a, out_bound)) {
+        if (cond->op == '>') { *out_inclusive = 0; return 1; }
+        if (cond->op == TOK_GE) { *out_inclusive = 1; return 1; }
         return 0;
     }
     return 0;
@@ -1294,6 +1295,11 @@ static int narrow_single_for_counter_is_byte_safe(const struct AstNode *scope, c
     if (for_node == NULL)
         return 0;
 
+    /* Keep single-loop word-work heuristics unchanged. Constant-expression
+     * bounds are enabled by the separately profitable byte/float sequence. */
+    if (for_node->b==NULL ||
+        !((for_node->b->a!=NULL && for_node->b->a->kind==AST_INT_LIT) ||
+          (for_node->b->b!=NULL && for_node->b->b->kind==AST_INT_LIT))) return 0;
     if (!narrow_for_cond_bound(for_node->b, name, &bound, &inclusive))
         return 0;
     if (!narrow_for_incr_is_increment(for_node->c, name))
@@ -1333,6 +1339,18 @@ static int narrow_counter_has_byte_cast(const struct AstNode *n,const char *name
     if(narrow_counter_has_byte_cast(n->a,name) || narrow_counter_has_byte_cast(n->b,name) ||
        narrow_counter_has_byte_cast(n->c,name) || narrow_counter_has_byte_cast(n->d,name)) return 1;
     for(i=0;i<n->list_len;++i) if(narrow_counter_has_byte_cast(n->list[i],name)) return 1;
+    return 0;
+}
+
+static int narrow_counter_has_float_cast(const struct AstNode *n,const char *name)
+{
+    int i;
+    if(n==NULL) return 0;
+    if(n->kind==AST_CAST && type_is_float(n->type) && n->a!=NULL &&
+       n->a->kind==AST_IDENT && n->a->sval!=NULL && !strcmp(n->a->sval,name)) return 1;
+    if(narrow_counter_has_float_cast(n->a,name) || narrow_counter_has_float_cast(n->b,name) ||
+       narrow_counter_has_float_cast(n->c,name) || narrow_counter_has_float_cast(n->d,name)) return 1;
+    for(i=0;i<n->list_len;++i) if(narrow_counter_has_float_cast(n->list[i],name)) return 1;
     return 0;
 }
 
@@ -1384,7 +1402,8 @@ int narrow_for_counter_is_byte_safe(const struct AstNode *scope, const char *nam
 {
     int loops=0;
     if(narrow_single_for_counter_is_byte_safe(scope,name)) return 1;
-    if(!allow_sequence || !narrow_counter_has_byte_cast(scope,name) ||
+    if(!((allow_sequence && narrow_counter_has_byte_cast(scope,name)) ||
+         narrow_counter_has_float_cast(scope,name)) ||
        narrow_tree_contains_decl(scope) || narrow_counter_has_jump(scope)) return 0;
     if(scope==NULL || scope->kind!=AST_COMPOUND) return 0;
     return narrow_for_counter_scope(scope,name,&loops) && loops>0;

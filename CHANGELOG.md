@@ -1,5 +1,53 @@
 # Changelog
 
+## Mixed-width arithmetic and loop code generation (2026-11-26)
+
+All seven slower cases from the latest zsdcc comparison now run faster with
+DCC. Cycle counts below use unchanged test sources, peephole optimization,
+and no stack checks; the zsdcc builds use the same inputs and output checks.
+
+| App | DCC before | DCC now | zsdcc |
+| --- | ---: | ---: | ---: |
+| tbytrng | 174,096 | 119,850 | 137,453 |
+| timhome | 398,952,908 | 172,522,420 | 174,550,467 |
+| tfixptr | 45,505 | 39,985 | 43,424 |
+| tdivmask | 802,325 | 417,426 | 439,094 |
+| tpredmsk | 1,249,294 | 1,198,932 | 1,235,435 |
+| trshadow | 581,251 | 446,245 | 525,727 |
+| twhcomma | 221,107 | 175,055 | 178,521 |
+
+Bounded small loops and selected two-trip outer loops expose constant row
+indices while preserving counter values and break/continue paths. Pure
+Boolean equality controls in integer validation leaves branch directly;
+read-only word arguments can use otherwise unused BC across branch paths.
+Calls, aliases, existing register claims, volatile arguments, alternate
+entries, and unknown instructions prevent this argument caching. Tiny
+helpers retain their frameless parameter loads.
+
+Byte-load equality can consume a promoted byte-plus-constant expression
+without word spills, with an explicit carry check when the sum exceeds 255.
+Unsigned-word additions to long values use a register handoff and carry into
+the high word. Floating-point additions can forward adjacent indirect RHS
+loads; fused multiply-add keeps its separate operand protocol. The unsigned
+divider skips leading zero dividend bits and uses at most eight quotient
+steps for divisors of 256 or more. Integer-to-float conversion skips an
+empty high byte, and fastcall float subtraction flips the packed sign before
+the common unpack rather than communicating through a memory flag.
+
+Comparison narrowing interprets constants in the comparison's signed type,
+including a LONG_MIN case found by differential fuzzing. Homed shifts use
+the operation's computation type after integer promotion.
+
+`tgenedge` adds overflow, signed-extreme, division, long-carry, and nested-loop
+controls. New peephole fixtures check idempotence and cache rejection gates.
+Validation includes both regression modes with and without stack checks,
+the 196 extended tests, typed-expression and runtime fuzzing, strict Clang
+compilation, and an isolated MSVC build. The seven benchmark cycle counts
+match between Linux and Windows. Performance baselines cover the measured
+changes; additional helper code and unrolled rows increase some binaries,
+including 256 bytes for stack-checked `trshadow` with peephole optimization
+and 512 bytes without it.
+
 ## Wide scalar loops, constants, and comparisons (2026-11-26)
 
 Integer long operations with immediate operands avoid unnecessary constant

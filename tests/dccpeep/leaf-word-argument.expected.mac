@@ -1,0 +1,53 @@
+	cseg
+;@dcc.lto begin _choose
+	public _choose
+_choose:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld c,(ix+4)
+	ld b,(ix+5)
+	dec sp ; peep: local_alloc_2
+	dec sp
+	ld (ix-2),0
+	ld (ix-1),0
+	ld l,c ; peep: leaf_word_argument_cache
+	ld h,b ; peep: leaf_word_argument_cache
+	ld de,17
+	or a
+	sbc hl,de
+	jp z,Lfound
+	ld l,c ; peep: leaf_word_argument_cache
+	ld h,b ; peep: leaf_word_argument_cache
+	ld de,56
+	or a
+	sbc hl,de
+	jp z,Lfound
+	ld l,c ; peep: leaf_word_argument_cache
+	ld h,b ; peep: leaf_word_argument_cache
+	ld de,95
+	or a
+	sbc hl,de
+	jp z,Lfound
+	ld l,c ; peep: leaf_word_argument_cache
+	ld h,b ; peep: leaf_word_argument_cache
+	ld de,134
+	or a
+	sbc hl,de
+	jp z,Lfound
+	ld l,c ; peep: leaf_word_argument_cache
+	ld h,b ; peep: leaf_word_argument_cache
+	ld de,173
+	or a
+	sbc hl,de
+	jp z,Lfound
+	ld hl,0
+	jp Ldone
+Lfound:
+	ld hl,1
+Ldone:
+	ld sp,ix
+	pop ix
+	ret
+;@dcc.lto end _choose
+	end

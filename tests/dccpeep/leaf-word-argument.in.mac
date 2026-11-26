@@ -1,0 +1,52 @@
+cseg
+;@dcc.lto begin _choose
+public _choose
+_choose:
+push ix
+ld ix,0
+add ix,sp
+ld hl,-2
+add hl,sp
+ld sp,hl
+ld (ix-2),0
+ld (ix-1),0
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,17
+or a
+sbc hl,de
+jp z,Lfound
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,56
+or a
+sbc hl,de
+jp z,Lfound
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,95
+or a
+sbc hl,de
+jp z,Lfound
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,134
+or a
+sbc hl,de
+jp z,Lfound
+ld l,(ix+4)
+ld h,(ix+5)
+ld de,173
+or a
+sbc hl,de
+jp z,Lfound
+ld hl,0
+jp Ldone
+Lfound:
+ld hl,1
+Ldone:
+ld sp,ix
+pop ix
+ret
+;@dcc.lto end _choose
+end

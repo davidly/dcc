@@ -4654,6 +4654,84 @@ static int mir_lower_statement_condition(const struct AstNode *node)
     return result;
 }
 
+/* Lower pure Boolean controls into edges, keeping RHS evaluation on its
+ * selected path. No object is written in this region, so there are no new
+ * object-state merges or source declaration replays. */
+/* Branch expansion pays off in integer validation leaves with several
+ * independent incoming values. Keep ordinary controls on the established
+ * lowering path to avoid trading their register allocation for code growth. */
+int mir_has_only_word_parameters(int minimum)
+{
+    int i, count=0;
+    for(i=0;i<mir.count;++i) {
+        const struct MirInsn *p=&mir.insns[i];
+        if(p->opcode!=MIR_PARAM) continue;
+        if(type_size(p->type)!=2 || type_is_float(p->type) || type_ptr_depth(p->type)) return 0;
+        ++count;
+    }
+    return count>=minimum;
+}
+
+static int mir_truth_has_boolean_equality(const struct AstNode *node)
+{
+    if(node==NULL) return 0;
+    if(node->kind==AST_BINARY && (node->op==TOK_EQ || node->op==TOK_NE) &&
+       (ast_expr_yields_bool01(node->a) || ast_expr_yields_bool01(node->b))) return 1;
+    return (node->kind==AST_LOGOR || node->kind==AST_LOGAND ||
+            (node->kind==AST_UNARY && node->op=='!')) &&
+           (mir_truth_has_boolean_equality(node->a) || mir_truth_has_boolean_equality(node->b));
+}
+
+static int mir_pure_truth_budget(const struct AstNode *node, int *budget)
+{
+    int i;
+    if(node==NULL) return 1;
+    if(--*budget<0) return 0;
+    if(!mir_pure_truth_budget(node->a,budget) || !mir_pure_truth_budget(node->b,budget) ||
+       !mir_pure_truth_budget(node->c,budget) || !mir_pure_truth_budget(node->d,budget)) return 0;
+    if(node->kind==AST_BINARY && (node->op==TOK_EQ || node->op==TOK_NE) &&
+       ast_expr_yields_bool01(node->a) && ast_expr_yields_bool01(node->b) &&
+       !mir_pure_truth_budget(node->b,budget)) return 0;
+    for(i=0;i<node->list_len;++i) if(!mir_pure_truth_budget(node->list[i],budget)) return 0;
+    return 1;
+}
+
+static void mir_lower_pure_truth_branch(const struct AstNode *node, int label, int truth)
+{
+    struct MirInsn *insn;
+    int skip, done, value;
+    if (node->kind==AST_UNARY && node->op=='!') {
+        mir_lower_pure_truth_branch(node->a,label,!truth); return;
+    }
+    if (node->kind==AST_LOGAND || node->kind==AST_LOGOR) {
+        if ((node->kind==AST_LOGAND && !truth) || (node->kind==AST_LOGOR && truth)) {
+            mir_lower_pure_truth_branch(node->a,label,truth);
+            mir_lower_pure_truth_branch(node->b,label,truth);
+        } else {
+            skip=mir_new_label();
+            mir_lower_pure_truth_branch(node->a,skip,!truth);
+            mir_lower_pure_truth_branch(node->b,label,truth);
+            mir_emit_label(skip);
+        }
+        return;
+    }
+    if (node->kind==AST_BINARY && (node->op==TOK_EQ || node->op==TOK_NE) &&
+        ast_expr_yields_bool01(node->a) && ast_expr_yields_bool01(node->b)) {
+        skip=mir_new_label(); done=mir_new_label();
+        mir_lower_pure_truth_branch(node->a,skip,0);
+        mir_lower_pure_truth_branch(node->b,label,node->op==TOK_EQ?truth:!truth);
+        mir_emit_jump(done); mir_emit_label(skip);
+        mir_lower_pure_truth_branch(node->b,label,node->op==TOK_EQ?!truth:truth);
+        mir_emit_label(done); return;
+    }
+    value=mir_lower_expr(node);
+    if (truth) {
+        int inverse=mir_new_value(); insn=mir_emit(MIR_UNARY);
+        insn->dst=inverse; insn->src1=value; insn->immediate='!'; insn->type=TYPE_INT; value=inverse;
+    }
+    insn=mir_emit(MIR_BRANCH_FALSE); insn->src1=value; insn->label=label;
+}
+
 /* A private constant-trip counter can eliminate loop tests and backedges.
  * Keep each body and increment intact so reads, break/continue, return,
  * and the final counter value retain C semantics. */
@@ -4713,7 +4791,30 @@ static int mir_volatile_unit_loop_body(const struct AstNode *node)
         (node->op != TOK_INC && node->op != TOK_DEC) || node->a == NULL ||
         node->a->kind != AST_IDENT) return 0;
     s = mir_ident_symbol(node->a);
-    return s != NULL && s->is_volatile && type_is_long(s->type);
+    return s != NULL && ((s->is_volatile && type_is_long(s->type)) ||
+        (s->storage == SC_LOCAL && !s->is_volatile && !s->is_array &&
+         type_ptr_depth(s->type) == 0 && !type_is_float(s->type) &&
+         type_size(s->type) <= 2 &&
+         !local_name_address_taken_in_function(s->name)));
+}
+
+/* A two-trip outer loop is a useful bounded case: exposing its constant
+ * row index removes multiplication from every iteration of the inner loop.
+ * Keep replay small, declaration-free, and free of calls. */
+static int mir_small_nested_loop_body(const struct AstNode *node, int *budget)
+{
+    int i;
+    if (node == NULL) return 1;
+    if (--*budget < 0 || node->kind == AST_DECL || node->kind == AST_CALL ||
+        node->kind == AST_WHILE || node->kind == AST_DOWHILE ||
+        node->kind == AST_SWITCH || type_is_float(node->type)) return 0;
+    if (!mir_small_nested_loop_body(node->a,budget) ||
+        !mir_small_nested_loop_body(node->b,budget) ||
+        !mir_small_nested_loop_body(node->c,budget) ||
+        !mir_small_nested_loop_body(node->d,budget)) return 0;
+    for (i=0;i<node->list_len;++i)
+        if (!mir_small_nested_loop_body(node->list[i],budget)) return 0;
+    return 1;
 }
 
 static int mir_for_constant_trips(const struct AstNode *node)
@@ -4723,6 +4824,7 @@ static int mir_for_constant_trips(const struct AstNode *node)
     struct Sym *counter;
     long first, trips;
     int budget = 24;
+    int nested_budget = 96;
     if (opt_debug || mir.has_vla || init == NULL || cond == NULL || step == NULL ||
         init->kind != AST_ASSIGN || init->op != '=' || init->a == NULL ||
         init->a->kind != AST_IDENT || init->b == NULL || init->b->kind != AST_INT_LIT || init->b->type != TYPE_INT ||
@@ -4745,7 +4847,12 @@ static int mir_for_constant_trips(const struct AstNode *node)
     if (trips < 1 || trips > 4 ||
         (trips > 1 && (first != 0 || opt_debug_lines ||
          ((!type_is_long(mir.return_type) || !mir_small_loop_body(node->d,name,&budget)) &&
-          !mir_volatile_unit_loop_body(node->d)))) ||
+          !mir_volatile_unit_loop_body(node->d) &&
+          !(trips == 2 && node->d != NULL && node->d->kind == AST_FOR &&
+            node->d->b != NULL && node->d->b->kind == AST_BINARY &&
+            node->d->b->op == '<' && node->d->b->b != NULL &&
+            node->d->b->b->kind == AST_INT_LIT && node->d->b->b->ival >= 16 &&
+            mir_small_nested_loop_body(node->d, &nested_budget))))) ||
         !mir_one_trip_body_safe(node->d, name)) return 0;
     return (int)trips;
 }
@@ -4764,6 +4871,7 @@ static void mir_lower_stmt(const struct AstNode *node)
     int compare_value;
     int counter_proof;
     int constant_trips;
+    int truth_budget;
     struct MirSwitchContext *switch_context;
     int i;
 
@@ -4824,12 +4932,23 @@ static void mir_lower_stmt(const struct AstNode *node)
             mir_deferred_conversion_type(condition, mir.return_type);
         return;
     case AST_IF:
+        truth_budget=96;
         else_label = mir_new_label();
         end_label = mir_new_label();
-        condition = mir_lower_statement_condition(node->a);
-        insn = mir_emit(MIR_BRANCH_FALSE);
-        insn->src1 = condition;
-        insn->label = else_label;
+        if (!opt_debug && !opt_debug_lines && mir.next_call_id==0 && mir_has_only_word_parameters(3) && node->a!=NULL &&
+            ((node->a->kind==AST_BINARY && (node->a->op==TOK_EQ || node->a->op==TOK_NE) &&
+              ast_expr_yields_bool01(node->a->a) && ast_expr_yields_bool01(node->a->b)) ||
+             ((node->a->kind==AST_LOGOR || node->a->kind==AST_LOGAND) &&
+              mir_truth_has_boolean_equality(node->a))) &&
+            !ast_expr_has_side_effects(node->a->a) && !ast_expr_has_side_effects(node->a->b) &&
+            mir_pure_truth_budget(node->a,&truth_budget))
+            mir_lower_pure_truth_branch(node->a,else_label,0);
+        else {
+            condition = mir_lower_statement_condition(node->a);
+            insn = mir_emit(MIR_BRANCH_FALSE);
+            insn->src1 = condition;
+            insn->label = else_label;
+        }
         /* Only an if/else has a genuine two-predecessor join at end_label
          * below; a bare if with no else has nothing to merge there (the
          * then-arm either returns or falls straight into else_label, which
@@ -17043,6 +17162,94 @@ static int mir_canonicalize_boolean_multiplication(void)
     return changed;
 }
 
+/* A signed long comparison of an extended byte/word has the original
+ * narrow range. Keep the source conversion (and its reads) but compare in
+ * word width, or fold an out-of-range bound. Shared constants stay intact. */
+static int mir_narrow_extended_comparisons(void)
+{
+    int i,changed=0;
+    for(i=0;i<mir.count;++i) {
+        struct MirInsn *d=&mir.insns[i],*c;
+        const struct MirInsn *wide,*source;
+        long lo,hi,bound; int width,common,result=-1,op;
+        if(d->opcode!=MIR_BINARY || !is_cmp_op((int)d->immediate) ||
+           d->secondary_offset!=TYPE_LONG) continue;
+        wide=mir_definition(d->src1);c=mir_mutable_definition(d->src2);
+        if(wide==NULL || wide->opcode!=MIR_UNARY || wide->immediate!=0 ||
+           wide->type!=TYPE_LONG || c==NULL || c->opcode!=MIR_CONST ||
+           type_is_float(c->type) || type_ptr_depth(c->type)) continue;
+        source=mir_definition(wide->src1);
+        if(source==NULL || type_is_float(source->type) || type_ptr_depth(source->type)) continue;
+        width=type_size(source->type);
+        if(width<1 || width>2) continue;
+        if(source->type & TYPE_UNSIGNED) { lo=0; hi=width==1?255:65535; }
+        else { lo=width==1?-128:-32768; hi=width==1?127:32767; }
+        bound=ast_const_apply_int_cast(c->immediate,d->secondary_offset);op=(int)d->immediate;
+        if(bound<lo) result=(op=='>' || op==TOK_GE || op==TOK_NE);
+        else if(bound>hi) result=(op=='<' || op==TOK_LE || op==TOK_NE);
+        if(result>=0) {
+            d->opcode=MIR_CONST; d->src1=d->src2=-1;d->type=TYPE_INT;
+            d->secondary_offset=0;d->immediate=result;
+        } else {
+            if(mir_value_use_count(c->dst)!=1) continue;
+            common=TYPE_INT | ((width==2 && (source->type & TYPE_UNSIGNED))?TYPE_UNSIGNED:0);
+            d->src1=wide->src1;d->secondary_offset=common;c->type=common;c->immediate=bound;
+        }
+        mir_invalidate_use_cache();
+        mir_retire_dead_byte_expression(wide->dst);
+        mir_retire_dead_byte_expression(c->dst);
+        ++changed;
+    }
+    return changed;
+}
+
+/* Extremal word comparisons are constants or endpoint equalities. Use
+ * the operation's computation type, including explicit signed casts. */
+static int mir_fold_word_endpoint_comparisons(void)
+{
+    int i,changed=0;
+    for(i=0;i<mir.count;++i) {
+        struct MirInsn *d=&mir.insns[i],*c;
+        long lo,hi,bound;int op,result=-1,newop=0;long newbound=0;
+        if(d->opcode!=MIR_BINARY || !is_cmp_op((int)d->immediate) ||
+           type_size(d->secondary_offset)!=2 || type_is_float(d->secondary_offset) ||
+           type_ptr_depth(d->secondary_offset)) continue;
+        c=mir_mutable_definition(d->src2);
+        if(c==NULL || c->opcode!=MIR_CONST) continue;
+        lo=(d->secondary_offset&TYPE_UNSIGNED)?0:-32768;
+        hi=(d->secondary_offset&TYPE_UNSIGNED)?65535:32767;
+        bound=ast_const_apply_int_cast(c->immediate,d->secondary_offset);op=(int)d->immediate;
+        /* Mask-fact recognition retains its canonical <1/>=1 predicates. */
+        if ((d->secondary_offset & TYPE_UNSIGNED) && bound==1 &&
+            (op=='<' || op==TOK_GE) && !mir_has_only_word_parameters(3)) continue;
+        if((op=='<' && bound==lo) || (op=='>' && bound==hi)) result=0;
+        else if((op==TOK_GE && bound==lo) || (op==TOK_LE && bound==hi)) result=1;
+        else if((op=='<' && bound==lo+1) || (op==TOK_LE && bound==lo)) { newop=TOK_EQ;newbound=lo; }
+        else if((op==TOK_GE && bound==lo+1) || (op=='>' && bound==lo)) { newop=TOK_NE;newbound=lo; }
+        else if((op=='>' && bound==hi-1) || (op==TOK_GE && bound==hi)) { newop=TOK_EQ;newbound=hi; }
+        else if((op==TOK_LE && bound==hi-1) || (op=='<' && bound==hi)) { newop=TOK_NE;newbound=hi; }
+        if(result>=0) { d->opcode=MIR_CONST;d->src1=d->src2=-1;d->immediate=result;d->secondary_offset=0; }
+        else if(newop && mir_value_use_count(c->dst)==1) { d->immediate=newop;c->immediate=newbound;c->type=d->secondary_offset; }
+        else continue;
+        mir_invalidate_use_cache();++changed;
+    }
+    return changed;
+}
+
+static int mir_fold_identical_integer_comparisons(void)
+{
+    int i,changed=0;
+    for(i=0;i<mir.count;++i) {
+        struct MirInsn *d=&mir.insns[i];int budget=64;
+        if(d->opcode!=MIR_BINARY || (d->immediate!=TOK_EQ && d->immediate!=TOK_NE) ||
+           type_size(d->secondary_offset)>2 || type_is_float(d->secondary_offset) ||
+           type_ptr_depth(d->secondary_offset) || !mir_equal_integer_values(d->src1,d->src2,&budget)) continue;
+        d->opcode=MIR_CONST;d->immediate=d->immediate==TOK_EQ;
+        d->src1=d->src2=-1;d->secondary_offset=0;mir_invalidate_use_cache();++changed;
+    }
+    return changed;
+}
+
 int mir_optimize_integer_expressions(void)
 {
     int changed = 0;
@@ -17062,6 +17269,9 @@ int mir_optimize_integer_expressions(void)
         changed += mir_fold_repaired_integer_binary(&mir.insns[i]);
     }
     changed += mir_canonicalize_boolean_multiplication();
+    changed += mir_narrow_extended_comparisons();
+    changed += mir_fold_word_endpoint_comparisons();
+    changed += mir_fold_identical_integer_comparisons();
     changed += mir_forward_named_byte_stores();
     changed += mir_reuse_repeated_byte_folds();
     changed += mir_fold_dominated_predicate_facts();

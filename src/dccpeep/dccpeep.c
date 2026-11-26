@@ -6915,15 +6915,21 @@ static int pass_ix_word_zero_test_via_mem(void)
         int n;
         char loline[32], orline[32];
 
-        if (!peep_parse_ld_hl_ix_pair(i, &n))
+        if (!parse_load_ix_pair(lines[i], lines[i+1], &n))
             continue;
+        if (n >= 0) {
+            int begin,end,k,local=0;
+            find_function_bounds_any(i,&begin,&end);
+            for(k=begin;k<end;++k) if(strstr(lines[k],"(ix-")!=NULL) {local=1;break;}
+            if(!local) continue; /* Preserve the frameless parameter rewrite. */
+        }
         if (!eq(i + 2, "ld a,h") || !eq(i + 3, "or l"))
             continue;
         if (!peep_registers_dead_after(i + 3, regs))
             continue;
 
-        sprintf(loline, "ld a,(ix-%d)", n - 1);
-        sprintf(orline, "or (ix-%d)", n);
+        sprintf(loline, "ld a,(ix%+d)", n + 1);
+        sprintf(orline, "or (ix%+d)", n);
         replace1_tagged(i, loline, "ix_word_zero_test_via_mem");
         replace1(i + 1, orline);
         delete_n(i + 2, 2);
@@ -7647,6 +7653,86 @@ static int pass_cache_ix_spill_via_exx(void)
         changed = 1;
     }
 
+    return changed;
+}
+
+/* Leaf helpers can reserve an otherwise unused BC for an immutable word
+ * argument, including reads reached through different CFG arms. The incoming
+ * copy cannot change without an explicit store or an escaped frame address. */
+static int pass_cache_leaf_word_argument(void)
+{
+    int i,changed=0;
+    for(i=0;i+2<nlines;++i) {
+        int start,end,k,offset,best=0,best_count=0;
+        int safe=1;
+        if(!eq(i,"push ix") || !eq(i+1,"ld ix,0") || !eq(i+2,"add ix,sp")) continue;
+        find_function_bounds_any(i,&start,&end);
+        {
+            int marker=i;
+            while(marker>=0 && strncmp(lines[marker],";@dcc.lto begin ",16)!=0 &&
+                  strncmp(lines[marker],";@dcc.lto end ",14)!=0) --marker;
+            if(marker<0 || strncmp(lines[marker],";@dcc.lto begin ",16)!=0) continue;
+        }
+        {
+            int local=0;
+            for(k=i+3;k<end;++k) if(strstr(lines[k],"(ix-")!=NULL) {local=1;break;}
+            for(k=start;k<end;++k)
+                if(strstr(lines[k],"@dcc.volatile-parameter")!=NULL) local=0;
+            if(!local || peep_register_claimed_in_range(PEEP_REG_BC,start,end)) continue;
+        }
+        if(end-i>1200 || range_takes_frame_address(i+3,end)) continue;
+        for(k=i+3;k<end;++k) {
+            const struct PeepLineInfo *info=peep_line_info(k);
+            char clean[MAX_LINE];
+            strip_peep_comment_copy(clean,lines[k]);
+            if(strncmp(clean,"call ",5)==0 || strncmp(clean,"rst ",4)==0 ||
+               strstr(clean,"@dcc.volatile-parameter")!=NULL ||
+               (starts_label(lines[k]) && lines[k][0]!='L') ||
+               (info!=NULL && ((info->effects.unknown && strcmp(clean,"ccf") &&
+                 strcmp(clean,"ex de,hl") && strcmp(clean,"rl l") &&
+                 strcmp(clean,"rlca") && strcmp(clean,"rla") && strcmp(clean,"rra") &&
+                 strcmp(clean,"rrca") && strcmp(clean,"cpl") && strcmp(clean,"scf")) ||
+                (!info->effects.unknown && ((info->effects.reads|info->effects.writes)&PEEP_REG_BC)!=0)))) {
+                safe=0;break;
+            }
+        }
+        if(!safe) continue;
+        for(offset=4;offset<=30;offset+=2) {
+            int count=0,valid=1;
+            char low[32],high[32],clean[MAX_LINE];
+            sprintf(low,"(ix+%d)",offset);sprintf(high,"(ix+%d)",offset+1);
+            for(k=i+3;k<end;++k) {
+                char *operand;
+                strip_peep_comment_copy(clean,lines[k]);
+                operand=strstr(clean,low);if(operand==NULL) operand=strstr(clean,high);
+                if(operand==NULL) continue;
+                if (!((strncmp(clean,"ld ",3)==0 && operand==clean+5 &&
+                       strchr("aldeh",clean[3])!=NULL) ||
+                      (strncmp(clean,"or ",3)==0 && operand==clean+3)) ||
+                    operand[strlen(operand)-1]!=')') {valid=0;break;}
+                ++count;
+            }
+            if(valid && count>best_count) {best=offset;best_count=count;}
+        }
+        if(best_count<6) continue;
+        for(k=i+3;k<end;++k) {
+            char clean[MAX_LINE],low[32],high[32],line[40];
+            strip_peep_comment_copy(clean,lines[k]);
+            sprintf(low,"(ix+%d)",best);sprintf(high,"(ix+%d)",best+1);
+            if(strstr(clean,low)!=NULL || strstr(clean,high)!=NULL) {
+                if(strncmp(clean,"or ",3)==0)
+                    sprintf(line,"or %c",strstr(clean,low)!=NULL?'c':'b');
+                else sprintf(line,"ld %c,%c",clean[3],strstr(clean,low)!=NULL?'c':'b');
+                replace1_tagged(k,line,"leaf_word_argument_cache");
+            }
+        }
+        {
+            char line[40];
+            sprintf(line,"ld c,(ix+%d)",best);insert_line(i+3,line);
+            sprintf(line,"ld b,(ix+%d)",best+1);insert_line(i+4,line);
+        }
+        changed=1;i=end+1;
+    }
     return changed;
 }
 
@@ -12945,6 +13031,7 @@ int main(int argc, char **argv)
      * blocking the cache for that local's other reloads in the same
      * segment). Purely local like every other pass in this section, so a
      * single pass suffices with no pass_labels follow-up. */
+    RUN_PASS(pass_cache_leaf_word_argument);
     RUN_PASS(pass_ix_word_zero_test_via_mem);
 
     RUN_PASS(pass_cache_ix_long_param_reload);

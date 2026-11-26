@@ -639,6 +639,50 @@ void mir_emit_byte_arithmetic_result(MirStream *out,
     mir_emit_cast(out, TYPE_INT, insn->type);
 }
 
+/* Compare a captured word in HL with an immediate without destroying DE
+ * or flipping HL's sign bit. The result is a normalized int in HL. */
+int mir_emit_scalar_immediate_compare(MirStream *out, int op, int type, long value)
+{
+    unsigned long bound = (unsigned long)value & 65535UL;
+    int unsign = mir_type_uses_unsigned_comparison(type), done, different;
+    if (opt_debug || type_size(type)!=2 || type_is_float(type) || type_ptr_depth(type) || !is_cmp_op(op)) return 0;
+    if (op=='>' || op==TOK_LE) {
+        if (bound==(unsign?65535UL:32767UL)) {
+            mir_stream_printf(out,"\tld hl,%d\n",op==TOK_LE); return 1;
+        }
+        bound=(bound+1)&65535UL; op=op=='>'?TOK_GE:'<';
+    }
+    if (unsign && (op=='<' || op==TOK_GE) && bound==0) {
+        mir_stream_printf(out,"\tld hl,%d\n",op==TOK_GE); return 1;
+    }
+    if (unsign && bound==1 && (op=='<' || op==TOK_GE)) {
+        op=op=='<'?TOK_EQ:TOK_NE; bound=0;
+    }
+    if (op==TOK_EQ || op==TOK_NE) {
+        if (bound==0) mir_stream_puts("\tld a,h\n\tor l\n",out);
+        else {
+            different=new_label();
+            mir_stream_printf(out,"\tld a,h\n\tcp %lu\n\tjr nz,L%d\n\tld a,l\n\tcp %lu\nL%d:\n",bound>>8,different,bound&255UL,different);
+        }
+        done=new_label();
+        mir_stream_printf(out,"\tld hl,0\n\tjr %s,L%d\n\tinc l\nL%d:\n",op==TOK_EQ?"nz":"z",done,done);
+    } else {
+        if (!unsign && bound==0) mir_stream_puts("\tld a,h\n\trlca\n",out);
+        else if ((bound&255UL)==0) {
+            mir_stream_puts("\tld a,h\n",out);
+            if (!unsign) mir_stream_puts("\txor 128\n",out);
+            mir_stream_printf(out,"\tcp %lu\n",(bound>>8)^(unsign?0UL:128UL));
+        } else {
+            mir_stream_printf(out,"\tld a,l\n\tsub %lu\n\tld a,h\n",bound&255UL);
+            if (!unsign) mir_stream_puts("\trla\n\tccf\n\trra\n",out);
+            mir_stream_printf(out,"\tsbc a,%lu\n",(bound>>8)^(unsign?0UL:128UL));
+        }
+        if(op==TOK_GE) mir_stream_puts("\tccf\n",out);
+        mir_stream_puts("\tld hl,0\n\trl l\n",out);
+    }
+    return 1;
+}
+
 void mir_emit_scalar_compare(MirStream *out, int operation, int is_unsigned)
 {
     int true_label = new_label();
@@ -3398,7 +3442,6 @@ int mir_emit_homed_constant_binary_instruction(MirStream *out,
                                                 int operation, long value)
 {
     int instruction = (int)(insn - mir.insns);
-    const struct MirInsn *source = mir_definition(insn->src1);
     unsigned long multiplier = (unsigned long)value & 0xffffUL;
     int uses_de = operation == '*' && multiplier != 0 &&
                   (multiplier & (multiplier - 1)) != 0;
@@ -3426,7 +3469,7 @@ int mir_emit_homed_constant_binary_instruction(MirStream *out,
     else if (!mir_emit_scalar_bit_window(out, insn, value))
         mir_emit_scalar_shift_by_constant(
             out, operation,
-            source != NULL && (source->type & TYPE_UNSIGNED) != 0, value);
+            (insn->secondary_offset & TYPE_UNSIGNED) != 0, value);
     if (!mir_emit_hl_to_home(out, insn->dst))
         return 0;
     if (preserve_de)

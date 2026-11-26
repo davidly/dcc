@@ -638,6 +638,7 @@ int mir_homed_immediate_compare_component(int value);
 void mir_homed_parameter_partition_scope(int active);
 int mir_emit_homed_parameter_byte_partition(MirStream *out,int value);
 int mir_value_has_unsigned_byte_range(int value,int depth);
+int mir_has_only_word_parameters(int minimum);
 int mir_emit_homed_compare_false(MirStream *out,
                                         const struct MirInsn *compare,
                                         int false_label);
@@ -660,6 +661,7 @@ int mir_emit_wide_operation(MirStream *out, const struct MirInsn *insn);
 int mir_wide_operation_is_signed_const_relational(
     const struct MirInsn *insn);
 void mir_emit_scalar_compare(MirStream *out, int operation, int is_unsigned);
+int mir_emit_scalar_immediate_compare(MirStream *out, int op, int type, long value);
 void mir_emit_scalar_compare_biased_right(MirStream *out, int operation);
 void mir_emit_signed_byte_extend(MirStream *out);
 void mir_emit_scalar_truth_test(MirStream *out, int value);

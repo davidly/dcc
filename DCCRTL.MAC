@@ -3636,7 +3636,7 @@ D10UN:
         public  __r2u
         public  __q2s
         public  __r2s
-; Fixed 16-iteration unsigned divider for constant divisors.
+; Bounded restoring unsigned divider for constant divisors.
 ; dccpeep rewrites ld de,<const> / call __div*/__mod* to these short
 ; public names.  Names are 5 chars and unique under short external matching.
 __q2u:
@@ -3663,8 +3663,18 @@ D8U0:
         ; Nonzero byte divisor: the remainder fits in A.  A ninth bit
         ; from RLA forces subtraction; SUB wraps it back into 0..E-1.
         ; This saves more than the dispatch costs for every byte divisor.
-        xor     a
+        ; Skip leading zero dividend bits for byte-sized inputs.
+        ld      a,h
+        or      a
+        jr      nz,D8UFULL
+        ld      h,l
+        ld      l,0
+        ld      b,8
+        jr      D8USTART
+D8UFULL:
         ld      b,16
+D8USTART:
+        xor     a
 D8UL:
         add     hl,hl
         rla
@@ -3680,31 +3690,39 @@ D8UN:
         ld      d,0
         jr      D16UD
 D16U0:
-        ; Delay each quotient bit until the next shift.  After a failed
-        ; subtraction ADD restores the remainder and sets carry; after a
-        ; successful subtraction carry is clear.  CCF therefore produces
-        ; the next quotient bit without a second subtraction.
-        ld      b,h
-        ld      c,l             ; BC = shifting dividend / quotient
-        ld      hl,0            ; HL = partial remainder
-        ld      a,16
+        ; A divisor >=256 has an at-most-eight-bit quotient. The high
+        ; dividend byte is the initial remainder; shift only the low byte.
+        ld      a,h
+        cp      d
+        jr      c,D16UZERO
+        jr      nz,D16USTART
+        ld      a,l
+        cp      e
+        jr      c,D16UZERO
+D16USTART:
+        ld      c,l
+        ld      l,h
+        ld      h,0
+        ld      a,8
         or      a
 D16U1:
         rl      c
-        rl      b
-        adc     hl,hl           ; next dividend bit; no 17th bit is possible
-        sbc     hl,de           ; partial dividend prefix fits in 16 bits
+        adc     hl,hl
+        sbc     hl,de
         jr      nc,D16U2
         add     hl,de
 D16U2:
         ccf
-        dec     a               ; preserves the pending quotient bit
+        dec     a
         jr      nz,D16U1
         rl      c
-        rl      b               ; insert the final quotient bit
         ex      de,hl
-        ld      h,b
         ld      l,c
+        ld      h,0
+        jr      D16UD
+D16UZERO:
+        ex      de,hl
+        ld      hl,0
 D16UD:
         pop     af
         pop     bc
@@ -3716,7 +3734,7 @@ __r2u:
         ret
 
 __q2s:
-        ; Signed fixed 16-step quotient.  Same semantics as __divs.
+        ; Signed bounded-step quotient. Same semantics as __divs.
         ld      a,h
         or      d
         jp      p,__q2u
@@ -3765,7 +3783,7 @@ Q2SDN:
         ret
 
 __r2s:
-        ; Signed fixed 16-step remainder.  Same semantics as __mods.
+        ; Signed bounded-step remainder. Same semantics as __mods.
         ld      a,h
         or      d
         jp      p,__r2u
@@ -15044,6 +15062,12 @@ __fuf:
         ret
 FUFNZ:
         ld      b,142          ; exponent for bit 15
+        ld      a,h
+        or      a
+        jr      nz,FUFN1
+        ld      h,l           ; skip eight leading zero bits together
+        ld      l,0
+        ld      b,134
 FUFN1:
         bit     7,h
         jr      nz,FUFND
@@ -15145,44 +15169,20 @@ __ffi:
 ; normalized finite numbers and signed zero are handled; NaN/Inf handling is
 ; conservative and returns the left operand for those uncommon bootstrap cases.
 
-        public  __faf
-__faf:
-        ; fastcall float a+b: DE:HL = b (live), a still on the stack (one
-        ; push, 4 bytes). Named __faf, not __faddf: M80 truncates public
-        ; symbols to 6 significant characters, and __faddf truncates to
-        ; __FADD, colliding with __fadd itself - the same mistake as
-        ; __msf's first attempt (__msetf) and __fmf's (__fmulf).
-        xor     a
-        ld      (FSUB),a
-        jr      FADDR0F ; peep: jp_to_jr
-
+; Fastcall add/subtract: right operand in DE:HL, left on the stack.
+; Negate the packed right operand for subtraction before the shared unpack;
+; these entries need no FSUB memory flag or subsequent sign-test dispatch.
+; Six-character public names avoid M80's __fadd/__fsub symbol truncation.
         public  __fsf
 __fsf:
-        ; fastcall float a-b: DE:HL = b (live, the subtrahend - the
-        ; calling convention's "right"/last-pushed operand at every call
-        ; site), a still on the stack. Named __fsf, not __fsubf, for the
-        ; same 6-char-truncation reason (__fsubf -> __FSUB, colliding
-        ; with __fsub).
-        ld      a,1
-        ld      (FSUB),a
-FADDR0F:
-        ; Unpack b (still live in DE:HL, the CURRENTLY ACTIVE register
-        ; bank) before ix/the stack are touched at all - FUNR only
-        ; touches registers, so this works with no memory scratch and no
-        ; push, unlike __fmul/__fdiv's memory-scratch-based fastcall
-        ; unpack. Do NOT exx before this call: exx would swap DE:HL away
-        ; to the shadow set, losing b's live value before FUNR ever sees
-        ; it (the bug in an earlier version of this code, caught by a
-        ; printf("%f") correctness test producing garbled digits).
-        call    FUNR
-        ; __fsf's sign flip, while b's bank is still the active one.
-        ld      a,(FSUB)
-        or      a
-        jr      z,FAF_NOFLIP
         ld      a,d
-        xor     80h
+        xor     80h             ; negate the packed right operand
         ld      d,a
-FAF_NOFLIP:
+        jr      FADDR0F
+        public  __faf
+__faf:
+FADDR0F:
+        call    FUNR
         exx                     ; b now safely parked in the shadow bank;
                                  ; the newly-active bank is free for a
         push    ix

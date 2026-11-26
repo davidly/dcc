@@ -378,6 +378,7 @@ static int mir_boolean_phi_branch_folding_enabled;
 static int mir_planned_stack_emit_count;
 static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
+static int mir_forwarded_word_add_value = -1;
 static int mir_forwarded_wide_stack_value = -1;
 static int mir_forwarded_wide_stack_consumer = -1;
 static int mir_forwarded_de_value = -1;
@@ -1178,9 +1179,10 @@ static int mir_wide_binary_rhs_is_commutative(
     const struct MirInsn *left;
 
     if (binary == NULL || binary->opcode != MIR_BINARY ||
-        type_size(binary->secondary_offset) != 4 ||
-        type_is_float(binary->secondary_offset))
+        type_size(binary->secondary_offset) != 4)
         return 0;
+    if (type_is_float(binary->secondary_offset))
+        return binary->immediate == '+';
     switch ((int)binary->immediate) {
     case '+':
     case '|':
@@ -1201,10 +1203,14 @@ static int mir_wide_binary_rhs_pair_supported(
 {
     const struct MirInsn *definition = mir_definition(value);
 
-    if (definition == NULL || !mir_wide_binary_rhs_is_commutative(binary))
+    if (definition == NULL || !mir_wide_binary_rhs_is_commutative(binary) ||
+        mir_float_madd_match((int)(binary - mir.insns), NULL, NULL))
         return 0;
-    if (definition->opcode == MIR_UNARY)
+    if (definition->opcode == MIR_LOAD_INDIRECT &&
+        type_is_float(binary->secondary_offset))
         return 1;
+    if (definition->opcode == MIR_UNARY)
+        return !type_is_float(binary->secondary_offset);
     return definition->opcode == MIR_BINARY && binary->immediate == '*';
 }
 
@@ -17358,6 +17364,9 @@ static void mir_emit_virtual_load_wide(MirStream *out, int value)
     }
 }
 
+static int mir_value_is_zero_or_one(int value, int depth, int *budget);
+static int mir_wide_word_add_handoff(int value, int at);
+
 static void mir_emit_virtual_store_wide(MirStream *out, int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -17379,6 +17388,11 @@ static void mir_emit_virtual_store_wide(MirStream *out, int value)
      * downstream would ever read the slot this store writes. */
     if (mir_value_has_direct_named_home(value))
         return;
+    if (!force_slot_store && mir_wide_binary_rhs_forwarding_enabled &&
+        mir_wide_word_add_handoff(value,mir_emit_instruction_index)) {
+        mir_forwarded_word_add_value=value;
+        return;
+    }
     if (value == mir_prepacked_result_value) {
         mir_stream_puts("\tpush de\n\tpush hl\n", out);
         return;
@@ -26371,7 +26385,7 @@ static int mir_emit_fused_comparison_branch(MirStream *out, const int *labels,
     target = mir_find_label(branch->label);
     if (target < 0)
         return 0;
-    if(!mir.has_narrowed_for_counter && left!=NULL && right!=NULL &&
+    if(left!=NULL && right!=NULL &&
        left->opcode!=MIR_CONST && right->opcode!=MIR_CONST &&
        !de_holds_biased_constant && !mir_fused_compare_uses_byte_immediate(compare_index) &&
        !mir_fused_compare_is_const_zero_rhs(compare_index) &&
@@ -26631,7 +26645,7 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
     const struct MirInsn *input;
     const struct MirInsn *constant = NULL;
     int cmp = -1, other, left, right, i, target;
-    int is_fold, byte_op=0, input_value=-1;
+    int is_fold, byte_op=0, input_value=-1, word_sum=0;
     const struct MirInsn *arithmetic=NULL;
 
     if (opt_debug || load->opcode != MIR_LOAD_INDIRECT || load->memory_size != 1 ||
@@ -26655,6 +26669,8 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
         return -1;
     left = mir_unsigned_byte_origin(compare->src1);
     right = mir_unsigned_byte_origin(compare->src2);
+    if(left==load->dst && right<0) {right=compare->src2;word_sum=1;}
+    else if(right==load->dst && left<0) {left=compare->src1;word_sum=1;}
     if (left < 0 || right < 0 || (left != load->dst && right != load->dst))
         return -1;
     other = left == load->dst ? right : left;
@@ -26663,8 +26679,8 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
         return -1;
     is_fold = rhs->opcode == MIR_BINARY && rhs->immediate == MIR_OP_BYTE_FOLD16;
     if (is_fold) input_value=rhs->src1;
-    else if(rhs->opcode==MIR_UNARY && rhs->immediate==0) {
-        arithmetic=mir_definition(rhs->src1);
+    else if(word_sum || (rhs->opcode==MIR_UNARY && rhs->immediate==0)) {
+        arithmetic=word_sum?rhs:mir_definition(rhs->src1);
         if(arithmetic==NULL || arithmetic->opcode!=MIR_BINARY ||
            type_size(arithmetic->type)!=2 || type_ptr_depth(arithmetic->type)!=0 ||
            type_is_float(arithmetic->type) || mir_value_use_count(arithmetic->dst)!=1)
@@ -26696,6 +26712,8 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
         mir_forwarded_stack_value == input->dst ||
         mir_forwarded_de_value == input->dst || mir_planned_stack_is_emitted(input->dst))
         return -1;
+    if(word_sum && (byte_op!='+' || input->type!=(TYPE_CHAR|TYPE_UNSIGNED) ||
+        constant->immediate<0 || constant->immediate>255)) return -1;
     if (is_fold) {
         constant = mir_definition(rhs->src2);
         if (rhs <= load || rhs >= compare || mir_value_use_count(other) != 1 ||
@@ -26733,7 +26751,11 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
         mir_stream_puts("\tld a,l\n", out);
         mir_stream_printf(out,"\t%s%lu\n",mnemonic,(unsigned long)constant->immediate&255UL);
     }
-    mir_stream_puts("\tcp c\n", out);
+    if(word_sum && constant->immediate!=0) {
+        int normal=new_label(),ready=new_label();
+        mir_stream_printf(out,"\tjp nc,L%d\n\tld a,1\n\tor a\n\tjp L%d\nL%d:\n"
+                              "\tcp c\nL%d:\n",normal,ready,normal,ready);
+    } else mir_stream_puts("\tcp c\n", out);
     if (!mir_emit_conditional_branch_with_phi_copies(out, labels,
             compare->immediate == TOK_EQ ? "z" : "nz", cmp + 1,
             target, mir.insns[cmp + 1].label))
@@ -26899,6 +26921,28 @@ static int mir_emit_direct_wide_equality(MirStream *out, const struct MirInsn *i
     return 1;
 }
 
+/* A zero-extended word can remain in HL for an adjacent long addition.
+ * Reserve BC only while reloading a proven directly addressable left operand. */
+static int mir_wide_word_add_handoff(int value, int at)
+{
+    const struct MirInsn *d=mir_definition(value), *source, *add;
+    struct MirDirectWideLocation location;
+    int budget=64, phi, store;
+    if(d==NULL || d->opcode!=MIR_UNARY || d->immediate!=0 || !type_is_long(d->type) ||
+       at+1>=mir.count || mir_value_use_count(value)!=1) return 0;
+    source=mir_definition(d->src1); add=&mir.insns[at+1];
+    if(source==NULL || source->opcode==MIR_CONST || type_size(source->type)!=2 || type_is_float(source->type) ||
+       !(source->type&TYPE_UNSIGNED) || type_ptr_depth(source->type) ||
+       add->opcode!=MIR_BINARY || add->immediate!='+' || add->src2!=value ||
+       !type_is_long(add->type) || mir_forwarded_wide_stack_value>=0 ||
+       mir_pending_planned_stack_consumer()>=0 ||
+       !mir_direct_wide_location(add->src1,&location) ||
+       (mir_virtual_load_physical_clobbers(add->src1)&MIR_PHYSICAL_CLOBBER_BC)!=0) return 0;
+    if(mir_binary_is_wide_phi_update(at+1,&phi,&store) &&
+       mir_value_is_zero_or_one(value,0,&budget)) return 0;
+    return 1;
+}
+
 static int mir_emit_direct_wide_add(MirStream *out, const struct MirInsn *insn)
 {
     struct MirDirectWideLocation left;
@@ -26946,6 +26990,7 @@ static int mir_emit_accumulator_wide_add(MirStream *out,
         return 0;
     if (stack_left) {
         mir_stream_puts("\tpop hl\n\tpop de\n", out);
+        mir_forwarded_word_add_value = -1;
         mir_forwarded_wide_stack_value = -1;
         mir_forwarded_wide_stack_consumer = -1;
     } else {
@@ -34537,6 +34582,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     mir_forwarded_stack_value = -1;
     mir_forwarded_stack_instruction = -1;
     mir_forwarded_stack_target_instruction = -1;
+    mir_forwarded_word_add_value = -1;
     mir_forwarded_wide_stack_value = -1;
     mir_forwarded_wide_stack_consumer = -1;
     mir_cached_call_value = -1;
@@ -35285,10 +35331,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 break;
             }
             if (insn->memory_size == 4) {
-                mir_stream_puts("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
-                      "\tld h,(hl)\n\tld l,a\n\tex (sp),hl\n"
-                      "\tinc hl\n\tinc hl\n\tld e,(hl)\n\tinc hl\n"
-                      "\tld d,(hl)\n\tpop hl\n", out);
+                if (type_is_float(insn->type))
+                    mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                      "\tinc hl\n\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n"
+                      "\tld l,a\n\tex de,hl\n", out);
+                else
+                    mir_stream_puts("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
+                          "\tld h,(hl)\n\tld l,a\n\tex (sp),hl\n"
+                          "\tinc hl\n\tinc hl\n\tld e,(hl)\n\tinc hl\n"
+                          "\tld d,(hl)\n\tpop hl\n", out);
             } else if (insn->memory_size == 1) {
                 mir_stream_puts("\tld l,(hl)\n", out);
                 if (type_is_bool(insn->type)) {
@@ -36262,6 +36313,17 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 int stack_forwarded_right =
                     mir_forwarded_wide_stack_value == insn->src2 &&
                     mir_forwarded_wide_stack_consumer == i;
+                if (mir_forwarded_word_add_value==insn->src2 &&
+                    mir_wide_word_add_handoff(insn->src2,i-1)) {
+                    int done_label=new_label();
+                    mir_stream_puts("\tld c,l\n\tld b,h\n",out);
+                    mir_emit_virtual_load_wide(out,insn->src1);
+                    mir_stream_printf(out,"\tadd hl,bc\n\tjp nc,L%d\n\tinc de\nL%d:\n",
+                                      done_label,done_label);
+                    mir_forwarded_word_add_value=-1;
+                    mir_emit_virtual_store_wide(out,insn->dst);
+                    break;
+                }
                 if (mir_emit_accumulator_wide_add(
                         out, insn, stack_forwarded_left, stack_forwarded_right))
                     break;
@@ -36284,6 +36346,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 if (mir_wide_multiply_is_fused_mulmod(i)) {
                     if (stack_forwarded_left || stack_forwarded_right) {
                         mir_stream_puts("\tpop hl\n\tpop de\n", out);
+                        mir_forwarded_word_add_value = -1;
                         mir_forwarded_wide_stack_value = -1;
                         mir_forwarded_wide_stack_consumer = -1;
                     }
@@ -36400,6 +36463,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 else if (!mir_emit_wide_operation(out, operation_insn))
                     goto done;
                 if (stack_forwarded_left || stack_forwarded_right) {
+                    mir_forwarded_word_add_value = -1;
                     mir_forwarded_wide_stack_value = -1;
                     mir_forwarded_wide_stack_consumer = -1;
                 }
@@ -36748,6 +36812,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                         mir_emit_virtual_store(out, insn->dst);
                         break;
                     }
+                }
+                if (!stack_forwarded_left && !planned_stack_forwarded_left &&
+                    !stack_forwarded_right && !de_forwarded_right &&
+                    right_definition != NULL && right_definition->opcode == MIR_CONST &&
+                    mir_binary_is_fusable_comparison(i)==0 &&
+                    mir_has_only_word_parameters(3) &&
+                    mir_emit_scalar_immediate_compare(out,(int)insn->immediate,
+                        insn->secondary_offset,right_definition->immediate)) {
+                    mir_emit_virtual_store(out,insn->dst);
+                    break;
                 }
                 /* A constant right-hand operand needs no dividend/left-
                  * operand-preserving push/pop dance: the left operand is
@@ -38040,6 +38114,7 @@ done:
     mir_forwarded_stack_value = -1;
     mir_forwarded_stack_instruction = -1;
     mir_forwarded_stack_target_instruction = -1;
+    mir_forwarded_word_add_value = -1;
     mir_forwarded_wide_stack_value = -1;
     mir_forwarded_wide_stack_consumer = -1;
     mir_cached_call_value = -1;
