@@ -1,5 +1,51 @@
 # Changelog
 
+## Boolean comparisons and bounded byte loops (2026-11-26)
+
+Tiny zero-argument integer comparison leaves can be substituted in MIR while
+preserving their global binding and volatile reads. Whole-function declaration
+tracking declines substitution across local, enum, or typedef shadowing;
+callable bodies remain available for function pointers. A bounded lexical
+preflight avoids changing frame metadata while inspecting unrelated bodies.
+
+After candidate selection, homed immediate comparisons use A/flags without
+spilling live register pairs, and carry results can become 0/1 directly in
+the assigned home. Existing compact zero/sign and nonzero-equality paths, and
+wide-return candidates, retain their established lowering. Integer comparison
+negation uses the opposite predicate instead of materializing and retesting a
+boolean.
+
+Call-free do-while byte updates receive explicit backedge labels for scalar
+PHIs. Byte unit updates then stay in their register homes, with redundant high
+byte clearing removed when the entry and backedge prove it stays zero.
+Constant byte updates used by tests fold with the required byte wraparound.
+A synchronized zero-based word counter cannot exceed 256 before a natural
+unsigned-byte cycle terminates; matched PHI/backedge proofs remove impossible
+early-return guards. Nonzero initial values, different steps, nested cycles,
+resets, calls, and volatile counters retain their guards.
+
+Long induction-variable decrements use borrow chains in their PHI slots.
+Proven 0/1 additions to long accumulators use conditional carry chains;
+ordinary +1 updates retain the existing direct path. Constant-left long
+comparisons exposed by type repair are canonicalized again before emission.
+
+At 4 MHz without stack checks, peep timings improve as follows:
+
+| Test | Previous DCC seconds | DCC seconds | zsdcc seconds |
+|---|---:|---:|---:|
+| tbytepre | 0.03808650 | 0.01930550 | 0.02290050 |
+| tcmpbyte | 31.23386950 | 20.69122550 | 21.51568675 |
+| tforlong | 0.01023075 | 0.00686825 | 0.00743725 |
+
+The MSVC/Windows and GCC/Linux builds produce identical peep cycle counts and
+output for all three. `timhome` exhaustively checks immediate comparison
+boundaries; `tboolin` covers lexical bindings, volatility, callbacks, and side
+effects; `tlongphi` covers carry/borrow boundaries, live old values, and signed
+controls; `tbytrng` covers synchronized-loop bounds and required exclusions.
+Performance ceilings are updated from measured results without loosening
+unrelated baselines. The host logical-widening test now accepts either valid
+zero extension or generic signed extension for a proven 0/1 signed-byte value.
+
 ## Byte results, long updates, and rotates (2026-11-26)
 
 The MIR backend emits only the demanded byte of pure parameter/constant

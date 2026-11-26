@@ -88,9 +88,9 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                                          self.code(self.compile(control, options)))
 
     def test_forwarded_byte_logical_widening_keeps_extension(self):
-        for target, extension in (
-            ("int8_t", "ld a,h\nrlca\nsbc a,a\nld d,a\nld e,a"),
-            ("uint8_t", "ld de,0"),
+        for target, extensions in (
+            ("int8_t", ("ld de,0", "ld a,h\nrlca\nsbc a,a\nld d,a\nld e,a")),
+            ("uint8_t", ("ld de,0",)),
         ):
             for expression in ("x && y", "x || y", "(x || y) && (y || x)"):
                 source = ("#include <stdint.h>\nuint32_t out; "
@@ -102,7 +102,11 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                         with self.subTest(target=target, expression=expression,
                                           stack=stack, debug=debug):
                             assembly = self.code(self.compile(source, stack + debug))
-                            self.assertIn(extension, assembly)
+                            # Logical results are 0/1 even through int8_t,
+                            # so either zero extension or the generic signed
+                            # extension is valid for that target.
+                            self.assertTrue(any(pattern in assembly for pattern in extensions),
+                                            assembly)
                             if debug == ("-gline",):
                                 self.assertEqual(assembly, release)
 

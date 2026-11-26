@@ -634,6 +634,7 @@ int mir_type_uses_unsigned_comparison(int type);
 int mir_emit_homed_constant_binary_instruction(MirStream *out,
                                                        const struct MirInsn *insn,
                                                        int operation, long value);
+int mir_homed_immediate_compare_component(int value);
 int mir_emit_homed_compare_false(MirStream *out,
                                         const struct MirInsn *compare,
                                         int false_label);

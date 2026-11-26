@@ -2914,7 +2914,8 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
             }
             break;
         case MIR_LOAD:
-            if (mir_bool_branch_load_supported(i))
+            if (mir_bool_branch_load_supported(i) ||
+                mir_homed_immediate_compare_component(insn->dst))
                 break;
             {
                 int memory_type, memory_storage, memory_offset;
@@ -3539,6 +3540,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
              * T18). */
             if (            mir_index_only_constant(insn->dst) ||
             mir_homed_binary_only_constant(insn->dst) ||
+            mir_homed_immediate_compare_component(insn->dst) ||
             mir_homed_direct_binary_only_constant(insn->dst) ||
             mir_homed_wide_binary_only_constant(insn->dst) ||
             mir_homed_wide_increment_component(insn->dst) ||

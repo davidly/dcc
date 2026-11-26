@@ -699,6 +699,7 @@ void add_typedef_name_ex(const char *name, int type, int array_len, int is_func,
     int i;
     int pi;
 
+    note_local_name_declared(name);
     i = find_typedef(name);
     if (i < typedef_scope_base) {
         if (ntypedefs >= MAX_TYPEDEFS) fatal("too many typedefs");
@@ -966,6 +967,7 @@ int parse_base_type(void)
                         }
                     }
                     if (!dup && nenum_consts < MAX_ENUM_CONSTS) {
+                        note_local_name_declared(ename);
                         dcc_copy_str(enum_const_names[nenum_consts], sizeof(enum_const_names[nenum_consts]), ename);
                         enum_const_values[nenum_consts] = cur_val;
                         nenum_consts++;

@@ -485,6 +485,30 @@ static int auto_byte_inline_tree(struct Sym *fn, const struct AstNode *node,
     }
 }
 
+/* Avoid parsing unrelated bodies speculatively: aggregate calls and local
+ * declarations can allocate compiler frame metadata even in an inert AST. */
+static int looks_like_boolean_leaf(void)
+{
+    LexState saved=lex_save();
+    int tokens=0,ids=0,returns=0,ifs=0,ok=1;
+    next_token();
+    if (g_lex.tok.kind!=TOK_IF) ok=0;
+    while (ok && g_lex.tok.kind!='}' && g_lex.tok.kind!=TOK_EOF && ++tokens<=32) {
+        int kind=g_lex.tok.kind;
+        if (kind==TOK_ID) ++ids;
+        else if (kind==TOK_RETURN) ++returns;
+        else if (kind==TOK_IF) ++ifs;
+        else if (kind!=TOK_NUM && kind!=TOK_EQ && kind!=TOK_NE &&
+                 kind!=TOK_LE && kind!=TOK_GE && kind!='<' && kind!='>' &&
+                 kind!='(' && kind!=')' && kind!='!' && kind!=';' && kind!='-' && kind!='+')
+            ok=0;
+        next_token();
+    }
+    ok=ok && tokens<=32 && g_lex.tok.kind=='}' && ids==1 && returns==2 && ifs==1;
+    lex_restore(&saved);
+    return ok;
+}
+
 static void record_inline_function_if_simple(struct Sym *s)
 {
     LexState _ls;
@@ -495,13 +519,16 @@ static void record_inline_function_if_simple(struct Sym *s)
     size_t namelen;
     int has_local;
     int automatic;
+    int boolean_leaf;
 
-    if (s == NULL || !s->is_static || g_lex.tok.kind != '{')
+    if (s == NULL || g_lex.tok.kind != '{')
         return;
     automatic = !s->is_inline;
-    if (automatic &&
+    boolean_leaf = s->type == TYPE_INT && s->proto_nargs == 0 && !s->proto_variadic &&
+        looks_like_boolean_leaf();
+    if ((!s->is_static && (!boolean_leaf || !automatic)) || (automatic && !boolean_leaf &&
         (s->type != (TYPE_CHAR | TYPE_UNSIGNED) || s->proto_nargs != 1 ||
-         s->proto_types[0] != (TYPE_INT | TYPE_UNSIGNED)))
+         s->proto_types[0] != (TYPE_INT | TYPE_UNSIGNED))))
         return;
     if ((s->type & 15) != TYPE_VOID &&
         (!(type_size(s->type) == 1 || type_size(s->type) == 2 || type_size(s->type) == 4) ||
@@ -545,6 +572,38 @@ static void record_inline_function_if_simple(struct Sym *s)
     lex_restore(&_ls);
     for (i = 0; i < MAX_PROTO_PARAMS; ++i)
         s->inline_param_use_count[i] = 0;
+
+    if (automatic && boolean_leaf) {
+        struct AstNode *first, *last, *condition, *comparison;
+        struct Sym *global;
+        if (body==NULL || body->kind!=AST_COMPOUND || body->list_len!=2)
+            return;
+        first=body->list[0]; last=body->list[1];
+        if (first==NULL || first->kind!=AST_IF || first->c!=NULL ||
+            first->b==NULL || first->b->kind!=AST_RETURN ||
+            first->b->a==NULL || first->b->a->kind!=AST_INT_LIT ||
+            first->b->a->ival!=1 || last==NULL || last->kind!=AST_RETURN ||
+            last->a==NULL || last->a->kind!=AST_INT_LIT || last->a->ival!=0)
+            return;
+        condition=first->a; comparison=condition;
+        if (comparison!=NULL && comparison->kind==AST_UNARY && comparison->op=='!')
+            comparison=comparison->a;
+        if (comparison==NULL || comparison->kind!=AST_BINARY ||
+            !is_cmp_op(comparison->op) || comparison->a==NULL ||
+            comparison->a->kind!=AST_IDENT || comparison->b==NULL ||
+            comparison->b->kind!=AST_INT_LIT)
+            return;
+        global=find_global(comparison->a->sval);
+        if (global==NULL || (global->storage!=SC_GLOBAL && global->storage!=SC_EXTERN) ||
+            type_ptr_depth(global->type)>0 || type_is_float(global->type) ||
+            type_size(global->type)!=2)
+            return;
+        s->auto_inline_boolean=1;
+        strncpy(s->inline_boolean_global,global->name,sizeof(s->inline_boolean_global)-1);
+        s->inline_boolean_global[sizeof(s->inline_boolean_global)-1]=0;
+        s->inline_return_expr=condition;
+        return;
+    }
 
     if (automatic) {
         int budget = 16;
@@ -876,7 +935,7 @@ static void reserve_inline_temp_locals(void)
 
 #define MAX_ADDR_CACHE_ARRAYS 16
 
-struct IdentCount { char name[64]; int count; int addr_taken; };
+struct IdentCount { char name[64]; int count; int addr_taken; int declared; };
 static struct IdentCount g_ident_counts[MAX_IDENT_COUNTS];
 static int g_ident_count_n;
 
@@ -923,6 +982,7 @@ static void bump_ident_count(const char *name)
         g_ident_counts[g_ident_count_n].name[namelen] = 0;
         g_ident_counts[g_ident_count_n].count = 1;
         g_ident_counts[g_ident_count_n].addr_taken = 0;
+        g_ident_counts[g_ident_count_n].declared = 0;
         g_ident_count_n++;
     }
 }
@@ -962,6 +1022,26 @@ static int ident_addr_taken_for(const char *name)
     for (i = 0; i < g_ident_count_n; ++i)
         if (strcmp(g_ident_counts[i].name, name) == 0)
             return g_ident_counts[i].addr_taken;
+    return 0;
+}
+
+void note_local_name_declared(const char *name)
+{
+    size_t length=strcspn(name,"#");
+    int i;
+    if (length==0) return;
+    for (i=0;i<g_ident_count_n;++i)
+        if (strlen(g_ident_counts[i].name)==length &&
+            !strncmp(g_ident_counts[i].name,name,length))
+            g_ident_counts[i].declared=1;
+}
+
+int local_name_declared_in_function(const char *name)
+{
+    int i;
+    if (g_ident_count_n>=MAX_IDENT_COUNTS) return 1;
+    for (i=0;i<g_ident_count_n;++i)
+        if (!strcmp(g_ident_counts[i].name,name)) return g_ident_counts[i].declared;
     return 0;
 }
 

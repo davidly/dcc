@@ -2680,15 +2680,28 @@ static int mir_binary_is_wide_phi_update(
     if (index < 0 || index >= mir.count)
         return 0;
     insn = &mir.insns[index];
-    if (insn->opcode != MIR_BINARY || insn->immediate != '+' ||
+    if (insn->opcode != MIR_BINARY ||
+        (insn->immediate != '+' && insn->immediate != '-') ||
         type_size(insn->secondary_offset) != 4)
         return 0;
     phi = mir_definition(insn->src1);
     right = mir_definition(insn->src2);
+    if (insn->immediate == '-' &&
+        (type_is_float(insn->secondary_offset) ||
+         right == NULL || right->opcode != MIR_CONST || right->immediate != 1))
+        return 0;
     if (phi == NULL || phi->opcode != MIR_PHI ||
         type_size(phi->type) != 4 || phi->src2 != insn->dst ||
         phi->object < 0 || insn->src2 == phi->dst)
         return 0;
+    if (insn->immediate=='-') {
+        int use,compares=0;
+        for (use=mir_next_use(phi->dst,-1);use>=0;use=mir_next_use(phi->dst,use))
+            if (mir.insns[use].opcode==MIR_BINARY &&
+                type_size(mir.insns[use].secondary_offset)==4 &&
+                is_cmp_op((int)mir.insns[use].immediate)) compares=1;
+        if (!compares) return 0;
+    }
     phi_instruction = (int)(phi - mir.insns);
     for (instruction = mir_next_use(insn->dst, -1); instruction >= 0;
          instruction = mir_next_use(insn->dst, instruction)) {
@@ -31902,7 +31915,7 @@ static void mir_emit_selfstore_incdec(MirStream *out, int offset, int is_inc)
     mir_stream_printf(out, "L%d:\n", done);
 }
 
-static int mir_emit_wide_phi_increment(MirStream *out, int phi_value)
+static int mir_emit_wide_phi_increment(MirStream *out, int phi_value, int is_increment)
 {
     int offset = mir_virtual_offset(phi_value);
     int iy_offset = mir_virtual_iy_offset(phi_value);
@@ -31918,6 +31931,17 @@ static int mir_emit_wide_phi_increment(MirStream *out, int phi_value)
         high_low = iy_offset - 2;
     } else if (offset - 2 < -128 || offset + 1 > 127) {
         return 0;
+    }
+    if (!is_increment) {
+        int bytes[4], byte;
+        bytes[0]=low; bytes[1]=low+1; bytes[2]=high_low; bytes[3]=high_low+1;
+        done=new_label();
+        for (byte=0; byte<3; ++byte)
+            mir_stream_printf(out,
+                "\tld a,(%s%+d)\n\tdec (%s%+d)\n\tor a\n\tjp nz, L%d\n",
+                base,bytes[byte],base,bytes[byte],done);
+        mir_stream_printf(out,"\tdec (%s%+d)\nL%d:\n",base,bytes[3],done);
+        return 1;
     }
     done = new_label();
     if (getenv("DCC_MIR_PERF_RECOVERY_REPORT") != NULL)
@@ -33123,6 +33147,38 @@ static int mir_value_is_zero_or_one(int value, int depth, int *budget)
         (d->immediate == TOK_EQ || d->immediate == TOK_NE ||
          d->immediate == '<' || d->immediate == '>' ||
          d->immediate == TOK_LE || d->immediate == TOK_GE);
+}
+
+/* A loop-carried long sum of a proven 0/1 value is a conditional carry
+ * chain. The ordinary PHI-update proof guarantees an unshared slot and no
+ * later use of the old accumulator. */
+static int mir_emit_boolean_phi_add(MirStream *out,int index)
+{
+    const struct MirInsn *add=&mir.insns[index];
+    int phi,store,budget=64,done;
+    if (add->immediate!='+' ||
+        mir_definition(add->src2)==NULL || mir_definition(add->src2)->opcode==MIR_CONST ||
+        !mir_binary_is_wide_phi_update(index,&phi,&store) ||
+        !mir_value_is_zero_or_one(add->src2,0,&budget) ||
+        mir_forwarded_wide_stack_value==add->src1)
+        return 0;
+    /* Preflight the exact displacement range before consuming any value. */
+    {
+        struct MirDirectWideLocation loc;
+        if (!mir_direct_wide_location(phi,&loc)) return 0;
+    }
+    if (mir_forwarded_wide_stack_value==add->src2) {
+        mir_stream_puts("\tpop hl\n\tpop de\n",out);
+        mir_forwarded_wide_stack_value=-1;
+        mir_forwarded_wide_stack_consumer=-1;
+    } else mir_emit_virtual_load_wide(out,add->src2);
+    done=new_label();
+    mir_stream_puts("\tld a,l\n\tor a\n",out);
+    mir_stream_printf(out,"\tjp z, L%d\n",done);
+    if (!mir_emit_wide_phi_increment(out,phi,1))
+        fatal("invalid boolean PHI increment location");
+    mir_stream_printf(out,"L%d:\n",done);
+    return 1;
 }
 
 static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
@@ -35812,10 +35868,12 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     out, narrow_phi_source,
                     insn->immediate == '+'))
                 break;
+            if (mir_emit_boolean_phi_add(out,i))
+                break;
             if (mir_binary_is_wide_phi_increment(
                     i, &wide_phi_source, NULL) &&
                 mir_emit_wide_phi_increment(
-                    out, wide_phi_source))
+                    out, wide_phi_source, insn->immediate == '+'))
                 break;
             if (mir_binary_is_selfstore_incdec(i, &selfstore_store_index)) {
                 int memory_type, memory_storage, memory_offset;

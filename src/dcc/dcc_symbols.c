@@ -590,6 +590,7 @@ struct Sym *add_local_known(const char *name, int type, int storage,
 
     if (g_frame.nlocals >= MAX_LOCALS) fatal("too many locals");
 
+    note_local_name_declared(name);
     s = &locals[g_frame.nlocals++];
     memset(s, 0, sizeof(*s));
     snprintf(s->name, sizeof(s->name), "%s", name);

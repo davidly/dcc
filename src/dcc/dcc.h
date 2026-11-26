@@ -365,6 +365,8 @@ struct Sym {
                       * reading its arguments directly out of those
                       * registers - dcc does not yet generate a __fastcall-
                       * aware prologue for a plain C function body. */
+    int auto_inline_boolean; /* zero-argument global comparison leaf */
+    char inline_boolean_global[64];
     int auto_inline_byte; /* bounded pure byte-return tree, MIR-only substitution */
     struct AstNode *inline_return_expr; /* simple static inline body, if captured */
     struct AstNode *inline_stmt_expr;   /* simple void inline expression body */
@@ -1036,6 +1038,8 @@ void emit_needed_deferred_bodies(void);
 int is_inline_substitutable(struct Sym *s);
 void skip_initializer_or_decl_tail(void);
 int local_name_address_taken_ahead(const char *name);
+void note_local_name_declared(const char *name);
+int local_name_declared_in_function(const char *name);
 int local_name_address_taken_in_function(const char *name);
 int local_name_address_taken_or_unknown(const char *name);
 int local_name_used_ahead(const char *name);
