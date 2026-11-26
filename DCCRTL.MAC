@@ -9443,6 +9443,44 @@ __m8u:
         rr      e
         ret
 
+; __m88u: unsigned 8x8 -> 16-bit product in the __m8u result layout.
+; Entry: A = multiplier, B = 0, C = multiplicand.
+; Exit: H = 0, L:E = product. A, BC, and D are preserved.
+; A left-shifting 16-bit accumulator needs only ADD HL,HL per bit,
+; rather than the three byte rotates needed for a full 8x16 product.
+        public  __m88u
+__m88u:
+        ld      h,a
+        ld      l,0
+        add     hl,hl
+        jr      nc,$+3
+        add     hl,bc
+        add     hl,hl
+        jr      nc,$+3
+        add     hl,bc
+        add     hl,hl
+        jr      nc,$+3
+        add     hl,bc
+        add     hl,hl
+        jr      nc,$+3
+        add     hl,bc
+        add     hl,hl
+        jr      nc,$+3
+        add     hl,bc
+        add     hl,hl
+        jr      nc,$+3
+        add     hl,bc
+        add     hl,hl
+        jr      nc,$+3
+        add     hl,bc
+        add     hl,hl
+        jr      nc,$+3
+        add     hl,bc
+        ld      e,l
+        ld      l,h
+        ld      h,0
+        ret
+
 ; __m1s: signed 16x16 -> 32 multiply, register ABI.
 ;   Entry: BC = LHS low word, HL = RHS low word.  Exit: DE:HL = product.
 ; __m1q has the same ABI and uses an 8-bit multiplier when either operand is
@@ -16509,7 +16547,7 @@ FQEXP_OK:
         ; "pop bc" below sets BOTH B and C - it's used to load C=Bhi, but
         ; that would just as well clobber B, which holds the precious
         ; result exponent. Save the whole BC pair (exponent+Ahi) on the
-        ; stack first and restore it right after the __m8u call, once the
+        ; stack first and restore it right after the __m88u call, once the
         ; 0:Bhi value it's needed for as an argument has been consumed.
         ;
         ; Bhi used to be refetched from (ix+6), the packed byte at b's
@@ -16524,13 +16562,13 @@ FQEXP_OK:
         ; carries {0,Bhi} across to the main-active bank, same reasoning
         ; as the FQFB2 fix above.
         push    bc              ; stash exponent(B) + Ahi(C)
-        ld      a,c             ; A = Ahi, the __m8u multiplier
+        ld      a,c             ; A = Ahi, the byte multiplier
         exx
         ld      b,0             ; alt B'=0, alt C'=Bhi untouched
         push    bc              ; push {0,Bhi}
         exx
         pop     bc              ; BC(main) = 0:Bhi, the multiplicand
-        call    __m8u           ; HL:E = Ahi*Bhi (H=0, value=L:E)
+        call    __m88u          ; both mantissa high bytes are only 8 bits
         pop     bc              ; restore B(exponent):C(Ahi, no longer needed)
 
         bit     7,l

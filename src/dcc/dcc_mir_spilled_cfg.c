@@ -25346,6 +25346,93 @@ static int mir_float_madd_match(int add_index, int *multiply_index,
     return 1;
 }
 
+/* Stream three single-use indirect float operands in evaluation order to
+ * the multiply-add ABI: addend and left factor on the stack, right factor
+ * in DE:HL. Only straight-line scalar address calculations may intervene.
+ * No control flow, calls, stores, VLA/varargs stack operations, or crossing
+ * planned stack handoffs are permitted. The memory reads retain their order.
+ */
+static int mir_float_madd_stream_loads(int add_index, int loads[3])
+{
+    int multiply_index, addend, values[3], part, i, value;
+    if (!mir_float_madd_match(add_index, &multiply_index, &addend))
+        return 0;
+    values[0] = addend;
+    values[1] = mir.insns[multiply_index].src1;
+    values[2] = mir.insns[multiply_index].src2;
+    for (part = 0; part < 3; ++part) {
+        const struct MirInsn *def = mir_definition(values[part]);
+        if (def == NULL || def->opcode != MIR_LOAD_INDIRECT ||
+            def->memory_size != 4 || def->bit_width != 0 ||
+            (def->memory_flags & MIR_MEMORY_FLAG_VOLATILE) != 0 ||
+            !type_is_float(def->type) || mir_value_use_count(def->dst) != 1)
+            return 0;
+        loads[part] = (int)(def - mir.insns);
+    }
+    if (loads[0] >= loads[1] || loads[1] >= loads[2] ||
+        add_index > loads[0] + 96 || loads[2] != multiply_index - 1)
+        return 0;
+    for (i = loads[0] + 1; i < loads[2]; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        const struct MirInsn *left = mir_definition(insn->src1);
+        const struct MirInsn *right = mir_definition(insn->src2);
+        if (i == loads[1])
+            continue;
+        if (type_size(insn->type) > 2 ||
+            (left != NULL && type_size(left->type) > 2) ||
+            (right != NULL && type_size(right->type) > 2) ||
+            (insn->memory_flags & MIR_MEMORY_FLAG_VOLATILE) != 0)
+            return 0;
+        switch (insn->opcode) {
+        case MIR_NOP: case MIR_CONST: case MIR_PARAM: case MIR_ADDRESS:
+        case MIR_LOAD: case MIR_INDEX_ADDRESS: case MIR_MEMBER_ADDRESS:
+        case MIR_BINARY: case MIR_UNARY:
+            break;
+        default:
+            return 0;
+        }
+    }
+    /* Extra operand pushes must never cover another value's stack cache. */
+    for (value = 0; value < mir.next_value; ++value) {
+        const struct MirInsn *def = mir_definition(value);
+        int producer = def != NULL ? (int)(def - mir.insns) : -1;
+        int consumer = mir.planned_stack_consumers != NULL
+            ? mir.planned_stack_consumers[value] : -1;
+        for (part = 0; part < 3; ++part)
+            if (producer < loads[part] && consumer >= loads[part])
+                return 0;
+        /* Dynamic single-use handoffs are selected during emission rather
+         * than recorded in planned_stack_consumers. Rule out any scalar
+         * single-use interval crossing an operand push as well. */
+        if (producer >= 0 && producer < loads[2] &&
+            type_size(def->type) <= 2 && mir_value_use_count(value) == 1) {
+            for (i = loads[0]; i <= loads[2]; ++i) {
+                if (mir.insns[i].src1 != value && mir.insns[i].src2 != value)
+                    continue;
+                for (part = 0; part < 2; ++part)
+                    if (producer < loads[part] && i > loads[part])
+                        return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int mir_float_madd_stream_load_role(int instruction)
+{
+    int add_index, loads[3], part;
+    /* Bound the selection work; longer expressions use ordinary spills. */
+    for (add_index = instruction + 2;
+         add_index < mir.count && add_index <= instruction + 96; ++add_index) {
+        if (!mir_float_madd_stream_loads(add_index, loads))
+            continue;
+        for (part = 0; part < 3; ++part)
+            if (loads[part] == instruction)
+                return part;
+    }
+    return -1;
+}
+
 static int mir_float_multiply_is_fused(int multiply_index)
 {
     int matched_multiply;
@@ -34321,6 +34408,17 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 mir_definition(insn->src1);
             int de_consumer;
             int de_value;
+            int stream_role = insn->memory_size == 4
+                ? mir_float_madd_stream_load_role(i) : -1;
+            if (stream_role >= 0) {
+                mir_emit_virtual_load(out, insn->src1);
+                mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
+                      "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+                      "\tex de,hl\n", out);
+                if (stream_role < 2)
+                    mir_stream_puts("\tpush de\n\tpush hl\n", out);
+                break;
+            }
             if (mir_match_indirect_incdec(i, &incdec)) {
                 mir_emit_indirect_incdec(out, &incdec);
                 i = incdec.store_instruction;
@@ -35105,11 +35203,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 break;
             if (mir_float_madd_match(i, &multiply_index, &addend_value)) {
                 const struct MirInsn *multiply = &mir.insns[multiply_index];
-                mir_emit_virtual_load_wide(out, addend_value);
-                mir_stream_puts("\tpush de\n\tpush hl\n", out);
-                mir_emit_virtual_load_wide(out, multiply->src1);
-                mir_stream_puts("\tpush de\n\tpush hl\n", out);
-                mir_emit_virtual_load_wide(out, multiply->src2);
+                int stream_loads[3];
+                if (!mir_float_madd_stream_loads(i, stream_loads)) {
+                    mir_emit_virtual_load_wide(out, addend_value);
+                    mir_stream_puts("\tpush de\n\tpush hl\n", out);
+                    mir_emit_virtual_load_wide(out, multiply->src1);
+                    mir_stream_puts("\tpush de\n\tpush hl\n", out);
+                    mir_emit_virtual_load_wide(out, multiply->src2);
+                }
                 mir_emit_runtime_call(out, "__fmaf");
                 mir_stream_puts("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
                 mir_emit_virtual_store_wide(out, insn->dst);

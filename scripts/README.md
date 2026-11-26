@@ -145,6 +145,32 @@ The `run_batches` override is for read-only test COMs accepting zero-based
 this way. The configured batch count stays fixed across hosts and concurrency
 settings so summed cycle baselines remain comparable.
 
+## `fma-stream-fuzz.py`
+
+Python 3.7+ differential tests for float multiply-add operand streaming.
+Build DCC first. The script builds an isolated control compiler with only
+streaming disabled; both compilers use the same runtime. CMake and the native
+DCC tools plus `ntvcm` must be available.
+
+```sh
+python3 scripts/fma-stream-fuzz.py --seeds 500 --jobs 8
+python3 scripts/fma-stream-fuzz.py --start 501 --seeds 500 --jobs 8 --force-spilled
+```
+
+Each seed generates twelve families covering overlapping pointer views,
+complex indices, register pressure, large frames, matrix loops, repeated
+operations, and fallback cases involving calls, branches, volatile reads or
+reused float values. Four variants cover peephole optimization and stack
+checks on/off. Comparisons use every pool element's raw float bits, side
+effects and frame guards. Assembly checks confirm streaming was exercised
+and the fallback families were not streamed. `--force-spilled` selects the
+spilled backend to test it even when normal selection prefers another backend.
+
+Sources and `summary.json` remain in a fresh directory under `build/`;
+failing builds also retain assembly, executables and logs. `--keep-build`
+retains successful builds too. Use `--work` to choose a fresh directory and
+`--control-compiler` to reuse a control compiler produced by an earlier run.
+
 ## `typed-expr-fuzz.py`
 
 Differential fuzzer for integer expression code generation. Each generated
