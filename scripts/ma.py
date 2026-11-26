@@ -24,6 +24,19 @@ class BuildError(Exception):
     pass
 
 
+# String and character literals, then block and line comments. Literals are
+# matched first so a "/*" or "//" inside one isn't taken for a comment.
+C_LITERAL_OR_COMMENT = re.compile(
+    r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|/\*.*?\*/|//[^\n]*', re.S)
+
+
+def without_c_comments(text):
+    """Blank out C comments so the printf-format scan only sees code and
+    literals: a comment like "about 1% faster" isn't a %f format."""
+    return C_LITERAL_OR_COMMENT.sub(
+        lambda m: m.group(0) if m.group(0)[0] in '"\'' else ' ', text)
+
+
 def mode(value):
     value = value.lower()
     if value in FAST:
@@ -145,7 +158,7 @@ def build_commands(args, env):
         elif (folder/'stdio.h').is_file():
             includes.append(folder)
     includes = unique_paths(includes)
-    contents = source.read_text(errors='replace')
+    contents = without_c_comments(source.read_text(errors='replace'))
     floatio = env.get('DCC_FLOATIO') == '1' or bool(re.search(r'%[-+ #0-9.*]*[fF]', contents))
     longio = env.get('DCC_LONGIO') == '1' or bool(re.search(r'%[-+ #0-9.*]*l[duxXs]', contents, re.I))
     stack = args.stack_size if args.stack_size is not None else env.get('DCC_STACK_SIZE')

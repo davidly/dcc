@@ -85,6 +85,17 @@ class Driver(unittest.TestCase):
         self.assertIn('dcc-floatio=true',command)
         self.assertIn('dcc-flongio=true',command)
 
+    def test_format_detection_ignores_comments(self):
+        Path('tests/hello.c').write_text(
+            '/* about 1% faster */\nint main() { return 0; } // 5% fewer, %lu here\n')
+        command = self.commands()[0]
+        self.assertIn('dcc-floatio=false',command)
+        self.assertIn('dcc-flongio=false',command)
+        Path('tests/hello.c').write_text('printf("/* %f */ // %ld");')
+        command = self.commands()[0]
+        self.assertIn('dcc-floatio=true',command)
+        self.assertIn('dcc-flongio=true',command)
+
     def test_tool_and_stack_overrides(self):
         env={'DCC':'./custom/dcc','DCCMAKE':'./custom/dccmake','DCC_STACK_SIZE':'768',
              'DCC_STRIP_UNUSED':'0','DCC_USE_EMULATED_M80':'1'}
