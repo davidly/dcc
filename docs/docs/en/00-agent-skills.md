@@ -6,7 +6,7 @@ A skill is a folder containing a `SKILL.md` and optional references.
 | Skill | Use it for |
 | --- | --- |
 | `dcc-cpm-z80` | Writing, building, running, and debugging CP/M programs with DCC, including its language and runtime conventions. |
-| `dcc-fuzz-testing` | Choosing and running the clang oracle, typed expression, runtime library, or syntax crash fuzzer. It also covers reproducing findings and verifying fixes. See [Differential testing](appendix/06-differential-testing.md). |
+| `dcc-fuzz-testing` | Choosing and running the clang oracle, typed expression, runtime library, or syntax crash fuzzer. It also covers reproducing findings and verifying fixes. See [Fuzz testing](appendix/06-differential-testing.md). |
 
 An agent that supports skills reads `SKILL.md` on demand when your task matches
 the skill's description, so it gets guidance for the DCC C Compiler without you pasting it
