@@ -474,15 +474,43 @@ static int auto_byte_inline_tree(struct Sym *fn, const struct AstNode *node,
     case AST_BINARY:
         if (node->op == '&' || node->op == '|' || node->op == '^')
             ++*bitwise;
+        else if(node->op==TOK_EQ || node->op==TOK_NE) ++*bitwise;
         else if ((node->op != TOK_SHL && node->op != TOK_SHR) ||
                  node->b == NULL || node->b->kind != AST_INT_LIT ||
                  node->b->ival < 0 || node->b->ival > 15)
             return 0;
+        else ++*bitwise;
         return auto_byte_inline_tree(fn, node->a, budget, bitwise) &&
                auto_byte_inline_tree(fn, node->b, budget, bitwise);
     default:
         return 0;
     }
+}
+
+/* A bounded single return expression cannot allocate nested declarations
+ * or hidden aggregate call temporaries during the speculative parse. */
+static int looks_like_pure_byte_return(void)
+{
+    LexState saved=lex_save();
+    int tokens=0,previous=0,ok=1;
+    next_token();
+    if(g_lex.tok.kind!=TOK_RETURN) ok=0;
+    next_token();
+    while(ok && g_lex.tok.kind!=';' && g_lex.tok.kind!=TOK_EOF && ++tokens<=64) {
+        int kind=g_lex.tok.kind;
+        if(kind==TOK_ID) {
+            struct Sym *symbol=find_local(g_lex.tok.text);
+            if((symbol==NULL || symbol->storage!=SC_PARAM) && find_typedef(g_lex.tok.text)<0) ok=0;
+        }
+        if(kind=='*' || kind=='{' || kind=='}' || kind=='=' || kind==TOK_INC || kind==TOK_DEC ||
+           (previous==TOK_ID && kind=='(') || kind==TOK_RETURN || kind==TOK_IF ||
+           kind==TOK_FOR || kind==TOK_WHILE || kind==TOK_SIZEOF) ok=0;
+        previous=kind; next_token();
+    }
+    if(g_lex.tok.kind!=';' || tokens>64) ok=0;
+    next_token();
+    ok=ok && g_lex.tok.kind=='}';
+    lex_restore(&saved); return ok;
 }
 
 /* Avoid parsing unrelated bodies speculatively: aggregate calls and local
@@ -527,8 +555,8 @@ static void record_inline_function_if_simple(struct Sym *s)
     boolean_leaf = s->type == TYPE_INT && s->proto_nargs == 0 && !s->proto_variadic &&
         looks_like_boolean_leaf();
     if ((!s->is_static && (!boolean_leaf || !automatic)) || (automatic && !boolean_leaf &&
-        (s->type != (TYPE_CHAR | TYPE_UNSIGNED) || s->proto_nargs != 1 ||
-         s->proto_types[0] != (TYPE_INT | TYPE_UNSIGNED))))
+        (type_size(s->type)!=1 || type_is_bool(s->type) ||
+         s->proto_nargs<1 || s->proto_nargs>3 || !looks_like_pure_byte_return())))
         return;
     if ((s->type & 15) != TYPE_VOID &&
         (!(type_size(s->type) == 1 || type_size(s->type) == 2 || type_size(s->type) == 4) ||
@@ -538,7 +566,9 @@ static void record_inline_function_if_simple(struct Sym *s)
     nparams = 0;
     for (i = 0; i < g_frame.nlocals && nparams < MAX_PROTO_PARAMS; ++i) {
         if (locals[i].storage == SC_PARAM) {
-            if (automatic && locals[i].is_volatile)
+            if (automatic && (locals[i].is_volatile ||
+                (!boolean_leaf && (type_size(locals[i].type)>2 ||
+                 type_ptr_depth(locals[i].type)!=0 || type_is_float(locals[i].type)))))
                 return;
             if (!(type_size(locals[i].type) == 1 || type_size(locals[i].type) == 2 ||
                   type_size(locals[i].type) == 4) ||
@@ -613,7 +643,7 @@ static void record_inline_function_if_simple(struct Sym *s)
             return;
         ret_expr = body->list[0]->a;
         if (ret_expr == NULL || ret_expr->kind != AST_CAST || ret_expr->type != s->type ||
-            !auto_byte_inline_tree(s, ret_expr, &budget, &bitwise) || bitwise < 2 ||
+            !auto_byte_inline_tree(s, ret_expr, &budget, &bitwise) || bitwise < 1 ||
             !inline_expr_is_simple(s, ret_expr))
             return;
         s->inline_return_expr = ret_expr;
@@ -2612,7 +2642,7 @@ int try_narrow_for_counter(const char *name, int type, int arrlen, int total_ele
     asm_suppress_depth++;
     seq = narrow_build_speculative_scope(&narrow_for_scratch_arena);
     asm_suppress_depth--;
-    result = (seq != NULL) ? narrow_for_counter_is_byte_safe(seq, name) : 0;
+    result = (seq != NULL) ? narrow_for_counter_is_byte_safe(seq, name, (type & TYPE_UNSIGNED) != 0) : 0;
 
     lex_restore(&_ls);
     spec_parse_restore(&_sp);

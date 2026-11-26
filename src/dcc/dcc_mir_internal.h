@@ -635,6 +635,9 @@ int mir_emit_homed_constant_binary_instruction(MirStream *out,
                                                        const struct MirInsn *insn,
                                                        int operation, long value);
 int mir_homed_immediate_compare_component(int value);
+void mir_homed_parameter_partition_scope(int active);
+int mir_emit_homed_parameter_byte_partition(MirStream *out,int value);
+int mir_value_has_unsigned_byte_range(int value,int depth);
 int mir_emit_homed_compare_false(MirStream *out,
                                         const struct MirInsn *compare,
                                         int false_label);
@@ -776,6 +779,7 @@ void mir_regional_begin_emission(void);
 int mir_regional_before_instruction(MirStream *out, int instruction);
 void mir_regional_after_instruction(int instruction);
 void mir_resolve_deferred_metadata(void);
+int mir_hoist_readonly_parameter_expression(void);
 int mir_optimize_integer_expressions(void);
 int mir_value_low_bit_demand(int value);
 int mir_word_values_have_same_bits(int left, int right);

@@ -1,0 +1,19 @@
+; dcc stage-1d output
+	cseg
+	public _byte_update
+_byte_update:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	dec sp
+	ld hl,(_count)
+	inc hl
+	ld (_count),hl
+	ld a,(_byte)
+	xor 1
+	ld (_byte),a
+	ld sp,ix
+	pop ix
+	ret
+	end

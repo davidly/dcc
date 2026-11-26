@@ -2060,6 +2060,43 @@ static int function_has_frame_address_escape(int func_start, int func_end)
  * after selection is final.
  */
 
+/* A leaf with no body stack/frame references cannot observe an unused
+ * leading allocation. Remove that allocation first; the existing IX-frame
+ * pass can then remove the now-empty prologue and epilogue. */
+static int pass_elim_dead_leaf_allocation(void)
+{
+    int i,changed=0;
+    for(i=0;i+6<nlines;++i) {
+        int allocation=i+3,end=allocation,j,boundary=nlines,epilogue=-1,valid=1,bytes=0,word_form=0;
+        char immediate[64];
+        if(!eq(i,"push ix") || !eq(i+1,"ld ix,0") || !eq(i+2,"add ix,sp")) continue;
+        while(end<nlines && eq(end,"dec sp") && end-allocation<64) ++end;
+        if(end==allocation && end+2<nlines &&
+           parse_ld_hl_imm(lines[end],immediate,sizeof(immediate)) && immediate[0]=='-' &&
+           parse_nonneg_int(immediate+1,&bytes) && bytes>0 && bytes<=64 &&
+           eq(end+1,"add hl,sp") && eq(end+2,"ld sp,hl")) { end+=3;word_form=1; }
+        if(end==allocation) continue;
+        for(j=end;j<nlines;++j) if(!strncmp(lines[j],"public ",7) || is_global_asm_label_line(j)) { boundary=j;break; }
+        for(j=end;j<boundary;++j) {
+            const PeepLineInfo *info;
+            if(j+2<boundary && eq(j,"ld sp,ix") && eq(j+1,"pop ix") && eq(j+2,"ret")) { epilogue=j;break; }
+            info=peep_line_info(j);
+            if(info==NULL) { valid=0;break; }
+            if(info->kind==PEEP_LINE_BLANK || info->kind==PEEP_LINE_COMMENT) continue;
+            if(info->kind!=PEEP_LINE_INSTRUCTION || info->effects.unknown || info->effects.control_flow ||
+               ((info->effects.reads|info->effects.writes)&(PEEP_REG_SP|PEEP_REG_IX))!=0) { valid=0;break; }
+        }
+        if(epilogue<0 || !valid) continue;
+        for(j=epilogue+3;j<boundary;++j) {
+            const PeepLineInfo *info=peep_line_info(j);
+            if(info==NULL || (info->kind!=PEEP_LINE_BLANK && info->kind!=PEEP_LINE_COMMENT && !eq(j,"end"))) { valid=0;break; }
+        }
+        if(!valid || (word_form && !peep_registers_dead_after(end-1,PEEP_REG_HL))) continue;
+        delete_n(allocation,end-allocation);changed=1;i--;
+    }
+    return changed;
+}
+
 static int pass_elim_ix_frame(void)
 {
     int i, j;
@@ -13007,7 +13044,8 @@ int main(int argc, char **argv)
      * is the same story once more: a conditional jump to that same
      * newly-collapsed label only now looks like a plain "ret" to it. */
     {
-        int frames_removed = RUN_PASS(pass_elim_ix_frame);
+        int frames_removed = RUN_PASS(pass_elim_dead_leaf_allocation);
+        frames_removed |= RUN_PASS(pass_elim_ix_frame);
 
         /* Frames whose only IX uses are parameter reads become SP-relative
          * loads; this needs the final push/pop shape, so it also runs after

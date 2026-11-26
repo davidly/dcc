@@ -26344,6 +26344,22 @@ static int mir_emit_fused_comparison_branch(MirStream *out, const int *labels,
     target = mir_find_label(branch->label);
     if (target < 0)
         return 0;
+    if(!mir.has_narrowed_for_counter && left!=NULL && right!=NULL &&
+       left->opcode!=MIR_CONST && right->opcode!=MIR_CONST &&
+       !de_holds_biased_constant && !mir_fused_compare_uses_byte_immediate(compare_index) &&
+       !mir_fused_compare_is_const_zero_rhs(compare_index) &&
+       !mir_fused_compare_is_const_zero_lhs(compare_index) &&
+       !mir_fused_compare_is_signed_zero_sign_test(compare_index) &&
+       mir_value_has_unsigned_byte_range(compare->src1,0) &&
+       mir_value_has_unsigned_byte_range(compare->src2,0)) {
+        if(operation=='>' || operation==TOK_LE) {
+            mir_stream_puts("\tld a,e\n\tcp l\n",out);
+            operation=operation=='>'?'<':TOK_GE;
+        } else mir_stream_puts("\tld a,l\n\tcp e\n",out);
+        true_condition=operation==TOK_EQ?"z":operation==TOK_NE?"nz":operation=='<'?"c":"nc";
+        return mir_emit_conditional_branch_with_phi_copies(out,labels,true_condition,
+            compare_index+1+negate,target,branch->label);
+    }
     if (mir_fused_compare_is_aligned_bound(compare_index)) {
         mir_stream_printf(out, "\tld a,h\n\tcp %ld\n", right->immediate >> 8);
         return mir_emit_conditional_branch_with_phi_copies(
@@ -26505,9 +26521,78 @@ static int mir_byte_compare_chain_contains(int value, int member)
     return 0;
 }
 
+/* A single-use fixed-address byte update can stay in A throughout. The
+ * original memory access order is retained, and unrelated/shared values or
+ * volatile accesses stop the region match. */
+static int mir_emit_fixed_byte_update_region(MirStream *out,int index)
+{
+    const struct MirInsn *load=&mir.insns[index],*store=NULL,*binary,*constant,*source;
+    struct MirResolvedNamedAddress address,written;
+    int i,last=-1,operand,depth=0;
+    char name[160];
+    const char *mnemonic;
+    if(opt_debug || load->opcode!=MIR_LOAD_INDIRECT || load->type!=(TYPE_CHAR|TYPE_UNSIGNED) ||
+       load->memory_size!=1 || load->memory_flags || load->bit_width ||
+       mir_value_use_count(load->dst)!=1 ||
+       mir_value_currently_uses_stack_handoff(load->src1,index) ||
+       mir_forwarded_stack_value==load->src1 || mir_planned_stack_is_emitted(load->src1) ||
+       !mir_resolve_named_address(load->src1,&address) || address.storage!=SC_GLOBAL)
+        return -1;
+    for(i=index+1;i<mir.count && i<=index+16;++i) {
+        const struct MirInsn *d=&mir.insns[i];
+        if(d->opcode==MIR_STORE_INDIRECT) { store=d;last=i;break; }
+        if(d->opcode!=MIR_NOP && d->opcode!=MIR_CONST &&
+           !(d->opcode==MIR_UNARY && d->immediate==0) && d->opcode!=MIR_BINARY) return -1;
+    }
+    if(store==NULL || !mir_resolve_named_address(store->src1,&written) ||
+       written.storage!=address.storage || strcmp(written.base_name,address.base_name) || written.offset!=address.offset ||
+       mir_value_currently_uses_stack_handoff(store->src1,last) || mir_planned_stack_is_emitted(store->src1) ||
+       mir_forwarded_stack_value==store->src1 || store->memory_flags || store->bit_width ||
+       store->memory_size!=1 || store->type!=(TYPE_CHAR|TYPE_UNSIGNED)) return -1;
+    binary=mir_definition(store->src2);
+    while(binary!=NULL && binary->opcode==MIR_UNARY && binary->immediate==0 && ++depth<8 &&
+          type_size(binary->type)<=2 && !type_is_bool(binary->type) && !type_is_float(binary->type) &&
+          type_ptr_depth(binary->type)==0 && mir_value_use_count(binary->dst)==1)
+        binary=mir_definition(binary->src1);
+    if(binary==NULL || binary->opcode!=MIR_BINARY || mir_value_use_count(binary->dst)!=1 ||
+       type_size(binary->secondary_offset)!=2 || type_is_float(binary->secondary_offset) ||
+       type_ptr_depth(binary->secondary_offset)!=0) return -1;
+    switch((int)binary->immediate) {
+    case '^':mnemonic="xor ";break;
+    case '&':mnemonic="and ";break;
+    case '|':mnemonic="or ";break;
+    case '+':mnemonic="add a,";break;
+    case '-':mnemonic="sub ";break;
+    default:return -1;
+    }
+    constant=mir_definition(binary->src2);operand=binary->src1;
+    if((constant==NULL || constant->opcode!=MIR_CONST) && binary->immediate!='-') {
+        constant=mir_definition(binary->src1);operand=binary->src2;
+    }
+    if(constant==NULL || constant->opcode!=MIR_CONST || mir_value_use_count(constant->dst)!=1) return -1;
+    source=mir_definition(operand);depth=0;
+    while(source!=NULL && source->opcode==MIR_UNARY && source->immediate==0 && ++depth<8 &&
+          type_size(source->type)<=2 && !type_is_bool(source->type) && !type_is_float(source->type) &&
+          type_ptr_depth(source->type)==0 && mir_value_use_count(source->dst)==1)
+        source=mir_definition(source->src1);
+    if(source!=load) return -1;
+    for(i=index+1;i<last;++i) {
+        const struct MirInsn *d=&mir.insns[i];
+        if(d->opcode==MIR_NOP || d==binary || d==constant) continue;
+        if(d->opcode==MIR_UNARY && d->immediate==0 && mir_value_use_count(d->dst)==1 &&
+           (mir_byte_compare_chain_contains(store->src2,d->dst) ||
+            mir_byte_compare_chain_contains(operand,d->dst))) continue;
+        return -1;
+    }
+    if(!mir_prepare_constant_absolute_operand(out,load->src1,name,sizeof(name))) return -1;
+    for(i=index+1;i<=last;++i) mir_emit_debug_events(out,i);
+    mir_stream_printf(out,"\tld a,(%s)\n\t%s%ld\n\tld (%s),a\n",name,mnemonic,constant->immediate&255L,name);
+    return last;
+}
+
 /* Fuse a single-use unsigned-byte load, a pure byte RHS, and an equality
  * branch. Promotions retain the byte's range; no word spills are necessary.
- * Only NOPs, the RHS fold/constant, and the comparison's own promotions may
+ * Only NOPs, single-use byte arithmetic/constants, and their promotions may
  * be bypassed. Calls, stores, volatile reads, labels, and shared values are
  * never moved. All ordinary scalar virtual loads preserve BC, so C can hold
  * the first byte while the RHS is evaluated in HL/A. */
@@ -26519,7 +26604,8 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
     const struct MirInsn *input;
     const struct MirInsn *constant = NULL;
     int cmp = -1, other, left, right, i, target;
-    int is_fold;
+    int is_fold, byte_op=0, input_value=-1;
+    const struct MirInsn *arithmetic=NULL;
 
     if (opt_debug || load->opcode != MIR_LOAD_INDIRECT || load->memory_size != 1 ||
         load->type != (TYPE_CHAR | TYPE_UNSIGNED) || load->memory_flags != 0 ||
@@ -26533,7 +26619,9 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
         }
         if (d->opcode != MIR_NOP && d->opcode != MIR_CONST &&
             !(d->opcode == MIR_UNARY && d->immediate == 0) &&
-            !(d->opcode == MIR_BINARY && d->immediate == MIR_OP_BYTE_FOLD16))
+            !(d->opcode == MIR_BINARY && (d->immediate == MIR_OP_BYTE_FOLD16 ||
+              d->immediate=='+' || d->immediate=='-' || d->immediate=='&' ||
+              d->immediate=='|' || d->immediate=='^')))
             return -1;
     }
     if (compare == NULL || mir_binary_is_fusable_comparison(cmp) != 1)
@@ -26547,11 +26635,31 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
     if (rhs == NULL || rhs->memory_flags != 0 || other == load->dst)
         return -1;
     is_fold = rhs->opcode == MIR_BINARY && rhs->immediate == MIR_OP_BYTE_FOLD16;
-    /* A previously materialized byte often already has a cheap register
-     * path. Fuse an embedded fold, where bypassing its word spills pays. */
-    if (!is_fold)
-        return -1;
-    input = mir_definition(rhs->src1);
+    if (is_fold) input_value=rhs->src1;
+    else if(rhs->opcode==MIR_UNARY && rhs->immediate==0) {
+        arithmetic=mir_definition(rhs->src1);
+        if(arithmetic==NULL || arithmetic->opcode!=MIR_BINARY ||
+           type_size(arithmetic->type)!=2 || type_ptr_depth(arithmetic->type)!=0 ||
+           type_is_float(arithmetic->type) || mir_value_use_count(arithmetic->dst)!=1)
+            return -1;
+        byte_op=(int)arithmetic->immediate;
+        if(byte_op!='+' && byte_op!='-' && byte_op!='&' && byte_op!='|' && byte_op!='^')
+            return -1;
+        constant=mir_definition(arithmetic->src2); input_value=arithmetic->src1;
+        if((constant==NULL || constant->opcode!=MIR_CONST) && byte_op!='-') {
+            constant=mir_definition(arithmetic->src1); input_value=arithmetic->src2;
+        }
+        if(constant==NULL || constant->opcode!=MIR_CONST || arithmetic<=load ||
+           arithmetic>=compare || mir_value_use_count(other)!=1) return -1;
+        input=mir_definition(input_value);
+        while(input!=NULL && input>load && input->opcode==MIR_UNARY &&
+              input->immediate==0 && type_size(input->type)<=2 &&
+              !type_is_float(input->type) && !type_is_bool(input->type) && type_ptr_depth(input->type)==0 &&
+              mir_value_use_count(input->dst)==1) {
+            input_value=input->src1; input=mir_definition(input_value);
+        }
+    } else return -1;
+    input = mir_definition(input_value);
     if (input == NULL || input >= load || type_size(input->type) > 2 ||
         type_ptr_depth(input->type) != 0 || type_is_float(input->type) ||
         input->memory_flags != 0 ||
@@ -26566,19 +26674,19 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
         if (rhs <= load || rhs >= compare || mir_value_use_count(other) != 1 ||
             constant == NULL || constant->opcode != MIR_CONST)
             return -1;
-    } else if (rhs >= load) {
-        return -1;
     }
     for (i = index + 1; i < cmp; ++i) {
         const struct MirInsn *d = &mir.insns[i];
-        if (d->opcode == MIR_NOP || d == rhs)
+        if (d->opcode == MIR_NOP || d == rhs || d == arithmetic)
             continue;
         if (d == constant && mir_value_use_count(d->dst) == 1)
             continue;
         if (d->opcode == MIR_UNARY && d->immediate == 0 &&
             mir_value_use_count(d->dst) == 1 &&
             (mir_byte_compare_chain_contains(compare->src1, d->dst) ||
-             mir_byte_compare_chain_contains(compare->src2, d->dst)))
+             mir_byte_compare_chain_contains(compare->src2, d->dst) ||
+             (arithmetic!=NULL && (mir_byte_compare_chain_contains(arithmetic->src1,d->dst) ||
+                                  mir_byte_compare_chain_contains(arithmetic->src2,d->dst)))))
             continue;
         return -1;
     }
@@ -26593,7 +26701,10 @@ static int mir_emit_byte_equality_region(MirStream *out, const int *labels, int 
         if ((constant->immediate & 255L) != 0)
             mir_stream_printf(out, "\txor %lu\n", (unsigned long)constant->immediate & 255UL);
     } else {
+        const char *mnemonic=byte_op=='+'?"add a,":byte_op=='-'?"sub ":
+                             byte_op=='&'?"and ":byte_op=='|'?"or ":"xor ";
         mir_stream_puts("\tld a,l\n", out);
+        mir_stream_printf(out,"\t%s%lu\n",mnemonic,(unsigned long)constant->immediate&255UL);
     }
     mir_stream_puts("\tcp c\n", out);
     if (!mir_emit_conditional_branch_with_phi_copies(out, labels,
@@ -31141,7 +31252,8 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
         return 0;
     if (type_ptr_depth(insn->secondary_offset) > 0 ||
         (type_size(insn->secondary_offset) != 2 &&
-         type_size(insn->secondary_offset) != 4))
+         type_size(insn->secondary_offset) != 4 &&
+         !(insn->narrowed_for_counter_update && insn->type==(TYPE_CHAR|TYPE_UNSIGNED))))
         return 0;
     right_definition = mir_definition(insn->src2);
     if (right_definition == NULL || right_definition->opcode != MIR_CONST ||
@@ -31159,8 +31271,15 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
         (memory_storage != SC_LOCAL && memory_storage != SC_PARAM &&
          memory_storage != SC_GLOBAL && memory_storage != SC_EXTERN) ||
         type_ptr_depth(memory_type) > 0 ||
-        (type_size(memory_type) != 2 && type_size(memory_type) != 4))
+        (type_size(memory_type) != 2 && type_size(memory_type) != 4 &&
+         !(insn->narrowed_for_counter_update && memory_type==(TYPE_CHAR|TYPE_UNSIGNED))))
         return 0;
+    /* A discarded bounded byte update can change its named home directly.
+     * PHI-backed values and live old results retain their separate homes. */
+    if(type_size(memory_type)==1 &&
+       (memory_storage!=SC_LOCAL || left_definition->opcode!=MIR_LOAD ||
+        left_definition->memory_flags!=0 || mir_value_use_count(insn->src1)!=1 ||
+        memory_offset< -128 || memory_offset>127)) return 0;
     /* In loops, wide globals can ripple carry/borrow directly through memory.
      * Keep compact straight-line candidates: their existing register update
      * can avoid an IX frame and wins on code size.
@@ -34969,7 +35088,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             int stream_role = insn->memory_size == 4
                 ? mir_float_madd_stream_load_role(i) : -1;
             {
-                int fused_branch = mir_emit_byte_equality_region(out, labels, i);
+                int fixed_update=mir_emit_fixed_byte_update_region(out,i);
+                int fused_branch;
+                if(fixed_update>=0) { i=fixed_update;continue; }
+                fused_branch = mir_emit_byte_equality_region(out, labels, i);
                 if (fused_branch >= 0) {
                     i = fused_branch;
                     continue;
@@ -35880,6 +36002,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 mir_scalar_memory_location(mir_definition(insn->src1),
                                             &memory_type, &memory_storage,
                                             &memory_offset);
+                if(type_size(memory_type)==1) {
+                    mir_stream_printf(out,"\t%s (ix%+d)\n",insn->immediate=='+'?"inc":"dec",memory_offset);
+                    break;
+                }
                 if (memory_storage == SC_GLOBAL ||
                     memory_storage == SC_EXTERN) {
                     mir_emit_selfstore_incdec_global(

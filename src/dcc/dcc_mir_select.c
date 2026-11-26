@@ -3896,6 +3896,165 @@ int mir_try_emit_z80(MirStream *out)
     return mir_try_selector(out, mir_try_emit_affine_return);
 }
 
+static void mir_record_predicate_mask_summary(int parameter,int object,int branches,int stores)
+{
+    struct Sym *fn=find_global(mir.name);
+    int i,j,count=0,used=0;
+    unsigned char masks[8],less[8];
+    unsigned short bounds[8];
+    if(fn==NULL || fn->proto_nargs!=1 || fn->proto_types[0]!=(TYPE_INT|TYPE_UNSIGNED) ||
+       branches>8 || stores!=branches+1) return;
+    for(i=0;i<mir.count;++i) {
+        const struct MirInsn *d=&mir.insns[i],*comparison,*constant,*update;
+        int target,found=-1,op,negated;
+        long mask;
+        if(d->opcode!=MIR_BRANCH_FALSE) continue;
+        comparison=mir_definition(d->src1);negated=comparison->opcode==MIR_UNARY;
+        if(negated) comparison=mir_definition(comparison->src1);
+        constant=mir_definition(comparison->src2);
+        op=(int)comparison->immediate;
+        if(negated) op=op=='<'?TOK_GE:'<';
+        target=mir_find_label(d->label);
+        for(j=i+1;j<target;++j) {
+            const struct MirInsn *part=&mir.insns[j];
+            if(part->opcode==MIR_STORE) { if(found>=0) return; found=j; }
+            else if(part->opcode!=MIR_NOP && part->opcode!=MIR_CONST &&
+                    part->opcode!=MIR_LOAD && part->opcode!=MIR_BINARY) return;
+        }
+        if(found<0 || count>=8) return;
+        update=mir_definition(mir.insns[found].src1);
+        if(update->opcode==MIR_CONST) { if(count!=0) return; mask=update->immediate; }
+        else {
+            const struct MirInsn *value=mir_definition(update->src2);
+            if(value==NULL || value->opcode!=MIR_CONST) return;
+            mask=value->immediate;
+        }
+        if(mask<=0 || mask>128 || (mask&(mask-1)) || (used&(int)mask)) return;
+        used|=(int)mask; masks[count]=(unsigned char)mask;
+        less[count]=(unsigned char)(op=='<');bounds[count]=(unsigned short)constant->immediate;
+        ++count;
+    }
+    if(count!=branches) return;
+    for(i=0;i<mir.count;++i) if(mir.insns[i].opcode==MIR_STORE && mir.insns[i].object==object) {
+        const struct MirInsn *value=mir_definition(mir.insns[i].src1);
+        if(value!=NULL && value->opcode==MIR_CONST && value->immediate==0) break;
+    }
+    if(i>=mir.count) return;
+    /* The validated shape has one initializer and one update per branch. */
+    for(j=0;j<i;++j) if(mir.insns[j].opcode==MIR_BRANCH_FALSE) return;
+    fn->predicate_mask_count=count;
+    for(i=0;i<count;++i) {
+        fn->predicate_masks[i]=masks[i];fn->predicate_less[i]=less[i];fn->predicate_bounds[i]=bounds[i];
+    }
+    (void)parameter;
+}
+
+/* A forward-only predicate mask keeps its byte accumulator in L and its
+ * immutable unsigned word parameter in DE. All other state and operations
+ * are rejected before any prologue or label is emitted. */
+static int mir_try_emit_small_predicate_mask(MirStream *out)
+{
+    int parameter=-1,object=-1,i,j,branches=0,stores=0;
+    int *labels;
+    const struct MirInsn *param=NULL;
+    if(opt_debug || opt_debug_lines || mir.has_vla || mir.aggregate_temp_bytes ||
+       mir.return_type!=(TYPE_INT|TYPE_UNSIGNED) || mir.object_count!=2) return 0;
+    for(i=0;i<mir.object_count;++i) {
+        if(mir.objects[i].type!=(TYPE_INT|TYPE_UNSIGNED) || mir_object_address_taken(i)) return 0;
+        if(mir.objects[i].storage==SC_PARAM) parameter=i;
+        else if(mir.objects[i].storage==SC_LOCAL) object=i;
+        else return 0;
+    }
+    if(parameter<0 || object<0) return 0;
+    for(i=0;i<mir.count;++i) {
+        const struct MirInsn *d=&mir.insns[i],*a,*b;
+        switch(d->opcode) {
+        case MIR_NOP: case MIR_LABEL: break;
+        case MIR_PARAM:
+            if(d->object!=parameter || param!=NULL || d->memory_flags) return 0;
+            param=d; break;
+        case MIR_CONST:
+            if(type_size(d->type)>2 || type_is_float(d->type)) return 0;
+            break;
+        case MIR_PHI:
+            if(d->object!=object) return 0;
+            break;
+        case MIR_LOAD:
+            if((d->object!=object && d->object!=parameter) || d->memory_flags || d->bit_width) return 0;
+            break;
+        case MIR_STORE:
+            a=mir_definition(d->src1);
+            if(d->object!=object || (d->memory_flags&~128) || a==NULL ||
+               !((a->opcode==MIR_CONST && a->immediate>=0 && a->immediate<=255) ||
+                 (a->opcode==MIR_BINARY && a->immediate=='|'))) return 0;
+            ++stores; break;
+        case MIR_BINARY:
+            a=mir_definition(d->src1); b=mir_definition(d->src2);
+            if(a==NULL || b==NULL || b->opcode!=MIR_CONST || d->secondary_offset!=(TYPE_INT|TYPE_UNSIGNED)) return 0;
+            if(d->immediate=='<' || d->immediate==TOK_GE) {
+                if(a->object!=parameter || (a->opcode!=MIR_PARAM && a->opcode!=MIR_LOAD) ||
+                   b->immediate<=0 || b->immediate>65535L || mir_value_use_count(d->dst)!=1) return 0;
+            } else if(d->immediate=='|') {
+                if(b->immediate<0 || b->immediate>255 ||
+                   !((a->opcode==MIR_CONST && a->immediate>=0 && a->immediate<=255) ||
+                     ((a->opcode==MIR_LOAD || a->opcode==MIR_PHI) && a->object==object))) return 0;
+                for(j=(int)(a-mir.insns)+1;a->opcode!=MIR_CONST && j<i;++j)
+                    if(mir.insns[j].opcode==MIR_STORE && mir.insns[j].object==object) return 0;
+                j=i+1; while(j<mir.count && mir.insns[j].opcode==MIR_NOP) ++j;
+                if(j>=mir.count || mir.insns[j].opcode!=MIR_STORE || mir.insns[j].src1!=d->dst ||
+                   mir_value_use_count(d->dst)!=1) return 0;
+            } else return 0;
+            break;
+        case MIR_UNARY:
+            a=mir_definition(d->src1);
+            if(d->immediate!='!' || a==NULL || a->opcode!=MIR_BINARY ||
+               (a->immediate!='<' && a->immediate!=TOK_GE) || mir_value_use_count(d->dst)!=1) return 0;
+            break;
+        case MIR_BRANCH_FALSE:
+            a=mir_definition(d->src1);
+            if(a!=NULL && a->opcode==MIR_UNARY && a->immediate=='!') a=mir_definition(a->src1);
+            if(a==NULL || a->opcode!=MIR_BINARY || (a->immediate!='<' && a->immediate!=TOK_GE) ||
+               mir_find_label(d->label)<=i) return 0;
+            ++branches; break;
+        case MIR_RETURN:
+            a=mir_definition(d->src1);
+            if(a==NULL || !((a->opcode==MIR_LOAD || a->opcode==MIR_PHI) && a->object==object)) return 0;
+            for(j=(int)(a-mir.insns)+1;j<i;++j)
+                if(mir.insns[j].opcode==MIR_STORE && mir.insns[j].object==object) return 0;
+            break;
+        default: return 0;
+        }
+    }
+    if(param==NULL || branches<2 || stores<3 || mir.insns[mir.count-1].opcode!=MIR_RETURN) return 0;
+    mir_record_predicate_mask_summary(parameter,object,branches,stores);
+    labels=(int *)malloc((size_t)mir.next_label*sizeof(int));
+    if(labels==NULL) fatal("out of memory emitting predicate mask");
+    for(i=0;i<mir.next_label;++i) labels[i]=new_label();
+    if(opt_stack_check) mir_emit_runtime_call(out,"__stchk");
+    mir_stream_printf(out,"\tld hl,%d\n\tadd hl,sp\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tld hl,0\n",mir.objects[parameter].offset-2);
+    for(i=0;i<mir.count;++i) {
+        const struct MirInsn *d=&mir.insns[i],*a,*b;
+        if(d->opcode==MIR_LABEL) mir_stream_printf(out,"L%d:\n",labels[d->label]);
+        else if(d->opcode==MIR_STORE && (a=mir_definition(d->src1))->opcode==MIR_CONST)
+            mir_stream_printf(out,"\tld l,%ld\n",a->immediate);
+        else if(d->opcode==MIR_BINARY && d->immediate=='|') {
+            a=mir_definition(d->src1); b=mir_definition(d->src2);
+            if(a->opcode==MIR_CONST) mir_stream_printf(out,"\tld l,%ld\n",a->immediate|b->immediate);
+            else mir_stream_printf(out,"\tld a,l\n\tor %ld\n\tld l,a\n",b->immediate);
+        } else if(d->opcode==MIR_BRANCH_FALSE) {
+            int op;
+            a=mir_definition(d->src1); op=a->opcode==MIR_UNARY;
+            if(op) a=mir_definition(a->src1);
+            op=op ? (a->immediate=='<'?TOK_GE:'<') : (int)a->immediate;
+            b=mir_definition(a->src2);
+            if((b->immediate&255L)==0) mir_stream_printf(out,"\tld a,d\n\tcp %ld\n",b->immediate>>8);
+            else mir_stream_printf(out,"\tld a,e\n\tsub %ld\n\tld a,d\n\tsbc a,%ld\n",b->immediate&255L,b->immediate>>8);
+            mir_stream_printf(out,"\tjp %s,L%d\n",op=='<'?"nc":"c",labels[d->label]);
+        } else if(d->opcode==MIR_RETURN) mir_stream_puts("\tret\n",out);
+    }
+    free(labels); return 1;
+}
+
 static int mir_try_generated_candidate(
     MirStream **selected, const char **selector_name,
     const char **candidate_name, int *selected_label_id,
@@ -3924,6 +4083,11 @@ static int mir_try_generated_candidate(
         emitted = mir_try_selector(
             generated, mir_try_emit_spilled_scalar_cfg);
         *selected_label_id = label_id;
+    } else if (!force_diagnostic &&
+               mir_try_selector(generated,mir_try_emit_small_predicate_mask)) {
+        emitted=1;
+        *selector_name="small-predicate-mask";
+        *selected_label_id=label_id;
     } else if (emit_filter != NULL && emit_filter[0] != 0 &&
         strcmp(emit_filter, mir.name) == 0) {
         *selector_name = "specialized";
@@ -4254,6 +4418,8 @@ void mir_end_function(void)
     mir_canonicalize_signed_wide_relational_constants();
     mir_reset_boolean_phi_branch_simplification_count();
     verified = mir_verify_and_dump();
+    if (verified && mir_hoist_readonly_parameter_expression())
+        verified = mir_verify_and_dump();
     if (verified) {
         mir_compute_dead_local_suffix();
         mir_report_dead_local_suffix();

@@ -1264,7 +1264,7 @@ static int narrow_name_modified_in(const struct AstNode *n, const char *name)
     }
 }
 
-int narrow_for_counter_is_byte_safe(const struct AstNode *scope, const char *name)
+static int narrow_single_for_counter_is_byte_safe(const struct AstNode *scope, const char *name)
 {
     int i;
     int for_idx;
@@ -1312,4 +1312,80 @@ int narrow_for_counter_is_byte_safe(const struct AstNode *scope, const char *nam
         return 0;
 
     return 1;
+}
+
+/* Prefer widening-free byte-data loops. Merely having a small trip count
+ * does not make a word loop cheaper when its body performs word work. */
+static int narrow_counter_has_byte_cast(const struct AstNode *n,const char *name)
+{
+    int i;
+    if(n==NULL) return 0;
+    if(n->kind==AST_CAST && n->type==(TYPE_CHAR|TYPE_UNSIGNED) && n->a!=NULL) {
+        const struct AstNode *v=n->a;
+        if(v->kind==AST_IDENT && v->sval!=NULL && !strcmp(v->sval,name)) return 1;
+        if(v->kind==AST_BINARY && (v->op=='+' || v->op=='-' || v->op=='&' ||
+                                  v->op=='|' || v->op=='^')) {
+            if(v->a!=NULL && v->b!=NULL &&
+               ((v->a->kind==AST_IDENT && v->a->sval!=NULL && !strcmp(v->a->sval,name) && v->b->kind==AST_INT_LIT) ||
+                (v->b->kind==AST_IDENT && v->b->sval!=NULL && !strcmp(v->b->sval,name) && v->a->kind==AST_INT_LIT))) return 1;
+        }
+    }
+    if(narrow_counter_has_byte_cast(n->a,name) || narrow_counter_has_byte_cast(n->b,name) ||
+       narrow_counter_has_byte_cast(n->c,name) || narrow_counter_has_byte_cast(n->d,name)) return 1;
+    for(i=0;i<n->list_len;++i) if(narrow_counter_has_byte_cast(n->list[i],name)) return 1;
+    return 0;
+}
+
+static int narrow_counter_has_jump(const struct AstNode *n)
+{
+    int i;
+    if(n==NULL) return 0;
+    if(n->kind==AST_GOTO || n->kind==AST_LABEL) return 1;
+    if(narrow_counter_has_jump(n->a) || narrow_counter_has_jump(n->b) ||
+       narrow_counter_has_jump(n->c) || narrow_counter_has_jump(n->d)) return 1;
+    for(i=0;i<n->list_len;++i) if(narrow_counter_has_jump(n->list[i])) return 1;
+    return 0;
+}
+
+/* Each use must belong to a separately initialized bounded loop. Branches
+ * and nested blocks may contain more such loops, but cannot observe the
+ * counter between them. Reject arbitrary jumps and nested declarations. */
+static int narrow_for_counter_scope(const struct AstNode *node,
+                                    const char *name, int *loops)
+{
+    int i, inclusive;
+    long initial, bound;
+    if(node==NULL) return 1;
+    if(node->kind==AST_GOTO || node->kind==AST_LABEL) return 0;
+    if(node->kind==AST_FOR && narrow_for_init_const(node->a,name,&initial)) {
+        if(!narrow_for_cond_bound(node->b,name,&bound,&inclusive) ||
+           !narrow_for_incr_is_increment(node->c,name) ||
+           narrow_tree_contains_decl(node) || narrow_name_modified_in(node->d,name))
+            return 0;
+        if(initial<0 || initial>NARROW_TARGET_BOUND || bound<0 ||
+           bound>NARROW_TARGET_BOUND-inclusive) return 0;
+        ++*loops;
+        return 1;
+    }
+    if(node->kind==AST_COMPOUND) {
+        for(i=0;i<node->list_len;++i)
+            if(!narrow_for_counter_scope(node->list[i],name,loops)) return 0;
+        return 1;
+    }
+    if(node->kind==AST_IF) {
+        if(narrow_tree_references_name(node->a,name)) return 0;
+        return narrow_for_counter_scope(node->b,name,loops) &&
+               narrow_for_counter_scope(node->c,name,loops);
+    }
+    return !narrow_tree_references_name(node,name);
+}
+
+int narrow_for_counter_is_byte_safe(const struct AstNode *scope, const char *name, int allow_sequence)
+{
+    int loops=0;
+    if(narrow_single_for_counter_is_byte_safe(scope,name)) return 1;
+    if(!allow_sequence || !narrow_counter_has_byte_cast(scope,name) ||
+       narrow_tree_contains_decl(scope) || narrow_counter_has_jump(scope)) return 0;
+    if(scope==NULL || scope->kind!=AST_COMPOUND) return 0;
+    return narrow_for_counter_scope(scope,name,&loops) && loops>0;
 }

@@ -1,5 +1,82 @@
 # Changelog
 
+## Constant division and predicate/byte lowering (2026-11-26)
+
+Unsigned word division and remainder by powers of two are normalized to
+shifts and masks before allocation and helper-clobber planning. This avoids
+the stale-quotient interaction that previously prevented division-to-shift
+lowering. Promoted unsigned-byte right shifts by 8..15 fold to zero while
+retaining argument evaluation and observable memory reads.
+
+Bounded pure byte-return leaves support signed returns, up to three scalar
+parameters, constant shifts, and equality expressions. Exact argument types,
+side-effect checks, and a bounded lexical preflight keep substitution from
+changing conversions, evaluation counts, callbacks, or frame metadata.
+Byte-valued word folds use a canonical form; matching captured values and
+private snapshots can eliminate redundant byte checks.
+
+Scored MIR alternatives forward fixed global byte stores only across proven
+alias-free, dominated regions. Predicate facts retain memory snapshots and
+calls; equality guards also support XOR and word affine identities. Pure
+unsigned predicate-mask leaves keep their accumulator in L and their input
+in DE. Their exact, disjoint bit summaries can prove later scalar checks in
+callers redundant. Definitions must precede callers for summary reuse;
+overlapping masks, overwrites, aliases and side effects are excluded.
+
+After homed selection, comparison-only unsigned parameters can use a byte
+partition when all their predicates are constant on 255..65535. Private
+argument copies are saturated once; written, escaped, volatile, forwarded,
+wide-return and debugging cases keep their original representation. Byte
+range proofs preserve established constant/narrowed-counter paths.
+
+Single-use fixed byte updates use A directly, including expanded assignments.
+Unused allocations in strictly stack-independent leaves can then disappear,
+allowing the existing IX-frame cleanup to remove the empty frame. Calls,
+stack accesses, live allocation addresses and unknown effects block removal.
+
+Unchanged survey sources, no stack checks, peephole optimization, Z80 cycles:
+
+| App | Previous DCC | Current DCC | zsdcc |
+| --- | ---: | ---: | ---: |
+| tautobyt | 129,770,539 | 13,640,742 | 14,708,228 |
+| tbytecmp | 322,299,799 | 163,079,319 | 165,115,271 |
+| tbytegen | 346,954,975 | 73,407,867 | 83,520,025 |
+
+Windows/MSVC and Linux/GCC agree on the final counts. A same-source comparison
+with the preceding toolchain improves 53 existing apps with peep and 37 without
+it. Three peep workloads are slightly slower: pihex +137 cycles (under
+0.00003%), tpostfld +14 (0.12%), and tszswap +136,985 (0.15%). Without peep only
+pihex is slower, by 142 cycles. The pihex and tpostfld ceilings record these
+small tradeoffs; tszswap remains within its existing ceiling.
+
+Added tdivmask, tpredmsk, tguard8 and dead-leaf allocation controls. Full suites
+with and without stack checks, the extended suite, 29 Windows regression
+apps, 60 focused host tests and 200 differential fuzz programs pass.
+
+## Byte-data loops and invariant parameter arithmetic (2026-11-26)
+
+Small call-free kernels hoist pure unsigned long arithmetic on an unwritten,
+unaliased parameter and a literal out of a loop with one entry. Unsigned-byte
+do-while comparisons expose their scalar PHIs, and redundant integer
+promotions of two unsigned bytes no longer require separate word homes.
+
+Separately initialized bounded loops can share a byte counter when its
+original type is unsigned and it explicitly supplies byte data. The proof
+rejects intervening counter uses, writes, aliases, jumps, nested declarations,
+and bounds that could exceed a byte. Discarded updates of a named byte
+counter use its memory home directly. Single-use byte-load equality checks
+combine constant addition, subtraction, or bitwise arithmetic without
+computing unused high bytes or spilling the comparison operands.
+
+With no stack checks and peephole optimization, unchanged `tprewrap` takes
+48,356 Z80 cycles (previously 88,629; zsdcc 52,372), and `trealloc` takes
+40,776 (previously 55,113; zsdcc 47,427). Both beat the measured zsdcc builds.
+The complete 673-app comparison improves 15 apps in both optimization modes,
+with 658 unchanged and none slower. Windows/MSVC and Linux/GCC agree on
+target cycle counts. Added `tbytkern` and `tforseq` regression controls for
+wraparound, ordering, alternate loop entries, parameter writes and aliases,
+volatile reads, shared expressions, counter escapes, and wide bounds.
+
 ## Boolean comparisons and bounded byte loops (2026-11-26)
 
 Tiny zero-argument integer comparison leaves can be substituted in MIR while

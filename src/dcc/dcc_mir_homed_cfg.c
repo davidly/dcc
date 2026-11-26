@@ -2795,6 +2795,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
         labels[i] = new_label();
 
     mir_regional_begin_emission();
+    mir_homed_parameter_partition_scope(1);
     uses_iy = mir_home_uses_iy();
     frameless = !uses_iy && mir_effective_local_bytes() == 0 &&
                 mir.allocation_spill_count == 0 &&
@@ -3497,6 +3498,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
         case MIR_PARAM:
             if (!mir_homed_param_is_loaded(insn))
                 break;
+            if(mir_emit_homed_parameter_byte_partition(out,insn->dst)) break;
             object = &mir.objects[insn->object];
             if (type_size(object->type) == 4) {
                 int offset = object->offset + (uses_iy ? 2 : 0);
@@ -4115,6 +4117,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
     mir_homed_cfg_frameless = frameless;
     accepted = 1;
 done:
+    mir_homed_parameter_partition_scope(0);
     mir_emit_instruction_index = -1;
     if (!accepted && wide_saved_colors != NULL) {
         memcpy(mir.allocation_colors, wide_saved_colors,

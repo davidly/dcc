@@ -367,6 +367,9 @@ struct Sym {
                       * aware prologue for a plain C function body. */
     int auto_inline_boolean; /* zero-argument global comparison leaf */
     char inline_boolean_global[64];
+    int predicate_mask_count; /* proved unsigned single-parameter predicate mask */
+    unsigned char predicate_masks[8], predicate_less[8];
+    unsigned short predicate_bounds[8];
     int auto_inline_byte; /* bounded pure byte-return tree, MIR-only substitution */
     struct AstNode *inline_return_expr; /* simple static inline body, if captured */
     struct AstNode *inline_stmt_expr;   /* simple void inline expression body */
@@ -1045,7 +1048,7 @@ int local_name_address_taken_or_unknown(const char *name);
 int local_name_used_ahead(const char *name);
 int narrow_array_is_byte_safe(const struct AstNode *scope, const char *arr_name);
 int narrow_scalar_is_byte_safe(const struct AstNode *scope, const char *name);
-int narrow_for_counter_is_byte_safe(const struct AstNode *scope, const char *name);
+int narrow_for_counter_is_byte_safe(const struct AstNode *scope, const char *name, int allow_sequence);
 int try_narrow_local_int_array(const char *name, int type, int arrlen, int total_elems);
 int try_narrow_register_scalar(const char *name, int type, int is_register,
                                int arrlen, int total_elems);

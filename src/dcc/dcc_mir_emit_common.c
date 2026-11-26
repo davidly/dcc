@@ -26,6 +26,7 @@
 #include "dcc_mir_internal.h"
 #include "dcc_mir_machine_internal.h"
 
+static int mir_homed_parameter_has_byte_partition(int value);
 static int mir_emit_homed_immediate_value(MirStream *out,const struct MirInsn *insn);
 static int mir_emit_homed_immediate_flags(MirStream *out,const struct MirInsn *compare);
 
@@ -1240,8 +1241,9 @@ int mir_home_uses_iy(void)
     int value;
 
     for (value = 0; value < mir.next_value; ++value)
-        if (mir.allocation_colors[value] == MIR_COLOR_IY ||
-            mir.allocation_colors[value] == MIR_COLOR_BC_IY)
+        if (!mir_homed_parameter_has_byte_partition(value) &&
+            (mir.allocation_colors[value] == MIR_COLOR_IY ||
+            mir.allocation_colors[value] == MIR_COLOR_BC_IY))
             return 1;
     if (mir_regional_home_plan_is_active())
         for (segment = 0;
@@ -2683,6 +2685,11 @@ int mir_float_identity_unary(const struct MirInsn *insn)
  * the direct forms on only to re-emit an already selected homed candidate,
  * so they improve its code without moving any selection decision. */
 static int mir_homed_direct_forms;
+static int mir_homed_partition_scope_active;
+void mir_homed_parameter_partition_scope(int active)
+{
+    mir_homed_partition_scope_active=active;
+}
 
 void mir_begin_homed_direct_forms(void)
 {
@@ -3815,6 +3822,96 @@ static int mir_homed_immediate_compare_load_offset(
     return 1;
 }
 
+/* All allowed predicates are constant on 255..65535. The caller's private
+ * argument copy can therefore be saturated once, retaining every observable
+ * comparison while subsequent tests read just its low byte. */
+static int mir_homed_parameter_has_byte_partition(int value)
+{
+    const struct MirInsn *p=mir_definition(value);
+    int i,comparisons=0;
+    if(!mir_homed_direct_forms || !mir_homed_partition_scope_active ||
+       type_size(mir.return_type)==4 || opt_debug || opt_debug_lines ||
+       mir_regional_home_plan_is_active() ||
+       (mir_home_spill_bytes()==0 && mir_effective_local_bytes()==0) ||
+       p==NULL || p->opcode!=MIR_PARAM || p->type!=(TYPE_INT|TYPE_UNSIGNED) ||
+       p->memory_flags || p->object<0 || mir_object_address_taken(p->object)) return 0;
+    for(i=0;i<mir.count;++i) {
+        const struct MirInsn *d=&mir.insns[i],*constant;
+        long maximum;
+        if(d->opcode==MIR_STORE && (d->object==p->object || !strcmp(d->name,p->name))) return 0;
+        if(mir_call_uses_value(d,value)) return 0;
+        if(d->src1!=value && d->src2!=value) continue;
+        if(d->opcode!=MIR_BINARY || d->src1!=value || !is_cmp_op((int)d->immediate) ||
+           d->secondary_offset!=(TYPE_INT|TYPE_UNSIGNED)) return 0;
+        constant=mir_definition(d->src2);
+        maximum=(d->immediate=='<' || d->immediate==TOK_GE)?255:254;
+        if(constant==NULL || constant->opcode!=MIR_CONST || constant->immediate<0 ||
+           constant->immediate>maximum) return 0;
+        ++comparisons;
+    }
+    return comparisons>=3;
+}
+
+int mir_emit_homed_parameter_byte_partition(MirStream *out,int value)
+{
+    const struct MirInsn *p;
+    int offset,ready;
+    if(!mir_homed_parameter_has_byte_partition(value)) return 0;
+    p=mir_definition(value);
+    offset=mir.objects[p->object].offset+(mir_home_uses_iy()?2:0);
+    if(offset< -128 || offset+1>127) return 0;
+    ready=new_label();
+    mir_stream_printf(out,"\tld a,(ix%+d)\n\tor a\n\tjp z,L%d\n"
+                         "\tld (ix%+d),255\nL%d:\n\tld (ix%+d),0\n",
+                      offset+1,ready,offset,ready,offset+1);
+    return 1;
+}
+
+/* Abstract ranges describe C values, not incidental high-byte contents in
+ * the accumulator. Comparisons between two 0..255 values need only lows. */
+int mir_value_has_unsigned_byte_range(int value,int depth)
+{
+    const struct MirInsn *d=mir_definition(value),*constant;
+    if(d==NULL || depth>12) return 0;
+    if(mir_homed_parameter_has_byte_partition(value)) return 1;
+    if(d->type==(TYPE_CHAR|TYPE_UNSIGNED)) return 1;
+    if(type_size(d->type)!=2 || type_is_float(d->type) || type_ptr_depth(d->type)!=0) return 0;
+    if(d->opcode==MIR_CONST) return d->immediate>=0 && d->immediate<=255;
+    if(d->opcode==MIR_UNARY) {
+        if(d->immediate=='!') return 1;
+        if(d->immediate==0) return mir_value_has_unsigned_byte_range(d->src1,depth+1);
+        return 0;
+    }
+    if(d->opcode==MIR_BINARY) {
+        if(is_cmp_op((int)d->immediate) || d->immediate==MIR_OP_BYTE_FOLD16) return 1;
+        constant=mir_definition(d->src2);
+        if(d->immediate=='&' && constant!=NULL && constant->opcode==MIR_CONST &&
+           constant->immediate>=0 && constant->immediate<=255) return 1;
+        if((d->immediate=='&' || d->immediate=='|' || d->immediate=='^') &&
+           mir_value_has_unsigned_byte_range(d->src1,depth+1) &&
+           mir_value_has_unsigned_byte_range(d->src2,depth+1)) return 1;
+        if(d->immediate==TOK_SHR && d->secondary_offset==(TYPE_INT|TYPE_UNSIGNED) &&
+           constant!=NULL && constant->opcode==MIR_CONST &&
+           constant->immediate>=8 && constant->immediate<16) return 1;
+    }
+    return 0;
+}
+
+static int mir_homed_readonly_parameter_offset(int value,int *offset)
+{
+    const struct MirInsn *p=mir_definition(value);
+    int i;
+    if((!mir_home_uses_iy() && mir_effective_local_bytes()==0 && mir_home_spill_bytes()==0) ||
+       p==NULL || p->opcode!=MIR_PARAM || p->memory_flags!=0 || p->object<0 ||
+       p->object>=mir.object_count || mir.objects[p->object].storage!=SC_PARAM ||
+       type_size(p->type)!=2 || mir_object_address_taken(p->object)) return 0;
+    for(i=0;i<mir.count;++i)
+        if(mir.insns[i].opcode==MIR_STORE && (mir.insns[i].object==p->object ||
+            !strcmp(mir.insns[i].name,p->name))) return 0;
+    *offset=mir.objects[p->object].offset+(mir_home_uses_iy()?2:0);
+    return *offset>= -128 && *offset+1<=127;
+}
+
 /* Read only A/flags while comparing a word home with an immediate. RLA,
  * CCF, RRA toggles the high sign bit while preserving the low-byte borrow. */
 static int mir_emit_homed_immediate_flags(MirStream *out,
@@ -3825,21 +3922,23 @@ static int mir_emit_homed_immediate_flags(MirStream *out,
     const char *lo=NULL,*hi=NULL;
     char low[32],high[32];
     long bound;
-    int offset,operation=(int)compare->immediate;
+    int offset,parameter_offset,operation=(int)compare->immediate;
+    int direct_parameter=mir_homed_readonly_parameter_offset(compare->src1,&parameter_offset);
     int reverse;
+    int partitioned=mir_homed_parameter_has_byte_partition(compare->src1);
     int unsign=mir_type_uses_unsigned_comparison(compare->secondary_offset);
     if (!mir_homed_direct_forms || type_size(mir.return_type)==4 ||
         right==NULL || right->opcode!=MIR_CONST || left==NULL ||
         type_size(left->type)!=2 || type_is_float(left->type) ||
         type_ptr_depth(left->type)>0 || type_size(compare->secondary_offset)!=2 ||
         mir_regional_rematerialization_kind(compare->src1)!=MIR_REGIONAL_REMAT_NONE ||
-        mir_is_lazy_parameter(compare->src1)) return 0;
+        (mir_is_lazy_parameter(compare->src1) && !direct_parameter)) return 0;
     bound=right->immediate & 65535L;
     /* Nonzero equality already has compact pair/subtract candidates. */
-    if ((operation==TOK_EQ || operation==TOK_NE) && bound!=0) return 0;
+    if ((operation==TOK_EQ || operation==TOK_NE) && bound!=0 && !partitioned) return 0;
     /* The established zero/sign tests already beat a subtract sequence. */
-    if (bound==0 && operation!=TOK_EQ && operation!=TOK_NE) return 0;
-    reverse=unsign && (operation=='>' || operation==TOK_LE) && (bound&255)==0;
+    if (bound==0 && operation!=TOK_EQ && operation!=TOK_NE && !partitioned) return 0;
+    reverse=!partitioned && unsign && (operation=='>' || operation==TOK_LE) && (bound&255)==0;
     if (reverse) operation=operation=='>'?'<':TOK_GE;
     else if (operation=='>' || operation==TOK_LE) {
         if (bound==(unsign?65535L:32767L)) return 0;
@@ -3847,7 +3946,8 @@ static int mir_emit_homed_immediate_flags(MirStream *out,
         operation=operation=='>'?TOK_GE:'<';
     }
     if (operation!='<' && operation!=TOK_GE && operation!=TOK_EQ && operation!=TOK_NE) return 0;
-    if (mir_homed_immediate_compare_load_offset(compare,&offset)) {
+    if (direct_parameter || mir_homed_immediate_compare_load_offset(compare,&offset)) {
+        if(direct_parameter) offset=parameter_offset;
         snprintf(low,sizeof(low),"(ix%+d)",offset);
         snprintf(high,sizeof(high),"(ix%+d)",offset+1);
         lo=low; hi=high;
@@ -3864,7 +3964,9 @@ static int mir_emit_homed_immediate_flags(MirStream *out,
         lo=low;hi=high;
     }
     if (out==NULL) return operation;
-    if (operation==TOK_EQ || operation==TOK_NE) {
+    if(partitioned) {
+        mir_stream_printf(out,"\tld a,%s\n\tcp %ld\n",lo,bound&255L);
+    } else if (operation==TOK_EQ || operation==TOK_NE) {
         mir_stream_printf(out,"\tld a,%s\n\tor %s\n",hi,lo);
     } else if (reverse) {
         mir_stream_puts("\txor a\n",out);
@@ -3928,6 +4030,39 @@ int mir_homed_immediate_compare_component(int value)
     return uses>0;
 }
 
+static int mir_emit_homed_byte_compare(MirStream *out,const struct MirInsn *c,int target)
+{
+    int values[2],i,offset,op=(int)c->immediate;
+    char operands[2][32];
+    if(!mir_homed_direct_forms || !mir_value_has_unsigned_byte_range(c->src1,0) ||
+       !mir_value_has_unsigned_byte_range(c->src2,0) || type_size(c->secondary_offset)!=2)
+        return 0;
+    values[0]=c->src1;values[1]=c->src2;
+    for(i=0;i<2;++i) {
+        int color=mir.allocation_colors[values[i]];
+        const struct MirInsn *d=mir_definition(values[i]);
+        if(d!=NULL && d->opcode==MIR_CONST) {
+            snprintf(operands[i],sizeof(operands[i]),"%ld",d->immediate&255L);
+            continue;
+        }
+        if(mir_is_lazy_parameter(values[i])) return 0;
+        if(color==MIR_COLOR_HL) strcpy(operands[i],"l");
+        else if(color==MIR_COLOR_DE) strcpy(operands[i],"e");
+        else if(color==MIR_COLOR_BC) strcpy(operands[i],"c");
+        else {
+            if(color==MIR_COLOR_IY || !mir_home_spill_offset(values[i],&offset) ||
+               offset< -128 || offset>127) return 0;
+            snprintf(operands[i],sizeof(operands[i]),"(ix%+d)",offset);
+        }
+    }
+    if(op=='>' || op==TOK_LE) {
+        mir_stream_printf(out,"\tld a,%s\n\tcp %s\n",operands[1],operands[0]);
+        op=op=='>'?'<':TOK_GE;
+    } else mir_stream_printf(out,"\tld a,%s\n\tcp %s\n",operands[0],operands[1]);
+    mir_stream_printf(out,"\tjp %s,L%d\n",op==TOK_EQ?"nz":op==TOK_NE?"z":op=='<'?"nc":"c",target);
+    return 1;
+}
+
 int mir_emit_homed_compare_false(MirStream *out,
                                         const struct MirInsn *compare,
                                         int false_label)
@@ -3948,6 +4083,7 @@ int mir_emit_homed_compare_false(MirStream *out,
             return 1;
         }
     }
+    if(mir_emit_homed_byte_compare(out,compare,false_label)) return 1;
     right_definition = mir_definition(right);
     if (right_definition != NULL && right_definition->opcode == MIR_CONST &&
         right_definition->immediate == 0 &&
