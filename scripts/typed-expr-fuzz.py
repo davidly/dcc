@@ -1308,7 +1308,7 @@ def main():
             concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         show_progress = total > 0 and terminal is not None
         update_progress, report = progress_reporter(total, terminal) if show_progress else (None, print)
-        results = pool.map(lambda s: run_seed(s, args), seeds)
+        results = pool.map(lambda s: (s, run_seed(s, args)), seeds)
         if show_progress:
             update_progress(0)
         for completed, (seed, outcome) in enumerate(results, 1):

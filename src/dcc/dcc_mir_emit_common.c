@@ -477,7 +477,7 @@ void mir_emit_signed_byte_extend(MirStream *out)
 }
 
 /* A sole, adjacent branch consumer (optionally through !) needs only a
- * bool byte's truth value. Defer the load across only the optional pure !.
+ * bool byte or long integer's truth value. Defer the load across only the optional pure !.
  * Keep volatile/bitfield accesses and full-debug emission on their existing
  * paths; value consumers still receive canonical 0/1 representations. */
 int mir_bool_branch_load_supported(int instruction)
@@ -498,22 +498,25 @@ int mir_bool_branch_load_supported(int instruction)
         value = branch->dst;
         branch = &mir.insns[instruction + 2];
     }
-    if (load->opcode != MIR_LOAD || !type_is_bool(load->type) ||
+    if (load->opcode != MIR_LOAD ||
+        (!type_is_bool(load->type) && !type_is_long(load->type)) ||
         load->memory_flags != 0 || load->bit_width != 0 ||
         mir_value_use_count(load->dst) != 1 ||
         branch->opcode != MIR_BRANCH_FALSE || branch->src1 != value ||
         !mir_scalar_memory_location(load, &type, &storage, &offset) ||
-        !type_is_bool(type))
+        (!type_is_bool(type) && !type_is_long(type)))
         return 0;
     /* Parameter offsets can include a selector-specific saved-IY bias. */
     return storage == SC_GLOBAL || storage == SC_EXTERN ||
-        (storage == SC_LOCAL && offset >= -128 && offset <= 127);
+        (storage == SC_LOCAL && offset >= -128 &&
+         offset + type_size(type) - 1 <= 127);
 }
 
-void mir_emit_bool_branch_load(MirStream *out, int instruction)
+void mir_emit_truth_branch_load(MirStream *out, int instruction, int preserve_hl)
 {
     const struct MirInsn *load = &mir.insns[instruction];
     int type, storage, offset;
+    int byte;
 
     if (!mir_scalar_memory_location(load, &type, &storage, &offset))
         fatal("missing bool branch load location");
@@ -525,11 +528,30 @@ void mir_emit_bool_branch_load(MirStream *out, int instruction)
         if ((storage == SC_EXTERN || (global != NULL && global->needs_extrn)) &&
             mir_extrn_should_emit(global))
             mir_stream_printf(out, "\textrn %s\n", name);
+        if (type_size(type) == 4) {
+            /* Keep the original helper's A/flags-only clobber contract for
+             * homed candidates; POP does not disturb the accumulated Z flag. */
+            if (preserve_hl)
+                mir_stream_puts("\tpush hl\n", out);
+            mir_stream_printf(out, "\tld hl,%s\n\tld a,(hl)\n", name);
+            for (byte = 1; byte < 4; ++byte)
+                mir_stream_puts("\tinc hl\n\tor (hl)\n", out);
+            if (preserve_hl)
+                mir_stream_puts("\tpop hl\n", out);
+            return;
+        }
         mir_stream_printf(out, "\tld a,(%s)\n", name);
     } else {
         mir_stream_printf(out, "\tld a,(ix%+d)\n", offset);
+        for (byte = 1; byte < type_size(type); ++byte)
+            mir_stream_printf(out, "\tor (ix%+d)\n", offset + byte);
     }
     mir_stream_puts("\tor a\n", out);
+}
+
+void mir_emit_bool_branch_load(MirStream *out, int instruction)
+{
+    mir_emit_truth_branch_load(out, instruction, 1);
 }
 
 /* Test a scalar already loaded into HL. Byte arithmetic can leave carry or
@@ -1013,6 +1035,167 @@ static int mir_emit_scalar_value(MirStream *out, int value, int depth)
     default:
         return 0;
     }
+}
+
+/* A byte return observes only the low eight bits of these pure integer DAGs.
+ * Read parameter byte slices directly instead of constructing unused words.
+ * No loads, stores, calls, control flow, bool conversions, or pointers are
+ * admitted, so evaluation can neither duplicate nor drop observable effects. */
+static int mir_byte_dag_parameter(int value, int byte, int depth)
+{
+    const struct MirInsn *d = mir_definition(value);
+    const struct MirInsn *constant;
+    const struct MirObject *object;
+    int source_size;
+
+    if (depth > 32 || d == NULL || byte < 0 ||
+        type_ptr_depth(d->type) != 0 || type_is_bool(d->type) ||
+        type_is_float(d->type) || type_is_struct_object(d->type))
+        return -1;
+    if (d->opcode == MIR_PARAM && d->object >= 0 &&
+        d->object < mir.object_count && byte < type_size(d->type)) {
+        object = &mir.objects[d->object];
+        if (object->storage == SC_PARAM && object->type == d->type &&
+            object->offset >= 4 && object->offset + byte < 128)
+            return object->offset - 2 + byte;
+    }
+    if (d->opcode == MIR_UNARY &&
+        (d->immediate == 0 || d->immediate == '+')) {
+        const struct MirInsn *source = mir_definition(d->src1);
+        if (source == NULL)
+            return -1;
+        source_size = type_size(source->type);
+        if (byte < source_size && byte < type_size(d->type))
+            return mir_byte_dag_parameter(d->src1, byte, depth + 1);
+    }
+    if (d->opcode == MIR_BINARY && d->immediate == '&') {
+        constant = mir_definition(d->src2);
+        if (constant != NULL && constant->opcode == MIR_CONST &&
+            (((unsigned long)constant->immediate >> (8 * byte)) & 255UL) == 255UL)
+            return mir_byte_dag_parameter(d->src1, byte, depth + 1);
+    }
+    if (d->opcode == MIR_BINARY && d->immediate == TOK_SHR &&
+        type_size(d->secondary_offset) == 2 && byte == 0) {
+        constant = mir_definition(d->src2);
+        if (constant != NULL && constant->opcode == MIR_CONST &&
+            constant->immediate == 8)
+            return mir_byte_dag_parameter(d->src1, 1, depth + 1);
+    }
+    return -1;
+}
+
+/* out == NULL performs bounded validation before any text is emitted. */
+static int mir_emit_byte_dag(MirStream *out, int value, int stack_bytes,
+                             int depth, int *budget)
+{
+    const struct MirInsn *d = mir_definition(value);
+    const struct MirInsn *right;
+    const char *op;
+    int offset;
+    int left_offset;
+    unsigned int immediate;
+
+    if (--*budget < 0 || depth > 32 || d == NULL ||
+        type_size(d->type) > 2 || type_ptr_depth(d->type) != 0 ||
+        type_is_bool(d->type) || type_is_float(d->type) ||
+        type_is_struct_object(d->type))
+        return 0;
+    offset = mir_byte_dag_parameter(value, 0, 0);
+    if (offset >= 0) {
+        if (out != NULL)
+            mir_stream_printf(out, "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n",
+                              offset + stack_bytes);
+        return 1;
+    }
+    if (d->opcode == MIR_CONST) {
+        if (out != NULL)
+            mir_stream_printf(out, "\tld a,%lu\n", (unsigned long)d->immediate & 255UL);
+        return 1;
+    }
+    if (d->opcode == MIR_UNARY &&
+        (d->immediate == 0 || d->immediate == '+'))
+        return mir_emit_byte_dag(out, d->src1, stack_bytes, depth + 1, budget);
+    if (d->opcode != MIR_BINARY ||
+        (d->immediate != '&' && d->immediate != '|' && d->immediate != '^'))
+        return 0;
+    op = d->immediate == '&' ? "and" : d->immediate == '|' ? "or" : "xor";
+    if (!mir_emit_byte_dag(out, d->src1, stack_bytes, depth + 1, budget))
+        return 0;
+    right = mir_definition(d->src2);
+    if (right != NULL && right->opcode == MIR_CONST) {
+        immediate = (unsigned int)((unsigned long)right->immediate & 255UL);
+        if (out != NULL &&
+            !((d->immediate == '&' && immediate == 255) ||
+              (d->immediate != '&' && immediate == 0)))
+            mir_stream_printf(out, "\t%s %u\n", op, immediate);
+        return 1;
+    }
+    offset = mir_byte_dag_parameter(d->src2, 0, 0);
+    if (offset >= 0) {
+        left_offset = mir_byte_dag_parameter(d->src1, 0, 0);
+        if (out != NULL) {
+            if (left_offset >= 0 && offset == left_offset + 1)
+                mir_stream_puts("\tinc hl\n", out);
+            else if (left_offset >= 0 && offset == left_offset - 1)
+                mir_stream_puts("\tdec hl\n", out);
+            else if (left_offset < 0 || offset != left_offset)
+                mir_stream_printf(out, "\tld hl,%d\n\tadd hl,sp\n", offset + stack_bytes);
+            mir_stream_printf(out, "\t%s (hl)\n", op);
+        }
+        return 1;
+    }
+    if (out != NULL)
+        mir_stream_puts("\tpush af\n", out);
+    if (!mir_emit_byte_dag(out, d->src2, stack_bytes + 2, depth + 1, budget))
+        return 0;
+    if (out != NULL) {
+        mir_stream_puts("\tld c,a\n\tpop af\n", out);
+        mir_stream_printf(out, "\t%s c\n", op);
+    }
+    return 1;
+}
+
+int mir_try_emit_byte_return_dag(MirStream *out)
+{
+    const struct MirInsn *result = NULL;
+    int i;
+    int budget = 64;
+    int bitwise = 0;
+
+    if (type_size(mir.return_type) != 1 || type_ptr_depth(mir.return_type) != 0 ||
+        type_is_bool(mir.return_type) || mir.is_variadic_function ||
+        mir_cfg_block_count() != 1)
+        return 0;
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *d = &mir.insns[i];
+        if (d->opcode == MIR_BINARY &&
+            (d->immediate == '&' || d->immediate == '|' || d->immediate == '^'))
+            bitwise = 1;
+        if (d->opcode == MIR_RETURN) {
+            if (result != NULL)
+                return 0;
+            result = d;
+        } else if (d->opcode != MIR_NOP && d->opcode != MIR_LABEL &&
+                   d->opcode != MIR_PARAM && d->opcode != MIR_CONST &&
+                   d->opcode != MIR_UNARY && d->opcode != MIR_BINARY)
+            return 0;
+    }
+    /* Existing leaf loaders are better for constants and simple byte casts. */
+    if (result == NULL || !bitwise ||
+        mir_byte_dag_parameter(result->src1, 0, 0) >= 0 ||
+        !mir_emit_byte_dag(NULL, result->src1, 0, 0, &budget))
+        return 0;
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    budget = 64;
+    mir_emit_byte_dag(out, result->src1, 0, 0, &budget);
+    mir_stream_puts("\tld l,a\n", out);
+    if ((mir.return_type & TYPE_UNSIGNED) != 0)
+        mir_stream_puts("\tld h,0\n", out);
+    else
+        mir_emit_signed_byte_extend(out);
+    mir_stream_puts("\tret\n", out);
+    return 1;
 }
 
 int mir_try_emit_scalar_dag(MirStream *out)
@@ -2447,6 +2630,11 @@ int mir_value_is_normalized_byte(int value, int type, int depth)
         return (bits & 0xff80UL) == 0 ||
                (bits & 0xff80UL) == 0xff80UL;
     }
+    if (definition->opcode == MIR_BINARY &&
+        definition->immediate == MIR_OP_BYTE_FOLD16 &&
+        definition->type == (TYPE_CHAR | TYPE_UNSIGNED) &&
+        (type & TYPE_UNSIGNED) != 0 && !type_is_bool(type))
+        return 1; /* The fused emitter explicitly clears H. */
     /* Byte loads and explicit narrowing casts already establish the C value
      * in HL.  Byte arithmetic is deliberately excluded: its high byte can
      * retain carry/sign debris and must be normalized before promotion. */

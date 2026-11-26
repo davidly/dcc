@@ -365,6 +365,7 @@ struct Sym {
                       * reading its arguments directly out of those
                       * registers - dcc does not yet generate a __fastcall-
                       * aware prologue for a plain C function body. */
+    int auto_inline_byte; /* bounded pure byte-return tree, MIR-only substitution */
     struct AstNode *inline_return_expr; /* simple static inline body, if captured */
     struct AstNode *inline_stmt_expr;   /* simple void inline expression body */
     struct AstNode *inline_stmt_body;   /* simple void inline statement body */

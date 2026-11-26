@@ -67,6 +67,10 @@ extern int mir_oversized_frame_bytes;
 #define MIR_AGGREGATE_GLOBAL_DEST_OFFSET (-32766L)
 #define MAX_DEFERRED_SIZEOF 256
 
+/* Internal binary operation, formed only after unsigned rotate proofs. */
+#define MIR_OP_ROTL32 65536
+#define MIR_OP_BYTE_FOLD16 65537
+
 enum MirOpcode {
     MIR_NOP,
     MIR_PARAM,
@@ -657,6 +661,7 @@ void mir_emit_signed_byte_extend(MirStream *out);
 void mir_emit_scalar_truth_test(MirStream *out, int value);
 int mir_bool_branch_load_supported(int instruction);
 void mir_emit_bool_branch_load(MirStream *out, int instruction);
+void mir_emit_truth_branch_load(MirStream *out, int instruction, int preserve_hl);
 int mir_binary_is_byte_unit_update(const struct MirInsn *insn);
 void mir_emit_byte_arithmetic_result(MirStream *out,
                                      const struct MirInsn *insn,
@@ -833,6 +838,7 @@ long mir_stream_size(MirStream *stream);
 int mir_stream_instruction_count(MirStream *stream);
 int mir_try_emit_homed_scalar_dag(MirStream *out);
 int mir_try_emit_scalar_dag(MirStream *out);
+int mir_try_emit_byte_return_dag(MirStream *out);
 int mir_spilled_cfg_depends_on_constant_absolute(void);
 int mir_spilled_cfg_depends_on_dynamic_index_base_forwarding(void);
 int mir_spilled_cfg_depends_on_direct_byte_param(void);

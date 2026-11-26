@@ -1,5 +1,51 @@
 # Changelog
 
+## Byte results, long updates, and rotates (2026-11-26)
+
+The MIR backend emits only the demanded byte of pure parameter/constant
+bitwise return expressions, including signed-byte return extension. Wide
+integer counters can update globals directly through carry/borrow chains in
+loops; aliases, volatile accesses, live update results, and intervening calls
+or stores retain their ordinary paths. Complementary logical shifts of the
+same unsigned long become constant rotates, using byte permutations and short
+bit rotations. Forwarded long addition/subtraction chains read stable frame
+operands directly instead of repeatedly pushing the accumulator.
+
+At 4 MHz without stack checks, peep timings improve from 62.6493 to 26.8391
+seconds for `tternarg`, 0.07071 to 0.02986 for `tloopcar`, 0.11346 to 0.07617
+for `twalkend`, 0.05746 to 0.03881 for `twalksc`, and 0.09067 to 0.08739
+for `tlongexp`. Compiler and runtime interfaces are unchanged.
+
+Tiny pure static byte helpers can also be substituted automatically in MIR
+when argument types match exactly and their evaluation can be reused safely.
+Word-comparison and byte-return caller contexts retain compact call paths.
+Embedded low/high-byte XORs then collapse to a byte fold. Long branch-only
+loads are tested directly, and loop comparisons forward operands across
+non-emitting constants. Proven 0/1 PHI values widen with a zero extension.
+`tloopcar` now uses 119,447 cycles versus zsdcc's 119,947; `tternarg` uses
+107,356,234 versus zsdcc's 108,754,398.
+`tautobyt` adds exhaustive inline-byte checks and argument-conversion,
+side-effect, callback, volatile and snapshot controls. `tlongtr` covers direct
+long truth tests and zero/one widening, with signed controls.
+
+Unsigned comparisons against multiples of 256 test the high byte for
+register/computed operands. An unsigned byte load compared with an embedded
+byte fold branches directly without widening and spilling both operands.
+Nonescaping local pointers initialized once in the entry prefix can
+rematerialize fixed global addresses in loops; reassignment, volatility,
+address escape, conditional initialization and shadowing retain ordinary
+paths. Profitability guards preserve existing compact named-load and
+non-loop candidates. These changes reduce `tternarg` from 41.5345 to 26.8391
+seconds. `tbytecmp` exhaustively checks comparison boundaries and byte folds;
+`tfixptr` checks pointer rematerialization and its safety exclusions.
+
+`tbytegen` checks all 65,536 word inputs, signed extension, nested operands,
+and observable effects. `twidegen` checks every constant rotate count against
+literal oracles, carry/borrow boundaries, live update results, alias/call
+barriers, and volatile controls. Both have output and performance baselines.
+The typed-expression fuzz runner now pairs each worker outcome with its seed
+before reporting it, fixing a reporting exception after successful workers.
+
 ## Full-range square root (2026-11-16)
 
 `sqrtf` now reduces positive finite arguments to `[1, 4)` before Newton

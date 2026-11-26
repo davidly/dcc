@@ -452,6 +452,39 @@ static int try_scan_inline_local_decl(struct Sym *fn, struct AstNode *body)
     return 1;
 }
 
+/* Bound automatic substitution to tiny, pure parameter/constant bit trees.
+ * Unlike explicit inline functions, these have no locals, memory accesses,
+ * calls, branches, or parameter writes. MIR also checks exact argument types
+ * and declines side-effecting arguments, so no new temporary homes are needed. */
+static int auto_byte_inline_tree(struct Sym *fn, const struct AstNode *node,
+                                int *budget, int *bitwise)
+{
+    if (node == NULL || --*budget < 0)
+        return 0;
+    switch (node->kind) {
+    case AST_IDENT:
+        return inline_param_index(fn, node->sval) >= 0;
+    case AST_INT_LIT:
+        return type_size(ast_expr_type_for_sizeof(node)) <= 2;
+    case AST_CAST:
+        return type_ptr_depth(node->type) == 0 &&
+               !type_is_bool(node->type) && !type_is_float(node->type) &&
+               !type_is_struct_object(node->type) && type_size(node->type) <= 2 &&
+               auto_byte_inline_tree(fn, node->a, budget, bitwise);
+    case AST_BINARY:
+        if (node->op == '&' || node->op == '|' || node->op == '^')
+            ++*bitwise;
+        else if ((node->op != TOK_SHL && node->op != TOK_SHR) ||
+                 node->b == NULL || node->b->kind != AST_INT_LIT ||
+                 node->b->ival < 0 || node->b->ival > 15)
+            return 0;
+        return auto_byte_inline_tree(fn, node->a, budget, bitwise) &&
+               auto_byte_inline_tree(fn, node->b, budget, bitwise);
+    default:
+        return 0;
+    }
+}
+
 static void record_inline_function_if_simple(struct Sym *s)
 {
     LexState _ls;
@@ -461,8 +494,14 @@ static void record_inline_function_if_simple(struct Sym *s)
     int nparams;
     size_t namelen;
     int has_local;
+    int automatic;
 
-    if (s == NULL || !s->is_static || !s->is_inline || g_lex.tok.kind != '{')
+    if (s == NULL || !s->is_static || g_lex.tok.kind != '{')
+        return;
+    automatic = !s->is_inline;
+    if (automatic &&
+        (s->type != (TYPE_CHAR | TYPE_UNSIGNED) || s->proto_nargs != 1 ||
+         s->proto_types[0] != (TYPE_INT | TYPE_UNSIGNED)))
         return;
     if ((s->type & 15) != TYPE_VOID &&
         (!(type_size(s->type) == 1 || type_size(s->type) == 2 || type_size(s->type) == 4) ||
@@ -472,6 +511,8 @@ static void record_inline_function_if_simple(struct Sym *s)
     nparams = 0;
     for (i = 0; i < g_frame.nlocals && nparams < MAX_PROTO_PARAMS; ++i) {
         if (locals[i].storage == SC_PARAM) {
+            if (automatic && locals[i].is_volatile)
+                return;
             if (!(type_size(locals[i].type) == 1 || type_size(locals[i].type) == 2 ||
                   type_size(locals[i].type) == 4) ||
                 type_is_struct_object(locals[i].type))
@@ -504,6 +545,22 @@ static void record_inline_function_if_simple(struct Sym *s)
     lex_restore(&_ls);
     for (i = 0; i < MAX_PROTO_PARAMS; ++i)
         s->inline_param_use_count[i] = 0;
+
+    if (automatic) {
+        int budget = 16;
+        int bitwise = 0;
+        if (body == NULL || body->kind != AST_COMPOUND || body->list_len != 1 ||
+            body->list[0] == NULL || body->list[0]->kind != AST_RETURN)
+            return;
+        ret_expr = body->list[0]->a;
+        if (ret_expr == NULL || ret_expr->kind != AST_CAST || ret_expr->type != s->type ||
+            !auto_byte_inline_tree(s, ret_expr, &budget, &bitwise) || bitwise < 2 ||
+            !inline_expr_is_simple(s, ret_expr))
+            return;
+        s->inline_return_expr = ret_expr;
+        s->auto_inline_byte = 1;
+        return;
+    }
 
     has_local = try_scan_inline_local_decl(s, body);
 
