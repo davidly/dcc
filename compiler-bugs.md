@@ -10,6 +10,28 @@ runner has no parked reproducers. The detailed fix history is in
 The full suite (654 apps) passes in both stack modes on Linux and Windows,
 with no performance regressions in the default configuration.
 
+## Seed 282623
+
+**Fixed locally.** The integer production campaign over seeds 260001–300000
+found an assembly failure in `peep` and `peep-nosc`; both configurations
+without peephole optimization passed. `pass_skip_ix_reload_across_label`
+named its new labels from the current line index. Other passes shrink the
+program between iterations, allowing another site to reuse that index. Two
+`Lskrl_9418` definitions caused multiply defined symbols and an out-of-range
+relative branch.
+
+The pass now checks existing definitions and selects an unused suffix,
+preserving the same instructions. The fixture
+`tests/dccpeep/skip-long-reload-label.in.mac` covers an existing skip label;
+`scripts/tests/test_dccpeep_reload_labels.py` checks unique labels, the
+original branch target, successful assembly, and repeated optimization. The
+regression fails before the fix, and the original seed passes all four
+production configurations after it.
+
+Verification on upstream `4754d505` passed: 300-seed production batches for
+both generators, the full suite in both stack modes, and Python and debugger
+checks. Existing performance baselines are unchanged.
+
 ## Performance follow-up
 
 Forcing the regional emitter with `DCC_MIR_PREFER_REGIONAL=1` produces correct

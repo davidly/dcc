@@ -783,6 +783,7 @@ static int pass_skip_ix_reload_across_label(void)
 
         {
             char skip_label[160], jr_line[192], skip_def[168];
+            int suffix = i;
 
             /* "Lskrl_", not "Lpeep_skiprl_": M80 truncates non-public
              * labels to 16 significant characters (confirmed empirically -
@@ -799,7 +800,12 @@ static int pass_skip_ix_reload_across_label(void)
              * project's m80c, which doesn't enforce this limit and let it
              * through unnoticed. Same fix applied to every other
              * Lpeep_..._%d generator below - see the shared rationale here. */
-            sprintf(skip_label, "Lskrl_%d", i);
+            /* Earlier iterations can leave a label with this line index
+             * after other passes shrink the program. Keep those targets
+             * distinct, including labels read from already optimized input. */
+            do {
+                sprintf(skip_label, "Lskrl_%d", suffix++);
+            } while (find_label_line_in_range(skip_label, 0, nlines) >= 0);
             sprintf(jr_line, "jr %s", skip_label);
             sprintf(skip_def, "%s:", skip_label);
 

@@ -1,0 +1,28 @@
+cseg
+public _probe
+_probe:
+call _source
+ld (ix-8),l
+ld (ix-7),h
+ld (ix-6),e
+ld (ix-5),d
+Ljoin:
+ld l,(ix-8)
+ld h,(ix-7)
+ld e,(ix-6)
+ld d,(ix-5)
+call _sink
+ret
+_entry:
+jp Ljoin
+_existing:
+ld a,(ix-1)
+or a
+jp z,Lskrl_4
+call _source
+Lskrl_4:
+ld a,1
+out (7),a
+ret
+extrn _source,_sink
+end

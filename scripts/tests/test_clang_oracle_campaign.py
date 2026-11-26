@@ -76,7 +76,7 @@ class FrontendProbeTests(unittest.TestCase):
                                frontend_off=frozenset({'pp-unsigned'}))
         fuzz = mock.Mock(side_effect=(1, 0))
         with mock.patch.dict(run_campaign.__globals__, {'fuzz': fuzz}):
-            self.assertEqual(run_campaign(args), 1)
+            self.assertEqual(run_campaign(args, list(range(120001, 120013))), 1)
         probe_args, probe_seeds = fuzz.call_args_list[0].args
         self.assertEqual(probe_args.gen, 'frontend')
         self.assertEqual(probe_args.work, args.work / 'frontend')
