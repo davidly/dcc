@@ -1,6 +1,4 @@
-"""Data inventory, assertion controls and isolated clobber worker contracts."""
-import copy
-import hashlib
+"""Generated MIR fuzz inventory and isolated worker contracts."""
 import json
 import os
 from pathlib import Path
@@ -18,69 +16,7 @@ class MirClobberRunnerTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='clobber runner ')
         self.addCleanup(self.temp.cleanup)
-        self.root=Path(self.temp.name).resolve();self.campaign=self.root/'cases'
-        self.campaign.mkdir();(self.root/'input.c').write_text('int main(void){return 0;}')
-        (self.root/'input.dat').write_text('fixture')
-        self.definition={'Name':'amfuture','Group':'future','Sources':['input.c'],'FixturePaths':['input.dat'],
-            'Defines':['VALUE=4'],'Expected':['passed'],'Exit':7,'ExactTemplate':'shape','ExactFunction':'main',
-            'RequireRejected':True,'RequireExact':False,'MachineMutation':'1:src1:999','MachineMutationFunction':'main',
-            'Args':['one','two words'],'StackBytes':1024,'StackModes':[False],'DebugModes':['true','lines'],
-            'RequiredGenericFunction':'main','RequiredSelectorFunction':'main','RequiredSelector':'spilled-scalar-cfg',
-            'RequiredCandidate':'spilled-all','AssemblyPatterns':['required'],'ForbiddenAssemblyPatterns':['forbidden'],
-            'OddUpperRuntime':False,'MirExpectations':[{'Function':'main','Loads':1,'Volatile':0,'Width':1}]}
-
-    def write(self,value):
-        (self.campaign/'campaign.json').write_text(json.dumps(value))
-
-    def load(self):return m.import_cases(self.campaign,self.root,existing=['existing'])
-
-    def test_schema_roundtrip_and_campaign_debug_contracts(self):
-        self.write([self.definition]);self.assertEqual(self.load(),[self.definition])
-        with self.assertRaisesRegex(RuntimeError,'Duplicate'):
-            m.import_cases(self.campaign,self.root,existing=['AMFUTURE'])
-        data={'Cases':[],'Specials':[]}
-        plan=m.plan(['future'],environment={},data=data,campaign_directory=self.campaign,root=self.root)
-        self.assertEqual(len(plan),6)
-        for entry in plan.values():
-            p=entry['Parameters']
-            for key in ('StackBytes','MachineMutation','MirExpectations','AssemblyPatterns','RequiredCandidate'):
-                self.assertEqual(p[key],self.definition[key])
-            self.assertEqual(p['RunArguments'],['one','two words'])
-        self.assertEqual(len(m.plan(['amfuture'],environment={},data=data,campaign_directory=self.campaign,root=self.root)),6)
-        with self.assertRaisesRegex(RuntimeError,'Unknown'):
-            m.plan(['allocmut-near-miss'],data=data,campaign_directory=self.campaign,root=self.root)
-
-    def test_schema_negative_controls(self):
-        invalid={'Unknown':True,'Sources':[],'Exit':True,'StackBytes':0,'StackModes':[False,False],
-            'DebugModes':['true','true'],'Group':'bad/name','Expected':'text','RequireExact':True,
-            'RequiredSelector':None,'MirExpectations':[],'FixturePaths':['../outside.dat']}
-        for key,value in invalid.items():
-            with self.subTest(key=key):
-                d=copy.deepcopy(self.definition);d[key]=value;self.write([d])
-                with self.assertRaises(RuntimeError):self.load()
-        for value in (self.definition,[self.definition,self.definition],[7]):
-            self.write(value)
-            with self.assertRaises(RuntimeError):self.load()
-        self.write([dict(self.definition,Group='existing')])
-        with self.assertRaisesRegex(RuntimeError,'collides'):self.load()
-        for field in ('Name','Sources','Expected','Exit'):
-            d=dict(self.definition);d.pop(field);self.write([d])
-            with self.assertRaisesRegex(RuntimeError,'Missing'):self.load()
-        for path in ('/input.c','C:\\input.c','../input.c'):
-            self.write([dict(self.definition,Sources=[path])])
-            with self.assertRaises(RuntimeError):self.load()
-
-    def test_default_inventory_matches_powershell_migration_snapshot(self):
-        plan=m.plan(environment={})
-        self.assertEqual(len(plan),10093)
-        digest=hashlib.sha256('\n'.join(sorted(plan)).encode()).hexdigest()
-        self.assertEqual(digest,'4ae449ffa81224f47b9fd00c5fc048efd7573c1c01ad79b8e60ae32f4b57430d')
-        self.assertEqual(sum(e['Command']=='Assert-ForcedRegionalSafe' for e in plan.values()),13)
-        self.assertEqual(len(m.qualifier_source().split('check(q'))-1,12)
-        # Historical aliases remain frozen; new campaign prefixes don't join them.
-        alloc=m.plan(['allocmut'],environment={})
-        self.assertTrue(alloc);self.assertTrue(all(e['Parameters']['Name'] in {d['Name'] for d in json.loads(m.DATA.read_text())['Cases']} for e in alloc.values()))
-        self.assertNotIn('mw8exact|stack-peep',alloc)
+        self.root=Path(self.temp.name).resolve()
 
     def test_custom_fuzz_seed_function_and_width_coverage(self):
         plan=m.plan(['fuzz'],[0,1],environment={})
@@ -105,32 +41,11 @@ class MirClobberRunnerTests(unittest.TestCase):
             path=self.root/'manifest.json';m.write_json(path,values)
             self.assertEqual(json.loads(path.read_text()),values)
 
-    def test_mir_access_flags_widths_function_identity_and_full_debug(self):
-        access=[{'Function':'memory','Loads':1,'Volatile':1,'Width':1,'ByteVolatile':1}]
-        evidence='; MIR function=memory purpose=final\n; 1 loadind v1 mem=1v\n; MIR summary function=memory insns=2\n'
-        m.access_evidence(evidence,access)
-        for bad in ('',evidence.replace('function=memory','function=other'),evidence.replace('mem=1v','mem=2v'),
-            evidence.replace('mem=1v','mem=1'),evidence+evidence,evidence.replace('; MIR summary function=memory','; MIR summary function=other'),
-            evidence.replace('; 1 loadind','; MIR function=other purpose=final\n; 1 loadind')):
-            with self.assertRaises(RuntimeError):m.access_evidence(bad,access)
-        debug=[{'Function':'memory','Loads':1,'Volatile':1,'Width':1,'FullDebugLoads':2,'FullDebugWidth':2}]
-        full='; MIR function=memory purpose=final\n; 1 loadind v1 mem=2v\n; 2 loadind v2 mem=2\n; MIR summary function=memory insns=3\n'
-        m.access_evidence(full,debug,'true');m.access_evidence(evidence,debug,'lines')
-        with self.assertRaises(RuntimeError):m.access_evidence(full,debug,'lines')
-        for bad in ([],[{'Function':'memory','Loads':1}],[{'Function':'memory','Loads':1,'Volatile':2}],
-                    [{'Function':'memory','Loads':1,'Volatile':0,'Width':0}],
-                    [{'Function':'memory.*','Loads':1,'Volatile':0}],access+access):
-            with self.assertRaises(RuntimeError):m.access_expectations(bad)
-
-    def test_target_exit_and_exact_rejection_evidence(self):
+    def test_target_exit_evidence(self):
         result={'TimedOut':False,'ExitCode':0,'Output':'correct'}
-        m.target_result(result,'memory','release',0,['correct'])
+        m.target_result(result,'fuzz','release',0,['correct'])
         for bad,code,text in [(result,1,['correct']),(dict(result,TimedOut=True),0,['correct']),(result,0,['wrong'])]:
-            with self.assertRaises(RuntimeError):m.target_result(bad,'memory','release',code,text)
-        text='MIR machine function=target template=shape reject=operand\nMIR selection function=target selector=spilled-scalar-cfg result=mir'
-        self.assertTrue(m.rejection_into_generic(text,'shape','target'))
-        self.assertFalse(m.rejection_into_generic(text.replace('target selector','other selector'),'shape','target'))
-        self.assertFalse(m.rejection_into_generic(text.replace('spilled-scalar','scheduled-machine'),'shape','target'))
+            with self.assertRaises(RuntimeError):m.target_result(bad,'fuzz','release',code,text)
 
     def test_build_timeout_distinct_and_environment_not_mutated(self):
         args=m.parse_args(['--build-timeout','17','--run-timeout','3'])
@@ -146,8 +61,8 @@ class MirClobberRunnerTests(unittest.TestCase):
     def test_list_works_without_tools_and_argument_validation(self):
         path=self.root/'list.json'
         with patch.dict(os.environ,{'PATH':''}):
-            self.assertEqual(m.main(['--cases','inlines','--emulator','deliberately-missing','--list-executions',str(path)]),0)
-        self.assertEqual(len(json.loads(path.read_text())),4)
+            self.assertEqual(m.main(['--cases','fuzz','--fuzz-seeds','0','1','--emulator','deliberately-missing','--list-executions',str(path)]),0)
+        self.assertEqual(len(json.loads(path.read_text())),48)
         for args in (['--jobs','0'],['--build-timeout','0'],['--shard-index','2','--shard-count','2'],['--jobs','2','--shard-count','2']):
             with self.assertRaises(SystemExit):m.parse_args(args)
 

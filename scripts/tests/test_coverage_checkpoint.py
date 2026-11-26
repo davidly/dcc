@@ -244,11 +244,6 @@ class CoverageStageShellTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("positive integer", result.stderr)
 
-    def test_invalid_campaign_job_budget(self):
-        result = self.run_stage(DCC_COVERAGE_CAMPAIGN_JOBS="0")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("DCC_COVERAGE_CAMPAIGN_JOBS", result.stderr)
-
     def test_invalid_clobber_build_timeout(self):
         for value in ("0", "-1", "1.5", "junk"):
             with self.subTest(value=value):

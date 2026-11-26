@@ -28,7 +28,7 @@ provenance repaired by D2e-1.
 
 BUG-060 was promoted as `tfpround`: exact-bit `%f` nearest-even rounding,
 decimal carries, signed zero and subnormal fractions. `%e`/`%g` remain
-unsupported; `scripts/printf-float-proof.py` checks their pre-existing behavior.
+unsupported; `scripts/printf-float-oracle.py` checks their pre-existing behavior.
 
 BUG-061 was promoted as `tests/tsizhigh.c` (unsigned typing for compile-time
 `sizeof` values at or above `0x8000`). BUG-062, the residual small/runtime
