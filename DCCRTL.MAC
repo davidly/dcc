@@ -4059,6 +4059,12 @@ __sxhl: ld      a,l
         public  pf_hforce
         public  pf_ocb16
         public  pf_width
+        public  pf_number
+        public  pf_sgn
+        public  pf_pos
+        public  pf_ahx
+        public  pf_aoc
+        public  pf_pfx
 _printf:
         push    ix
         ld      ix,0
@@ -4101,6 +4107,8 @@ pf_percent:
         ld      (pf_haveprec),a
         ld      (pf_left),a
         ld      (pf_zero),a
+        ld      (pf_flags),a
+        ld      (pf_prefixlen),a
 
 pf_pct_next:
         ld      a,(hl)
@@ -4114,23 +4122,13 @@ pf_pct_next:
         cp      '-'
         jr      z,pf_pct_left
 
-        ; '+' (force sign) and '#' (alternate form) are not implemented, but
-        ; must still be recognized and skipped as no-op flags here rather
-        ; than falling through to the unrecognized-conversion-character
-        ; path below: that path bails out without consuming an argument,
-        ; which silently desyncs every argument after it for the rest of
-        ; this printf() call (confirmed: "%+d %d %d", 1,2,3 printed
-        ; "+d 1 2" instead of failing locally). Recognizing them here as
-        ; true no-ops means the real conversion character that follows
-        ; (e.g. the 'd' in "%+d") still runs normally and consumes exactly
-        ; one argument, so only the '+'/'#' cosmetic effect itself is
-        ; missing - nothing after it in the call is corrupted.
+        ; Numeric sign/alternate flags. '+' takes precedence over space.
         cp      '+'
-        jr      z,pf_pct_next
+        jp      z,pf_pct_plus
         cp      '#'
-        jr      z,pf_pct_next
+        jp      z,pf_pct_alt
         cp      ' '
-        jr      z,pf_pct_next
+        jp      z,pf_pct_space
 
         cp      '.'
         jr      z,pf_pct_dot
@@ -4138,14 +4136,14 @@ pf_pct_next:
         ; C99 size_t length modifier.  In dcc, size_t is 16-bit, so
         ; %zu/%zd/%zi/%zx/%zX use the ordinary 16-bit integer handlers.
         cp      'z'
-        jr      z,pf_pct_z
+        jp      z,pf_pct_z
 
         ; Decimal field width: %2d / %3u / %8s etc.  A leading '0' (before any
         ; width digit) is the '0' zero-pad flag, not a width digit.
         cp      '0'
-        jr      c,pf_pct_done_width
+        jp      c,pf_pct_done_width
         cp      '9'+1
-        jr      nc,pf_pct_done_width
+        jp      nc,pf_pct_done_width
 
         cp      '0'
         jr      nz,pf_pct_acc
@@ -4173,6 +4171,22 @@ pf_pct_left:
         ld      a,1
         ld      (pf_left),a
         jr      pf_pct_next
+
+pf_pct_plus:
+        ld      a,(pf_flags)
+        or      1
+        ld      (pf_flags),a
+        jp      pf_pct_next
+pf_pct_space:
+        ld      a,(pf_flags)
+        or      2
+        ld      (pf_flags),a
+        jp      pf_pct_next
+pf_pct_alt:
+        ld      a,(pf_flags)
+        or      4
+        ld      (pf_flags),a
+        jp      pf_pct_next
 
 pf_pct_dot:
         ; Parse digits after '.' into pf_prec (e.g. %.4d  prec=4).
@@ -4527,14 +4541,7 @@ pf_u:
         call    pf_build_u      ; A = digit count, HL -> first digit (built once)
         ld      (pf_digit),a
         call    pf_zero_prec_blank
-        push    hl
-        xor     a               ; unsigned: no sign
-        call    pf_zsetup       ; honour the '0' zero-pad flag
-        call    pf_efflen       ; A = max(digits, precision)
-        call    pf_iprepad      ; emit leading spaces unless left-justified
-        pop     hl
-        call    pf_zfd          ; precision/zero-fill then emit the digits
-        call    pf_ipostpad     ; emit trailing spaces when left-justified
+        call    pf_number
         pop     de
         pop     hl
         jp      pf_loop
@@ -4543,44 +4550,25 @@ pf_d:
         push    hl
         call    pf_arg_hl
         push    de
-
-        ; Build digits of |value| once, then pad/sign/zero-fill/emit using the
-        ; known length.  Avoids the separate digit-counting divide pass.
         bit     7,h
         jr      z,pf_d_pos
-        ; Negative: build digits of -value, remember sign.
         xor     a
         sub     l
         ld      l,a
         ld      a,0
         sbc     a,h
         ld      h,a
-        call    pf_build_u
-        ld      (pf_digit),a    ; save digit count of |value|
-        call    pf_zero_prec_blank
-        push    hl              ; save pointer to first digit
-        ld      a,1             ; sign length = 1 ('-')
-        call    pf_zsetup       ; honour the '0' zero-pad flag
-        call    pf_efflen       ; A = max(digits, precision)
-        cp      255             ; include '-' without wrapping 255 to zero
-        adc     a,0
-        call    pf_iprepad
         ld      a,'-'
-        call    pf_emit_a
+        call    pf_sgn
+        call    pf_build_u
         jr      pf_d_tail
 pf_d_pos:
+        call    pf_pos
         call    pf_build_u
-        ld      (pf_digit),a    ; save digit count
-        call    pf_zero_prec_blank
-        push    hl              ; save pointer to first digit
-        xor     a               ; sign length = 0
-        call    pf_zsetup
-        call    pf_efflen       ; A = max(digits, precision)
-        call    pf_iprepad
 pf_d_tail:
-        pop     hl              ; HL -> first digit
-        call    pf_zfd          ; precision/zero-fill then emit digits
-        call    pf_ipostpad
+        ld      (pf_digit),a
+        call    pf_zero_prec_blank
+        call    pf_number
         pop     de
         pop     hl
         jp      pf_loop
@@ -4609,15 +4597,9 @@ pf_x:
         push    de
         call    pf_hxb16  ; A = digit count, HL -> first hex digit
         ld      (pf_digit),a
+        call    pf_ahx
         call    pf_zero_prec_blank
-        push    hl
-        xor     a               ; unsigned: no sign
-        call    pf_zsetup       ; honour the '0' zero-pad flag
-        call    pf_efflen       ; A = max(digits, precision)
-        call    pf_iprepad      ; emit leading spaces unless left-justified
-        pop     hl
-        call    pf_zfd          ; precision/zero-fill then emit digits
-        call    pf_ipostpad     ; emit trailing spaces when left-justified
+        call    pf_number
         pop     de
         pop     hl
         jp      pf_loop
@@ -4632,18 +4614,106 @@ pf_o:
         push    de
         call    pf_ocb16  ; A = digit count, HL -> first octal digit
         ld      (pf_digit),a
+        call    pf_aoc
         call    pf_zero_prec_blank
-        push    hl
-        xor     a               ; unsigned: no sign
-        call    pf_zsetup       ; honour the '0' zero-pad flag
-        call    pf_efflen       ; A = max(digits, precision)
-        call    pf_iprepad      ; emit leading spaces unless left-justified
-        pop     hl
-        call    pf_zfd          ; precision/zero-fill then emit digits
-        call    pf_ipostpad     ; emit trailing spaces when left-justified
+        call    pf_number
         pop     de
         pop     hl
         jp      pf_loop
+
+ ; Shared numeric prefix/field primitives. Preserve BC (output count),
+; the format pointer and the caller's vararg offset as for the old tails.
+pf_pos:
+        ld      a,(pf_flags)
+        bit     0,a
+        ld      a,'+'
+        jr      nz,pf_sgn
+        ld      a,(pf_flags)
+        and     2
+        jr      z,pf_sgn
+        ld      a,' '
+pf_sgn:
+        ld      (pf_prefix),a
+        or      a
+        jr      z,pf_sign_len
+        ld      a,1
+pf_sign_len:
+        ld      (pf_prefixlen),a
+        ret
+
+; Minimal hex strings start with '0' only for zero: %#x has no prefix then.
+pf_ahx:
+        ld      a,(pf_flags)
+        and     4
+        ret     z
+        ld      a,(hl)
+        cp      '0'
+        ret     z
+        ld      a,2
+        ld      (pf_prefixlen),a
+        ld      a,'0'
+        ld      (pf_prefix),a
+        ld      a,(pf_hexup)
+        or      a
+        ld      a,'x'
+        jr      z,pf_hex_prefix
+        ld      a,'X'
+pf_hex_prefix:
+        ld      (pf_prefix+1),a
+        ret
+
+; Octal alternate form needs one leading zero, supplied by existing
+; precision zero-fill when possible. %#.0o with zero still prints "0".
+pf_aoc:
+        ld      a,(pf_flags)
+        and     4
+        ret     z
+        ld      a,(hl)
+        cp      '0'
+        jr      nz,pf_oct_nonzero
+        ld      a,(pf_prec)
+        or      a
+        ret     nz
+        inc     a
+        ld      (pf_prec),a
+        ret
+pf_oct_nonzero:
+        ld      a,(pf_prec)
+        ld      e,a
+        ld      a,(pf_digit)
+        cp      e
+        ret     c
+        ld      a,'0'
+        jr      pf_sgn
+
+pf_number:
+        push    hl
+        ld      a,(pf_prefixlen)
+        call    pf_zsetup
+        call    pf_efflen
+        ld      e,a
+        ld      a,(pf_prefixlen)
+        add     a,e
+        jr      nc,pf_number_len
+        ld      a,255
+pf_number_len:
+        call    pf_iprepad
+        call    pf_pfx
+        pop     hl
+        call    pf_zfd
+        jp      pf_ipostpad
+
+pf_pfx:
+        ld      a,(pf_prefixlen)
+        or      a
+        ret     z
+        ld      a,(pf_prefix)
+        call    pf_emit_a
+        ld      a,(pf_prefixlen)
+        cp      2
+        ret     nz
+        ld      a,(pf_prefix+1)
+        jp      pf_emit_a
 
 ; pf_done is directly referenced by __pf_run's pf_loop (jp z,pf_done), so
 ; it's split out of the (now strippable) pf_o block into its own always-
@@ -4958,6 +5028,9 @@ pf_zero:
         db      0
 pf_hexup:
         db      0
+pf_flags:      db 0              ; bit 0 '+', bit 1 space, bit 2 '#'
+pf_prefixlen:  db 0
+pf_prefix:     ds 2
 
 pf_decbuf:
         ds      7
@@ -5147,6 +5220,14 @@ pf_f:
         ld      a,d
         and     80h
         ld      (pf_fneg),a
+        or      a
+        jr      z,pf_f_positive
+        ld      a,'-'
+        call    pf_sgn
+        jr      pf_f_classify
+pf_f_positive:
+        call    pf_pos
+pf_f_classify:
         ld      a,d
         and     7fh
         cp      7fh
@@ -5168,11 +5249,8 @@ pf_f_showinf:
 pf_f_show_special:
         xor     a
         ld      (pf_zero),a             ; nan/inf are always space padded
-        ld      a,(pf_fneg)
-        or      a
-        ld      a,3
-        jr      z,pf_f_special_len
-        inc     a
+        ld      a,(pf_prefixlen)
+        add     a,3
 pf_f_special_len:
         call    pf_f_prepad
         call    pf_f_signzero
@@ -5310,7 +5388,14 @@ pf_f_integer_zero:
 pf_f_fraction:
         ld      a,(pf_fcnt)
         or      a
+        jr      nz,pf_f_fraction_dot
+        ld      a,(pf_flags)
+        and     4
         jr      z,pf_f_free
+        ld      a,'.'
+        call    pf_emit_a
+        jr      pf_f_free
+pf_f_fraction_dot:
         ld      a,'.'
         call    pf_emit_a
         ld      a,(pf_fscale)
@@ -5373,14 +5458,18 @@ pf_f_done_nowidth:
 
 ; Return the complete field length in A from integer digit count E.
 pf_f_length:
-        ld      a,(pf_fneg)
-        or      a
-        jr      z,pf_f_len_nosign
-        inc     e
+        ld      a,(pf_prefixlen)
+        add     a,e
+        ld      e,a
 pf_f_len_nosign:
         ld      a,(pf_fcnt)
         or      a
+        jr      nz,pf_f_len_fraction
+        ld      a,(pf_flags)
+        and     4
         jr      z,pf_f_len_integer
+        xor     a
+pf_f_len_fraction:
         inc     a                       ; precision + decimal point
         jr      z,pf_f_len_sat          ; precision 255 overflowed
         add     a,e
@@ -5409,11 +5498,7 @@ pf_f_prepad:
 ; Emit a pending sign, then any requested zero fill.  pf_digit is the complete
 ; content length, including sign, decimal point, and fractional digits.
 pf_f_signzero:
-        ld      a,(pf_fneg)
-        or      a
-        jr      z,pf_f_sz_zero
-        ld      a,'-'
-        call    pf_emit_a
+        call    pf_pfx
 pf_f_sz_zero:
         ld      a,(pf_left)
         or      a
@@ -5739,41 +5824,24 @@ pf_wstrlen_done:
         ret
 
 pf_ld:
-        ; Signed 32-bit decimal
         push    hl
-        call    pf_arg_dehl     ; loads __pf32_l/__pf32_h, advances DE by 4
+        call    pf_arg_dehl
         push    de
         ld      hl,(__pf32_h)
         bit     7,h
         jr      z,pf_ld_pos
-        ; Negative: negate, build digits once, then print with '-'
         call    pf_neg32
-        call    pf_build_u32    ; A = count, HL -> first digit
-        ld      (pf_digit),a
-        call    pf_zero_prec_blank
-        push    hl
-        ld      a,1             ; sign length = 1 ('-')
-        call    pf_zsetup       ; honour the '0' zero-pad flag
-        call    pf_efflen       ; A = max(digits, precision)
-        cp      255             ; include '-' without wrapping 255 to zero
-        adc     a,0
-        call    pf_iprepad
         ld      a,'-'
-        call    pf_emit_a
+        call    pf_sgn
+        call    pf_build_u32
         jr      pf_ld_tail
 pf_ld_pos:
-        call    pf_build_u32    ; A = count, HL -> first digit
+        call    pf_pos
+        call    pf_build_u32
+pf_ld_tail:
         ld      (pf_digit),a
         call    pf_zero_prec_blank
-        push    hl
-        xor     a               ; sign length = 0
-        call    pf_zsetup
-        call    pf_efflen       ; A = max(digits, precision)
-        call    pf_iprepad
-pf_ld_tail:
-        pop     hl
-        call    pf_zfd          ; precision/zero-fill then emit digits
-        call    pf_ipostpad
+        call    pf_number
         pop     de
         pop     hl
         jp      pf_loop
@@ -5786,14 +5854,7 @@ pf_lu:
         call    pf_build_u32    ; A = count, HL -> first digit
         ld      (pf_digit),a
         call    pf_zero_prec_blank
-        push    hl
-        xor     a               ; unsigned: no sign
-        call    pf_zsetup
-        call    pf_efflen       ; A = max(digits, precision)
-        call    pf_iprepad
-        pop     hl
-        call    pf_zfd
-        call    pf_ipostpad
+        call    pf_number
         pop     de
         pop     hl
         jp      pf_loop
@@ -5813,15 +5874,9 @@ pf_lx:
         push    de
         call    pf_build_hex32  ; A = digit count, HL -> first hex digit
         ld      (pf_digit),a
+        call    pf_ahx
         call    pf_zero_prec_blank
-        push    hl
-        xor     a               ; unsigned: no sign
-        call    pf_zsetup       ; honour the '0' zero-pad flag
-        call    pf_efflen       ; A = max(digits, precision)
-        call    pf_iprepad      ; emit leading spaces unless left-justified
-        pop     hl
-        call    pf_zfd          ; precision/zero-fill then emit digits
-        call    pf_ipostpad     ; emit trailing spaces when left-justified
+        call    pf_number
         pop     de
         pop     hl
         jp      pf_loop

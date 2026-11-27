@@ -62,6 +62,87 @@ class WideFrameTests(unittest.TestCase):
         self.assertNotIn("wide_frame_mask_test", self.optimize(
             body, ";@dcc.frame-cacheable\n;@dcc.volatile-parameter\n"))
 
+    def frame_pointer_update(self):
+        return ("ld hl,-12\nadd hl,sp\nld sp,hl\n"
+                "ld (ix-2),0\nld (ix-1),0\n"
+                "push ix\npop hl\ndec hl\ndec hl\nld c,l\nld b,h\n"
+                "L1:\nld l,c\nld h,b\npush hl\nld l,c\nld h,b\n"
+                "ld a,(hl)\ninc hl\nld h,(hl)\nld l,a\n"
+                "ld e,(ix+4)\nld d,(ix+5)\nadd hl,de\n"
+                "ld (ix-10),l\nld (ix-9),h\nex de,hl\npop hl\n"
+                "ld (hl),e\ninc hl\nld (hl),d\n"
+                "ld hl,17\nld de,19\nld (_sink),a\n"
+                "ld sp,ix\npop ix\nret")
+
+    def test_frame_pointer_update_keeps_volatile_order_and_live_a(self):
+        output = self.optimize(self.frame_pointer_update())
+        accesses = [line.strip() for line in output.splitlines()
+                    if "@dcc.volatile-access" in line]
+        self.assertEqual(accesses, [
+            "ld a,(ix-2) ;@dcc.volatile-access",
+            "ld h,(ix-1) ;@dcc.volatile-access",
+            "ld (ix-2),l ;@dcc.volatile-access",
+            "ld (ix-1),h ;@dcc.volatile-access"])
+        self.assertIn("ld (_sink),a", output)
+
+    def test_frame_pointer_update_declines_escapes_and_frame_changes(self):
+        body = self.frame_pointer_update()
+        for bad in (body.replace("L1:", "push bc\ncall _escape\npop bc\nL1:"),
+                    body.replace("L1:", "ld ix,123\nL1:"),
+                    body.replace("push ix\npop hl\ndec hl", "jp L1\npush ix\npop hl\ndec hl"),
+                    body.replace("ld e,(ix+4)", "ld e,(ix+6)"),
+                    body.replace("ld hl,17", "ld (_sink),hl"),
+                    body.replace("ld de,19", "ld (_sink),de"),
+                    body.replace("L1:", "ld (_sink),hl\nL1:")):
+            with self.subTest(body=bad):
+                self.assertNotIn("@dcc.volatile-access", self.optimize(bad))
+        self.assertNotIn("@dcc.volatile-access", self.optimize(body, marker=""))
+
+    def test_scalar_compare_preserves_flags_observed_by_jp_and_jr(self):
+        body = ("ld l,(ix+4)\nld h,(ix+5)\nld e,(ix+6)\nld d,(ix+7)\n"
+                "push hl\npush de\nor a\nsbc hl,de\npop de\npop hl\n"
+                "jr nc,L1\nld hl,1\njr L2\nL1:\nld hl,2\nL2:\n"
+                "ld (_sink),hl\nld a,0\nor a\npop ix\nret")
+        for jump in ("jp", "jr"):
+            with self.subTest(jump=jump):
+                source = body.replace("jr ", jump + " ")
+                self.assertIn("scalar_word_compare", self.optimize(source))
+                for condition in ("z", "nz", "m", "p", "pe", "po"):
+                    if jump == "jr" and condition not in ("z", "nz"):
+                        continue
+                    live = source.replace("L1:\n", "L1:\n" + jump + " " + condition + ",L2\n")
+                    self.assertNotIn("scalar_word_compare", self.optimize(live))
+
+    def test_scalar_increment_preserves_observed_carry(self):
+        body = ("ld l,(ix+4)\nld h,(ix+5)\nld e,(ix+6)\nld d,(ix+7)\n"
+                "ld iy,1\npush de\npush iy\npop de\nadd hl,de\npop de\n"
+                "ld iy,0\nL1:\nld (_sink),hl\nld a,0\nor a\npop ix\nret")
+        self.assertIn("scalar_word_increment", self.optimize(body))
+        for jump in ("jp", "jr"):
+            live = body.replace("L1:\n", jump + " c,L1\nL1:\n")
+            self.assertNotIn("scalar_word_increment", self.optimize(live))
+
+    def test_mirrored_accumulator_keeps_only_private_bc_uses(self):
+        store = "push hl\nld h,b\nld l,c\nld (ix-2),l\nld (ix-1),h\npop hl\n"
+        load = "push hl\nld l,(ix-2)\nld h,(ix-1)\nld b,h\nld c,l\npop hl\n"
+        body = ("dec sp\ndec sp\nld e,(ix+4)\nld d,(ix+5)\n"
+                "ld l,(ix+6)\nld h,(ix+7)\nld bc,0\n" + store +
+                "L0:\nld a,h\nor l\njr z,Lend\nld a,l\nand 1\nld c,a\nld b,0\n"
+                "push hl\nld h,b\nld l,c\nld a,h\nor l\npop hl\njr z,Lskip\n" + load +
+                "ld a,c\nadd a,e\nld c,a\nld a,b\nadc a,d\nld b,a\n" + store +
+                "Lskip:\nex de,hl\nadd hl,hl\nex de,hl\nsrl h\nrr l\njp L0\n"
+                "Lend:\nld l,(ix-2)\nld h,(ix-1)\nld sp,ix\npop ix\nret")
+        output = self.optimize(body)
+        self.assertIn("leaf_mirrored_word", output)
+        self.assertNotIn("(ix-2)", output)
+        self.assertNotIn("(ix-1)", output)
+        for unsafe in (body.replace("Lskip:\n", "Lskip:\nld bc,5\n"),
+                       body.replace("Lskip:\n", "Lskip:\ninc (ix-2)\n"),
+                       body.replace("Lskip:\n", "Lskip:\npush ix\npop de\n")):
+            self.assertNotIn("leaf_mirrored_word", self.optimize(unsafe))
+        self.assertNotIn("leaf_mirrored_word", self.optimize(
+            body, ";@dcc.frame-cacheable\n;@dcc.volatile-local\n"))
+
     def test_counter_guard_inlines_only_proven_void_loop_calls(self):
         helper = (";@dcc.lto begin _guard\n_guard:\n;@dcc.frame-cacheable\n"
                   ";@dcc.return-void\nld hl,2\nadd hl,sp\nld a,(hl)\ninc hl\n"

@@ -17765,7 +17765,7 @@ static int mir_load_is_byte_induction(int value)
         lhs=mir_definition(test->src1);bound=mir_definition(test->src2);
         if(!lhs || lhs->opcode!=MIR_LOAD || lhs->object!=load->object || lhs->memory_flags ||
            !bound || bound->opcode!=MIR_CONST || bound->immediate<=initial->immediate || bound->immediate>255)continue;
-        while(back<mir.count && mir.insns[back].opcode==MIR_NOP)++back;
+        while(back<mir.count && (mir.insns[back].opcode==MIR_NOP || mir.insns[back].opcode==MIR_LABEL))++back;
         if(back>=mir.count || mir.insns[back].opcode!=MIR_JUMP)continue;
         header=mir_find_label(mir.insns[back].label);
         if(header<=writes[0] || header>(int)(lhs-mir.insns) ||

@@ -109,12 +109,12 @@ static void test_space_flag(void)
     int n;
 
     n = sprintf(output, "% d/%d", 1, 2);
-    check_string("1/2", "space integer synchronization");
-    check(n == 3, "space integer count");
+    check_string(" 1/2", "space integer synchronization");
+    check(n == 4, "space integer count");
 
     n = sprintf(output, "% f/%d", float_from_bits(0x3fc00000UL), 7);
-    check_string("1.500000/7", "space float selection");
-    check(n == 10, "space float count");
+    check_string(" 1.500000/7", "space float selection");
+    check(n == 11, "space float count");
 }
 
 int main(void)

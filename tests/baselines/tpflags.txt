@@ -1,0 +1,3 @@
+printf:+1=+1 hex=0x2
+vprintf: 3
+tpflags passed

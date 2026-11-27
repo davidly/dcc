@@ -7261,7 +7261,7 @@ static int pass_cache_ix_local_word_reload(void)
         int noc;
         int delta;
 
-        if (i < nlines && !line_clobbers_bc(lines[i]) &&
+        if (i < nlines && !strstr(lines[i],"@dcc.volatile-access") && !line_clobbers_bc(lines[i]) &&
             !starts_label(lines[i]) && !line_starts_function_marker(lines[i]))
             continue;
 
@@ -7763,6 +7763,340 @@ static int pass_cache_ix_spill_via_exx(void)
  * registers are dead. Require compiler-owned, nonvolatile frames;
  * match every byte independently because wide spill homes need not be laid
  * out in register order. */
+/* Promote a private word whose register round trips already use BC. The
+ * call-free compiler-owned leaf may use BC only for this accumulator, its
+ * full-word add, and a dead temporary used to test a masked byte. Keeping
+ * the accumulator resident removes the repeated save/load/store shuffles. */
+/* For these late scalar folds, follow the actual jump condition and
+ * documented 16-bit flag effects. The shared effects model deliberately
+ * overestimates branch uses; changing it globally would disturb structural
+ * passes and their cost choices. Unknown instructions and ABI exits decline. */
+static unsigned scalar_branch_flags(int line)
+{
+    const PeepLineInfo *info=peep_line_info(line);
+    char condition[8],clean[MAX_LINE],*comma;
+    if(info && (info->opcode==PEEP_OPCODE_JP || info->opcode==PEEP_OPCODE_JR)) {
+        size_t length;
+        strip_peep_comment_copy(clean,lines[line]);
+        comma=strchr(clean,',');
+        if(comma==NULL)return 0;
+        length=(size_t)(comma-(clean+3));
+        while(length && isspace((unsigned char)clean[3+length-1]))--length;
+        if(length==0 || length>=sizeof(condition))return ~0U;
+        memcpy(condition,clean+3,length);condition[length]=0;
+        if(!strcmp(condition,"c") || !strcmp(condition,"nc"))return PEEP_FLAG_C;
+        if(!strcmp(condition,"z") || !strcmp(condition,"nz"))return PEEP_FLAG_Z;
+        if(!strcmp(condition,"m") || !strcmp(condition,"p"))return PEEP_FLAG_S;
+        if(!strcmp(condition,"pe") || !strcmp(condition,"po"))return PEEP_FLAG_PV;
+    }
+    return info?info->effects.flags_read:~0U;
+}
+
+static int scalar_flags_dead_after(int line,unsigned flags)
+{
+    unsigned bit;
+    int *queue=(int *)malloc((size_t)nlines*sizeof(int));
+    unsigned char *seen=(unsigned char *)malloc((size_t)nlines);
+    int safe=queue!=NULL && seen!=NULL;
+    for(bit=PEEP_FLAG_C;safe && bit<=PEEP_FLAG_PV;bit<<=1)if(flags&bit) {
+        const PeepFlowLine *origin=peep_flow_line(line);
+        int head=0,tail=0,j;
+        memset(seen,0,(size_t)nlines);
+        if(!origin || !origin->successor_count){safe=0;break;}
+        for(j=0;j<origin->successor_count;++j) {
+            int next=origin->successors[j];
+            if(!seen[next]){seen[next]=1;queue[tail++]=next;}
+        }
+        while(head<tail && safe) {
+            int at=queue[head++];
+            const PeepLineInfo *info=peep_line_info(at);
+            const PeepFlowLine *flow=peep_flow_line(at);
+            unsigned writes=info->effects.flags_written;
+            if(info->effects.unknown || (scalar_branch_flags(at)&bit)) {safe=0;break;}
+            if((!strcmp(info->mnemonic,"inc") || !strcmp(info->mnemonic,"dec"))) {
+                if(info->left.kind==PEEP_OPERAND_REGISTER &&
+                   (info->left.registers==PEEP_REG_HL || info->left.registers==PEEP_REG_DE ||
+                    info->left.registers==PEEP_REG_BC || info->left.registers==PEEP_REG_IX ||
+                    info->left.registers==PEEP_REG_IY || info->left.registers==PEEP_REG_SP))writes=0;
+                else writes&=~PEEP_FLAG_C;
+            }
+            if(!strcmp(info->mnemonic,"add") &&
+               (info->left.registers==PEEP_REG_HL || info->left.registers==PEEP_REG_IX ||
+                info->left.registers==PEEP_REG_IY))writes=PEEP_FLAG_C;
+            if(info->opcode==PEEP_OPCODE_BLOCK) {safe=0;break;}
+            if(writes&bit)continue;
+            if(!flow || !flow->successor_count){safe=0;break;}
+            for(j=0;j<flow->successor_count;++j) {
+                int next=flow->successors[j];
+                if(!seen[next]){seen[next]=1;queue[tail++]=next;}
+            }
+        }
+    }
+    free(queue);free(seen);return safe;
+}
+
+/* Late scalar folds retain the structural loop shapes until larger
+ * transforms have finished. Each replacement proves its extra clobbers or
+ * changed flags dead on both branch successors. */
+static int pass_scalar_word_roundtrips(void)
+{
+    int i,changed=0;
+    unsigned flags=PEEP_FLAG_C|PEEP_FLAG_Z|PEEP_FLAG_S|PEEP_FLAG_PV;
+    for(i=0;i+5<nlines;++i) {
+        char target[128];
+        if(eq(i,"ld l,c") && eq(i+1,"ld h,b")) {
+            int shift=i+2;
+            if(eq(shift,"ld de,1"))++shift;
+            if(eq(shift,"srl h") && eq(shift+1,"rr l") &&
+               eq(shift+2,"ld c,l") && eq(shift+3,"ld b,h") &&
+               peep_registers_dead_after(shift+3,PEEP_REG_HL)) {
+                int keep_de=shift!=i+2 && !peep_registers_dead_after(shift+3,PEEP_REG_DE);
+                replace1_tagged(i,keep_de?"ld de,1":"srl b","scalar_word_shift");
+                replace1(i+1,keep_de?"srl b":"rr c");
+                if(keep_de)replace1(i+2,"rr c");
+                delete_n(i+2+keep_de,shift+2-i-keep_de);changed=1;continue;
+            }
+            if(eq(i+2,"ld a,h") && eq(i+3,"or l") &&
+               peep_registers_dead_after(i+3,PEEP_REG_HL)) {
+                replace1_tagged(i,"ld a,b","scalar_word_test");replace1(i+1,"or c");
+                delete_n(i+2,2);changed=1;continue;
+            }
+        }
+        if(eq(i,"ld l,c") && eq(i+1,"ld a,l") && peep_registers_dead_after(i+1,PEEP_REG_L)) {
+            replace1_tagged(i,"ld a,c","scalar_word_test");delete_n(i+1,1);changed=1;continue;
+        }
+        if(eq(i,"ld iy,1") && eq(i+1,"push de") && eq(i+2,"push iy") &&
+           eq(i+3,"pop de") && eq(i+4,"add hl,de") && eq(i+5,"pop de") &&
+           peep_registers_dead_after(i+5,PEEP_REG_IY) && scalar_flags_dead_after(i+5,PEEP_FLAG_C)) {
+            replace1_tagged(i,"inc hl","scalar_word_increment");delete_n(i+1,5);changed=1;continue;
+        }
+        if(eq(i,"ld e,l") && eq(i+1,"ld d,h") && eq(i+2,"add hl,de") &&
+           peep_registers_dead_after(i+2,PEEP_REG_DE)) {
+            replace1_tagged(i,"add hl,hl","scalar_word_double");delete_n(i+1,2);changed=1;continue;
+        }
+        if(eq(i,"ld h,0") && eq(i+1,"ld a,l") && eq(i+3,"ld l,a") &&
+           eq(i+4,"ld a,h") && eq(i+5,"or l") && i+6<nlines &&
+           jump_target_any(lines[i+6],target)) {
+            const PeepLineInfo *mask=peep_line_info(i+2),*branch=peep_line_info(i+6);
+            if(mask && !strcmp(mask->mnemonic,"and") && mask->left.immediate_valid &&
+               branch && scalar_branch_flags(i+6)==PEEP_FLAG_Z &&
+               peep_registers_dead_after(i+6,PEEP_REG_HL)) {
+                delete_n(i+3,3);delete_n(i,1);changed=1;continue;
+            }
+        }
+        if(i+6<nlines && eq(i,"push hl") && eq(i+1,"push de") && eq(i+2,"or a") &&
+           eq(i+3,"sbc hl,de") && eq(i+4,"pop de") && eq(i+5,"pop hl") &&
+           jump_target_any(lines[i+6],target)) {
+            const PeepLineInfo *branch=peep_line_info(i+6);
+            if(branch && scalar_branch_flags(i+6)==PEEP_FLAG_C &&
+               peep_registers_dead_after(i+6,PEEP_REG_A) &&
+               scalar_flags_dead_after(i+6,flags & ~PEEP_FLAG_C)) {
+                replace1_tagged(i,"ld a,l","scalar_word_compare");replace1(i+1,"sub e");
+                replace1(i+2,"ld a,h");replace1(i+3,"sbc a,d");delete_n(i+4,2);changed=1;
+            }
+        }
+    }
+    return changed;
+}
+
+/* Resolve a leaf's immutable BC frame pointer for a word read/add/write.
+ * Every BC use must belong to a matched update, and the address must be
+ * formed once in the straight-line entry prefix. No pointer escapes remain.
+ * Keep both reads before both writes and mark the direct accesses so later
+ * local-register promotion cannot cache a potentially volatile pointee. */
+static int pass_leaf_frame_word_update(void)
+{
+    int i,changed=0;
+    for(i=0;i+8<nlines;++i) {
+        int start,end,k,at,off=0,init_end,owned=0,safe=1,count=0;
+        int matches[1200],lengths[1200];
+        if(!eq(i,"push ix") || !eq(i+1,"ld ix,0") || !eq(i+2,"add ix,sp"))continue;
+        find_function_bounds_any(i,&start,&end);
+        for(k=i+3;k<end;++k)if(strstr(lines[k],"@dcc.lto end ")){end=k;break;}
+        if(end-i>=1200)continue;
+        for(k=start;k<end;++k)if(strstr(lines[k],"@dcc.frame-cacheable"))owned=1;
+        if(!owned)continue;
+        for(at=i+3;at+3<end;++at) {
+            const PeepLineInfo *info=peep_line_info(at);
+            if(info && info->kind==PEEP_LINE_INSTRUCTION && info->effects.control_flow)break;
+            if(starts_label(lines[at]))break;
+            if(eq(at,"push ix") && eq(at+1,"pop hl"))break;
+        }
+        if(at+3>=end || !eq(at,"push ix") || !eq(at+1,"pop hl"))continue;
+        k=at+2;
+        while(k<end && (eq(k,"dec hl") || eq(k,"inc hl"))) {off+=eq(k,"dec hl")?-1:1;++k;}
+        if(off < -128 || off > -2 || !eq(k,"ld c,l") || !eq(k+1,"ld b,h"))continue;
+        init_end=k+2;
+        if(!peep_registers_dead_after(init_end-1,PEEP_REG_HL))continue;
+        for(k=i+3;k<end && safe;) {
+            const PeepLineInfo *info=peep_line_info(k);
+            if(k==at){k=init_end;continue;}
+            if(k>=init_end && k+18<end && eq(k,"ld l,c") && eq(k+1,"ld h,b") && eq(k+2,"push hl") &&
+               eq(k+3,"ld l,c") && eq(k+4,"ld h,b") && eq(k+5,"ld a,(hl)") &&
+               eq(k+6,"inc hl") && eq(k+7,"ld h,(hl)") && eq(k+8,"ld l,a") && eq(k+11,"add hl,de")) {
+                const PeepLineInfo *lo=peep_line_info(k+9),*hi=peep_line_info(k+10);
+                int tail=k+12;
+                if(!lo || !hi || lo->opcode!=PEEP_OPCODE_LD || hi->opcode!=PEEP_OPCODE_LD ||
+                   !lo->right.frame_offset_valid || !hi->right.frame_offset_valid ||
+                   lo->left.registers!=PEEP_REG_E || hi->left.registers!=PEEP_REG_D ||
+                   hi->right.frame_offset!=lo->right.frame_offset+1) {safe=0;break;}
+                /* An optional compiler spill of the result stays in place. */
+                if(!eq(tail,"ex de,hl")) {
+                    const PeepLineInfo *a=peep_line_info(tail),*b=peep_line_info(tail+1);
+                    if(!a || !b || a->opcode!=PEEP_OPCODE_LD || b->opcode!=PEEP_OPCODE_LD ||
+                       !a->left.frame_offset_valid || !b->left.frame_offset_valid ||
+                       a->right.registers!=PEEP_REG_L || b->right.registers!=PEEP_REG_H ||
+                       b->left.frame_offset!=a->left.frame_offset+1) {safe=0;break;}
+                    tail+=2;
+                }
+                if(!eq(tail,"ex de,hl") || !eq(tail+1,"pop hl") || !eq(tail+2,"ld (hl),e") ||
+                   !eq(tail+3,"inc hl") || !eq(tail+4,"ld (hl),d") ||
+                   !peep_registers_dead_after(tail+4,PEEP_REG_HL|PEEP_REG_DE)) {safe=0;break;}
+                matches[count]=k;lengths[count++]=tail+5-k;k=tail+5;continue;
+            }
+            if(eq(k,"push ix") ||
+               (info && (info->effects.writes&PEEP_REG_IX) &&
+                !(eq(k,"pop ix") && eq(k+1,"ret")))) {safe=0;break;}
+            {
+                char target[128];
+                if(jump_target_any(lines[k],target) &&
+                   (target[0]=='(' || find_label_line_in_range(target,init_end,end)<0)) {safe=0;break;}
+            }
+            if(info && info->kind==PEEP_LINE_INSTRUCTION &&
+               (info->opcode==PEEP_OPCODE_CALL ||
+                (info->effects.unknown && !eq(k,"srl h") && !eq(k,"rr l")) ||
+                ((info->effects.reads|info->effects.writes)&PEEP_REG_BC)))safe=0;
+            if(info && info->kind==PEEP_LINE_OPAQUE)safe=0;
+            ++k;
+        }
+        if(!safe || !count)continue;
+        while(count--) {
+            char line[128];int begin=matches[count],tail=begin+lengths[count]-5;
+            sprintf(line,"ld (ix%+d),l ;@dcc.volatile-access",off);replace1(tail,line);
+            sprintf(line,"ld (ix%+d),h ;@dcc.volatile-access",off+1);replace1(tail+1,line);
+            delete_n(tail+2,3);
+            sprintf(line,"ld a,(ix%+d) ;@dcc.volatile-access",off);replace1(begin,line);
+            replace1(begin+1,"ld l,a");
+            sprintf(line,"ld h,(ix%+d) ;@dcc.volatile-access",off+1);replace1(begin+2,line);
+            delete_n(begin+3,6);
+        }
+        delete_n(at,init_end-at);changed=1;
+    }
+    return changed;
+}
+
+static int pass_leaf_mirrored_word_cache(void)
+{
+    static const char regs[]="dehl";
+    int i,changed=0;
+    for(i=0;i+8<nlines;++i) {
+        int start,end,k,j,off=0,have=0,init=0,stores=0,reads=0,safe=1,owned=0;
+        int lengths[1200],kind[1200],write_end=-1;
+        char low[64],high[64],clean[MAX_LINE],target[128];
+        if(!eq(i,"push ix") || !eq(i+1,"ld ix,0") || !eq(i+2,"add ix,sp"))continue;
+        find_function_bounds_any(i,&start,&end);
+        for(k=i+3;k<end;++k)if(strstr(lines[k],"@dcc.lto end ")){end=k;break;}
+        if(end-i>=1200 || range_takes_frame_address(i+3,end) || peep_register_claimed_in_range(PEEP_REG_BC,start,end))continue;
+        for(k=start;k<end;++k) {
+            if(strstr(lines[k],"@dcc.frame-cacheable"))owned=1;
+            if(strstr(lines[k],"@dcc.volatile"))safe=0;
+        }
+        if(!owned || !safe)continue;
+        /* Identify the local word's first BC-to-frame mirror. */
+        for(k=i+3;k+5<end;++k) {
+            const PeepLineInfo *lo=peep_line_info(k+3),*hi=peep_line_info(k+4);
+            if(eq(k,"push hl") && eq(k+1,"ld h,b") && eq(k+2,"ld l,c") && eq(k+5,"pop hl") &&
+               lo && hi && lo->opcode==PEEP_OPCODE_LD && hi->opcode==PEEP_OPCODE_LD &&
+               lo->left.frame_offset_valid && hi->left.frame_offset_valid &&
+               lo->left.frame_offset<0 && hi->left.frame_offset==lo->left.frame_offset+1) {
+                off=lo->left.frame_offset;have=1;break;
+            }
+        }
+        if(!have)continue;
+        sprintf(low,"ld l,(ix%+d)",off);sprintf(high,"ld h,(ix%+d)",off+1);
+        memset(lengths,0,sizeof(lengths));memset(kind,0,sizeof(kind));
+        for(k=i+3;k<end && safe;) {
+            const PeepLineInfo *info=peep_line_info(k);
+            char store_lo[64],store_hi[64];
+            int rel=k-i;
+            sprintf(store_lo,"ld (ix%+d),l",off);sprintf(store_hi,"ld (ix%+d),h",off+1);
+            if(k+5<end && eq(k,"push hl") && eq(k+1,"ld h,b") && eq(k+2,"ld l,c") &&
+               eq(k+3,store_lo) && eq(k+4,store_hi) && eq(k+5,"pop hl")) {
+                if(!init || write_end!=k){safe=0;break;}
+                write_end=-1;
+                lengths[rel]=6;kind[rel]=1;++stores;k+=6;continue;
+            }
+            if(init && k+5<end && eq(k,"push hl") && eq(k+1,low) && eq(k+2,high) &&
+               eq(k+3,"ld b,h") && eq(k+4,"ld c,l") && eq(k+5,"pop hl")) {
+                lengths[rel]=6;kind[rel]=1;++reads;k+=6;continue;
+            }
+            if(init && k+1<end && eq(k,low) && eq(k+1,high)) {
+                lengths[rel]=2;kind[rel]=2;++reads;k+=2;continue;
+            }
+            /* This Boolean scratch is never observed except by its truth
+             * test. Replacing it leaves BC resident and reproduces A/flags. */
+            if(init && k+9<end && eq(k,"ld a,l") && eq(k+2,"ld c,a") && eq(k+3,"ld b,0") &&
+               eq(k+4,"push hl") && eq(k+5,"ld h,b") && eq(k+6,"ld l,c") &&
+               eq(k+7,"ld a,h") && eq(k+8,"or l") && eq(k+9,"pop hl")) {
+                const PeepLineInfo *mask=peep_line_info(k+1);
+                if(mask && !strcmp(mask->mnemonic,"and") && mask->left.immediate_valid &&
+                   mask->left.immediate>=0 && mask->left.immediate<=255) {
+                    lengths[rel]=10;kind[rel]=3;k+=10;continue;
+                }
+            }
+            if(init && k+5<end && eq(k,"ld a,c") && eq(k+2,"ld c,a") &&
+               eq(k+3,"ld a,b") && eq(k+5,"ld b,a")) {
+                int match=0;
+                for(j=0;j<2;++j) {
+                    char a[32],b[32];sprintf(a,"add a,%c",regs[j*2+1]);sprintf(b,"adc a,%c",regs[j*2]);
+                    if(eq(k+1,a) && eq(k+4,b))match=1;
+                }
+                if(match && k>=i+9 && eq(k-6,"push hl") && eq(k-5,low) && eq(k-4,high) &&
+                   eq(k-3,"ld b,h") && eq(k-2,"ld c,l") && eq(k-1,"pop hl") &&
+                   k+11<end && eq(k+6,"push hl") && eq(k+7,"ld h,b") && eq(k+8,"ld l,c") &&
+                   eq(k+9,store_lo) && eq(k+10,store_hi) && eq(k+11,"pop hl")) {write_end=k+6;k+=6;continue;}
+            }
+            strip_peep_comment_copy(clean,lines[k]);
+            if(!strncmp(clean,"ld bc,",6)) {
+                char *last;long value=strtol(clean+6,&last,10);
+                if(!init && last!=clean+6 && !*last && value>=-32768 && value<=65535) {init=1;write_end=k+1;++k;continue;}
+            }
+            if(strstr(clean,"(ix")) {
+                char operand[32];sprintf(operand,"(ix%+d)",off);
+                if(strstr(clean,operand)){safe=0;break;}
+                sprintf(operand,"(ix%+d)",off+1);if(strstr(clean,operand)){safe=0;break;}
+            }
+            if(jump_target_any(clean,target) && (target[0]=='(' || find_label_line_in_range(target,start,end)<0)){safe=0;break;}
+            if(info && info->kind==PEEP_LINE_INSTRUCTION) {
+                int rotate=0;
+                for(j=0;j<4;++j) {
+                    char op[32];sprintf(op,"rl %c",regs[j]);if(eq(k,op))rotate=1;
+                    sprintf(op,"rr %c",regs[j]);if(eq(k,op))rotate=1;
+                    sprintf(op,"srl %c",regs[j]);if(eq(k,op))rotate=1;
+                    sprintf(op,"sla %c",regs[j]);if(eq(k,op))rotate=1;
+                }
+                if(!rotate && !eq(k,"ex de,hl") &&
+                   (info->effects.unknown || ((info->effects.reads|info->effects.writes)&PEEP_REG_BC)))safe=0;
+                if(info->opcode==PEEP_OPCODE_CALL)safe=0;
+                if(info->effects.control_flow && !init)safe=0;
+            } else if(info && info->kind==PEEP_LINE_OPAQUE)safe=0;
+            ++k;
+        }
+        if(!safe || stores<2 || reads<2)continue;
+        for(k=end-1;k>=i+3;--k)if(lengths[k-i]) {
+            int count=lengths[k-i],action=kind[k-i];
+            if(action==1)delete_n(k,count);
+            else if(action==2){replace1_tagged(k,"ld l,c","leaf_mirrored_word");replace1(k+1,"ld h,b");}
+            else {replace1_tagged(k,"ld a,l","leaf_mirrored_word");replace1(k+2,"or a");delete_n(k+3,count-3);}
+        }
+        /* This shape reserved exactly the promoted word and nothing else. */
+        if(off==-2 && eq(i+3,"dec sp") && eq(i+4,"dec sp"))delete_n(i+3,2);
+        insert_line(i+3,";@dcc.reg claim=bc scope=function kind=peep-local");
+        changed=1;
+    }
+    return changed;
+}
+
 static int pass_wide_frame_mask_test(void)
 {
     static const char regs[4]={'l','h','e','d'};
@@ -7874,7 +8208,11 @@ static int cache_leaf_local_word(unsigned pair, char lo, char hi)
                (k>i && starts_label(lines[k]) && lines[k][0]!='L') ||
                (info && info->kind==PEEP_LINE_OPAQUE) ||
                (info && info->kind==PEEP_LINE_INSTRUCTION &&
-                ((info->effects.unknown && strcmp(clean,"ex de,hl") &&
+                ((info->effects.unknown &&
+                  !((!strcmp(info->mnemonic,"srl") || !strcmp(info->mnemonic,"sra") ||
+                     !strcmp(info->mnemonic,"sla") || !strcmp(info->mnemonic,"rl") ||
+                     !strcmp(info->mnemonic,"rr")) && info->left.kind==PEEP_OPERAND_REGISTER &&
+                    !(info->left.registers&pair)) && strcmp(clean,"ex de,hl") &&
                   strcmp(clean,"ccf") && strcmp(clean,"scf") && strcmp(clean,"cpl") &&
                   strcmp(clean,"rlca") && strcmp(clean,"rrca") &&
                   strcmp(clean,"rla") && strcmp(clean,"rra")) ||
@@ -7893,6 +8231,7 @@ static int cache_leaf_local_word(unsigned pair, char lo, char hi)
                 operand=strstr(clean,low);bit=1;
                 if(!operand) {operand=strstr(clean,high);bit=2;}
                 if(!operand) continue;
+                if(strstr(lines[k],"@dcc.volatile-access")) {valid=0;break;}
                 suffix=operand+strlen(bit==1?low:high);
                 if(!strncmp(clean,"ld ",3) && operand==clean+3 && *suffix==',') {
                     char *value=suffix+1,*last;
@@ -13349,6 +13688,8 @@ int main(int argc, char **argv)
      * does for pass_ldir_memset/pass_stride_loop_to_ptr. Purely local (no
      * control flow change), so a single pass suffices; pass_labels tidies
      * up. */
+    RUN_PASS(pass_leaf_frame_word_update);
+    RUN_PASS(pass_leaf_mirrored_word_cache);
     RUN_PASS(pass_wide_frame_mask_test);
     RUN_PASS(pass_wide_frame_shift_in_place);
     RUN_PASS(pass_cache_leaf_local_word);
@@ -13365,6 +13706,7 @@ int main(int argc, char **argv)
      * blocking the cache for that local's other reloads in the same
      * segment). Purely local like every other pass in this section, so a
      * single pass suffices with no pass_labels follow-up. */
+    RUN_PASS(pass_scalar_word_roundtrips);
     RUN_PASS(pass_cache_leaf_word_argument);
     RUN_PASS(pass_ix_word_zero_test_via_mem);
 
@@ -13498,6 +13840,7 @@ int main(int argc, char **argv)
         RUN_PASS(pass_labels);
     }
 
+    RUN_PASS(pass_scalar_word_roundtrips);
     RUN_PASS(pass_de_copy_before_pop_hl_to_ex);
 
     /* Convert remaining framed prologues/epilogues to shared stub calls.
@@ -13563,6 +13906,8 @@ int main(int argc, char **argv)
     RUN_PASS(pass_narrow_indirect_byte_store_after_exchange);
     do {
         changed = 0;
+        if (RUN_PASS(pass_scalar_word_roundtrips))
+            changed = 1;
         if (RUN_PASS(pass_add_hl_immediate_direct_de))
             changed = 1;
         if (RUN_PASS(pass_combine_hl_constant_adds))

@@ -72,14 +72,9 @@ int main()
     printf("%o\n", 511);       /* 777 */
     printf("[%6o]\n", 10);     /* [    12] */
 
-    /* An unsupported flag ('+' force-sign, '#' alternate-form) must not
-     * desync the arguments that follow it on the same call - confirmed as
-     * a real bug: it used to shift every subsequent %-conversion's
-     * argument by one. Neither flag's own cosmetic effect is implemented
-     * (no '+' sign, no "0x"/leading-0 prefix), but everything after them
-     * must still read the right argument. */
-    printf("%+d %d %d\n", 1, 2, 3);        /* 1 2 3 */
-    printf("%#x %#o %d\n", 6, 4, 9);       /* 6 4 9 */
+    /* Sign and alternate-form flags also preserve following arguments. */
+    printf("%+d %d %d\n", 1, 2, 3);        /* +1 2 3 */
+    printf("%#x %#o %d\n", 6, 4, 9);       /* 0x6 04 9 */
 
     /* %c character */
     printf("%c\n", 65);        /* A */
