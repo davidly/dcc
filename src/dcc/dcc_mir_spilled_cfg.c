@@ -27525,6 +27525,93 @@ int mir_ulong_log2_pow2(unsigned long v)
     return n;
 }
 
+/* Sparse long constants can be multiplied with a bounded Horner sequence.
+ * Signed digits make runs of ones cheap: 255 = 256-1, 65535 = 65536-1.
+ * Work in target-width unsigned bits, including on hosts with 32-bit long.
+ * The emitted sequence uses AF/BC/DE/HL and balanced private stack copies;
+ * it preserves IX/IY and performs the same multiplication modulo 2^32. */
+struct MirWideMultiplyPlan {
+    int position[3], sign[3], terms, negate, cost;
+};
+
+static int mir_wide_shift_cost(int count)
+{
+    int bytes = count / 8;
+    if (count == 31) return 6;
+    return (bytes == 1 || bytes == 3 ? 4 : bytes == 2 ? 3 : 0) + 3 * (count % 8);
+}
+
+static int mir_plan_wide_constant_multiply(unsigned long bits,
+                                          struct MirWideMultiplyPlan *plan)
+{
+    struct MirWideMultiplyPlan best;
+    unsigned long magnitude;
+    int mode, found = 0;
+    bits &= 0xffffffffUL;
+    magnitude = bits & 0x80000000UL ? (0UL-bits) & 0xffffffffUL : bits;
+    for (mode = 0; mode < 2; ++mode) {
+        struct MirWideMultiplyPlan candidate;
+        unsigned long remaining = magnitude;
+        int position = 0, i;
+        memset(&candidate, 0, sizeof(candidate));
+        /* 2^31 is its own additive inverse modulo 2^32. */
+        candidate.negate = (bits & 0x80000000UL) != 0 && bits != 0x80000000UL;
+        while (remaining != 0 && position < 32) {
+            int digit = (remaining & 1UL) ?
+                (mode && (remaining & 3UL) == 3UL ? -1 : 1) : 0;
+            if (digit) {
+                if (candidate.terms == 3) break;
+                candidate.position[candidate.terms] = position;
+                candidate.sign[candidate.terms++] = digit;
+            }
+            remaining = (remaining >> 1) + (digit < 0);
+            ++position;
+        }
+        if (remaining != 0) continue;
+        candidate.cost = candidate.negate ? 12 : 0;
+        if (!candidate.terms) candidate.cost = 2;
+        else {
+            candidate.cost += 2 * (candidate.terms-1);
+            for (i = candidate.terms-1; i > 0; --i) {
+                candidate.cost += mir_wide_shift_cost(candidate.position[i]-candidate.position[i-1]);
+                candidate.cost += candidate.sign[i-1] < 0 ? 7 : 6;
+            }
+            candidate.cost += mir_wide_shift_cost(candidate.position[0]);
+        }
+        /* Cap the shift/add body to keep isolated multiplies compact.
+         * Negative constants may also need the fixed four-byte negate. */
+        if ((candidate.cost - (candidate.negate ? 12 : 0)) <= 24 && (!found || candidate.cost < best.cost)) {
+            best = candidate;
+            found = 1;
+        }
+    }
+    if (found && plan != NULL) *plan = best;
+    return found;
+}
+
+static void mir_emit_wide_constant_multiply(MirStream *out,
+                                            const struct MirWideMultiplyPlan *plan)
+{
+    int i;
+    if (plan->terms == 0) {
+        mir_stream_puts("\tld hl,0\n\tld de,0\n", out);
+        return;
+    }
+    for (i = 1; i < plan->terms; ++i)
+        mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    for (i = plan->terms-1; i > 0; --i) {
+        mir_emit_wide_shift_by_constant(out, 1, 1, plan->position[i]-plan->position[i-1]);
+        if (plan->sign[i-1] > 0)
+            mir_stream_puts("\tpop bc\n\tadd hl,bc\n\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+        else
+            mir_stream_puts("\tpop bc\n\tor a\n\tsbc hl,bc\n\tex de,hl\n\tpop bc\n\tsbc hl,bc\n\tex de,hl\n", out);
+    }
+    mir_emit_wide_shift_by_constant(out, 1, 1, plan->position[0]);
+    if (plan->negate)
+        mir_stream_puts("\txor a\n\tsub l\n\tld l,a\n\tld a,0\n\tsbc a,h\n\tld h,a\n"
+                        "\tld a,0\n\tsbc a,e\n\tld e,a\n\tld a,0\n\tsbc a,d\n\tld d,a\n", out);
+}
+
 static int mir_pointer_difference_pow2_shift(
     const struct MirInsn *insn)
 {
@@ -27717,13 +27804,20 @@ static const char *mir_wide_runtime_helper(const struct MirInsn *insn)
 
         if (src2_definition != NULL &&
             src2_definition->opcode == MIR_CONST &&
-            mir_ulong_log2_pow2(
-                (unsigned long)src2_definition->immediate) > 0)
+            mir_plan_wide_constant_multiply(
+                (unsigned long)src2_definition->immediate, NULL)) {
+            /* The existing immediate 3/5/9 emitter predates this query's
+             * fast paths. Preserve its conservative allocation contract;
+             * changing it also changes unrelated long-PHI schedules. */
+            if (src2_definition->immediate == 3 || src2_definition->immediate == 5 ||
+                src2_definition->immediate == 9)
+                return "__lmul";
             return NULL;
+        }
         if (src1_definition != NULL &&
             src1_definition->opcode == MIR_CONST &&
-            mir_ulong_log2_pow2(
-                (unsigned long)src1_definition->immediate) > 0)
+            mir_plan_wide_constant_multiply(
+                (unsigned long)src1_definition->immediate, NULL))
             return NULL;
         return "__lmul";
     }
@@ -27816,8 +27910,8 @@ static int mir_wide_operation_is_integer_immediate(const struct MirInsn *insn)
             insn->immediate == '&' || insn->immediate == '|' || insn->immediate == '^' ||
             ((insn->immediate == TOK_EQ || insn->immediate == TOK_NE) &&
              mir_wide_and_constant_mask(right) == 0) ||
-            (insn->immediate == '*' && (right->immediate == 3 ||
-             right->immediate == 5 || right->immediate == 9)));
+            (insn->immediate == '*' && mir_plan_wide_constant_multiply(
+                (unsigned long)right->immediate, NULL)));
 }
 
 static void mir_emit_wide_integer_immediate(MirStream *out, const struct MirInsn *insn, int flags_only)
@@ -27825,10 +27919,10 @@ static void mir_emit_wide_integer_immediate(MirStream *out, const struct MirInsn
     unsigned long bits = mir_wide_and_constant_mask(mir_definition(insn->src2));
     int op = (int)insn->immediate, byte;
     if (op == '*') {
-        int shifts = bits == 3 ? 1 : bits == 5 ? 2 : 3;
-        mir_stream_puts("\tpush de\n\tpush hl\n", out);
-        mir_emit_wide_shift_by_constant(out, 1, 1, shifts);
-        mir_stream_puts("\tpop bc\n\tadd hl,bc\n\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+        struct MirWideMultiplyPlan plan;
+        if (!mir_plan_wide_constant_multiply(bits, &plan))
+            fatal("invalid immediate long multiply plan");
+        mir_emit_wide_constant_multiply(out, &plan);
     } else if (op == TOK_EQ || op == TOK_NE) {
         int done = new_label();
         if (bits == 0)
@@ -28037,52 +28131,20 @@ int mir_emit_wide_operation(MirStream *out, const struct MirInsn *insn)
         return 1;
     case '*':
         {
-            /* Item T46 (mir-text-size-plan.md): ported from
-             * emit_mul_pow2_long_const (dcc_ops.c) - `long_expr *
-             * <compile-time power-of-two constant>` strength-reduces to
-             * a left shift instead of a call to the generic __lmul
-             * runtime helper, reusing mir_emit_wide_shift_by_constant
-             * (Item T45, above). Unlike legacy's AST-level version
-             * (which only ever sees the constant in the syntactic right
-             * operand position), MIR's lowering does not canonicalize
-             * commutative operands - `x * 4L` lowers with the constant
-             * as src2, `4L * x` lowers with the constant as src1 - so
-             * both positions are checked. When src2 is the constant,
-             * DE:HL (already loaded with src2's now-dead value) is
-             * discarded and src1 (the real multiplicand) is restored
-             * from the stack, mirroring Item T45's shift-fix exactly.
-             * When src1 is the constant, DE:HL already holds src2 (the
-             * real multiplicand, loaded most recently) and the dead
-             * constant left on the stack from src1's evaluation is
-             * simply popped off - no register restore needed at all.
-             * Declines (falls through to __lmul) for 0, 1, and any
-             * non-power-of-two multiplier, matching legacy's exact
-             * scope - 0 and 1 are rare enough as literal long
-             * multipliers not to be worth special-casing separately. */
-            const struct MirInsn *src2_definition =
-                mir_definition(insn->src2);
-            const struct MirInsn *src1_definition =
-                mir_definition(insn->src1);
-
-            if (src2_definition != NULL &&
-                src2_definition->opcode == MIR_CONST) {
-                int shift = mir_ulong_log2_pow2(
-                    (unsigned long)src2_definition->immediate);
-                if (shift > 0) {
-                    mir_stream_puts("\tpop hl\n\tpop de\n", out);
-                    mir_emit_wide_shift_by_constant(out, 1, 1, shift);
-                    return 1;
-                }
+            const struct MirInsn *right = mir_definition(insn->src2);
+            const struct MirInsn *left = mir_definition(insn->src1);
+            struct MirWideMultiplyPlan plan;
+            if (right != NULL && right->opcode == MIR_CONST &&
+                mir_plan_wide_constant_multiply((unsigned long)right->immediate, &plan)) {
+                mir_stream_puts("\tpop hl\n\tpop de\n", out);
+                mir_emit_wide_constant_multiply(out, &plan);
+                return 1;
             }
-            if (src1_definition != NULL &&
-                src1_definition->opcode == MIR_CONST) {
-                int shift = mir_ulong_log2_pow2(
-                    (unsigned long)src1_definition->immediate);
-                if (shift > 0) {
-                    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
-                    mir_emit_wide_shift_by_constant(out, 1, 1, shift);
-                    return 1;
-                }
+            if (left != NULL && left->opcode == MIR_CONST &&
+                mir_plan_wide_constant_multiply((unsigned long)left->immediate, &plan)) {
+                mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+                mir_emit_wide_constant_multiply(out, &plan);
+                return 1;
             }
         }
         helper = mir_wide_runtime_helper(insn); break;

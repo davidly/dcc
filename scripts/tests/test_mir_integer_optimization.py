@@ -123,6 +123,22 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                 self.assertIsNotNone(label, assembly)
                 self.assertRegex(assembly, r"call\s+" + label.group(1) + r"\b")
 
+    def test_sparse_long_constant_products_inline_in_both_orders(self):
+        for constant in ("255UL", "257UL", "65535UL", "0x7fffffffUL",
+                         "0x80000000UL", "0xffffff01UL", "0xffffffffUL"):
+            for expression in ("x * " + constant, constant + " * x"):
+                with self.subTest(expression=expression):
+                    source = ("#include <stdint.h>\nuint32_t probe(uint32_t x) { return " +
+                              expression + "; }")
+                    for options in ((), ("-fstack-check",), ("-gline",)):
+                        self.assertNotIn("call __lmul", self.compile(source, options))
+        for constant in ("1000UL", "32767UL", "3600UL", "0x01010101UL", "0x12345678UL"):
+            source = ("#include <stdint.h>\nuint32_t probe(uint32_t x) { return x*" +
+                      constant + "; }")
+            self.assertIn("call __lmul", self.compile(source))
+        source = ("#include <stdint.h>\nuint32_t probe(uint32_t a,uint32_t b) {return a*b;}")
+        self.assertIn("call __lmul", self.compile(source))
+
     def test_nested_wide_increment_compare_reads_the_incremented_home(self):
         for typename in ("int32_t", "uint32_t"):
             source = ("#include <stdint.h>\n" + typename + " limit = 3; " +
