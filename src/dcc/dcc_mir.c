@@ -1715,8 +1715,22 @@ static int mir_try_lower_inline_call_common(const struct AstNode *call,
         for (argument = 0; argument < call->list_len; ++argument) {
             int argument_type = ast_expr_type_for_sizeof(call->list[argument]);
             int no_deref;
-            if (type_ptr_depth(fn_sym->proto_types[argument]) != 0)
-                ast_pointer_expr_type(call->list[argument], &argument_type, &no_deref);
+            if (type_ptr_depth(fn_sym->proto_types[argument]) != 0) {
+                const struct AstNode *arg = call->list[argument];
+                ast_pointer_expr_type(arg, &argument_type, &no_deref);
+                /* An unreplayed nested declaration has no AST symbol yet.
+                 * Its mandatory argument temp performs the same pointer
+                 * conversion as an ordinary prototyped call. */
+                if (arg->kind == AST_IDENT && mir_sizeof_operand_unreplayed(arg) &&
+                    mir_inline_arg_needs_temp(arg, fn_sym->inline_param_use_count[argument]))
+                    argument_type = fn_sym->proto_types[argument];
+            } else if (fn_sym->proto_types[argument] == (TYPE_CHAR | TYPE_UNSIGNED) &&
+                       call->list[argument]->kind == AST_INT_LIT &&
+                       call->list[argument]->ival >= 0 && call->list[argument]->ival <= 255) {
+                /* Promotion of an exactly representable byte literal has
+                 * the same value before and after parameter conversion. */
+                argument_type = fn_sym->proto_types[argument];
+            }
             if (argument_type != fn_sym->proto_types[argument] ||
                 ast_expr_has_side_effects(call->list[argument]))
                 return 0;
@@ -7889,7 +7903,7 @@ static int mir_low_byte_expressions_equal(int left,int right,int *budget)
     return mir_low_byte_expression_match(left,right,budget,0);
 }
 
-static int mir_instruction_dominates_by_reachability(int first,int second)
+int mir_instruction_dominates_by_reachability(int first,int second)
 {
     unsigned char *seen;
     int *queue,head=0,tail=0,i,result=1;
@@ -17768,14 +17782,15 @@ int mir_fold_byte_range_checks(void)
 }
 
 /* Inline argument slots are private but pooled. Forward only an exact
- * byte store/load pair in one straight-line region with the same call-site
+ * byte/pointer store/load pair in one straight-line region with the same call-site
  * identity, stopping at every possible overwrite or control-flow edge. */
 static int mir_forward_inline_byte_temps(void)
 {
     int i, j, changed = 0;
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *load = &mir.insns[i];
-        if (load->opcode != MIR_LOAD || load->type != (TYPE_CHAR | TYPE_UNSIGNED) ||
+        if (load->opcode != MIR_LOAD ||
+            (load->type != (TYPE_CHAR | TYPE_UNSIGNED) && type_ptr_depth(load->type) == 0) ||
             load->memory_flags != 0 || load->inline_temp_id == 0 ||
             strncmp(load->name, "#itmp", 5))
             continue;
@@ -17790,8 +17805,11 @@ static int mir_forward_inline_byte_temps(void)
                 continue;
             source = mir_definition(store->src1);
             if (store->inline_temp_id == load->inline_temp_id && store->type == load->type &&
-                (store->memory_size == 0 || store->memory_size == 1) &&
-                store->memory_flags == 0 && source != NULL && source->memory_flags == 0 &&
+                (store->memory_size == 0 || store->memory_size == type_size(load->type)) &&
+                store->memory_flags == 0 && source != NULL &&
+                (source->memory_flags == 0 ||
+                 ((source->opcode == MIR_ADDRESS || source->opcode == MIR_MEMBER_ADDRESS) &&
+                  (source->memory_flags & ~2) == 0)) &&
                 source->type == load->type) {
                 mir_replace_value_uses(load->dst, store->src1);
                 mir_make_nop(load);
@@ -17799,6 +17817,32 @@ static int mir_forward_inline_byte_temps(void)
                 ++changed;
             }
             break;
+        }
+    }
+    /* A pooled slot is private unless its address escaped. After forwarding
+     * all reads for one logical call site, its snapshot write is dead even
+     * if a different call site reuses the physical slot later. Keep value
+     * evaluation intact: calls and volatile loads retain their effects. */
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *store = &mir.insns[i];
+        int observed = 0;
+        if (store->opcode != MIR_STORE || store->inline_temp_id == 0 || store->object >= 0 ||
+            (store->type != (TYPE_CHAR | TYPE_UNSIGNED) && !type_ptr_depth(store->type)) ||
+            store->memory_flags != 0 || strncmp(store->name, "#itmp", 5)) continue;
+        for (j = 0; j < mir.count; ++j) {
+            const struct MirInsn *use = &mir.insns[j];
+            if (strcmp(use->name, store->name)) continue;
+            if (use->opcode == MIR_ADDRESS ||
+                (use->opcode == MIR_LOAD &&
+                 (use->inline_temp_id == store->inline_temp_id || use->inline_temp_id == 0))) {
+                observed = 1;
+                break;
+            }
+        }
+        if (!observed) {
+            mir_make_nop(store);
+            mir_invalidate_use_cache();
+            ++changed;
         }
     }
     return changed;

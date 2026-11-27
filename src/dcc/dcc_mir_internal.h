@@ -955,4 +955,6 @@ void mir_emit_virtual_load(MirStream *out, int value);
 int mir_value_is_wide(int value);
 int mir_value_is_selfstore_incdec(int value);
 
+int mir_instruction_dominates_by_reachability(int first, int second);
+
 #endif /* DCC_MIR_INTERNAL_H */

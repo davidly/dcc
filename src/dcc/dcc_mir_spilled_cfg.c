@@ -14526,6 +14526,7 @@ struct MirByteAffineLoop {
     int index_offset;
     int index_size;
     int wrapping_sum;
+    int exit_value;
 };
 
 static int mir_affine_byte_operand(int value, struct MirLowByteIndexLoop *slice)
@@ -14552,6 +14553,7 @@ static int mir_match_byte_affine_loop(int head, struct MirByteAffineLoop *plan)
 
     memset(plan, 0, sizeof(*plan));
     plan->failure_first = plan->failure_last = -1;
+    plan->exit_value = -1;
     if (opt_debug || head < 0 || head >= mir.count ||
         mir.insns[head].opcode != MIR_LABEL)
         return 0;
@@ -14792,8 +14794,15 @@ static int mir_match_byte_affine_loop(int head, struct MirByteAffineLoop *plan)
         if (value < 0)
             continue;
         for (j = mir_next_use(value, -1); j >= 0; j = mir_next_use(value, j))
-            if (!mir_low_byte_loop_has_component(slice, j))
-                return 0;
+            if (!mir_low_byte_loop_has_component(slice, j)) {
+                /* The header counter equals the exclusive bound at normal
+                 * exit. Materialize that SSA value for dominated consumers;
+                 * failure paths must never observe the final counter. */
+                if (value != phi->dst || j < end ||
+                    !mir_instruction_dominates_by_reachability(end, j))
+                    return 0;
+                plan->exit_value = value;
+            }
     }
     return 1;
 }
@@ -17965,6 +17974,10 @@ static void mir_emit_byte_affine_loop(MirStream *out, const int *labels,
                           "\tld (ix%+d),%d\n", loop->limit, top, plan->index_offset, loop->limit);
     if (plan->index_size == 2)
         mir_stream_printf(out, "\tld (ix%+d),0\n", plan->index_offset + 1);
+    if (plan->exit_value >= 0) {
+        mir_stream_printf(out, "\tld hl,%d\n", loop->limit);
+        mir_emit_virtual_store(out, plan->exit_value);
+    }
     if (loop->kind == MIR_LOW_BYTE_INDEX_COMPARE)
         mir_stream_printf(out, "\tjp L%d\nL%d:\n", labels[plan->exit_label], failure);
 }
@@ -26605,7 +26618,7 @@ static int mir_fused_compare_is_const_zero_rhs(int compare_index)
 
 /* Small word equality can adjust/test HL without loading another pair.
  * Both bytes participate, including after signed-char promotion. Limit
- * destructive tests to single-use loads: computed loop values have other
+ * destructive tests to single-use loads/call results: loop values have other
  * forwarding opportunities that are cheaper than this sequence. */
 static int mir_fused_compare_small_word_equality(int compare_index)
 {
@@ -26620,7 +26633,8 @@ static int mir_fused_compare_small_word_equality(int compare_index)
         mir_binary_is_fusable_comparison(compare_index) <= 0) return 0;
     left = mir_definition(compare->src1);
     if (left == NULL || (left->opcode != MIR_LOAD &&
-                         left->opcode != MIR_LOAD_INDIRECT)) return 0;
+                         left->opcode != MIR_LOAD_INDIRECT &&
+                         left->opcode != MIR_CALL)) return 0;
     right = mir_definition(compare->src2);
     if (right == NULL || right->opcode != MIR_CONST ||
         type_size(right->type) > 2 || mir_value_use_count(right->dst) != 1) return 0;
@@ -35833,6 +35847,22 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 break;
             if (mir_emit_constant_absolute_load(out, insn))
                 break;
+            {
+                struct MirResolvedNamedAddress frame;
+                if (insn->memory_size == 1 && insn->bit_width == 0 &&
+                    insn->type == (TYPE_CHAR | TYPE_UNSIGNED) &&
+                    mir_address_is_rematerializable(insn->src1) &&
+                    !mir_planned_stack_is_emitted(insn->src1) &&
+                    mir_forwarded_stack_value != insn->src1 &&
+                    !mir_value_is_fused_byte_comparison_component(insn->dst) &&
+                    mir_resolve_named_address(insn->src1, &frame) &&
+                    (frame.storage == SC_LOCAL || frame.storage == SC_PARAM) &&
+                    frame.offset >= -128 && frame.offset <= 127) {
+                    mir_stream_printf(out, "\tld l,(ix%+ld)\n\tld h,0\n", frame.offset);
+                    mir_emit_virtual_store(out, insn->dst);
+                    break;
+                }
+            }
             mir_emit_virtual_load(out, insn->src1);
             if (mir_value_is_fused_byte_comparison_component(insn->dst)) {
                 mir_stream_puts("\tld a,(hl)\n", out);
@@ -36178,6 +36208,34 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             break;
             }
         case MIR_STORE_INDIRECT:
+            {
+                struct MirResolvedNamedAddress frame;
+                if (insn->memory_size == 1 && insn->bit_width == 0 &&
+                    mir_definition(insn->src2) != NULL &&
+                    mir_definition(insn->src2)->opcode != MIR_CONST &&
+                    mir_address_is_rematerializable(insn->src1) &&
+                    !mir_planned_stack_is_emitted(insn->src1) &&
+                    mir_forwarded_stack_value != insn->src1 &&
+                    mir_resolve_named_address(insn->src1, &frame) &&
+                    (frame.storage == SC_LOCAL || frame.storage == SC_PARAM) &&
+                    frame.offset >= -128 && frame.offset <= 127) {
+                    if (mir_forwarded_stack_value == insn->src2 &&
+                        mir_forwarded_stack_target_instruction == i) {
+                        mir_stream_puts("\tpop hl\n", out);
+                        mir_forwarded_stack_value = -1;
+                        mir_forwarded_stack_instruction = -1;
+                        mir_forwarded_stack_target_instruction = -1;
+                    } else if (mir_forwarded_hl_value == insn->src2 &&
+                               mir_forwarded_hl_instruction + 1 == i) {
+                        mir_forwarded_hl_value = -1;
+                        mir_forwarded_hl_instruction = -1;
+                    } else if (!mir_consume_planned_stack(out, insn->src2, i, "hl")) {
+                        mir_emit_virtual_load(out, insn->src2);
+                    }
+                    mir_stream_printf(out, "\tld (ix%+ld),l\n", frame.offset);
+                    break;
+                }
+            }
             if (insn->bit_width > 0) {
                 int shift;
                 mir_emit_virtual_load(out, insn->src2);

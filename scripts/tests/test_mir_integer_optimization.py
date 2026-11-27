@@ -57,7 +57,7 @@ class MirIntegerOptimizationTests(unittest.TestCase):
         self.assertIn("MIR byte-affine-loop", assembly)
         self.assertRegex(assembly, r';@dcc-line [^\n]+ 4\n')
 
-    def test_affine_byte_loop_keeps_calls_volatile_and_live_index(self):
+    def test_affine_byte_loop_keeps_calls_and_volatile_accesses(self):
         body = "unsigned char i; for(i=0;i<11;++i) p[i]=first+i;"
         source = "void probe(unsigned char *p, unsigned char first) { " + body + " }"
         self.assertIn("MIR byte-affine-loop", self.compile(source))
@@ -65,12 +65,24 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             source.replace("unsigned char *p", "volatile unsigned char *p"),
             "extern void observe(void); " + source.replace("p[i]=first+i;",
                 "{ p[i]=first+i; observe(); }"),
-            source.replace("void probe", "int probe").replace("; }", "; return i; }"),
             source.replace("p[i]=first+i;", "{ p[i]=first+i; ++first; }"),
         )
         for source in near_misses:
             with self.subTest(source=source):
                 self.assertNotIn("MIR byte-affine-loop", self.compile(source))
+
+    def test_affine_loop_materializes_live_exit_counter(self):
+        for counter in ("unsigned char", "int", "unsigned"):
+            source = ("int probe(unsigned char *p, unsigned char first) { " +
+                      counter + " i; for(i=3;i<13;++i) p[i]=first+i; return i; }")
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(counter=counter, options=options):
+                    self.assertIn("MIR byte-affine-loop", self.compile(source, options))
+        # A failure must observe the counter at failure, not the final bound.
+        source = ("int probe(const unsigned char *p, unsigned char first) { "
+                  "int i; for(i=3;i<13;++i) if(p[i]!=(unsigned char)(first+i)) "
+                  "return i; return i; }")
+        self.assertNotIn("MIR byte-affine-loop", self.compile(source))
 
     def test_affine_word_counter_and_wrapped_sum(self):
         for counter in ("int", "unsigned"):

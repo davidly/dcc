@@ -4477,7 +4477,7 @@ void mir_end_function(void)
     }
     for (normalization_pass = 0;
          failure_reason == NULL && generated != NULL && !opt_debug &&
-             normalization_pass < 10;
+             normalization_pass < 11;
          ++normalization_pass) {
         struct MirInsn *original_insns = NULL;
         MirStream *alternative = NULL;
@@ -4579,8 +4579,22 @@ void mir_end_function(void)
                 integer_changed = 1;
                 if (!mir_verify_and_dump()) break;
             }
-        } else {
+        } else if (normalization_pass == 9) {
             integer_changed = mir_reuse_wide_equality_predicates();
+        } else {
+            int range_pass;
+            integer_changed = mir_optimize_byte_checks();
+            /* Exposing an inline pointer snapshot can reveal a byte store
+             * and then a range identity. Evaluate the complete simplification
+             * before costing the temporary forwarding in isolation. */
+            if (integer_changed && mir_verify_and_dump()) {
+                integer_changed += mir_optimize_integer_expressions();
+                for (range_pass = 0; range_pass < 8 &&
+                     mir_fold_byte_range_checks(); ++range_pass) {
+                    ++integer_changed;
+                    if (!mir_verify_and_dump()) break;
+                }
+            }
         }
         if ((boolean_phi_changed || integer_changed || stores_changed ||
              divmod_changed) &&
