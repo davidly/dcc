@@ -494,6 +494,14 @@ static int mir_promoted_local_slot_reuse_is_active(void)
 
 static int mir_phi_argument_stack_handoff_enabled;
 
+/* An object-backed PHI can share its source's frame home and omit the edge
+ * copy. Stack handoff needs every incoming edge to supply an argument. */
+static int mir_phi_can_handoff_stack_argument(const struct MirInsn *phi)
+{
+    return phi != NULL && phi->opcode == MIR_PHI && phi->object < 0 &&
+           type_size(phi->type) > 0 && type_size(phi->type) <= 2;
+}
+
 static int mir_phi_first_call_argument_candidate(int value)
 {
     const struct MirInsn *phi = mir_definition(value);
@@ -505,8 +513,7 @@ static int mir_phi_first_call_argument_candidate(int value)
     int argument_count = 0;
     int instruction;
 
-    if (phi == NULL || phi->opcode != MIR_PHI ||
-        type_size(phi->type) <= 0 || type_size(phi->type) > 2)
+    if (!mir_phi_can_handoff_stack_argument(phi))
         return -1;
     phi_instruction = (int)(phi - mir.insns);
     for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -614,8 +621,7 @@ static int mir_reverse_phi_argument_target(int value)
     int phi_instruction;
     int instruction;
 
-    if (mir.has_vla || phi == NULL || phi->opcode != MIR_PHI ||
-        type_size(phi->type) <= 0 || type_size(phi->type) > 2)
+    if (mir.has_vla || !mir_phi_can_handoff_stack_argument(phi))
         return -1;
     phi_instruction = (int)(phi - mir.insns);
     for (instruction = 0; instruction < mir.count; ++instruction) {

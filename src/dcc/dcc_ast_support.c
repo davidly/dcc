@@ -216,13 +216,13 @@ static int ast_scalar_binary_supported_uncached(const struct AstNode *n)
                     ast_const_float_fold(n, &fv))
                     return 1;
             }
-            /* A constant operand that does not fold (`~(72UL / 0UL)` or
-             * `!(5 % 0 + 1)` on a branch that never runs) is computed like
-             * its operand. */
+            /* A constant operand such as -(1.0f / 0.0f) can fail to fold
+             * and still be lowered under another unary operator in a
+             * branch that never runs. */
             if (ast_node_is_const(n->a)) {
                 long cv;
 
-                return n->a->kind == AST_BINARY &&
+                return (n->a->kind == AST_BINARY || n->a->kind == AST_UNARY) &&
                        !ast_const_scalar_fold(n->a, &cv) &&
                        ast_expr_supported(n->a);
             }
