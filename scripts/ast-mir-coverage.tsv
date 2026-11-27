@@ -7,6 +7,7 @@ mixed-classified	src/dcc/dcc_ast_capture.c	Per-function roles in ast-function-co
 mixed-classified	src/dcc/dcc_ast_support.c	Per-function roles in ast-function-coverage.json
 active-owner	src/dcc/dcc_ast_metadata.c	Non-emitting declaration scope and debug metadata
 active-owner	src/dcc/dcc_ast_stmt_meta.c	Statement capture and metadata planning
+active-owner	src/dcc/dcc_ast_sizeof.c	sizeof signedness refinement before MIR lowering
 active-owner	src/dcc/dcc_mir.c	Lowering metadata repair CFG promotion and allocation
 active-owner	src/dcc/dcc_mir_emit_common.c	Shared production MIR emission
 active-owner	src/dcc/dcc_mir_homed_cfg.c	Production fixed and regional home emission

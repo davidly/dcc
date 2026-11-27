@@ -3,9 +3,11 @@
 
 import argparse
 import os
+import queue
 import secrets
 import select
 import signal
+import threading
 import socket
 import sys
 import tempfile
@@ -99,6 +101,34 @@ def bridge_windows(client):
     }
     client.setblocking(False)
     output_fd = sys.stdout.fileno()
+    if not os.isatty(sys.stdin.fileno()):
+        incoming = queue.Queue()
+
+        def read_pipe():
+            while True:
+                data = sys.stdin.buffer.read(1)
+                incoming.put(data)
+                if not data:
+                    return
+
+        threading.Thread(target=read_pipe, daemon=True).start()
+        while True:
+            readable, _, _ = select.select((client,), (), (), 0.05)
+            if readable:
+                data = client.recv(4096)
+                if not data:
+                    return
+                os.write(output_fd, data)
+            try:
+                data = incoming.get_nowait()
+            except queue.Empty:
+                data = None
+            if data == b"" or data == b"\x1d":
+                return
+            if data:
+                client.sendall(data)
+        return
+
     while True:
         readable, _, _ = select.select((client,), (), (), 0.05)
         if readable:

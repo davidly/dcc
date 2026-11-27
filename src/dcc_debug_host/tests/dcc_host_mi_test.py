@@ -3,6 +3,7 @@
 
 import json
 import queue
+import socket
 import stat
 import subprocess
 import sys
@@ -56,6 +57,8 @@ class MISession:
     def command(self, command, stop=False):
         token = self.token
         self.token += 1
+        if sys.platform == "win32":
+            command = command.replace("\\", "\\\\")
         self.process.stdin.write(f"{token}{command}\n")
         self.process.stdin.flush()
         result = self._wait(lambda line: line.startswith(f"{token}^"))
@@ -68,6 +71,8 @@ class MISession:
     def command_error(self, command):
         token = self.token
         self.token += 1
+        if sys.platform == "win32":
+            command = command.replace("\\", "\\\\")
         self.process.stdin.write(f"{token}{command}\n")
         self.process.stdin.flush()
         result = self._wait(lambda line: line.startswith(f"{token}^"))
@@ -92,6 +97,7 @@ class MISession:
 
 class TerminalBridge:
     def __init__(self, script, endpoint):
+        self.endpoint = Path(endpoint)
         self.process = subprocess.Popen(
             [sys.executable, str(script), "--endpoint-file", str(endpoint)],
             stdin=subprocess.PIPE,
@@ -117,7 +123,8 @@ class TerminalBridge:
         deadline = time.time() + timeout
         while time.time() < deadline:
             with self.lock:
-                if text in self.output:
+                normalized = bytes(self.output).replace(b"\r\n", b"\n")
+                if text in normalized:
                     return
             if self.process.poll() is not None:
                 break
@@ -134,6 +141,12 @@ class TerminalBridge:
     def close(self):
         if self.process.poll() is None:
             self.process.terminate()
+        self.process.wait(timeout=5)
+
+    def close_before_connection(self):
+        address, port, token = self.endpoint.read_text(encoding="ascii").split()
+        with socket.create_connection((address, int(port)), timeout=5) as client:
+            client.sendall((token + "\n").encode("ascii"))
         self.process.wait(timeout=5)
 
 
@@ -652,7 +665,7 @@ def run_test(host):
             Path(__file__).resolve().parents[1] / "dcc_host_terminal_bridge.py", cancelled_endpoint
         )
         assert cancelled_endpoint.exists(), cancelled_endpoint
-        cancelled_bridge.close()
+        cancelled_bridge.close_before_connection()
         assert not cancelled_endpoint.exists(), cancelled_endpoint
 
         endpoint = Path(directory) / "terminal.endpoint"

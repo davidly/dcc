@@ -769,7 +769,10 @@ at `build/compiler-coverage/report/html/index.html`. Set `CC`,
 `LLVM_COV`, or `LLVM_PROFDATA` to override tool discovery.
 Coverage clobber builds have a separate 300-second timeout because
 instrumentation and cache verification can exceed the ordinary 60-second
-build budget. Set `DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT` to override it. Standalone
+build budget. Set `DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT` to override it. The debug-info
+census compiles every app with the instrumented compiler and allows 120 seconds
+per app (its standalone default is 20); set `DCC_COVERAGE_CENSUS_TIMEOUT` to
+override it. Standalone
 `run-mir-clobber-tests.py` accepts `--build-timeout` (default 60); `--timeout`
 continues to control target execution independently.
 

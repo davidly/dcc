@@ -29,6 +29,9 @@ clobber_jobs=${DCC_COVERAGE_CLOBBER_JOBS:-$default_clobber_jobs}
 # exceed the ordinary release runner's 60-second build budget.
 clobber_build_timeout=${DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT:-300}
 census_jobs=${DCC_COVERAGE_CENSUS_JOBS:-$jobs}
+# The census compiles every app with the instrumented compiler; its standalone
+# 20-second per-app default is too short for large apps under that load.
+census_timeout=${DCC_COVERAGE_CENSUS_TIMEOUT:-120}
 case "$stage" in
     all|build|collect|report) ;;
     *) echo "compiler-coverage: stage must be all, build, collect, or report" >&2; exit 1 ;;
@@ -45,6 +48,7 @@ validate_jobs DCC_COVERAGE_JOBS "$jobs"
 validate_jobs DCC_COVERAGE_CLOBBER_JOBS "$clobber_jobs"
 validate_jobs DCC_COVERAGE_CLOBBER_BUILD_TIMEOUT "$clobber_build_timeout"
 validate_jobs DCC_COVERAGE_CENSUS_JOBS "$census_jobs"
+validate_jobs DCC_COVERAGE_CENSUS_TIMEOUT "$census_timeout"
 mkdir -p "$build_dir"
 if ! mkdir "$build_dir/.coverage-lock" 2>/dev/null; then
     echo "compiler-coverage: build directory is already in use: $build_dir" >&2
@@ -167,7 +171,7 @@ for debug_args in "-g" "-gline" "-g -fstack-check" "-gline -fstack-check"; do
         python3 "$repo_root/scripts/mir-migration-census.py" \
         --compiler "$DCC" \
         --output "$build_dir/debug-census-$debug_name.tsv" \
-        --jobs "$census_jobs" \
+        --jobs "$census_jobs" --timeout "$census_timeout" \
         --extra-args="$debug_args"
 done
 ctest --test-dir "$build_dir/cmake" --parallel "$jobs" --output-on-failure

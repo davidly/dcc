@@ -65,11 +65,11 @@ validation. CI runs this check independently of expensive coverage collection.
 
 | Mixed module | Production | Legacy-only |
 | --- | ---: | ---: |
-| `dcc_ast_classify.c` | 87 | 7 |
-| `dcc_ast_stmt_classify.c` | 29 | 27 |
-| `dcc_ast_capture.c` | 14 | 73 |
-| `dcc_ast_support.c` | 41 | 8 |
-| Total | 171 | 115 |
+| `dcc_ast_classify.c` | 88 | 0 |
+| `dcc_ast_stmt_classify.c` | 30 | 0 |
+| `dcc_ast_capture.c` | 14 | 0 |
+| `dcc_ast_support.c` | 58 | 0 |
+| Total | 190 | 0 |
 
 Production roots were traced from `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c`,
 `dcc_mir.c`, `dcc_ast_build.c`, `dcc_func.c`, `dcc_decl.c`, and `dcc_stmt.c`:
@@ -79,18 +79,15 @@ transitive mixed-module helpers are included even when unexecuted. Remaining
 definitions belong to retained emission and emitter-only proofs. Classification
 is not inferred from function names or measured execution counts.
 
-Seven mixed-module references cross from included functions to excluded
-emitters. The manifest records each guard: initializer capture returns when
-MIR is active; discarded expressions use MIR instead of dead-expression
-emission; inline metadata passes `emit_values=0`. The analogous external
-`parse_auto_struct_initializer` reference to `ast_gen_expr` also follows a MIR
-capture path that bypasses emission. These are reviewed control-flow arguments,
-not a whole-program reachability proof. The validator detects changed reference
-sets, not edits to the guards themselves. Positive execution of an excluded
-function is a hard coverage-workflow error and requires reclassification.
+No legacy-only definitions remain in the mixed modules, so the manifest's
+`guarded_edges` list is empty. If a definition is classified `legacy` again,
+every reference to it from an included function must be recorded there with the
+guard that keeps it from executing; the validator rejects changed reference
+sets. Positive execution of an excluded function is a hard coverage-workflow
+error and requires reclassification.
 
 Included functions remain whole: their diagnostics, defensive checks, and
-guarded legacy branches are not removed to raise percentages. The 28
+guarded legacy branches are not removed to raise percentages. The 29
 active-owner modules likewise retain all their compiled functions. Thus the
 denominator excludes legacy-only functions in mixed modules but is deliberately
 conservative, not a claim that every included line is production-reachable.
@@ -111,9 +108,9 @@ summing native metrics. It does not reconstruct executable lines from source
 text or coverage regions. Line totals are function-summed and should only be
 compared with subsequent reports using the same convention and classification.
 
-LLVM 18 can include the 115 mixed-module legacy functions in the native
+LLVM 18 can include mixed-module legacy functions in the native
 `-show-functions` report even though none appears in the generated name
-allowlist. The analyzer derives that exact exclusion set from the same raw
+allowlist; none are currently classified legacy. The analyzer derives that exact exclusion set from the same raw
 coverage identities and versioned classification, ignores only those known
 legacy rows when summing native metrics, and still fails if any excluded
 function executed. Unexpected functions, duplicate rows, selected/excluded

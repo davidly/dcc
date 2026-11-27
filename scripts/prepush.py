@@ -63,8 +63,9 @@ def clean_environment(environment):
     return env
 
 
-def step(name, label, commands, env=None):
-    return {'name': name, 'label': label, 'commands': commands, 'env': env or {}}
+def step(name, label, commands, env=None, skip_reason=None):
+    return {'name': name, 'label': label, 'commands': commands, 'env': env or {},
+            'skip_reason': skip_reason}
 
 
 def cmake_step(name, label, out, folder, source, options, configuration, run_tests, jobs, env=None):
@@ -101,18 +102,41 @@ def parallel_steps(args, out):
     jobs = str(numeric_jobs)
     timeout = str(args.timeout)
     cc = os.environ.get('CC') or shutil.which('clang') or 'clang'
-    sanitize_env = {'ASAN_OPTIONS': 'detect_leaks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'}
+    if os.name == 'nt':
+        clang = shutil.which('clang')
+        ninja = shutil.which('ninja')
+        if clang and ninja:
+            sanitizer = cmake_step(
+                'mir-host-sanitize', 'MIR host tests with Clang ASan/UBSan', out,
+                'mir-host-sanitize', 'src/dcc',
+                ['-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Debug', '-DDCC_BUILD_MIR_TESTS=ON',
+                 '-DCMAKE_C_COMPILER=' + clang,
+                 '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer',
+                 '-DDCC_RUNTIME_OUTPUT_DIRECTORY=' + str(out / 'mir-host-sanitize' / 'bin')],
+                'Debug', True, numeric_jobs,
+                {'ASAN_OPTIONS': 'detect_leaks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'})
+        else:
+            sanitizer = step(
+                'mir-host-sanitize', 'MIR host sanitizer tests unavailable', [],
+                skip_reason='Windows MSVC does not support this ASan/UBSan configuration; '
+                            'install Clang and Ninja to run it.')
+    else:
+        sanitizer = cmake_step(
+            'mir-host-sanitize', 'MIR host tests with ASan/UBSan', out,
+            'mir-host-sanitize', 'src/dcc',
+            ['-DCMAKE_BUILD_TYPE=Debug', '-DDCC_BUILD_MIR_TESTS=ON',
+             '-DCMAKE_C_COMPILER=' + cc,
+             '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer',
+             '-DDCC_RUNTIME_OUTPUT_DIRECTORY=' + str(out / 'mir-host-sanitize' / 'bin')],
+            'Debug', True, numeric_jobs,
+            {'ASAN_OPTIONS': 'detect_leaks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'})
     strict_env = {'DCC_MIR_REQUIRE_COMPLETE': '1', 'DCC_MIR_REQUIRE_EMIT': '1'}
     runall = [py, 'scripts/runall.py', '--mode', 'full', '--extended', '--timeout', timeout,
               '--failures-only', '--throttle-limit', jobs]
     return [
         step('script-tests', 'Python script tests',
              [[py, '-m', 'unittest', 'discover', '-s', 'scripts/tests', '-p', 'test_*.py']], {'CC': cc}),
-        cmake_step('mir-host-sanitize', 'MIR host tests with ASan/UBSan', out, 'mir-host-sanitize', 'src/dcc',
-                   ['-DCMAKE_BUILD_TYPE=Debug', '-DDCC_BUILD_MIR_TESTS=ON', '-DCMAKE_C_COMPILER=' + cc,
-                    '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer',
-                    '-DDCC_RUNTIME_OUTPUT_DIRECTORY=' + str(out / 'mir-host-sanitize' / 'bin')],
-                   'Debug', True, numeric_jobs, sanitize_env),
+        sanitizer,
         step('runall-stack', 'Strict full+extended suite, stack check', [runall], strict_env),
         step('runall-no-stack', 'Strict full+extended suite, no stack check', [runall + ['--no-stack-check']], strict_env),
         cmake_step('mir-host', 'MIR host tests', out, 'mir-host', 'src/dcc',
@@ -182,6 +206,12 @@ class Runner:
 
     def run(self, item, number):
         log_path = self.logs / '{:02d}-{}.log'.format(number, item['name'])
+        if item.get('skip_reason'):
+            log_path.write_text('SKIP: ' + item['skip_reason'] + '\n')
+            self.say('  SKIP [{}/{}] {}: {}'.format(
+                number, self.total, item['label'], item['skip_reason']))
+            return {'name': item['name'], 'label': item['label'], 'status': 'SKIP',
+                    'seconds': 0, 'log': str(log_path), 'elapsed': 0}
         env = dict(self.base_env)
         env.update(item['env'])
         self.say('  start [{}/{}] {}'.format(number, self.total, item['label']))
@@ -292,12 +322,16 @@ def main(argv=None):
             'startedAt': stamp, 'wallSeconds': round(wall, 1), 'buildJobs': build_jobs(args), 'stepJobs': step_jobs(args), 'parallel': args.parallel,
             'timeout': args.timeout,
             'steps': [{k: v for k, v in r.items() if k != 'elapsed'} for r in results]}, indent=2) + '\n')
-    failed = [r['name'] for r in results if r['status'] != 'pass']
+    failed = [r['name'] for r in results if r['status'] not in ('pass', 'SKIP')]
     not_run = len(chosen) - len(results)
     if failed or not_run:
         print('\nFailed: ' + (', '.join(failed) or 'none') + (' ({} step(s) not run)'.format(not_run) if not_run else ''))
         return 1
-    print('\nAll pre-push steps passed.')
+    skipped = sum(r['status'] == 'SKIP' for r in results)
+    if skipped:
+        print('\nAll runnable pre-push steps passed ({} step(s) skipped).'.format(skipped))
+    else:
+        print('\nAll pre-push steps passed.')
     return 0
 
 
