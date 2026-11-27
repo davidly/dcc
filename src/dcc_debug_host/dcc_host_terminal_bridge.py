@@ -19,8 +19,13 @@ def publish_endpoint(path, port, token):
     descriptor = f"127.0.0.1 {port} {token}\n"
     handle, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
     try:
-        os.fchmod(handle, 0o600)
         with os.fdopen(handle, "w", encoding="ascii") as output:
+            # fchmod is Unix-only; mkstemp already creates a private file there.
+            # Own the descriptor before changing permissions so failures close it
+            # before cleanup attempts to unlink the file (required on Windows).
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is not None:
+                fchmod(output.fileno(), 0o600)
             output.write(descriptor)
         os.replace(temporary, path)
     finally:
