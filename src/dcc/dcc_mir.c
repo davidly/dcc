@@ -7669,6 +7669,45 @@ static int mir_rotate_same_source(int left, int right)
                   : mir_endian_loads_are_straight_line(b, a));
 }
 
+/* Fuse an unsigned x ^ (x << k) / x ^ (x >> k) DAG before allocation.
+ * Exact snapshots (or barrier-free identical named reads) preserve effects;
+ * shared shifts and undefined counts stay on the ordinary path. */
+static int mir_combine_unsigned_xorshifts(void)
+{
+    int i, changed = 0;
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *combine = &mir.insns[i], *shift;
+        const struct MirInsn *count;
+        int operand, old_shift;
+        if (combine->opcode != MIR_BINARY || combine->immediate != '^' ||
+            combine->type != (TYPE_LONG | TYPE_UNSIGNED) ||
+            combine->secondary_offset != combine->type) continue;
+        shift = mir_mutable_definition(combine->src2);
+        operand = combine->src1;
+        if (shift == NULL || shift->opcode != MIR_BINARY ||
+            (shift->immediate != TOK_SHL && shift->immediate != TOK_SHR)) {
+            shift = mir_mutable_definition(combine->src1);
+            operand = combine->src2;
+        }
+        if (shift == NULL || shift->opcode != MIR_BINARY ||
+            (shift->immediate != TOK_SHL && shift->immediate != TOK_SHR) ||
+            shift->type != combine->type || shift->secondary_offset != combine->type ||
+            mir_value_use_count(shift->dst) != 1 ||
+            !mir_rotate_same_source(operand, shift->src1)) continue;
+        count = mir_definition(shift->src2);
+        if (count == NULL || count->opcode != MIR_CONST ||
+            count->immediate < 0 || count->immediate >= 32) continue;
+        old_shift = shift->dst;
+        combine->immediate = shift->immediate == TOK_SHL ? MIR_OP_XOR_SHL32 : MIR_OP_XOR_SHR32;
+        combine->src1 = shift->src1;
+        combine->src2 = shift->src2;
+        mir_invalidate_use_cache();
+        mir_retire_dead_endian_tree(old_shift);
+        ++changed;
+    }
+    return changed;
+}
+
 static void mir_combine_unsigned_rotates(void)
 {
     int saved_scope = mir_use_cache_scope_active;
@@ -17504,8 +17543,10 @@ static int mir_canonicalize_boolean_multiplication(void)
             type_size(d->secondary_offset) != 2 || type_is_float(d->secondary_offset)) continue;
         constant = mir_definition(d->src1); boolean = mir_definition(d->src2);
         if (constant == NULL || constant->opcode != MIR_CONST ||
-            boolean == NULL || boolean->opcode != MIR_BINARY ||
-            !is_cmp_op((int)boolean->immediate) ||
+            boolean == NULL || boolean->opcode == MIR_CONST ||
+            !((boolean->opcode == MIR_BINARY && is_cmp_op((int)boolean->immediate)) ||
+              (((unsigned long)constant->immediate & 65535UL) >= 256UL &&
+               mir_ulong_log2_pow2((unsigned long)constant->immediate & 65535UL) >= 0)) ||
             !mir_mul_const_fast_path_eligible((unsigned long)constant->immediate & 65535UL, d->dst)) continue;
         tmp = d->src1; d->src1 = d->src2; d->src2 = tmp; ++changed;
     }
@@ -17615,6 +17656,76 @@ static int mir_fold_identical_integer_comparisons(void)
 /* A nonnegative upper bound at one use. Guard facts belong to SSA values
  * and must dominate this exact use; a loop exit never inherits its body's
  * byte-range fact. Only nontrapping integer operations are modeled. */
+/* A word induction snapshot includes the final failing header test. Prove
+ * the initial and final values fit a byte, and every increment is guarded
+ * by the strict bound, rather than borrowing a fact from a later exit. */
+static int mir_load_is_byte_induction(int value)
+{
+    const struct MirInsn *load=mir_definition(value), *initial, *step, *source, *one;
+    int writes[2],count=0,i,type,storage,offset,at;
+    if(!load || load->opcode!=MIR_LOAD || load->memory_flags || load->object<0 ||
+       mir_object_address_taken(load->object) || type_size(load->type)!=2 ||
+       type_is_float(load->type) || type_ptr_depth(load->type) ||
+       !mir_scalar_memory_location(load,&type,&storage,&offset) || storage!=SC_LOCAL || mir.count>1000)return 0;
+    for(i=0;i<mir.count;++i)if(mir.insns[i].object==load->object) {
+        if(mir.insns[i].opcode==MIR_PHI || mir.insns[i].opcode==MIR_PARAM)return 0;
+        if(mir.insns[i].opcode==MIR_STORE) {if(count>=2)return 0;writes[count++]=i;}
+    }
+    if(count!=2)return 0;
+    initial=mir_definition(mir.insns[writes[0]].src1);
+    step=mir_definition(mir.insns[writes[1]].src1);
+    at=(int)(load-mir.insns);
+    if(!initial || initial->opcode!=MIR_CONST || initial->immediate<0 || initial->immediate>254 ||
+       !step || step->opcode!=MIR_BINARY || step->immediate!='+' || step->type!=load->type ||
+       step->secondary_offset!=load->type || !mir_instruction_dominates_by_reachability(writes[0],at))return 0;
+    source=mir_definition(step->src1);one=mir_definition(step->src2);
+    if(!source || source->opcode!=MIR_LOAD || source->object!=load->object || source->memory_flags ||
+       source<=&mir.insns[writes[0]] || source>=step ||
+       !mir_instruction_dominates_by_reachability(writes[0],(int)(source-mir.insns)) ||
+       !one || one->opcode!=MIR_CONST || one->immediate!=1)return 0;
+    for(i=writes[0]+1;i<writes[1];++i)if(mir.insns[i].opcode==MIR_BRANCH_FALSE) {
+        const struct MirInsn *test=mir_definition(mir.insns[i].src1), *lhs, *bound;
+        int back=writes[1]+1,header;
+        if(!test || test->opcode!=MIR_BINARY || test->immediate!='<' ||
+           test->secondary_offset!=load->type)continue;
+        lhs=mir_definition(test->src1);bound=mir_definition(test->src2);
+        if(!lhs || lhs->opcode!=MIR_LOAD || lhs->object!=load->object || lhs->memory_flags ||
+           !bound || bound->opcode!=MIR_CONST || bound->immediate<=initial->immediate || bound->immediate>255)continue;
+        while(back<mir.count && mir.insns[back].opcode==MIR_NOP)++back;
+        if(back>=mir.count || mir.insns[back].opcode!=MIR_JUMP)continue;
+        header=mir_find_label(mir.insns[back].label);
+        if(header<=writes[0] || header>(int)(lhs-mir.insns) ||
+           !mir_edge_dominates_instruction(i,i+1,(int)(step-mir.insns)))continue;
+        return 1;
+    }
+    return 0;
+}
+
+int mir_value_is_byte_induction(int value)
+{
+    const struct MirInsn *phi=mir_definition(value), *initial, *step, *one;
+    int i;
+    if(phi && phi->opcode==MIR_LOAD)return mir_load_is_byte_induction(value);
+    if(!phi || phi->opcode!=MIR_PHI || type_size(phi->type)!=2 ||
+       type_is_float(phi->type) || type_ptr_depth(phi->type) || phi->memory_flags ||
+       mir.count>1000) return 0;
+    initial=mir_definition(phi->src1);step=mir_definition(phi->src2);
+    if(!initial || initial->opcode!=MIR_CONST || initial->immediate<0 || initial->immediate>254 ||
+       !step || step->opcode!=MIR_BINARY || step->immediate!='+' ||
+       step->src1!=value || step->type!=phi->type || step->secondary_offset!=phi->type) return 0;
+    one=mir_definition(step->src2);
+    if(!one || one->opcode!=MIR_CONST || one->immediate!=1)return 0;
+    for(i=0;i<mir.count;++i) if(mir.insns[i].opcode==MIR_BRANCH_FALSE) {
+        const struct MirInsn *test=mir_definition(mir.insns[i].src1), *bound;
+        if(!test || test->opcode!=MIR_BINARY || test->immediate!='<' || test->src1!=value ||
+           test->secondary_offset!=phi->type)continue;
+        bound=mir_definition(test->src2);
+        if(bound && bound->opcode==MIR_CONST && bound->immediate>initial->immediate &&
+           bound->immediate<=255 && mir_edge_dominates_instruction(i,i+1,(int)(step-mir.insns)))return 1;
+    }
+    return 0;
+}
+
 static int mir_unsigned_bound_at(int value, int at, unsigned long *maximum, int depth)
 {
     const struct MirInsn *d = mir_definition(value);
@@ -17945,6 +18056,7 @@ int mir_optimize_integer_expressions(void)
         changed += mir_fold_repaired_integer_binary(&mir.insns[i]);
     }
     changed += mir_canonicalize_boolean_multiplication();
+    changed += mir_combine_unsigned_xorshifts();
     changed += mir_narrow_extended_comparisons();
     changed += mir_fold_word_endpoint_comparisons();
     changed += mir_fold_identical_integer_comparisons();

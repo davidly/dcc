@@ -32,6 +32,12 @@ class RecursiveByteRangeTests(unittest.TestCase):
         self.assertIn("cp8_to_bit3", self.optimize(text.replace("ld c,0", "ld c,8")))
         self.assertNotIn("cp8_to_bit3", self.optimize(text, closed=False))
 
+    def test_function_metadata_preserves_entry_proof(self):
+        text = FIXTURE.read_text(encoding="ascii")
+        self.assertIn("_walk:\n", text)
+        text = text.replace("_walk:\n", "_walk:\n;@dcc.frame-cacheable\n\n")
+        self.assertIn("cp8_to_bit3", self.optimize(text))
+
     def test_declines_unproven_roots_edges_and_frame_aliases(self):
         text = FIXTURE.read_text(encoding="ascii")
         cases = (

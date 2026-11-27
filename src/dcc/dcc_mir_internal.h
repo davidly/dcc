@@ -70,6 +70,8 @@ extern int mir_oversized_frame_bytes;
 /* Internal binary operation, formed only after unsigned rotate proofs. */
 #define MIR_OP_ROTL32 65536
 #define MIR_OP_BYTE_FOLD16 65537
+#define MIR_OP_XOR_SHL32 65538
+#define MIR_OP_XOR_SHR32 65539
 
 enum MirOpcode {
     MIR_NOP,
@@ -638,6 +640,7 @@ int mir_homed_immediate_compare_component(int value);
 void mir_homed_parameter_partition_scope(int active);
 int mir_emit_homed_parameter_byte_partition(MirStream *out,int value);
 int mir_value_has_unsigned_byte_range(int value,int depth);
+int mir_value_is_byte_induction(int value);
 int mir_has_only_word_parameters(int minimum);
 int mir_emit_homed_compare_false(MirStream *out,
                                         const struct MirInsn *compare,

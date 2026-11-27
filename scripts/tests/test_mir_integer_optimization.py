@@ -78,11 +78,13 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             for options in ((), ("-fstack-check",), ("-gline",)):
                 with self.subTest(counter=counter, options=options):
                     self.assertIn("MIR byte-affine-loop", self.compile(source, options))
-        # A failure must observe the counter at failure, not the final bound.
+        # A failure observes the current counter; an escaping call remains ordinary.
         source = ("int probe(const unsigned char *p, unsigned char first) { "
                   "int i; for(i=3;i<13;++i) if(p[i]!=(unsigned char)(first+i)) "
                   "return i; return i; }")
-        self.assertNotIn("MIR byte-affine-loop", self.compile(source))
+        self.assertIn("MIR byte-affine-loop", self.compile(source))
+        with_call = "extern int report(int); " + source.replace("return i; return i;", "return report(i); return i;")
+        self.assertNotIn("MIR byte-affine-loop", self.compile(with_call))
 
     def test_affine_word_counter_and_wrapped_sum(self):
         for counter in ("int", "unsigned"):

@@ -4716,6 +4716,19 @@ void mir_end_function(void)
                 break;
             }
     }
+    {
+        int declaration,cacheable=1;
+        for (declaration=0; declaration<mir.declared_count; ++declaration)
+            if (mir.declared_storage[declaration] == SC_LOCAL &&
+                mir.declared_is_volatile[declaration]) {
+                fputs(";@dcc.volatile-local\n",destination);
+                cacheable=0;
+                break;
+            }
+        for(declaration=0;declaration<mir.count;++declaration)
+            if(mir.insns[declaration].opcode==MIR_OPAQUE)cacheable=0;
+        if(cacheable)fputs(";@dcc.frame-cacheable\n",destination);
+    }
     selected_hash = mir_copy_selected_stream(generated, destination);
 
     if (mir.report_mode)
