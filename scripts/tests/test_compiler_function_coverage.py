@@ -2,6 +2,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -161,6 +162,8 @@ class CompilationInventoryTests(unittest.TestCase):
         return coverage.compiled_inventory(self.database, self.root, jobs=2)
 
     def test_compilation_defines_and_data_only_inventory(self):
+        if not shutil.which("clang"):
+            self.skipTest("Clang is required for LLVM AST JSON extraction")
         found = self.inventory()
         self.assertEqual(set(found), {"src/dcc/dcc.c", "src/dcc/data.c", "src/dcc/conditional.c"})
         self.assertEqual(found["src/dcc/data.c"], [])
@@ -199,6 +202,8 @@ class CompilationInventoryTests(unittest.TestCase):
         self.assertIn("compiler-function-coverage:", process.stderr)
 
     def test_incomplete_cli_exports_gaps_and_propagates_failure(self):
+        if not shutil.which("clang"):
+            self.skipTest("Clang is required for LLVM AST JSON extraction")
         inventory = self.inventory()
         files, functions, native = [], [], []
         total, covered = 0, 0

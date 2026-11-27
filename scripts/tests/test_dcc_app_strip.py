@@ -3,7 +3,7 @@ import shutil
 import subprocess
 import unittest
 from pathlib import Path
-from scripts.tests.version_header import version_include
+from scripts.tests.version_header import compile_host_tool
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -18,21 +18,9 @@ class DccAppStripTests(unittest.TestCase):
             "test-app-strip-%d" % os.getpid()
         )
         cls.workspace.mkdir(parents=True, exist_ok=True)
-        cls.tool = cls.workspace / "dccrtlstrip"
-        subprocess.run(
-            [
-                "cc",
-                "-std=c89",
-                "-O2",
-                *version_include(cls.workspace),
-                str(RTL_STRIP_SOURCE),
-                str(APP_STRIP_SOURCE),
-                "-o",
-                str(cls.tool),
-            ],
-            cwd=REPO_ROOT,
-            check=True,
-        )
+        cls.tool = cls.workspace / ("dccrtlstrip.exe" if os.name == "nt" else "dccrtlstrip")
+        compile_host_tool([RTL_STRIP_SOURCE, APP_STRIP_SOURCE], cls.tool, cls.workspace,
+                          flags=("-std=c89", "-O2"))
 
     @classmethod
     def tearDownClass(cls):
