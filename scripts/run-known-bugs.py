@@ -33,6 +33,7 @@ import argparse
 import concurrent.futures
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -44,9 +45,23 @@ HOST_FLAGS = ['-std=gnu99', '-w', '-fsigned-char', '-fno-common']
 SANITIZE = ['-O1', '-fsanitize=address,undefined', '-fno-sanitize-recover=all']
 
 
+def select_host_compiler():
+    requested = shlex.split(os.environ.get('CC') or '')
+    if requested and shutil.which(requested[0]):
+        return requested
+    for candidate in ('clang', 'gcc', 'cc'):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return [resolved]
+    return ['clang']
+
+
+HOST_CC = select_host_compiler()
+
+
 def host_output(source, work, flags, timeout):
     exe = work / 'host'
-    r = subprocess.run(['clang', *HOST_FLAGS, *flags, str(source), '-o', str(exe)],
+    r = subprocess.run([*HOST_CC, *HOST_FLAGS, *flags, str(source), '-o', str(exe)],
                        capture_output=True, text=True)
     if r.returncode:
         return None, 'host build failed: ' + r.stderr.strip()[:200]
@@ -111,10 +126,14 @@ def check(name, args):
         # unsequenced modifications and missing returns are undefined but
         # invisible to the sanitizers; clang diagnoses them at compile time.
         # C23-only syntax is not something dcc has to accept
-        lint = subprocess.run(['clang', '-std=gnu99', '-fsigned-char', '-fsyntax-only',
-                               '-Wno-everything', '-Werror=unsequenced', '-Werror=return-type',
-                               '-Werror=c23-extensions',
-                               str(source)], capture_output=True, text=True)
+        if 'clang' in Path(HOST_CC[0]).name.lower():
+            lint_command = [*HOST_CC, '-std=gnu99', '-fsigned-char', '-fsyntax-only',
+                            '-Wno-everything', '-Werror=unsequenced', '-Werror=return-type',
+                            '-Werror=c23-extensions', str(source)]
+        else:
+            lint_command = [*HOST_CC, '-std=gnu99', '-fsigned-char', '-fsyntax-only',
+                            '-Werror=sequence-point', '-Werror=return-type', str(source)]
+        lint = subprocess.run(lint_command, capture_output=True, text=True)
         if lint.returncode:
             out, err = None, 'not well defined: ' + lint.stderr.strip().splitlines()[0][-150:]
     if out is not None:
