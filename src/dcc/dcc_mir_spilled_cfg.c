@@ -15436,8 +15436,8 @@ static int mir_prepare_backend_slots(void)
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_JUMP) {
             int target = mir_find_label(mir.insns[i].label);
-            if (target >= 0 && target < i)
-                for (value = 0; value < mir.next_value; ++value)
+            if (target >= 0 && target < i) {
+                for (value = 0; value < mir.next_value; ++value) {
                     if (first[value] > target &&
                         mir.live_in != NULL && mir.live_out != NULL &&
                         MIR_LIVE_TEST(mir.live_out, i, value) &&
@@ -15451,6 +15451,8 @@ static int mir_prepare_backend_slots(void)
                                last[value] >= target && last[value] < i) {
                         last[value] = i;
                     }
+                }
+            }
         }
     /*
      * A fused narrow multiply elides both widening instructions and reloads

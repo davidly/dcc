@@ -4515,11 +4515,11 @@ static int mir_endgame_binary_graph(void)
             &mir.insns[phi->instruction];
 
         if (instruction->opcode != MIR_PHI ||
-            instruction->src1 !=
-                mir.insns[phi->first_value].dst &&
-            !((phi->first_value == 4 || phi->first_value == 329) &&
-              instruction->src1 ==
-                  mir.insns[phi->first_value + 1].dst) ||
+            (instruction->src1 !=
+                 mir.insns[phi->first_value].dst &&
+             !((phi->first_value == 4 || phi->first_value == 329) &&
+               instruction->src1 ==
+                   mir.insns[phi->first_value + 1].dst)) ||
             instruction->src2 !=
                 mir.insns[phi->second_value].dst ||
             instruction->phi_pred1 !=
