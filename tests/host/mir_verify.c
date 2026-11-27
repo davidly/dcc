@@ -12,6 +12,7 @@
 #define mir_verify_close _close
 #define mir_verify_fileno _fileno
 #else
+#include <sys/resource.h>
 #include <unistd.h>
 #define mir_verify_dup dup
 #define mir_verify_dup2 dup2
@@ -20,6 +21,34 @@
 #endif
 
 static int failures;
+
+#ifndef _WIN32
+/* verify_large_expression_preflight lowers 4096-deep expression chains, and
+ * lowering and constant folding recurse once per node. Sanitizer builds have
+ * large frames (about 2.5 KB per fold level on aarch64 Clang ASan -O0), so
+ * the default 8 MB stack overflows. The main thread's stack size is fixed at
+ * exec, so raise the soft limit and re-exec once. */
+static void mir_verify_ensure_stack(char **argv)
+{
+    static const char marker[] = "DCC_MIR_VERIFY_STACK_RAISED";
+    rlim_t wanted = (rlim_t)64 * 1024 * 1024;
+    struct rlimit limit;
+
+    if (getenv(marker) != NULL || getrlimit(RLIMIT_STACK, &limit) != 0 ||
+        limit.rlim_cur == RLIM_INFINITY || limit.rlim_cur >= wanted)
+        return;
+    if (limit.rlim_max != RLIM_INFINITY && limit.rlim_max < wanted)
+        wanted = limit.rlim_max;
+    if (wanted <= limit.rlim_cur)
+        return;
+    limit.rlim_cur = wanted;
+    if (setrlimit(RLIMIT_STACK, &limit) != 0 || setenv(marker, "1", 1) != 0)
+        return;
+    fflush(NULL);
+    execv(argv[0], argv);
+    /* Keep running with the original stack if re-exec is unavailable. */
+}
+#endif
 
 static void set_test_environment(const char *name, const char *value)
 {
@@ -9668,6 +9697,9 @@ int main(int argc, char **argv)
 {
     struct Sym *callee;
     int mutation;
+#ifndef _WIN32
+    mir_verify_ensure_stack(argv);
+#endif
     if (argc == 2 && !strcmp(argv[1], "--use-query-proof")) {
         verify_uncached_call_use_counts();
         verify_indexed_backend_queries();
