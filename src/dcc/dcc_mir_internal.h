@@ -333,9 +333,13 @@ struct MirFunction {
     struct MirDebugEvent *debug_events;
     int debug_event_count;
     int debug_event_capacity;
+    int *debug_event_heads;
+    int *debug_event_next;
+    int debug_event_index_count;
     int *debug_object_in;
     int *debug_object_out;
     int debug_object_state_count;
+    unsigned char debug_object_fully_promoted[256];
     struct MirObject objects[256];
     int object_count;
     /* The object lowering chose for each nested-block local's name. */
@@ -621,6 +625,7 @@ int mir_try_emit_repeated_invariant_add_loop(MirStream *out);
 int mir_try_emit_z80(MirStream *out);
 int mir_select_report_enabled(void);
 void mir_clear_debug_events(void);
+void mir_invalidate_debug_event_index(void);
 void mir_emit_debug_events(MirStream *out, int point);
 void mir_emit_first_debug_location(MirStream *out);
 void mir_prepare_debug_object_states(void);

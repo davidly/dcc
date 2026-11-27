@@ -3417,6 +3417,55 @@ static void add_deferred_debug_event(int point, const char *text)
     ++mir.debug_event_count;
 }
 
+static void verify_indexed_debug_events(void)
+{
+    int saved_debug = opt_debug;
+    int saved_lines = opt_debug_lines;
+    MirStream *output;
+    char text[128];
+    size_t length;
+    int ok;
+
+    opt_debug = 1;
+    opt_debug_lines = 0;
+    setup(6, 1, 1);
+    /* Declaration splicing can leave capture order different from points. */
+    add_deferred_debug_event(3, "third\n");
+    add_deferred_debug_event(1, "first\n");
+    add_deferred_debug_event(1, "second\n");
+    add_deferred_debug_event(6, "end\n");
+    output = mir_stream_open();
+    if (output == NULL)
+        fatal("cannot create indexed debug test stream");
+    mir_emit_debug_events(output, 1);
+    mir_emit_debug_events(output, 3);
+    mir_emit_debug_events(output, 6);
+    mir_stream_rewind(output);
+    length = mir_stream_read(text, 1, sizeof(text) - 1, output);
+    text[length] = 0;
+    ok = !strcmp(text, "first\nsecond\nthird\nend\n");
+    mir_stream_close(output);
+    /* Capturing another event must invalidate an already built index. */
+    ok = mir_capture_debug_location("late.c", 42) && ok;
+    output = mir_stream_open();
+    if (output == NULL)
+        fatal("cannot create indexed debug test stream");
+    mir_emit_debug_events(output, 6);
+    mir_stream_rewind(output);
+    length = mir_stream_read(text, 1, sizeof(text) - 1, output);
+    text[length] = 0;
+    ok = ok && !strcmp(text, "end\n;@dcc-line \"late.c\" 42\n");
+    mir_stream_close(output);
+    mir_clear_debug_events();
+    ok = ok && mir.debug_event_heads == NULL && mir.debug_event_next == NULL;
+    if (!ok) {
+        fprintf(stderr, "FAIL indexed debug event ordering/invalidation\n");
+        ++failures;
+    }
+    opt_debug = saved_debug;
+    opt_debug_lines = saved_lines;
+}
+
 static void check_deferred_function_pointer_result(const char *name)
 {
     int ok = 1;
@@ -8961,6 +9010,19 @@ static void verify_shadow_schedules(void)
         check_shadow_schedule(width ? "wide call pressure" : "word call pressure",
                               3, 2, 0, 1, 7, 1);
     }
+    setup(5, 130, 1);
+    mir.insns[1].dst = 63;
+    mir.insns[2].opcode = MIR_CONST;
+    mir.insns[2].dst = 64;
+    mir.insns[2].immediate = 2;
+    mir.insns[3].opcode = MIR_BINARY;
+    mir.insns[3].dst = 129;
+    mir.insns[3].src1 = 63;
+    mir.insns[3].src2 = 64;
+    mir.insns[3].immediate = '+';
+    mir.insns[3].secondary_offset = TYPE_INT;
+    mir.insns[4].src1 = 129;
+    check_shadow_schedule("sparse bit boundaries", 1, 0, 0, 0, 3, 0);
     setup(3, 1, 1);
     mir.count = 0;
     if (!mir_build_shadow_schedule(&summary) ||
@@ -9629,6 +9691,7 @@ int main(int argc, char **argv)
     verify_immediate_phi_consumer_forwarding();
     verify_call_argument_liveness();
     verify_mir_stream_io();
+    verify_indexed_debug_events();
     verify_mir_stream_seek_transaction();
     verify_ast_kind_names();
     verify_simple_mir_feature_queries();

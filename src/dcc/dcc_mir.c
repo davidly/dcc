@@ -301,12 +301,22 @@ static void mir_copy_name(char *dst, const char *name)
     dst[length] = 0;
 }
 
+void mir_invalidate_debug_event_index(void)
+{
+    free(mir.debug_event_heads);
+    free(mir.debug_event_next);
+    mir.debug_event_heads = NULL;
+    mir.debug_event_next = NULL;
+    mir.debug_event_index_count = 0;
+}
+
 void mir_clear_debug_events(void)
 {
     int event;
 
     for (event = 0; event < mir.debug_event_count; ++event)
         free(mir.debug_events[event].text);
+    mir_invalidate_debug_event_index();
     free(mir.debug_events);
     mir.debug_events = NULL;
     mir.debug_event_count = 0;
@@ -332,6 +342,7 @@ static int mir_capture_debug_text(const char *text)
         mir.debug_events = events;
         mir.debug_event_capacity = capacity;
     }
+    mir_invalidate_debug_event_index();
     event = &mir.debug_events[mir.debug_event_count++];
     event->point = mir.count;
     length = strlen(text) + 1;
@@ -419,8 +430,31 @@ void mir_emit_debug_events(MirStream *out, int point)
 
     if (!DEBUG_METADATA_ENABLED)
         return;
-    for (event = 0; event < mir.debug_event_count; ++event)
-        if (mir.debug_events[event].point == point)
+    if (mir.debug_event_heads == NULL ||
+        mir.debug_event_index_count != mir.count) {
+        mir_invalidate_debug_event_index();
+        mir.debug_event_heads = (int *)malloc(
+            ((size_t)mir.count + 1) * sizeof(*mir.debug_event_heads));
+        mir.debug_event_next = (int *)malloc(
+            (size_t)mir.debug_event_count * sizeof(*mir.debug_event_next));
+        if (mir.debug_event_heads == NULL ||
+            (mir.debug_event_count != 0 && mir.debug_event_next == NULL))
+            fatal("out of memory indexing MIR debug events");
+        for (event = 0; event <= mir.count; ++event)
+            mir.debug_event_heads[event] = -1;
+        /* Prepend backwards to preserve capture order at each point. */
+        for (event = mir.debug_event_count - 1; event >= 0; --event) {
+            int target = mir.debug_events[event].point;
+            if (target >= 0 && target <= mir.count) {
+                mir.debug_event_next[event] = mir.debug_event_heads[target];
+                mir.debug_event_heads[target] = event;
+            }
+        }
+        mir.debug_event_index_count = mir.count;
+    }
+    if (point >= 0 && point <= mir.count)
+        for (event = mir.debug_event_heads[point]; event >= 0;
+             event = mir.debug_event_next[event])
             mir_stream_puts(mir.debug_events[event].text, out);
     if (opt_debug_lines)
         mir_emit_debug_locations(out, point, 1);
@@ -444,6 +478,9 @@ void mir_prepare_debug_object_states(void)
 {
     size_t state_count;
     int *next_state;
+    int *predecessor_offsets;
+    int *predecessors;
+    int *next_predecessor;
     int changed;
     int instruction;
     int object;
@@ -455,6 +492,45 @@ void mir_prepare_debug_object_states(void)
     mir.debug_object_state_count = 0;
     if (!opt_debug_lines || mir.count <= 0 || mir.object_count <= 0)
         return;
+    /* Index incoming CFG edges once. Scanning every instruction for each
+     * target made each debug-state fixed-point pass quadratic in MIR size. */
+    predecessor_offsets = (int *)calloc(
+        (size_t)mir.count + 1, sizeof(*predecessor_offsets));
+    next_predecessor = (int *)malloc(
+        (size_t)mir.count * sizeof(*next_predecessor));
+    if (predecessor_offsets == NULL || next_predecessor == NULL)
+        fatal("out of memory indexing debug object predecessors");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int successor;
+        for (successor = 0;
+             successor < mir.insns[instruction].successor_count; ++successor)
+            ++predecessor_offsets[
+                mir.insns[instruction].successors[successor] + 1];
+    }
+    for (instruction = 1; instruction <= mir.count; ++instruction)
+        predecessor_offsets[instruction] += predecessor_offsets[instruction - 1];
+    predecessors = (int *)malloc(
+        (size_t)predecessor_offsets[mir.count] * sizeof(*predecessors));
+    if (predecessor_offsets[mir.count] != 0 && predecessors == NULL)
+        fatal("out of memory indexing debug object predecessors");
+    memcpy(next_predecessor, predecessor_offsets,
+           (size_t)mir.count * sizeof(*next_predecessor));
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int successor;
+        for (successor = 0;
+             successor < mir.insns[instruction].successor_count; ++successor) {
+            int target = mir.insns[instruction].successors[successor];
+            predecessors[next_predecessor[target]++] = instruction;
+        }
+    }
+    free(next_predecessor);
+    memset(mir.debug_object_fully_promoted, 1,
+           sizeof(mir.debug_object_fully_promoted));
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_LOAD &&
+            mir.insns[instruction].object >= 0 &&
+            mir.insns[instruction].object < mir.object_count)
+            mir.debug_object_fully_promoted[mir.insns[instruction].object] = 0;
     state_count = (size_t)mir.count * mir.object_count;
     mir.debug_object_in = (int *)malloc(state_count * sizeof(int));
     mir.debug_object_out = (int *)malloc(state_count * sizeof(int));
@@ -473,7 +549,7 @@ void mir_prepare_debug_object_states(void)
             int *output = &mir.debug_object_out[
                 (size_t)instruction * mir.object_count];
             int predecessor_count = 0;
-            int predecessor;
+            int predecessor_index;
 
             if (instruction == 0) {
                 for (object = 0; object < mir.object_count; ++object)
@@ -481,34 +557,27 @@ void mir_prepare_debug_object_states(void)
             } else {
                 for (object = 0; object < mir.object_count; ++object)
                     next_state[object] = MIR_OBJECT_UNREACHED;
-                for (predecessor = 0; predecessor < mir.count; ++predecessor) {
-                    int successor;
-                    for (successor = 0;
-                         successor < mir.insns[predecessor].successor_count;
-                         ++successor) {
-                        int *predecessor_out;
-                        if (mir.insns[predecessor].successors[successor] !=
-                            instruction)
-                            continue;
-                        predecessor_out = &mir.debug_object_out[
-                            (size_t)predecessor * mir.object_count];
-                        if (predecessor_count == 0) {
-                            memcpy(next_state, predecessor_out,
-                                   (size_t)mir.object_count * sizeof(int));
-                        } else {
-                            for (object = 0; object < mir.object_count; ++object)
-                                if (next_state[object] == MIR_OBJECT_UNREACHED)
-                                    next_state[object] = predecessor_out[object];
-                                else if (predecessor_out[object] ==
-                                         MIR_OBJECT_UNREACHED)
-                                    continue;
-                                else if (next_state[object] !=
-                                         predecessor_out[object])
-                                    next_state[object] = MIR_OBJECT_AMBIGUOUS;
-                        }
-                        ++predecessor_count;
-                        break;
+                for (predecessor_index = predecessor_offsets[instruction];
+                     predecessor_index < predecessor_offsets[instruction + 1];
+                     ++predecessor_index) {
+                    int predecessor = predecessors[predecessor_index];
+                    int *predecessor_out = &mir.debug_object_out[
+                        (size_t)predecessor * mir.object_count];
+                    if (predecessor_count == 0) {
+                        memcpy(next_state, predecessor_out,
+                               (size_t)mir.object_count * sizeof(int));
+                    } else {
+                        for (object = 0; object < mir.object_count; ++object)
+                            if (next_state[object] == MIR_OBJECT_UNREACHED)
+                                next_state[object] = predecessor_out[object];
+                            else if (predecessor_out[object] ==
+                                     MIR_OBJECT_UNREACHED)
+                                continue;
+                            else if (next_state[object] !=
+                                     predecessor_out[object])
+                                next_state[object] = MIR_OBJECT_AMBIGUOUS;
                     }
+                    ++predecessor_count;
                 }
                 if (predecessor_count == 0)
                     for (object = 0; object < mir.object_count; ++object)
@@ -530,6 +599,8 @@ void mir_prepare_debug_object_states(void)
         }
     } while (changed);
     free(next_state);
+    free(predecessors);
+    free(predecessor_offsets);
     mir.debug_object_state_count = (int)state_count;
 }
 
@@ -608,7 +679,7 @@ void mir_emit_debug_locations(MirStream *out, int point, int allow_registers)
             mir.declared_is_array[declaration] ||
             mir.declared_is_vla[declaration] ||
             mir.declared_is_volatile[declaration] ||
-            (object >= 0 && !mir_object_is_fully_promoted(object));
+            (object >= 0 && !mir.debug_object_fully_promoted[object]);
         if (stable_frame) {
             offset = mir.declared_offsets[declaration];
             if (mir.declared_storage[declaration] == SC_PARAM &&
@@ -5575,6 +5646,7 @@ void mir_end_declaration(void)
     memcpy(&mir.insns[mir.declaration_placeholder + 1], captured,
            (size_t)captured_count * sizeof(*captured));
     free(captured);
+    mir_invalidate_debug_event_index();
     for (i = 0; i < mir.debug_event_count; ++i) {
         int point = mir.debug_events[i].point;
         if (point >= mir.declaration_capture_start)
@@ -8537,6 +8609,7 @@ static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
         event_count = 0;
     if (event_count > mir.debug_event_capacity)
         event_count = mir.debug_event_capacity;
+    mir_invalidate_debug_event_index();
     for (event = 0; event < event_count; ++event)
         if (mir.debug_events[event].point >= index &&
             mir.debug_events[event].point <= old_count)
@@ -12494,13 +12567,15 @@ int mir_phi_physical_start(int phi_instruction)
 
 static int mir_try_make_object_phi(int instruction, int object,
                                    const int *out_state,
-                                   const unsigned char *reachable)
+                                   const unsigned char *reachable,
+                                   const int *predecessor_offsets,
+                                   const int *predecessors)
 {
     int block_start = mir_block_start_for_instruction(instruction);
     int predecessor_values[2];
     int predecessor_labels[2];
     int predecessor_count = 0;
-    int predecessor;
+    int predecessor_index;
     struct MirInsn *load;
     int phi_report = getenv("DCC_MIR_PHI_REPORT") != NULL;
 
@@ -12516,42 +12591,39 @@ static int mir_try_make_object_phi(int instruction, int object,
                     block_start);
         return 0;
     }
-    for (predecessor = 0; predecessor < mir.count; ++predecessor) {
-        int successor;
-        if (!reachable[predecessor])
+    for (predecessor_index = predecessor_offsets[block_start];
+         predecessor_index < predecessor_offsets[block_start + 1];
+         ++predecessor_index) {
+        int predecessor = predecessors[predecessor_index];
+        int value;
+        int label;
+        if (!reachable[predecessor] ||
+            (predecessor_index > predecessor_offsets[block_start] &&
+             predecessors[predecessor_index - 1] == predecessor))
             continue;
-        for (successor = 0;
-             successor < mir.insns[predecessor].successor_count;
-             ++successor) {
-            int value;
-            int label;
-            if (mir.insns[predecessor].successors[successor] != block_start)
-                continue;
-            if (predecessor_count >= 2) {
-                if (phi_report)
-                    fprintf(stderr,
-                            "; MIR phi miss function=%s insn=%d object=%s "
-                            "reason=too-many-predecessors\n",
-                            mir.name, instruction, mir.objects[object].name);
-                return 0;
-            }
-            value = out_state[(size_t)predecessor * mir.object_count + object];
-            label = mir_block_label_before(predecessor);
-            if (value < 0 || label < 0) {
-                if (phi_report)
-                    fprintf(stderr,
-                            "; MIR phi miss function=%s insn=%d object=%s "
-                            "reason=predecessor-unresolved predecessor=%d "
-                            "value=%d label=%d\n",
-                            mir.name, instruction, mir.objects[object].name,
-                            predecessor, value, label);
-                return 0;
-            }
-            predecessor_values[predecessor_count] = value;
-            predecessor_labels[predecessor_count] = label;
-            ++predecessor_count;
-            break;
+        if (predecessor_count >= 2) {
+            if (phi_report)
+                fprintf(stderr,
+                        "; MIR phi miss function=%s insn=%d object=%s "
+                        "reason=too-many-predecessors\n",
+                        mir.name, instruction, mir.objects[object].name);
+            return 0;
         }
+        value = out_state[(size_t)predecessor * mir.object_count + object];
+        label = mir_block_label_before(predecessor);
+        if (value < 0 || label < 0) {
+            if (phi_report)
+                fprintf(stderr,
+                        "; MIR phi miss function=%s insn=%d object=%s "
+                        "reason=predecessor-unresolved predecessor=%d "
+                        "value=%d label=%d\n",
+                        mir.name, instruction, mir.objects[object].name,
+                        predecessor, value, label);
+            return 0;
+        }
+        predecessor_values[predecessor_count] = value;
+        predecessor_labels[predecessor_count] = label;
+        ++predecessor_count;
     }
     if (predecessor_count != 2) {
         if (phi_report)
@@ -12922,7 +12994,8 @@ static int mir_promote_objects(void)
             reaching = MIR_OBJECT_AMBIGUOUS;
         if (reaching == MIR_OBJECT_AMBIGUOUS &&
             mir_try_make_object_phi(
-                i, insn->object, out_state, reachable)) {
+                i, insn->object, out_state, reachable,
+                predecessor_offsets, predecessors)) {
             inserted_phi = 1;
             break;
         }
@@ -12945,7 +13018,8 @@ static int mir_promote_objects(void)
                 reaching = MIR_OBJECT_AMBIGUOUS;
             if (reaching == MIR_OBJECT_AMBIGUOUS &&
                 mir_try_make_object_phi(
-                    i, insn->object, out_state, reachable)) {
+                    i, insn->object, out_state, reachable,
+                    predecessor_offsets, predecessors)) {
                 inserted_phi = 1;
                 break;
             }
@@ -17895,9 +17969,34 @@ int mir_fold_byte_range_checks(void)
 /* Inline argument slots are private but pooled. Forward only an exact
  * byte/pointer store/load pair in one straight-line region with the same call-site
  * identity, stopping at every possible overwrite or control-flow edge. */
+struct MirInlineTempRead {
+    const char *name;
+    int identity;
+};
+
+static struct MirInlineTempRead *mir_inline_temp_read_slot(
+    struct MirInlineTempRead *table, size_t capacity,
+    const char *name, int identity)
+{
+    const unsigned char *text = (const unsigned char *)name;
+    unsigned hash = (unsigned)identity;
+    size_t slot;
+
+    while (*text != 0)
+        hash = hash * 131u + *text++;
+    slot = hash & (capacity - 1);
+    while (table[slot].name != NULL &&
+           (table[slot].identity != identity ||
+            strcmp(table[slot].name, name) != 0))
+        slot = (slot + 1) & (capacity - 1);
+    return &table[slot];
+}
+
 static int mir_forward_inline_byte_temps(void)
 {
     int i, j, changed = 0;
+    size_t read_capacity = 16;
+    struct MirInlineTempRead *reads;
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *load = &mir.insns[i];
         if (load->opcode != MIR_LOAD ||
@@ -17930,6 +18029,33 @@ static int mir_forward_inline_byte_temps(void)
             break;
         }
     }
+    /* No read index is needed unless there is a removable pooled store. */
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *store = &mir.insns[i];
+        if (store->opcode == MIR_STORE && store->inline_temp_id != 0 &&
+            store->object < 0 && store->memory_flags == 0 &&
+            (store->type == (TYPE_CHAR | TYPE_UNSIGNED) || type_ptr_depth(store->type)) &&
+            !strncmp(store->name, "#itmp", 5))
+            break;
+    }
+    if (i == mir.count)
+        return changed;
+    while (read_capacity < (size_t)mir.count * 2)
+        read_capacity *= 2;
+    reads = (struct MirInlineTempRead *)calloc(read_capacity, sizeof(*reads));
+    if (reads == NULL)
+        fatal("out of memory indexing inline temporary reads");
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *use = &mir.insns[i];
+        struct MirInlineTempRead *slot;
+        if ((use->opcode != MIR_LOAD && use->opcode != MIR_ADDRESS) ||
+            strncmp(use->name, "#itmp", 5))
+            continue;
+        slot = mir_inline_temp_read_slot(reads, read_capacity, use->name,
+                    use->opcode == MIR_ADDRESS ? 0 : use->inline_temp_id);
+        slot->name = use->name;
+        slot->identity = use->opcode == MIR_ADDRESS ? 0 : use->inline_temp_id;
+    }
     /* A pooled slot is private unless its address escaped. After forwarding
      * all reads for one logical call site, its snapshot write is dead even
      * if a different call site reuses the physical slot later. Keep value
@@ -17940,22 +18066,17 @@ static int mir_forward_inline_byte_temps(void)
         if (store->opcode != MIR_STORE || store->inline_temp_id == 0 || store->object >= 0 ||
             (store->type != (TYPE_CHAR | TYPE_UNSIGNED) && !type_ptr_depth(store->type)) ||
             store->memory_flags != 0 || strncmp(store->name, "#itmp", 5)) continue;
-        for (j = 0; j < mir.count; ++j) {
-            const struct MirInsn *use = &mir.insns[j];
-            if (strcmp(use->name, store->name)) continue;
-            if (use->opcode == MIR_ADDRESS ||
-                (use->opcode == MIR_LOAD &&
-                 (use->inline_temp_id == store->inline_temp_id || use->inline_temp_id == 0))) {
-                observed = 1;
-                break;
-            }
-        }
+        observed = mir_inline_temp_read_slot(
+            reads, read_capacity, store->name, 0)->name != NULL ||
+            mir_inline_temp_read_slot(reads, read_capacity, store->name,
+                                      store->inline_temp_id)->name != NULL;
         if (!observed) {
             mir_make_nop(store);
             mir_invalidate_use_cache();
             ++changed;
         }
     }
+    free(reads);
     return changed;
 }
 

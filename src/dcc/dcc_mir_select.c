@@ -4636,6 +4636,7 @@ void mir_end_function(void)
                 if (original_count > 0)
                     memcpy(mir.insns, original_insns,
                            (size_t)original_count * sizeof(*original_insns));
+                mir_invalidate_debug_event_index();
                 for (metadata_index = 0; metadata_index < debug_count; ++metadata_index)
                     mir.debug_events[metadata_index].point = original_debug_points[metadata_index];
                 if (declaration_count > 0) {

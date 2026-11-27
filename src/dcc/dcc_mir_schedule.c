@@ -186,7 +186,7 @@ static int mir_schedule_count_phi_edge_uses(void)
 }
 
 static int mir_schedule_collect_block_phi_uses(
-    const struct MirScheduleBlock *block, int *edge_uses)
+    const struct MirScheduleBlock *block, int *edge_uses, MirLiveWord *active)
 {
     const struct MirInsn *terminator = &mir.insns[block->last];
     int predecessor_label = mir_block_label_before(block->last);
@@ -220,6 +220,7 @@ static int mir_schedule_collect_block_phi_uses(
             if (source >= mir.next_value)
                 return 0;
             ++edge_uses[source];
+            active[(size_t)source / 64] |= 1ULL << (source % 64);
             instruction =
                 mir_next_phi_in_block(target, instruction + 1);
         }
@@ -227,20 +228,46 @@ static int mir_schedule_collect_block_phi_uses(
     return 1;
 }
 
+static int mir_schedule_popcount(unsigned long long bits)
+{
+    bits -= (bits >> 1) & 0x5555555555555555ULL;
+    bits = (bits & 0x3333333333333333ULL) +
+           ((bits >> 2) & 0x3333333333333333ULL);
+    bits = (bits + (bits >> 4)) & 0x0f0f0f0f0f0f0f0fULL;
+    return (int)((bits * 0x0101010101010101ULL) >> 56);
+}
+
+static int mir_schedule_first_bit(unsigned long long bits)
+{
+    int bit = 0;
+    if ((bits & 0xffffffffULL) == 0) { bits >>= 32; bit += 32; }
+    if ((bits & 0xffffULL) == 0) { bits >>= 16; bit += 16; }
+    if ((bits & 0xffULL) == 0) { bits >>= 8; bit += 8; }
+    if ((bits & 0xfULL) == 0) { bits >>= 4; bit += 4; }
+    if ((bits & 3ULL) == 0) { bits >>= 2; bit += 2; }
+    if ((bits & 1ULL) == 0) ++bit;
+    return bit;
+}
+
 static int mir_schedule_maximum_pressure(void)
 {
     int maximum = 0;
     int instruction;
+    size_t words = ((size_t)mir.next_value + 63) / 64;
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         int pressure = 0;
-        int value;
+        int destination = mir.insns[instruction].dst;
+        size_t word;
 
-        for (value = 0; value < mir.next_value; ++value)
-            if (MIR_LIVE_TEST(mir.live_in, instruction, value) ||
-                MIR_LIVE_TEST(mir.live_out, instruction, value) ||
-                mir.insns[instruction].dst == value)
-                ++pressure;
+        for (word = 0; word < words; ++word)
+            pressure += mir_schedule_popcount(
+                mir.live_in[(size_t)instruction * words + word] |
+                mir.live_out[(size_t)instruction * words + word]);
+        if (destination >= 0 && destination < mir.next_value &&
+            !MIR_LIVE_TEST(mir.live_in, instruction, destination) &&
+            !MIR_LIVE_TEST(mir.live_out, instruction, destination))
+            ++pressure;
         if (maximum < pressure)
             maximum = pressure;
     }
@@ -297,6 +324,10 @@ static int mir_schedule_build_segments(
     int *edge_uses;
     unsigned char *defined;
     int block;
+    int value;
+    size_t word;
+    size_t words = ((size_t)mir.next_value + 63) / 64;
+    MirLiveWord *active;
 
     first = (int *)malloc((size_t)mir.next_value * sizeof(*first));
     last = (int *)malloc((size_t)mir.next_value * sizeof(*last));
@@ -304,19 +335,34 @@ static int mir_schedule_build_segments(
     edge_uses =
         (int *)malloc((size_t)mir.next_value * sizeof(*edge_uses));
     defined = (unsigned char *)malloc((size_t)mir.next_value);
-    if (first == NULL || last == NULL || uses == NULL ||
+    active = (MirLiveWord *)calloc(words, sizeof(*active));
+    if (active == NULL || first == NULL || last == NULL || uses == NULL ||
         edge_uses == NULL || defined == NULL)
         fatal("out of memory building MIR live segments");
+    for (value = 0; value < mir.next_value; ++value) {
+        first[value] = mir.count;
+        last[value] = -1;
+        uses[value] = edge_uses[value] = 0;
+        defined[value] = 0;
+    }
     for (block = 0; block < block_count; ++block) {
         int instruction;
-        int value;
 
-        for (value = 0; value < mir.next_value; ++value) {
-            first[value] = mir.count;
-            last[value] = -1;
-            uses[value] = 0;
-            edge_uses[value] = 0;
-            defined[value] = 0;
+        /* Reset only values touched in the preceding block, then seed this
+         * block's candidates from its packed live-in/live-out sets. */
+        for (word = 0; word < words; ++word) {
+            MirLiveWord bits = active[word];
+            while (bits != 0) {
+                value = (int)(word * 64) + mir_schedule_first_bit(bits);
+                bits &= bits - 1;
+                first[value] = mir.count;
+                last[value] = -1;
+                uses[value] = edge_uses[value] = 0;
+                defined[value] = 0;
+            }
+            active[word] =
+                mir.live_in[(size_t)blocks[block].first * words + word] |
+                mir.live_out[(size_t)blocks[block].last * words + word];
         }
         for (instruction = blocks[block].first;
              instruction <= blocks[block].last; ++instruction) {
@@ -324,6 +370,7 @@ static int mir_schedule_build_segments(
 
             if (insn->dst >= 0) {
                 value = insn->dst;
+                active[(size_t)value / 64] |= 1ULL << (value % 64);
                 if (first[value] > instruction)
                     first[value] = instruction;
                 if (last[value] < instruction)
@@ -332,6 +379,7 @@ static int mir_schedule_build_segments(
             }
             if (insn->opcode != MIR_PHI && insn->src1 >= 0) {
                 value = insn->src1;
+                active[(size_t)value / 64] |= 1ULL << (value % 64);
                 if (first[value] > instruction)
                     first[value] = instruction;
                 if (last[value] < instruction)
@@ -340,6 +388,7 @@ static int mir_schedule_build_segments(
             }
             if (insn->opcode != MIR_PHI && insn->src2 >= 0) {
                 value = insn->src2;
+                active[(size_t)value / 64] |= 1ULL << (value % 64);
                 if (first[value] > instruction)
                     first[value] = instruction;
                 if (last[value] < instruction)
@@ -349,6 +398,7 @@ static int mir_schedule_build_segments(
             if (mir_schedule_is_call(insn))
                 for (value = 0; value < mir.next_value; ++value)
                     if (mir_call_uses_value(insn, value)) {
+                        active[(size_t)value / 64] |= 1ULL << (value % 64);
                         if (first[value] > instruction)
                             first[value] = instruction;
                         if (last[value] < instruction)
@@ -357,7 +407,8 @@ static int mir_schedule_build_segments(
                     }
         }
         if (!mir_schedule_collect_block_phi_uses(
-                &blocks[block], edge_uses)) {
+                &blocks[block], edge_uses, active)) {
+            free(active);
             free(defined);
             free(edge_uses);
             free(uses);
@@ -367,51 +418,59 @@ static int mir_schedule_build_segments(
             *segments_out = NULL;
             return -1;
         }
-        for (value = 0; value < mir.next_value; ++value) {
-            unsigned flags = 0;
-            int live_in =
-                MIR_LIVE_TEST(mir.live_in, blocks[block].first, value);
-            int live_out =
-                MIR_LIVE_TEST(mir.live_out, blocks[block].last, value);
+        for (word = 0; word < words; ++word) {
+            MirLiveWord bits = active[word];
+            while (bits != 0) {
+                unsigned flags = 0;
+                int live_in;
+                int live_out;
+                value = (int)(word * 64) + mir_schedule_first_bit(bits);
+                bits &= bits - 1;
+                live_in =
+                    MIR_LIVE_TEST(mir.live_in, blocks[block].first, value);
+                live_out =
+                    MIR_LIVE_TEST(mir.live_out, blocks[block].last, value);
 
-            if (!live_in && !live_out && !defined[value] &&
-                uses[value] == 0 && edge_uses[value] == 0)
-                continue;
-            if (!live_in && !live_out && uses[value] == 0 &&
-                edge_uses[value] == 0 &&
-                mir_schedule_allowed_colors(value) == 0)
-                continue;
-            if (live_in) {
-                flags |= MIR_SCHEDULE_LIVE_IN;
-                if (first[value] > blocks[block].first)
-                    first[value] = blocks[block].first;
+                if (!live_in && !live_out && !defined[value] &&
+                    uses[value] == 0 && edge_uses[value] == 0)
+                    continue;
+                if (!live_in && !live_out && uses[value] == 0 &&
+                    edge_uses[value] == 0 &&
+                    mir_schedule_allowed_colors(value) == 0)
+                    continue;
+                if (live_in) {
+                    flags |= MIR_SCHEDULE_LIVE_IN;
+                    if (first[value] > blocks[block].first)
+                        first[value] = blocks[block].first;
+                }
+                if (live_out) {
+                    flags |= MIR_SCHEDULE_LIVE_OUT;
+                    if (last[value] < blocks[block].last)
+                        last[value] = blocks[block].last;
+                }
+                if (defined[value])
+                    flags |= MIR_SCHEDULE_DEFINES;
+                if (edge_uses[value] != 0) {
+                    flags |= MIR_SCHEDULE_PHI_EDGE;
+                    uses[value] += edge_uses[value];
+                    if (first[value] > blocks[block].last)
+                        first[value] = blocks[block].last;
+                    if (last[value] < blocks[block].last)
+                        last[value] = blocks[block].last;
+                }
+                if (blocks[block].first == blocks[block].last &&
+                    mir_schedule_is_call(
+                        &mir.insns[blocks[block].first]) &&
+                    live_in && live_out)
+                    flags |= MIR_SCHEDULE_CROSSES_CALL;
+                mir_schedule_append_segment(
+                    &segments, &segment_count, &segment_capacity,
+                    value, block, first[value], last[value],
+                    uses[value], flags);
             }
-            if (live_out) {
-                flags |= MIR_SCHEDULE_LIVE_OUT;
-                if (last[value] < blocks[block].last)
-                    last[value] = blocks[block].last;
-            }
-            if (defined[value])
-                flags |= MIR_SCHEDULE_DEFINES;
-            if (edge_uses[value] != 0) {
-                flags |= MIR_SCHEDULE_PHI_EDGE;
-                uses[value] += edge_uses[value];
-                if (first[value] > blocks[block].last)
-                    first[value] = blocks[block].last;
-                if (last[value] < blocks[block].last)
-                    last[value] = blocks[block].last;
-            }
-            if (blocks[block].first == blocks[block].last &&
-                mir_schedule_is_call(
-                    &mir.insns[blocks[block].first]) &&
-                live_in && live_out)
-                flags |= MIR_SCHEDULE_CROSSES_CALL;
-            mir_schedule_append_segment(
-                &segments, &segment_count, &segment_capacity,
-                value, block, first[value], last[value],
-                uses[value], flags);
         }
     }
+    free(active);
     free(defined);
     free(edge_uses);
     free(uses);
