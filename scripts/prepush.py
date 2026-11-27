@@ -135,13 +135,21 @@ def parallel_steps(args, out):
                 skip_reason='Windows MSVC does not support this ASan/UBSan configuration; '
                             'install Clang and Ninja to run it.')
     else:
+        sanitizer_flags = '-fsanitize=address,undefined -fno-omit-frame-pointer'
+        sanitizer_link_options = []
+        if sys.platform.startswith('linux'):
+            # Older Clang ASan runtimes can crash before main in PIE executables
+            # on Linux/WSL. Keep instrumentation, but avoid that startup failure.
+            sanitizer_flags += ' -fno-pie'
+            sanitizer_link_options = ['-DCMAKE_EXE_LINKER_FLAGS=-no-pie']
         sanitizer = cmake_step(
             'mir-host-sanitize', 'MIR host tests with ASan/UBSan', out,
             'mir-host-sanitize', 'src/dcc',
             ['-DCMAKE_BUILD_TYPE=Debug', '-DDCC_BUILD_MIR_TESTS=ON',
              '-DCMAKE_C_COMPILER=' + cc,
-             '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer',
-             '-DDCC_RUNTIME_OUTPUT_DIRECTORY=' + str(out / 'mir-host-sanitize' / 'bin')],
+             '-DCMAKE_C_FLAGS=' + sanitizer_flags,
+             '-DDCC_RUNTIME_OUTPUT_DIRECTORY=' + str(out / 'mir-host-sanitize' / 'bin')]
+            + sanitizer_link_options,
             'Debug', True, numeric_jobs,
             {'ASAN_OPTIONS': 'detect_leaks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'})
     strict_env = {'DCC_MIR_REQUIRE_COMPLETE': '1', 'DCC_MIR_REQUIRE_EMIT': '1'}
