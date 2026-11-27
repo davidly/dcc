@@ -63,6 +63,20 @@ def clean_environment(environment):
     return env
 
 
+def select_c_compiler(system=None, environment=None):
+    system = system or os.name
+    environment = os.environ if environment is None else environment
+    if system == 'nt':
+        return environment.get('CC') or shutil.which('clang') or 'clang'
+    candidates = [environment.get('CC'), 'clang', 'gcc', 'cc']
+    for candidate in candidates:
+        if candidate:
+            resolved = shutil.which(candidate)
+            if resolved:
+                return resolved
+    raise RuntimeError('No C compiler found; install Clang or GCC, or set CC to an installed compiler.')
+
+
 def step(name, label, commands, env=None, skip_reason=None):
     return {'name': name, 'label': label, 'commands': commands, 'env': env or {},
             'skip_reason': skip_reason}
@@ -101,7 +115,7 @@ def parallel_steps(args, out):
     numeric_jobs = step_jobs(args)
     jobs = str(numeric_jobs)
     timeout = str(args.timeout)
-    cc = os.environ.get('CC') or shutil.which('clang') or 'clang'
+    cc = select_c_compiler()
     if os.name == 'nt':
         clang = shutil.which('clang')
         ninja = shutil.which('ninja')
