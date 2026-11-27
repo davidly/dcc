@@ -1,0 +1,129 @@
+/* Dynamic wide shifts, masked branches and captured Boolean operands. */
+#include <stdint.h>
+#include <stdio.h>
+static volatile unsigned count;
+static volatile uint32_t observed;
+static unsigned calls;
+struct Vector { uint32_t value; unsigned count; uint32_t left, right, arithmetic; };
+static const struct Vector vectors[]={
+ {0x00000000UL,0,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,1,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,7,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,8,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,9,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,15,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,16,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,17,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,23,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,24,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,25,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,30,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000000UL,31,0x00000000UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,0,0x00000001UL,0x00000001UL,0x00000001UL},
+ {0x00000001UL,1,0x00000002UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,7,0x00000080UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,8,0x00000100UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,9,0x00000200UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,15,0x00008000UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,16,0x00010000UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,17,0x00020000UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,23,0x00800000UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,24,0x01000000UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,25,0x02000000UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,30,0x40000000UL,0x00000000UL,0x00000000UL},
+ {0x00000001UL,31,0x80000000UL,0x00000000UL,0x00000000UL},
+ {0x7fffffffUL,0,0x7fffffffUL,0x7fffffffUL,0x7fffffffUL},
+ {0x7fffffffUL,1,0xfffffffeUL,0x3fffffffUL,0x3fffffffUL},
+ {0x7fffffffUL,7,0xffffff80UL,0x00ffffffUL,0x00ffffffUL},
+ {0x7fffffffUL,8,0xffffff00UL,0x007fffffUL,0x007fffffUL},
+ {0x7fffffffUL,9,0xfffffe00UL,0x003fffffUL,0x003fffffUL},
+ {0x7fffffffUL,15,0xffff8000UL,0x0000ffffUL,0x0000ffffUL},
+ {0x7fffffffUL,16,0xffff0000UL,0x00007fffUL,0x00007fffUL},
+ {0x7fffffffUL,17,0xfffe0000UL,0x00003fffUL,0x00003fffUL},
+ {0x7fffffffUL,23,0xff800000UL,0x000000ffUL,0x000000ffUL},
+ {0x7fffffffUL,24,0xff000000UL,0x0000007fUL,0x0000007fUL},
+ {0x7fffffffUL,25,0xfe000000UL,0x0000003fUL,0x0000003fUL},
+ {0x7fffffffUL,30,0xc0000000UL,0x00000001UL,0x00000001UL},
+ {0x7fffffffUL,31,0x80000000UL,0x00000000UL,0x00000000UL},
+ {0x80000000UL,0,0x80000000UL,0x80000000UL,0x80000000UL},
+ {0x80000000UL,1,0x00000000UL,0x40000000UL,0xc0000000UL},
+ {0x80000000UL,7,0x00000000UL,0x01000000UL,0xff000000UL},
+ {0x80000000UL,8,0x00000000UL,0x00800000UL,0xff800000UL},
+ {0x80000000UL,9,0x00000000UL,0x00400000UL,0xffc00000UL},
+ {0x80000000UL,15,0x00000000UL,0x00010000UL,0xffff0000UL},
+ {0x80000000UL,16,0x00000000UL,0x00008000UL,0xffff8000UL},
+ {0x80000000UL,17,0x00000000UL,0x00004000UL,0xffffc000UL},
+ {0x80000000UL,23,0x00000000UL,0x00000100UL,0xffffff00UL},
+ {0x80000000UL,24,0x00000000UL,0x00000080UL,0xffffff80UL},
+ {0x80000000UL,25,0x00000000UL,0x00000040UL,0xffffffc0UL},
+ {0x80000000UL,30,0x00000000UL,0x00000002UL,0xfffffffeUL},
+ {0x80000000UL,31,0x00000000UL,0x00000001UL,0xffffffffUL},
+ {0xffffffffUL,0,0xffffffffUL,0xffffffffUL,0xffffffffUL},
+ {0xffffffffUL,1,0xfffffffeUL,0x7fffffffUL,0xffffffffUL},
+ {0xffffffffUL,7,0xffffff80UL,0x01ffffffUL,0xffffffffUL},
+ {0xffffffffUL,8,0xffffff00UL,0x00ffffffUL,0xffffffffUL},
+ {0xffffffffUL,9,0xfffffe00UL,0x007fffffUL,0xffffffffUL},
+ {0xffffffffUL,15,0xffff8000UL,0x0001ffffUL,0xffffffffUL},
+ {0xffffffffUL,16,0xffff0000UL,0x0000ffffUL,0xffffffffUL},
+ {0xffffffffUL,17,0xfffe0000UL,0x00007fffUL,0xffffffffUL},
+ {0xffffffffUL,23,0xff800000UL,0x000001ffUL,0xffffffffUL},
+ {0xffffffffUL,24,0xff000000UL,0x000000ffUL,0xffffffffUL},
+ {0xffffffffUL,25,0xfe000000UL,0x0000007fUL,0xffffffffUL},
+ {0xffffffffUL,30,0xc0000000UL,0x00000003UL,0xffffffffUL},
+ {0xffffffffUL,31,0x80000000UL,0x00000001UL,0xffffffffUL},
+ {0x89abcdefUL,0,0x89abcdefUL,0x89abcdefUL,0x89abcdefUL},
+ {0x89abcdefUL,1,0x13579bdeUL,0x44d5e6f7UL,0xc4d5e6f7UL},
+ {0x89abcdefUL,7,0xd5e6f780UL,0x0113579bUL,0xff13579bUL},
+ {0x89abcdefUL,8,0xabcdef00UL,0x0089abcdUL,0xff89abcdUL},
+ {0x89abcdefUL,9,0x579bde00UL,0x0044d5e6UL,0xffc4d5e6UL},
+ {0x89abcdefUL,15,0xe6f78000UL,0x00011357UL,0xffff1357UL},
+ {0x89abcdefUL,16,0xcdef0000UL,0x000089abUL,0xffff89abUL},
+ {0x89abcdefUL,17,0x9bde0000UL,0x000044d5UL,0xffffc4d5UL},
+ {0x89abcdefUL,23,0xf7800000UL,0x00000113UL,0xffffff13UL},
+ {0x89abcdefUL,24,0xef000000UL,0x00000089UL,0xffffff89UL},
+ {0x89abcdefUL,25,0xde000000UL,0x00000044UL,0xffffffc4UL},
+ {0x89abcdefUL,30,0xc0000000UL,0x00000002UL,0xfffffffeUL},
+ {0x89abcdefUL,31,0x80000000UL,0x00000001UL,0xffffffffUL},
+};
+static uint32_t change(uint32_t *p) { ++calls; *p^=0x01020304UL; return *p; }
+static unsigned masked(uint32_t x) {
+    unsigned n=0;
+    if(x&1UL)n+=1;
+    if((x&0x80000000UL)==0UL)n+=2;
+    if(0UL!=(x&0x00010001UL))n+=4;
+    if(!(x&0x08000200UL))n+=8;
+    return n;
+}
+static unsigned volatile_mask(volatile uint32_t *p) { return (*p&0x01000001UL)!=0; }
+int main(void) {
+    unsigned i;
+    for(i=0;i<sizeof(vectors)/sizeof(vectors[0]);++i) {
+        const struct Vector *p=&vectors[i];
+        uint32_t x=p->value;
+        count=p->count;
+        if((x<<count)!=p->left || (x>>count)!=p->right ||
+           (uint32_t)((int32_t)x>>count)!=p->arithmetic)
+            return puts("FAIL dynamic wide shift");
+        {
+            unsigned expected=0;
+            if(x%2UL)expected+=1;
+            if(x<0x80000000UL)expected+=2;
+            if((x%2UL)||((x/65536UL)%2UL))expected+=4;
+            if(!((x/512UL)%2UL) && !((x/0x08000000UL)%2UL))expected+=8;
+            if(masked(x)!=expected)return puts("FAIL masked branch");
+        }
+        observed=x;
+        if(volatile_mask(&observed)!=((x%2UL)!=0 || ((x/0x01000000UL)%2UL)!=0))
+            return puts("FAIL volatile mask");
+        {
+            uint32_t a=x,b=~x,snapshot=a;
+            calls=0;
+            b=change(&a);
+            if((snapshot^b)!=0x01020304UL || (snapshot&b)!=(x&(x^0x01020304UL)) ||
+               (snapshot|b)!=(x|(x^0x01020304UL)) || calls!=1)
+                return puts("FAIL captured wide Boolean");
+        }
+    }
+    puts("twidebit passed");
+    return 0;
+}

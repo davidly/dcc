@@ -2397,6 +2397,46 @@ static int param_frame_in_loop(int body, int end, int line)
     return 0;
 }
 
+/* A compiler-owned leaf returning its first word argument can restore the
+ * caller's stack with POP/PUSH rather than build an IX frame. BC is an ABI
+ * scratch pair; all other registers and flags keep their original effects.
+ * Restrict the body to straight-line, stack-independent instructions and
+ * require the sole argument read immediately before the return conversion. */
+static int pass_leaf_return_argument_without_frame(void)
+{
+    int i,changed=0;
+    for(i=0;i+7<nlines;++i) {
+        int start,end,k,load=-1,epilogue=-1,safe=1,owned=0;
+        if(!eq(i,"push ix") || !eq(i+1,"ld ix,0") || !eq(i+2,"add ix,sp"))continue;
+        find_function_bounds_any(i,&start,&end);
+        for(k=start;k<end;++k)if(strstr(lines[k],"@dcc.frame-cacheable"))owned=1;
+        if(!owned || peep_register_claimed_in_range(PEEP_REG_BC,start,end))continue;
+        for(k=i+3;k<end;++k) {
+            const PeepLineInfo *info=peep_line_info(k);
+            if(eq(k,"ld l,(ix+4)") && eq(k+1,"ld h,(ix+5)")) {load=k;break;}
+            if(!info || (info->kind!=PEEP_LINE_COMMENT && info->kind!=PEEP_LINE_BLANK &&
+               (info->kind!=PEEP_LINE_INSTRUCTION || info->effects.unknown || info->effects.control_flow ||
+                ((info->effects.reads|info->effects.writes)&(PEEP_REG_SP|PEEP_REG_IX))))) {safe=0;break;}
+        }
+        if(!safe || load<0)continue;
+        epilogue=load+2;
+        if(eq(epilogue,"ld h,0"))++epilogue;
+        if(epilogue+1>=end || !eq(epilogue,"pop ix") || !eq(epilogue+1,"ret"))continue;
+        for(k=epilogue+2;k<end;++k) {
+            const PeepLineInfo *info=peep_line_info(k);
+            if(!info || (info->kind!=PEEP_LINE_COMMENT && info->kind!=PEEP_LINE_BLANK && !eq(k,"end")))safe=0;
+        }
+        if(!safe)continue;
+        delete_n(epilogue,1);
+        replace1_tagged(load,"pop bc","leaf_return_argument");
+        replace1(load+1,"pop hl");
+        insert_line(load+2,"push hl");insert_line(load+3,"push bc");
+        delete_n(i,3);
+        changed=1;
+    }
+    return changed;
+}
+
 static int pass_elim_param_only_ix_frame(void)
 {
     static int depth[MAX_LINES];
@@ -7663,6 +7703,95 @@ static int pass_cache_ix_spill_via_exx(void)
  * local word in otherwise unused BC across all CFG arms. Each access is a
  * byte-for-byte register substitution; volatile locals and unknown effects
  * decline. Initial writes must precede all reads and control-flow splits. */
+/* A one-bit self shift needs no register round trip when its result
+ * registers are dead. Require compiler-owned, nonvolatile frames;
+ * match every byte independently because wide spill homes need not be laid
+ * out in register order. */
+static int pass_wide_frame_mask_test(void)
+{
+    static const char regs[4]={'l','h','e','d'};
+    int i,changed=0;
+    for(i=0;i+6<nlines;++i) {
+        int k,off[4],safe=1,start,end,owned=0;
+        char expected[64],target[128];
+        const PeepLineInfo *load=peep_line_info(i+4),*mask=peep_line_info(i+5);
+        int selected=-1;
+        if(!load || load->opcode!=PEEP_OPCODE_LD || !mask || strcmp(mask->mnemonic,"and") ||
+           !mask->left.immediate_valid || !jump_target_any(lines[i+6],target))continue;
+        for(k=0;k<4;++k) {
+            sprintf(expected,"ld a,%c",regs[k]);
+            if(eq(i+4,expected))selected=k;
+        }
+        if(selected<0)continue;
+        for(k=0;k<4;++k) {
+            const PeepLineInfo *info=peep_line_info(i+k);
+            if(!info || info->opcode!=PEEP_OPCODE_LD ||
+               info->right.kind!=PEEP_OPERAND_FRAME || !info->right.frame_offset_valid) {safe=0;break;}
+            off[k]=info->right.frame_offset;
+            sprintf(expected,"ld %c,(ix%+d)",regs[k],off[k]);
+            if(!eq(i+k,expected)) {safe=0;break;}
+        }
+        if(!safe || !peep_registers_dead_after(i+6,PEEP_REG_HL|PEEP_REG_DE))continue;
+        find_function_bounds_any(i,&start,&end);
+        for(k=start;k<end;++k) {
+            if(strstr(lines[k],"@dcc.frame-cacheable"))owned=1;
+            if(strstr(lines[k],"@dcc.volatile"))safe=0;
+        }
+        if(!owned || !safe)continue;
+        sprintf(expected,"ld a,(ix%+d)",off[selected]);
+        replace1_tagged(i,expected,"wide_frame_mask_test");
+        delete_n(i+1,4);changed=1;
+    }
+    return changed;
+}
+
+static int pass_wide_frame_shift_in_place(void)
+{
+    static const char regs[4] = {'l','h','e','d'};
+    int i, changed = 0;
+    for (i = 0; i + 10 < nlines; ++i) {
+        int start,end,k,j,off[4],left,arithmetic=0,store,end_at,safe=1,owned=0;
+        char clean[MAX_LINE],expected[64],replacement[64];
+        left = eq(i+4,"add hl,hl") && eq(i+5,"rl e") && eq(i+6,"rl d");
+        if (!left) {
+            arithmetic=eq(i+4,"sra d");
+            if ((!arithmetic && !eq(i+4,"srl d")) ||
+                !eq(i+5,"rr e") || !eq(i+6,"rr h") || !eq(i+7,"rr l")) continue;
+        }
+        store=i+(left?7:8); end_at=store+3;
+        if (end_at>=nlines) continue;
+        find_function_bounds_any(i,&start,&end);
+        for (k=start;k<end;++k) {
+            if (strstr(lines[k],"@dcc.frame-cacheable")) owned=1;
+            if (strstr(lines[k],"@dcc.volatile")) safe=0;
+        }
+        if (!owned || !safe) continue;
+        for (k=0;k<4;++k) {
+            const PeepLineInfo *info=peep_line_info(i+k);
+            if (!info || info->opcode!=PEEP_OPCODE_LD ||
+                info->right.kind!=PEEP_OPERAND_FRAME || !info->right.frame_offset_valid) {safe=0;break;}
+            off[k]=info->right.frame_offset;
+            sprintf(expected,"ld %c,(ix%+d)",regs[k],off[k]);
+            if (!eq(i+k,expected)) {safe=0;break;}
+            sprintf(expected,"ld (ix%+d),%c",off[k],regs[k]);
+            if (!eq(store+k,expected)) {safe=0;break;}
+            for (j=0;j<k;++j) if (off[j]==off[k]) safe=0;
+        }
+        /* The last RL/RR computes the same result byte and carry in both
+         * forms, so every documented flag is preserved. */
+        if (!safe || !peep_registers_dead_after(end_at,PEEP_REG_HL|PEEP_REG_DE)) continue;
+        for (k=0;k<4;++k) {
+            j=left?k:3-k;
+            sprintf(replacement,"%s (ix%+d)",k? (left?"rl":"rr"):
+                (left?"sla":arithmetic?"sra":"srl"),off[j]);
+            replace1_tagged(i+k,replacement,"wide_frame_shift");
+        }
+        delete_n(i+4,end_at-i-3);
+        changed=1;
+    }
+    return changed;
+}
+
 static int cache_leaf_local_word(unsigned pair, char lo, char hi)
 {
     int i,changed=0;
@@ -13164,6 +13293,8 @@ int main(int argc, char **argv)
      * does for pass_ldir_memset/pass_stride_loop_to_ptr. Purely local (no
      * control flow change), so a single pass suffices; pass_labels tidies
      * up. */
+    RUN_PASS(pass_wide_frame_mask_test);
+    RUN_PASS(pass_wide_frame_shift_in_place);
     RUN_PASS(pass_cache_leaf_local_word);
     if (RUN_PASS(pass_cache_ix_local_word_reload))
         RUN_PASS(pass_labels);
@@ -13291,6 +13422,7 @@ int main(int argc, char **argv)
         /* Frames whose only IX uses are parameter reads become SP-relative
          * loads; this needs the final push/pop shape, so it also runs after
          * convergence. */
+        frames_removed |= RUN_PASS(pass_leaf_return_argument_without_frame);
         frames_removed |= RUN_PASS(pass_elim_param_only_ix_frame);
         if (frames_removed) {
             RUN_PASS(pass_jp_to_plain_ret);

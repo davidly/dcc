@@ -1218,20 +1218,28 @@ static int assemble_op(Asm *a,char *op,char *args) {
     if((streqi(op,"RL") || streqi(op,"RLC") || streqi(op,"RR") || streqi(op,"RRC") ||
         streqi(op,"SLA") || streqi(op,"SRA") || streqi(op,"SRL")) && n==1) {
         int base=-1;
+        if(streqi(op,"RLC")) base=0x00;
+        else if(streqi(op,"RRC")) base=0x08;
+        else if(streqi(op,"RL")) base=0x10;
+        else if(streqi(op,"RR")) base=0x18;
+        else if(streqi(op,"SLA")) base=0x20;
+        else if(streqi(op,"SRA")) base=0x28;
+        else if(streqi(op,"SRL")) base=0x38;
         r=reg8(av[0]);
         if(r>=0) {
-            if(streqi(op,"RLC")) base=0x00;
-            else if(streqi(op,"RRC")) base=0x08;
-            else if(streqi(op,"RL")) base=0x10;
-            else if(streqi(op,"RR")) base=0x18;
-            else if(streqi(op,"SLA")) base=0x20;
-            else if(streqi(op,"SRA")) base=0x28;
-            else if(streqi(op,"SRL")) base=0x38;
             emitb(a,0xcb);
             emitb(a,base+r);
             return 1;
         }
+        if(indexed_arg(av[0],&pfx,&d)) {
+            emitb(a,pfx);
+            emitb(a,0xcb);
+            emitb(a,d);
+            emitb(a,base+6);
+            return 1;
+        }
     }
+
     if((streqi(op,"BIT")||streqi(op,"RES")||streqi(op,"SET")) && n==2) {
         int bit=(int)eval(a,av[0]).v;
         int base=streqi(op,"BIT")?0x40:(streqi(op,"RES")?0x80:0xc0);

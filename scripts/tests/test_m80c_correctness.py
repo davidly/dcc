@@ -146,6 +146,20 @@ class M80cCorrectnessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.linked_bytes("ROTATE")[:4], bytes([0xCB, 0x00, 0xCB, 0x09]))
 
+    def test_indexed_rotates_and_shifts_encode_prefix_before_displacement(self):
+        operations = (("RLC", 0x06), ("RRC", 0x0e), ("RL", 0x16),
+                      ("RR", 0x1e), ("SLA", 0x26), ("SRA", 0x2e), ("SRL", 0x3e))
+        source = "\tCSEG\n"
+        expected = bytearray()
+        for index, prefix in (("IX", 0xdd), ("IY", 0xfd)):
+            for displacement in (-128, -1, 0, 1, 127):
+                for mnemonic, opcode in operations:
+                    source += "\t%s (%s%+d)\n" % (mnemonic, index, displacement)
+                    expected.extend((prefix, 0xcb, displacement & 255, opcode))
+        result = self.assemble("IDXROT", source + "\tEND\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.linked_bytes("IDXROT")[:len(expected)], bytes(expected))
+
     def test_byte_register_absolute_loads_are_rejected(self):
         for reg in "BCDEHL":
             with self.subTest(register=reg):
