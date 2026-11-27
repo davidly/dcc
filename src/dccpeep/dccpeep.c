@@ -2437,6 +2437,62 @@ static int pass_leaf_return_argument_without_frame(void)
     return changed;
 }
 
+/* Inline a small compiler-owned conditional counter update only at loop
+ * calls. Preserve BC's cleanup-pop value, HL/A/flags and all other register
+ * effects exactly; the sole parameter is read once and never escapes. */
+static int pass_inline_loop_counter_guard(void)
+{
+    static int sequence;
+    int i,changed=0;
+    for(i=0;i+2<nlines;++i) {
+        char clean[MAX_LINE],symbol[128],counter[128],expected[MAX_LINE],label[128];
+        int entry,start,end,k,n=0,body[13],owned=0,void_result=0,safe=1,caller_start,caller_end;
+        const PeepLineInfo *call;
+        if(!eq(i,"push hl") || !eq(i+2,"pop bc"))continue;
+        call=peep_line_info(i+1);
+        if(!call || call->opcode!=PEEP_OPCODE_CALL)continue;
+        strip_peep_comment_copy(clean,lines[i+1]);
+        if(strncmp(clean,"call ",5) || strlen(clean+5)>=sizeof(symbol))continue;
+        strcpy(symbol,clean+5);
+        entry=find_label_line_in_range(symbol,0,nlines);
+        if(entry<0)continue;
+        find_function_bounds_any(entry,&start,&end);
+        for(k=start;k<end;++k) {
+            const PeepLineInfo *info=peep_line_info(k);
+            if(strstr(lines[k],"@dcc.frame-cacheable"))owned=1;
+            if(strstr(lines[k],"@dcc.return-void"))void_result=1;
+            if(strstr(lines[k],"@dcc.volatile-parameter"))safe=0;
+            if(k>entry && strstr(lines[k],"@dcc.lto end "))break;
+            if(k<=entry || !info || info->kind==PEEP_LINE_COMMENT || info->kind==PEEP_LINE_BLANK)continue;
+            if(n>=13 || info->kind!=PEEP_LINE_INSTRUCTION) {safe=0;break;}
+            body[n++]=k;
+        }
+        if(!safe || !owned || !void_result || n!=13 ||
+           !eq(body[0],"ld hl,2") || !eq(body[1],"add hl,sp") ||
+           !eq(body[2],"ld a,(hl)") || !eq(body[3],"inc hl") ||
+           !eq(body[4],"ld h,(hl)") || !eq(body[5],"ld l,a") ||
+           !eq(body[6],"ld a,h") || !eq(body[7],"or l") ||
+           (!eq(body[8],"ret nz") && !eq(body[8],"ret z")) ||
+           !peep_parse_ld_hl_paren_sym(lines[body[9]],counter) ||
+           !eq(body[10],"inc hl") || !eq(body[12],"ret"))continue;
+        sprintf(expected,"ld (%s),hl",counter);
+        if(!eq(body[11],expected))continue;
+        find_function_bounds_any(i,&caller_start,&caller_end);
+        if(!param_frame_in_loop(caller_start,caller_end,i))continue;
+        do {sprintf(label,"LCG%d",sequence++);} while(find_label_line_in_range(label,0,nlines)>=0);
+        sprintf(expected,"jp %s,%s",eq(body[8],"ret nz")?"nz":"z",label);
+        replace1_tagged(i,"ld b,h","inline_loop_counter_guard");
+        replace1(i+1,"ld c,l");replace1(i+2,"ld a,h");
+        insert_line(i+3,"or l");insert_line(i+4,expected);
+        sprintf(expected,"ld hl,(%s)",counter);insert_line(i+5,expected);
+        insert_line(i+6,"inc hl");
+        sprintf(expected,"ld (%s),hl",counter);insert_line(i+7,expected);
+        strcat(label,":");insert_line(i+8,label);
+        changed=1;i+=8;
+    }
+    return changed;
+}
+
 static int pass_elim_param_only_ix_frame(void)
 {
     static int depth[MAX_LINES];
@@ -13437,6 +13493,11 @@ int main(int argc, char **argv)
     /* Runs after every effects-model consumer: `ex` is opaque to that
      * model, so pass_push_hl_pop_de_to_ex emitted a register copy
      * instead and left this final 4 T-state tightening for here. */
+    if(RUN_PASS(pass_inline_loop_counter_guard)) {
+        RUN_PASS(pass_jp_to_jr);
+        RUN_PASS(pass_labels);
+    }
+
     RUN_PASS(pass_de_copy_before_pop_hl_to_ex);
 
     /* Convert remaining framed prologues/epilogues to shared stub calls.

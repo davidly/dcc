@@ -9,11 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @unittest.skipUnless((ROOT / "dccpeep").is_file(), "built dccpeep required")
 class WideFrameTests(unittest.TestCase):
-    def optimize(self, body, marker=";@dcc.frame-cacheable\n"):
+    def optimize(self, body, marker=";@dcc.frame-cacheable\n", suffix=""):
         source = ("; dcc stage-1d output\ncseg\n;@dcc.lto begin _leaf\n"
                   "public _leaf\n_leaf:\n" + marker +
                   "push ix\nld ix,0\nadd ix,sp\n" + body +
-                  "\n;@dcc.lto end _leaf\nend\n")
+                  "\n;@dcc.lto end _leaf\n" + suffix + "end\n")
         with tempfile.TemporaryDirectory(prefix="dcc-wide-frame-") as directory:
             folder = Path(directory)
             (folder / "IN.MAC").write_text(source, encoding="ascii")
@@ -61,6 +61,27 @@ class WideFrameTests(unittest.TestCase):
         self.assertNotIn("wide_frame_mask_test", self.optimize(body, ""))
         self.assertNotIn("wide_frame_mask_test", self.optimize(
             body, ";@dcc.frame-cacheable\n;@dcc.volatile-parameter\n"))
+
+    def test_counter_guard_inlines_only_proven_void_loop_calls(self):
+        helper = (";@dcc.lto begin _guard\n_guard:\n;@dcc.frame-cacheable\n"
+                  ";@dcc.return-void\nld hl,2\nadd hl,sp\nld a,(hl)\ninc hl\n"
+                  "ld h,(hl)\nld l,a\nld a,h\nor l\nret nz\n"
+                  "ld hl,(_counter)\ninc hl\nld (_counter),hl\nret\n"
+                  ";@dcc.lto end _guard\n")
+        loop = ("ld de,0\nL0:\nld hl,1\npush hl\ncall _guard\npop bc\n"
+                "inc de\nld a,d\ncp 2\njr c,L0\npop ix\nret")
+        output = self.optimize(loop, suffix=helper)
+        self.assertIn("inline_loop_counter_guard", output)
+        self.assertNotIn("call _guard", output)
+        # BC must still equal the popped argument after the original call.
+        self.assertIn("ld b,h", output)
+        self.assertIn("ld c,l", output)
+        for unsafe in (helper.replace(";@dcc.return-void\n", ""),
+                       helper.replace(";@dcc.return-void", ";@dcc.volatile-parameter\n;@dcc.return-void"),
+                       helper.replace("inc hl\nld (_counter)", "dec hl\nld (_counter)")):
+            self.assertNotIn("inline_loop_counter_guard", self.optimize(loop, suffix=unsafe))
+        self.assertNotIn("inline_loop_counter_guard", self.optimize(
+            loop.replace("jr c,L0\n", ""), suffix=helper))
 
     def test_leaf_argument_return_removes_frame_without_moving_side_effect(self):
         body = ("ld hl,(_calls)\ninc hl\nld (_calls),hl\n"

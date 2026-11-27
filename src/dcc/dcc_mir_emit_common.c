@@ -1132,6 +1132,31 @@ static int mir_byte_dag_parameter(int value, int byte, int depth)
     return -1;
 }
 
+/* A-only operations preserve the address of the last parameter byte read.
+ * Recover that address only through constant RHS arithmetic; other DAG
+ * shapes retain the ordinary SP-relative reload. */
+static int mir_byte_dag_last_parameter(int value,int depth)
+{
+    const struct MirInsn *d=mir_definition(value),*right;
+    int offset=mir_byte_dag_parameter(value,0,0);
+    if(offset>=0)return offset;
+    if(depth>32 || d==NULL)return -1;
+    if(d->opcode==MIR_UNARY && (d->immediate==0 || d->immediate=='+'))
+        return mir_byte_dag_last_parameter(d->src1,depth+1);
+    if(d->opcode!=MIR_BINARY)return -1;
+    right=mir_definition(d->src2);
+    if(right!=NULL && right->opcode==MIR_CONST &&
+       (d->immediate=='+' || d->immediate=='-' || d->immediate=='*' ||
+        d->immediate=='&' || d->immediate=='|' || d->immediate=='^'))
+        return mir_byte_dag_last_parameter(d->src1,depth+1);
+    if(d->immediate=='*') {
+        const struct MirInsn *left=mir_definition(d->src1);
+        if(left!=NULL && left->opcode==MIR_CONST)
+            return mir_byte_dag_last_parameter(d->src2,depth+1);
+    }
+    return -1;
+}
+
 /* out == NULL performs bounded validation before any text is emitted. */
 static int mir_emit_byte_dag(MirStream *out, int value, int stack_bytes,
                              int depth, int *budget)
@@ -1140,6 +1165,7 @@ static int mir_emit_byte_dag(MirStream *out, int value, int stack_bytes,
     const struct MirInsn *right;
     const char *op;
     int offset;
+    int left_value,right_value;
     int left_offset;
     unsigned int immediate;
 
@@ -1164,12 +1190,36 @@ static int mir_emit_byte_dag(MirStream *out, int value, int stack_bytes,
         (d->immediate == 0 || d->immediate == '+'))
         return mir_emit_byte_dag(out, d->src1, stack_bytes, depth + 1, budget);
     if (d->opcode != MIR_BINARY ||
-        (d->immediate != '&' && d->immediate != '|' && d->immediate != '^'))
+        (d->immediate != '&' && d->immediate != '|' && d->immediate != '^' &&
+         d->immediate != '+' && d->immediate != '-' && d->immediate != '*'))
         return 0;
-    op = d->immediate == '&' ? "and" : d->immediate == '|' ? "or" : "xor";
-    if (!mir_emit_byte_dag(out, d->src1, stack_bytes, depth + 1, budget))
+    left_value=d->src1;right_value=d->src2;
+    right=mir_definition(right_value);
+    if(d->immediate=='*' && (right==NULL || right->opcode!=MIR_CONST)) {
+        right=mir_definition(left_value);
+        if(right==NULL || right->opcode!=MIR_CONST)return 0;
+        left_value=d->src2;right_value=d->src1;
+    }
+    op = d->immediate == '&' ? "and" : d->immediate == '|' ? "or" :
+         d->immediate=='^'?"xor":d->immediate=='+'?"add a,":"sub";
+    if (!mir_emit_byte_dag(out, left_value, stack_bytes, depth + 1, budget))
         return 0;
-    right = mir_definition(d->src2);
+    if(d->immediate=='*') {
+        unsigned multiplier=(unsigned)((unsigned long)right->immediate&255UL);
+        int bit=7;
+        if(out!=NULL) {
+            if(multiplier==0)mir_stream_puts("\txor a\n",out);
+            else {
+                while(!(multiplier&(1U<<bit)))--bit;
+                if(multiplier&(multiplier-1))mir_stream_puts("\tld c,a\n",out);
+                while(bit-->0) {
+                    mir_stream_puts("\tadd a,a\n",out);
+                    if(multiplier&(1U<<bit))mir_stream_puts("\tadd a,c\n",out);
+                }
+            }
+        }
+        return 1;
+    }
     if (right != NULL && right->opcode == MIR_CONST) {
         immediate = (unsigned int)((unsigned long)right->immediate & 255UL);
         if (out != NULL &&
@@ -1178,9 +1228,9 @@ static int mir_emit_byte_dag(MirStream *out, int value, int stack_bytes,
             mir_stream_printf(out, "\t%s %u\n", op, immediate);
         return 1;
     }
-    offset = mir_byte_dag_parameter(d->src2, 0, 0);
+    offset = mir_byte_dag_parameter(right_value, 0, 0);
     if (offset >= 0) {
-        left_offset = mir_byte_dag_parameter(d->src1, 0, 0);
+        left_offset = mir_byte_dag_last_parameter(left_value, 0);
         if (out != NULL) {
             if (left_offset >= 0 && offset == left_offset + 1)
                 mir_stream_puts("\tinc hl\n", out);
@@ -1194,7 +1244,7 @@ static int mir_emit_byte_dag(MirStream *out, int value, int stack_bytes,
     }
     if (out != NULL)
         mir_stream_puts("\tpush af\n", out);
-    if (!mir_emit_byte_dag(out, d->src2, stack_bytes + 2, depth + 1, budget))
+    if (!mir_emit_byte_dag(out, right_value, stack_bytes + 2, depth + 1, budget))
         return 0;
     if (out != NULL) {
         mir_stream_puts("\tld c,a\n\tpop af\n", out);
@@ -1216,8 +1266,11 @@ int mir_try_emit_byte_return_dag(MirStream *out)
         return 0;
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *d = &mir.insns[i];
+        if (d->memory_flags & MIR_MEMORY_FLAG_VOLATILE)
+            return 0;
         if (d->opcode == MIR_BINARY &&
-            (d->immediate == '&' || d->immediate == '|' || d->immediate == '^'))
+            (d->immediate == '&' || d->immediate == '|' || d->immediate == '^' ||
+             d->immediate == '+' || d->immediate == '-' || d->immediate == '*'))
             bitwise = 1;
         if (d->opcode == MIR_RETURN) {
             if (result != NULL)

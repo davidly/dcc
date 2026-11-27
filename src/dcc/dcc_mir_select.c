@@ -4729,6 +4729,8 @@ void mir_end_function(void)
             if(mir.insns[declaration].opcode==MIR_OPAQUE)cacheable=0;
         if(cacheable)fputs(";@dcc.frame-cacheable\n",destination);
     }
+    if(type_ptr_depth(mir.return_type)==0 && (mir.return_type&15)==TYPE_VOID)
+        fputs(";@dcc.return-void\n",destination);
     selected_hash = mir_copy_selected_stream(generated, destination);
 
     if (mir.report_mode)
