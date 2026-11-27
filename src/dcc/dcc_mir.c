@@ -16290,13 +16290,15 @@ static int mir_low_bit_demand(int value, int *budget)
             type_ptr_depth(use->type) != 0 ||
             type_is_bool(use->type))
             return 32;
-        if (use->opcode == MIR_UNARY && use->immediate == 0) {
+        if (use->opcode == MIR_UNARY &&
+            (use->immediate == 0 || use->immediate == '-' ||
+             use->immediate == '~')) {
             needed = mir_low_bit_demand(use->dst, budget);
             if (needed > type_size(use->type) * 8)
                 needed = type_size(use->type) * 8;
         } else if (use->opcode == MIR_BINARY &&
                    (use->immediate == '+' || use->immediate == '-' ||
-                    use->immediate == '&' || use->immediate == '|' ||
+                    use->immediate == '*' || use->immediate == '&' || use->immediate == '|' ||
                     use->immediate == '^') &&
                    !type_is_float(use->secondary_offset) &&
                    type_ptr_depth(use->secondary_offset) == 0) {
@@ -16397,6 +16399,242 @@ static int mir_narrow_demanded_right_shifts(void)
     }
     mir_invalidate_use_cache();
     return changed;
+}
+
+/* Modular integer arithmetic needs only its demanded low bits. Keep all
+ * original loads/calls, and insert explicit operand conversions so allocation
+ * and helper selection see the same word-width operation as emission. Division,
+ * right shifts and variable left shifts cannot discard their high bits here. */
+static int mir_narrow_demanded_arithmetic(void)
+{
+    int i, changed = 0;
+
+    for (i = mir.count - 1; i >= 0; --i) {
+        struct MirInsn *operation = &mir.insns[i];
+        int left, right, value, operand, demand;
+        int binary = operation->opcode == MIR_BINARY;
+        int unary = operation->opcode == MIR_UNARY;
+
+        if ((!binary && !unary) || type_size(operation->type) != 4 ||
+            type_is_float(operation->type) || type_ptr_depth(operation->type) ||
+            operation->memory_flags != 0 || operation->word_divmod_partner != 0)
+            continue;
+        if (binary && (type_size(operation->secondary_offset) != 4 ||
+            type_is_float(operation->secondary_offset) ||
+            type_ptr_depth(operation->secondary_offset) ||
+            (operation->immediate != '+' && operation->immediate != '-' &&
+             operation->immediate != '*' && operation->immediate != '&' &&
+             operation->immediate != '|' && operation->immediate != '^')))
+            continue;
+        if (unary && operation->immediate != '-' && operation->immediate != '~')
+            continue;
+        demand = mir_value_low_bit_demand(operation->dst);
+        if (demand <= 0 || demand > 16)
+            continue;
+        left = operation->src1;
+        right = operation->src2;
+        operation->type = TYPE_INT | TYPE_UNSIGNED;
+        operation->secondary_offset = binary ? operation->type : 0;
+        for (operand = 0; operand < (binary ? 2 : 1); ++operand) {
+            struct MirInsn *conversion;
+            value = mir_new_value();
+            conversion = mir_insert_instruction_before(i, MIR_UNARY);
+            conversion->dst = value;
+            conversion->src1 = operand == 0 ? left : right;
+            conversion->type = TYPE_INT | TYPE_UNSIGNED;
+            conversion->immediate = 0;
+            ++i;
+            if (operand == 0)
+                mir.insns[i].src1 = value;
+            else
+                mir.insns[i].src2 = value;
+        }
+        i -= binary ? 2 : 1;
+        mir_invalidate_use_cache();
+        ++changed;
+    }
+    return changed;
+}
+
+/* Collect a closed, nontrapping address calculation invariant in a natural
+ * loop. Loads are permitted only from unescaped scalar homes with no writes
+ * in the loop; arbitrary memory reads and calls are never speculated. */
+static int mir_collect_invariant_address(int value, int head, int back,
+    int *components, int *count, int depth)
+{
+    const struct MirInsn *d = mir_definition(value);
+    int at, i;
+
+    if (d == NULL || depth > 16)
+        return 0;
+    at = (int)(d - mir.insns);
+    if (at < head)
+        return mir_instruction_dominates_by_reachability(at, head);
+    if (at > back || d->memory_flags != 0)
+        return 0;
+    for (i = 0; i < *count; ++i)
+        if (components[i] == at)
+            return 1;
+    switch (d->opcode) {
+    case MIR_CONST:
+    case MIR_ADDRESS:
+        break;
+    case MIR_LOAD:
+        if (d->object < 0 || d->object >= mir.object_count ||
+            (mir.objects[d->object].storage != SC_LOCAL &&
+             mir.objects[d->object].storage != SC_PARAM) ||
+            mir_object_address_taken(d->object) || d->bit_width != 0 ||
+            type_size(d->type) > 2 || type_is_float(d->type))
+            return 0;
+        for (i = head; i <= back; ++i)
+            if (mir.insns[i].opcode == MIR_CALL ||
+                mir.insns[i].opcode == MIR_CALL_AGGREGATE ||
+                mir.insns[i].opcode == MIR_OPAQUE)
+                return 0;
+        for (i = head; i <= back; ++i)
+            if ((mir.insns[i].opcode == MIR_STORE ||
+                 mir.insns[i].opcode == MIR_VLA_SAVE ||
+                 mir.insns[i].opcode == MIR_VLA_RESTORE) &&
+                mir.insns[i].object == d->object)
+                return 0;
+        break;
+    case MIR_MEMBER_ADDRESS:
+        if (!mir_collect_invariant_address(d->src1, head, back,
+                                           components, count, depth + 1))
+            return 0;
+        break;
+    case MIR_INDEX_ADDRESS:
+        if (!mir_collect_invariant_address(d->src1, head, back,
+                                           components, count, depth + 1) ||
+            !mir_collect_invariant_address(d->src2, head, back,
+                                           components, count, depth + 1))
+            return 0;
+        break;
+    default:
+        return 0;
+    }
+    if (*count >= 16)
+        return 0;
+    components[(*count)++] = at;
+    return 1;
+}
+
+/* Give an unlabeled byte-loop entry a precise predecessor identity.
+ * Running as a normalization alternative keeps existing exact schedules
+ * available when their original CFG is already better. */
+int mir_label_byte_loop_preheader(void)
+{
+    int head, i, has_byte, back, start;
+
+    if (opt_debug || mir.has_vla || mir.has_runtime_stride_param || mir.count > 1000)
+        return 0;
+    for (head = 1; head < mir.count; ++head) {
+        if (mir.insns[head].opcode != MIR_LABEL ||
+            mir.insns[head - 1].opcode == MIR_JUMP ||
+            mir.insns[head - 1].opcode == MIR_BRANCH_FALSE ||
+            mir.insns[head - 1].opcode == MIR_RETURN)
+            continue;
+        start = mir_block_start_for_instruction(head - 1);
+        if (mir.insns[start].opcode == MIR_LABEL)
+            continue;
+        has_byte = 0;
+        for (i = head + 1; i < mir.count && i < head + 10; ++i) {
+            if (mir.insns[i].opcode == MIR_BRANCH_FALSE || mir.insns[i].opcode == MIR_LABEL)
+                break;
+            if (mir.insns[i].opcode == MIR_LOAD && mir.insns[i].object >= 0 &&
+                mir.insns[i].type == (TYPE_CHAR | TYPE_UNSIGNED) &&
+                mir.insns[i].memory_flags == 0 &&
+                !mir_object_address_taken(mir.insns[i].object))
+                has_byte = 1;
+        }
+        if (!has_byte)
+            continue;
+        for (back = i + 1; back < mir.count; ++back)
+            if (mir.insns[back].opcode == MIR_JUMP &&
+                mir.insns[back].label == mir.insns[head].label) {
+                int label = mir_new_label();
+                struct MirInsn *entry = mir_insert_instruction_before(start, MIR_LABEL);
+                entry->label = label;
+                mir_invalidate_use_cache();
+                return 1;
+            }
+    }
+    return 0;
+}
+
+int mir_hoist_loop_address(void)
+{
+    int back, head, i, j, edge;
+
+    if (opt_debug || mir.has_vla || mir.has_runtime_stride_param || mir.count > 1000)
+        return 0;
+    for (back = 0; back < mir.count; ++back) {
+        int single_entry = 1;
+        if (mir.insns[back].opcode != MIR_JUMP)
+            continue;
+        head = mir_find_label(mir.insns[back].label);
+        if (head <= 0 || head >= back)
+            continue;
+        /* Keep this transformation to byte-index loops. Hoisting addresses
+         * in larger word-indexed kernels can add long-lived spills and make
+         * already strength-reduced code larger after peephole optimization. */
+        {
+            int byte_index = 0;
+            for (i = head + 1; i < back && i < head + 12; ++i) {
+                if (mir.insns[i].opcode == MIR_BRANCH_FALSE ||
+                    mir.insns[i].opcode == MIR_LABEL)
+                    break;
+                if (mir.insns[i].opcode == MIR_PHI &&
+                    mir.insns[i].type == (TYPE_CHAR | TYPE_UNSIGNED))
+                    byte_index = 1;
+            }
+            if (!byte_index)
+                continue;
+        }
+        for (i = 0; i < mir.count && single_entry; ++i) {
+            if (i >= head && i <= back)
+                continue;
+            for (edge = 0; edge < mir.insns[i].successor_count; ++edge) {
+                int target = mir.insns[i].successors[edge];
+                if (target >= head && target <= back &&
+                    !(i == head - 1 && target == head &&
+                      mir.insns[i].opcode != MIR_JUMP &&
+                      mir.insns[i].opcode != MIR_BRANCH_FALSE))
+                    single_entry = 0;
+            }
+        }
+        if (!single_entry)
+            continue;
+        for (i = head + 1; i < back; ++i) {
+            int components[16], count = 0, safe = 1;
+            struct MirInsn copies[16];
+            if (mir.insns[i].opcode != MIR_INDEX_ADDRESS ||
+                mir.insns[i].immediate <= 1 ||
+                !mir_collect_invariant_address(mir.insns[i].dst, head, back,
+                                               components, &count, 0))
+                continue;
+            for (j = 0; j < count; ++j) {
+                int use;
+                copies[j] = mir.insns[components[j]];
+                for (use = mir_next_use(copies[j].dst, -1); use >= 0;
+                     use = mir_next_use(copies[j].dst, use))
+                    if (use < head || use > back)
+                        safe = 0;
+            }
+            if (!safe)
+                continue;
+            for (j = 0; j < count; ++j)
+                mir_make_nop(&mir.insns[components[j]]);
+            for (j = 0; j < count; ++j) {
+                struct MirInsn *inserted =
+                    mir_insert_instruction_before(head + j, copies[j].opcode);
+                *inserted = copies[j];
+            }
+            mir_invalidate_use_cache();
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* A narrow constant just folded from a unary that a long operation reads
@@ -17283,6 +17521,7 @@ int mir_optimize_integer_expressions(void)
     changed += mir_fold_byte_cycle_word_bounds();
     changed += mir_fold_byte_false_edge_checks();
     changed += mir_narrow_demanded_right_shifts();
+    changed += mir_narrow_demanded_arithmetic();
     mir_invalidate_use_cache();
     mir_use_cache_scope_active = saved_scope;
     mir_extended_integer_constant_conversion_fold_count =

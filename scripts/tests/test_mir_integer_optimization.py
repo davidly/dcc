@@ -34,6 +34,44 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return output_path.read_text(encoding="ascii"), result.stderr
 
+    def test_demanded_low_word_multiply_avoids_long_helper(self):
+        for typename in ("uint32_t", "int32_t"):
+            source = ("#include <stdint.h>\nuint16_t probe(" + typename +
+                      " a) { return (uint16_t)(a*3L); }")
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(typename=typename, options=options):
+                    assembly = self.compile(source, options)
+                    self.assertNotIn("call __lmul", assembly)
+        # A second, full-width consumer must prevent modular narrowing.
+        source = ("#include <stdint.h>\nuint32_t probe(uint32_t a, uint32_t b) {"
+                  " uint32_t product=a*b; return product ^ (uint8_t)product; }")
+        self.assertIn("call __lmul", self.compile(source))
+
+    def test_affine_byte_loop_preserves_line_events(self):
+        source = ("void probe(unsigned char *p, unsigned char first) {\n"
+                  " unsigned char i;\n"
+                  " for(i=0;i<11;++i)\n"
+                  "  p[i]=first+i;\n"
+                  "}\n")
+        assembly = self.compile(source, ("-gline",))
+        self.assertIn("MIR byte-affine-loop", assembly)
+        self.assertRegex(assembly, r';@dcc-line [^\n]+ 4\n')
+
+    def test_affine_byte_loop_keeps_calls_volatile_and_live_index(self):
+        body = "unsigned char i; for(i=0;i<11;++i) p[i]=first+i;"
+        source = "void probe(unsigned char *p, unsigned char first) { " + body + " }"
+        self.assertIn("MIR byte-affine-loop", self.compile(source))
+        near_misses = (
+            source.replace("unsigned char *p", "volatile unsigned char *p"),
+            "extern void observe(void); " + source.replace("p[i]=first+i;",
+                "{ p[i]=first+i; observe(); }"),
+            source.replace("void probe", "int probe").replace("; }", "; return i; }"),
+            source.replace("p[i]=first+i;", "{ p[i]=first+i; ++first; }"),
+        )
+        for source in near_misses:
+            with self.subTest(source=source):
+                self.assertNotIn("MIR byte-affine-loop", self.compile(source))
+
     def test_nested_wide_increment_compare_reads_the_incremented_home(self):
         for typename in ("int32_t", "uint32_t"):
             source = ("#include <stdint.h>\n" + typename + " limit = 3; " +

@@ -4485,6 +4485,13 @@ void mir_end_function(void)
         const char *alternative_candidate = "none";
         int alternative_label_id = candidate_label_base;
         int original_count = mir.count;
+        int *original_debug_points = NULL;
+        int original_declaration_points[1024];
+        int original_scope_ends[1024];
+        int debug_count = mir.debug_event_count;
+        int declaration_count = mir.declaration_count;
+        int metadata_index;
+
         const char *diagnostic_function =
             getenv("DCC_MIR_SELECT_FUNCTION");
         enum MirStrictSpilledProfile strict_profile;
@@ -4507,6 +4514,25 @@ void mir_end_function(void)
         int divmod_changed = 0;
         int use_alternative = 0;
 
+        /* Insertion shifts source/debug coordinates as well as instructions.
+         * A declined normalization must restore both before the next candidate. */
+        if (debug_count < 0 || debug_count > mir.debug_event_capacity)
+            debug_count = 0;
+        if (declaration_count < 0 || declaration_count > 1024)
+            declaration_count = 0;
+        if (debug_count > 0) {
+            original_debug_points = (int *)malloc((size_t)debug_count * sizeof(int));
+            if (original_debug_points == NULL)
+                fatal("out of memory saving MIR normalization metadata");
+            for (metadata_index = 0; metadata_index < debug_count; ++metadata_index)
+                original_debug_points[metadata_index] = mir.debug_events[metadata_index].point;
+        }
+        if (declaration_count > 0) {
+            memcpy(original_declaration_points, mir.declaration_placeholders,
+                   (size_t)declaration_count * sizeof(int));
+            memcpy(original_scope_ends, mir.declaration_scope_ends,
+                   (size_t)declaration_count * sizeof(int));
+        }
         if (original_count > 0) {
             original_insns = (struct MirInsn *)malloc(
                 (size_t)original_count * sizeof(*original_insns));
@@ -4521,7 +4547,20 @@ void mir_end_function(void)
             boolean_phi_changed =
                 mir_boolean_phi_branch_simplification_count() > 0;
         } else if (normalization_pass == 1) {
-            integer_changed = mir_optimize_integer_expressions();
+            int address_pass;
+            for (address_pass = 0; address_pass < 8 &&
+                 mir_label_byte_loop_preheader(); ++address_pass) {
+                integer_changed = 1;
+                if (!mir_verify_and_dump())
+                    break;
+            }
+            for (address_pass = 0; address_pass < 8 &&
+                 mir_hoist_loop_address(); ++address_pass) {
+                integer_changed = 1;
+                if (!mir_verify_and_dump())
+                    break;
+            }
+            integer_changed += mir_optimize_integer_expressions();
         } else if (normalization_pass == 2) {
             stores_changed = mir_combine_little_endian_byte_stores();
         } else {
@@ -4567,6 +4606,14 @@ void mir_end_function(void)
                 if (original_count > 0)
                     memcpy(mir.insns, original_insns,
                            (size_t)original_count * sizeof(*original_insns));
+                for (metadata_index = 0; metadata_index < debug_count; ++metadata_index)
+                    mir.debug_events[metadata_index].point = original_debug_points[metadata_index];
+                if (declaration_count > 0) {
+                    memcpy(mir.declaration_placeholders, original_declaration_points,
+                           (size_t)declaration_count * sizeof(int));
+                    memcpy(mir.declaration_scope_ends, original_scope_ends,
+                           (size_t)declaration_count * sizeof(int));
+                }
                 if (boolean_phi_changed)
                     mir_reset_boolean_phi_branch_simplification_count();
                 if (!mir_verify_and_dump())
@@ -4575,6 +4622,7 @@ void mir_end_function(void)
             mir_compute_dead_local_suffix();
             label_id = selected_label_id;
         }
+        free(original_debug_points);
         free(original_insns);
     }
     if (failure_reason == NULL && generated != NULL && !opt_debug) {

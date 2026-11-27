@@ -782,6 +782,8 @@ int mir_regional_before_instruction(MirStream *out, int instruction);
 void mir_regional_after_instruction(int instruction);
 void mir_resolve_deferred_metadata(void);
 int mir_hoist_readonly_parameter_expression(void);
+int mir_hoist_loop_address(void);
+int mir_label_byte_loop_preheader(void);
 int mir_optimize_integer_expressions(void);
 int mir_value_low_bit_demand(int value);
 int mir_word_values_have_same_bits(int left, int right);
