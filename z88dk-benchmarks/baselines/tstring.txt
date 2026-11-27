@@ -1,0 +1,26 @@
+testing strlen
+testing strchr and strrchr
+testing strstr
+testing memcpy and memcmp
+testing printf
+ 1 ( 1): a
+18 (18): lmnopqrstuvwxyzabc
+35 (35): wxyzabcdefghijklmnopqrstuvwxyzabcde
+52 (52): hijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefg
+69 (69): stuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghi
+16 (16): defghijklmnopqrs
+33 (33): opqrstuvwxyzabcdefghijklmnopqrstu
+50 (50): zabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvw
+67 (67): klmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxy
+14 (14): hijklmnopqrstu
+31 (31): stuvwxyzabcdefghijklmnopqrstuvw
+48 (48): defghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxy
+65 (65): opqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyza
+12 (12): zabcdefghijk
+29 (29): klmnopqrstuvwxyzabcdefghijklm
+46 (46): vwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmno
+63 (63): ghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopq
+10 (10): defghijklm
+27 (27): opqrstuvwxyzabcdefghijklmno
+44 (44): zabcdefghijklmnopqrstuvwxyzabcdefghijklmnopq
+tnarrow completed with great success

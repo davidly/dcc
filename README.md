@@ -211,12 +211,14 @@ Generally, dcc compares very well with all other compilers that target CP/M, esp
   - e.c: This computes the first 192 digits of e. It measures integer division and mod operations as well as loop and array performance.
   - tm.c: Test Malloc. This is C-only and measures performance of the allocator, memset, and scanning an arrary for an expected value. Many of the C compilers for CP/M can't run it because they don't have an allocator or don't implement free().
   - ttt.c: Proves you can't win at tic-tac-toe if the opponent is competent. Tests function call performance as well as loop and array performance. Always remember it took WOPR 72 seconds to solve this problem in the 1983 movie War Games. A 2Mhz 8080 in 1974 could solve this in less than 3 seconds. Movie magic.
-  - pihex.c: Computes PI in base 16. This is C-only and some of the compilers can't build or run it due to a variety of bugs. It measures unsigned long mod and floating point performance. I spent 90 minutes trying to get the two forms of ZCC to build and run it, ran into many compiler and C runtime bugs, and gave up. HiSoft v4.11 has a C runtime bug where if you cast 3.963512 to an int it gives you 4. After I worked around that and other bugs, code from that compiler ran really well -- faster than dcc.
+  - pihex.c: Computes PI in base 16. This is C-only and some of the compilers can't build or run it due to a variety of bugs. It measures unsigned long mod and floating point performance. Both z88dk backends now build and run it using the compatibility helpers in `z88dk-benchmarks/`. HiSoft v4.11 has a C runtime bug where if you cast 3.963512 to an int it gives you 4. After I worked around that and other bugs, code from that compiler ran really well -- faster than dcc.
   - mm.c: Another BYTE magazine classic from October 1982. Measures floating point initialization, addition, and multiplication performance.
   - tstring.c: Measures performance of strlen, strchr, strrchr, strstr, memcmp, memcpy, memset, memchr, rand, and integer modulus. Most compilers don't implement all of these and need them supplied.
   - tbig.c: Test sequential and random file i/o on the biggest file size CP/M 2.2 supports: 8MB. 
 
-Benchmark times are in milliseconds on a 4Mhz Z80. CP/M file sizes are rounded up to the next multiple of 128 bytes due to how the file system works.
+Benchmark times are simulated seconds on a 4MHz Z80. CP/M file sizes are rounded up to the next multiple of 128 bytes due to how the file system works.
+
+The [z88dk benchmark package](z88dk-benchmarks/README.md) contains the sources, input fixtures, build/run scripts, and reference results needed to reproduce the sccz80 and zsdcc rows. It uses Python 3.7 or later and a consistent 200,000 allocation-attempt budget for zsdcc.
 
 <img alt="table" src="images/table.jpg" />
 

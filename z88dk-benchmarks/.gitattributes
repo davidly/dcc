@@ -1,0 +1,10 @@
+# Preserve the recorded snapshot bytes, including CP/M input line endings.
+# Interpreter cycle counts and the input hashes depend on those exact bytes.
+* -text
+# Imported source/output snapshots retain their existing whitespace.
+*.c whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
+*.h whitespace=cr-at-eol
+*.bat whitespace=cr-at-eol
+*.csv whitespace=cr-at-eol
+fixtures/* whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
+baselines/* whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
