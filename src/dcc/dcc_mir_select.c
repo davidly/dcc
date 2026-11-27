@@ -4477,7 +4477,7 @@ void mir_end_function(void)
     }
     for (normalization_pass = 0;
          failure_reason == NULL && generated != NULL && !opt_debug &&
-             normalization_pass < 9;
+             normalization_pass < 10;
          ++normalization_pass) {
         struct MirInsn *original_insns = NULL;
         MirStream *alternative = NULL;
@@ -4573,12 +4573,14 @@ void mir_end_function(void)
             integer_changed = mir_fold_normalized_byte_conversions();
         } else if (normalization_pass == 7) {
             integer_changed = mir_optimize_byte_checks();
-        } else {
+        } else if (normalization_pass == 8) {
             int range_pass;
             for (range_pass = 0; range_pass < 8 && mir_fold_byte_range_checks(); ++range_pass) {
                 integer_changed = 1;
                 if (!mir_verify_and_dump()) break;
             }
+        } else {
+            integer_changed = mir_reuse_wide_equality_predicates();
         }
         if ((boolean_phi_changed || integer_changed || stores_changed ||
              divmod_changed) &&

@@ -785,6 +785,7 @@ int mir_hoist_readonly_parameter_expression(void);
 int mir_hoist_loop_address(void);
 int mir_label_byte_loop_preheader(void);
 int mir_optimize_integer_expressions(void);
+int mir_reuse_wide_equality_predicates(void);
 int mir_narrow_demanded_loads(void);
 int mir_fold_normalized_byte_conversions(void);
 int mir_optimize_byte_checks(void);

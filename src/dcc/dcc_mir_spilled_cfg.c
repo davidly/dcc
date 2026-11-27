@@ -75,6 +75,7 @@ static int mir_register_iy_address_root = -1;
 static int mir_register_iy_row_consumer = -1;
 static int mir_register_iy_frame_shift;
 static int mir_fused_compare_is_const_zero_rhs(int compare_index);
+static int mir_fused_compare_small_word_equality(int compare_index);
 static int mir_fused_compare_is_const_zero_lhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static int mir_fused_compare_is_signed_byte_constant(int compare_index);
@@ -963,6 +964,7 @@ static int mir_const_is_transparent_zero_rhs_operand(int instruction)
         return 0;
     if (mir_binary_is_fusable_comparison(instruction + 1) > 0 &&
         (mir_fused_compare_is_const_zero_rhs(instruction + 1) ||
+         mir_fused_compare_small_word_equality(instruction + 1) ||
          mir_fused_compare_is_signed_zero_sign_test(instruction + 1)))
         return 1;
     return constant->immediate == 0 &&
@@ -16551,6 +16553,7 @@ static int mir_can_forward_stack_to_binary_const(int value)
      * zero-frame function consumes it explicitly at the comparison. */
     if (mir_binary_is_fusable_comparison(binary_instruction) > 0 &&
         (mir_fused_compare_is_const_zero_rhs(binary_instruction) ||
+         mir_fused_compare_small_word_equality(binary_instruction) ||
          mir_fused_compare_is_signed_zero_sign_test(binary_instruction)))
         return -1;
     /* A materialized zero test never pops the handoff either; the adjacent
@@ -16652,6 +16655,7 @@ static int mir_can_forward_stack_to_binary_rhs(int value)
      * skip the pop this predicate promises the caller will perform. */
     if (mir_binary_is_fusable_comparison(binary_instruction) > 0 &&
         (mir_fused_compare_is_const_zero_rhs(binary_instruction) ||
+         mir_fused_compare_small_word_equality(binary_instruction) ||
          mir_fused_compare_is_signed_zero_sign_test(binary_instruction)))
         return -1;
     for (instruction = binary_instruction + 1;
@@ -26593,6 +26597,31 @@ static int mir_fused_compare_is_const_zero_rhs(int compare_index)
            (right->immediate & 0xffffL) == 0;
 }
 
+/* Small word equality can adjust/test HL without loading another pair.
+ * Both bytes participate, including after signed-char promotion. Limit
+ * destructive tests to single-use loads: computed loop values have other
+ * forwarding opportunities that are cheaper than this sequence. */
+static int mir_fused_compare_small_word_equality(int compare_index)
+{
+    const struct MirInsn *compare, *left, *right;
+    unsigned long bits;
+    if (compare_index < 0 || compare_index >= mir.count) return 0;
+    compare = &mir.insns[compare_index];
+    if ((compare->immediate != TOK_EQ && compare->immediate != TOK_NE) ||
+        mir_value_use_count(compare->src1) != 1 ||
+        type_size(compare->secondary_offset) != 2 ||
+        type_ptr_depth(compare->secondary_offset) || type_is_float(compare->secondary_offset) ||
+        mir_binary_is_fusable_comparison(compare_index) <= 0) return 0;
+    left = mir_definition(compare->src1);
+    if (left == NULL || (left->opcode != MIR_LOAD &&
+                         left->opcode != MIR_LOAD_INDIRECT)) return 0;
+    right = mir_definition(compare->src2);
+    if (right == NULL || right->opcode != MIR_CONST ||
+        type_size(right->type) > 2 || mir_value_use_count(right->dst) != 1) return 0;
+    bits = (unsigned long)right->immediate & 0xffffUL;
+    return bits == 1UL || bits == 2UL || bits == 65535UL || bits == 65534UL;
+}
+
 static int mir_fused_compare_is_const_zero_lhs(int compare_index)
 {
     const struct MirInsn *compare = &mir.insns[compare_index];
@@ -26741,7 +26770,18 @@ static int mir_emit_fused_comparison_branch(MirStream *out, const int *labels,
             out, labels, true_condition, compare_index + 1 + negate,
             target, branch->label);
     }
-    if ((operation == TOK_EQ || operation == TOK_NE) &&
+    if (mir_fused_compare_small_word_equality(compare_index)) {
+        unsigned long bits = (unsigned long)right->immediate & 0xffffUL;
+        if (bits == 65535UL || bits == 65534UL) {
+            mir_stream_puts("\tinc hl\n", out);
+            if (bits == 65534UL) mir_stream_puts("\tinc hl\n", out);
+            mir_stream_puts("\tld a,h\n\tor l\n", out);
+        } else if (bits == 1UL) {
+            mir_stream_puts("\tdec l\n\tld a,h\n\tor l\n", out);
+        } else {
+            mir_stream_puts("\tld a,l\n\txor 2\n\tor h\n", out);
+        }
+    } else if ((operation == TOK_EQ || operation == TOK_NE) &&
         (mir_fused_compare_is_const_zero_rhs(compare_index) ||
          mir_fused_compare_is_const_zero_lhs(compare_index))) {
         /* Item 25: DE was never loaded for this case (the caller skips it
@@ -27898,6 +27938,26 @@ int mir_wide_operation_is_signed_const_relational(const struct MirInsn *insn)
     return right != NULL && right->opcode == MIR_CONST;
 }
 
+/* Unsigned bounds aligned to a whole byte only inspect the upper bytes:
+ * x <= 65535 and x < 65536 both mean that the high word is zero. */
+static int mir_wide_unsigned_byte_bound(const struct MirInsn *insn)
+{
+    const struct MirInsn *right;
+    unsigned long bits;
+    int shift;
+    if (insn->opcode != MIR_BINARY ||
+        insn->secondary_offset != (TYPE_LONG | TYPE_UNSIGNED)) return 0;
+    right = mir_definition(insn->src2);
+    if (right == NULL || right->opcode != MIR_CONST) return 0;
+    bits = mir_wide_and_constant_mask(right);
+    if (insn->immediate == TOK_LE || insn->immediate == '>')
+        bits = (bits + 1UL) & 0xffffffffUL;
+    else if (insn->immediate != '<' && insn->immediate != TOK_GE)
+        return 0;
+    shift = mir_ulong_log2_pow2(bits);
+    return shift == 8 || shift == 16 || shift == 24 ? shift / 8 : 0;
+}
+
 /* Immediate integer operations consume DE:HL directly. Classify this
  * before loading operands so no constant frame slot or stack pair is needed. */
 static int mir_wide_operation_is_integer_immediate(const struct MirInsn *insn)
@@ -27905,11 +27965,23 @@ static int mir_wide_operation_is_integer_immediate(const struct MirInsn *insn)
     const struct MirInsn *right;
     if (insn->opcode != MIR_BINARY || !type_is_long(insn->secondary_offset)) return 0;
     right = mir_definition(insn->src2);
-    return right != NULL && right->opcode == MIR_CONST &&
-           (insn->immediate == '+' || insn->immediate == '-' ||
+    if (right == NULL || right->opcode != MIR_CONST) return 0;
+    if ((insn->immediate == TOK_EQ || insn->immediate == TOK_NE) &&
+        mir_wide_and_constant_mask(right) != 0) {
+        const struct MirInsn *left = mir_definition(insn->src1);
+        int depth = 0;
+        while (left != NULL && left->opcode == MIR_UNARY && left->immediate == 0 &&
+               type_is_long(left->type) && ++depth < 8)
+            left = mir_definition(left->src1);
+        /* Keep indirect snapshots on the existing address-based schedule.
+         * Removing their constant slot can otherwise select a larger IY
+         * address plan whose extra traffic outweighs this local saving. */
+        if (left != NULL && left->opcode == MIR_LOAD_INDIRECT) return 0;
+    }
+    return (insn->immediate == '+' || insn->immediate == '-' ||
             insn->immediate == '&' || insn->immediate == '|' || insn->immediate == '^' ||
-            ((insn->immediate == TOK_EQ || insn->immediate == TOK_NE) &&
-             mir_wide_and_constant_mask(right) == 0) ||
+            insn->immediate == TOK_EQ || insn->immediate == TOK_NE ||
+            mir_wide_unsigned_byte_bound(insn) ||
             (insn->immediate == '*' && mir_plan_wide_constant_multiply(
                 (unsigned long)right->immediate, NULL)));
 }
@@ -27923,9 +27995,15 @@ static void mir_emit_wide_integer_immediate(MirStream *out, const struct MirInsn
         if (!mir_plan_wide_constant_multiply(bits, &plan))
             fatal("invalid immediate long multiply plan");
         mir_emit_wide_constant_multiply(out, &plan);
-    } else if (op == TOK_EQ || op == TOK_NE) {
+    } else if (is_cmp_op(op)) {
         int done = new_label();
-        if (bits == 0)
+        int first_byte = mir_wide_unsigned_byte_bound(insn);
+        if (first_byte) {
+            mir_stream_printf(out, "\tld a,%c\n", "lhed"[first_byte]);
+            for (byte = first_byte + 1; byte < 4; ++byte)
+                mir_stream_printf(out, "\tor %c\n", "lhed"[byte]);
+            if (first_byte == 3) mir_stream_puts("\tor a\n", out);
+        } else if (bits == 0)
             mir_stream_puts("\tld a,l\n\tor h\n\tor e\n\tor d\n", out);
         else {
             for (byte = 0; byte < 4; ++byte) {
@@ -27938,7 +28016,7 @@ static void mir_emit_wide_integer_immediate(MirStream *out, const struct MirInsn
         }
         if (flags_only) return;
         mir_stream_printf(out, "\tld hl,0\n\tjr %s,L%d\n\tinc l\nL%d:\n",
-                          op == TOK_EQ ? "nz" : "z", done, done);
+                          op == TOK_EQ || op == '<' || op == TOK_LE ? "nz" : "z", done, done);
     } else if ((op == '+' || op == '-') && bits == 1) {
         int done = new_label();
         mir_stream_puts(op == '+' ? "\tinc hl\n\tld a,h\n\tor l\n"
@@ -36904,7 +36982,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                      * store/reload/retest round trip entirely. */
                     if (!stack_forwarded_right && mir_wide_operation_is_integer_immediate(insn)) {
                         const struct MirInsn *branch = &mir.insns[i+fuse_skip];
-                        const char *condition = ((insn->immediate==TOK_EQ) != (fuse_skip==2)) ? "z" : "nz";
+                        int true_on_zero = insn->immediate == TOK_EQ ||
+                            insn->immediate == '<' || insn->immediate == TOK_LE;
+                        const char *condition = (true_on_zero != (fuse_skip==2)) ? "z" : "nz";
                         if (!mir_emit_conditional_branch_with_phi_copies(out,labels,condition,
                             i+fuse_skip,mir_find_label(branch->label),branch->label)) goto done;
                     } else if (!mir_emit_fused_wide_comparison_branch(
@@ -37009,6 +37089,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                       mir_binary_const_rhs_mask_fast_path(insn)) ||
                      (mir_binary_is_fusable_comparison(i) > 0 &&
                       (mir_fused_compare_is_const_zero_rhs(i) ||
+                       mir_fused_compare_small_word_equality(i) ||
                        mir_fused_compare_is_signed_zero_sign_test(i) ||
                        mir_fused_compare_uses_byte_immediate(i))))) {
                     /* Most binary instructions consume a forwarded lhs
@@ -37323,6 +37404,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                             mir_planned_stack_invalid = 1;
                         planned_stack_forwarded_left = 0;
                     }
+                } else if (mir_fused_compare_small_word_equality(i)) {
+                    /* The fused equality adjusts/tests HL directly. */
                 } else if (mir_binary_is_fusable_comparison(i) > 0 &&
                     mir_fused_compare_is_const_zero_rhs(i)) {
                     /* Item 25: this comparison will be fused directly into

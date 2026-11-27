@@ -139,6 +139,38 @@ class MirIntegerOptimizationTests(unittest.TestCase):
         source = ("#include <stdint.h>\nuint32_t probe(uint32_t a,uint32_t b) {return a*b;}")
         self.assertIn("call __lmul", self.compile(source))
 
+    def test_nonzero_long_equality_uses_immediates(self):
+        for typename in ("int32_t", "uint32_t"):
+            for op in ("==", "!="):
+                source = ("#include <stdint.h>\nint probe(" + typename +
+                          " x) { return x " + op + " 0x12345678UL; }")
+                for options in ((), ("-fstack-check",), ("-gline",)):
+                    assembly = self.compile(source, options)
+                    self.assertNotIn("push de", assembly)
+                    self.assertNotIn("ld hl,22136", assembly)
+
+    def test_unsigned_long_byte_bounds_avoid_helpers(self):
+        comparisons = ("x<=255UL", "x<256UL", "x>65535UL", "x>=65536UL",
+                       "x<=16777215UL", "x<16777216UL")
+        for expression in comparisons:
+            source = "#include <stdint.h>\nint probe(uint32_t x) { return " + expression + "; }"
+            for options in ((), ("-fstack-check",), ("-gline",)):
+                with self.subTest(expression=expression, options=options):
+                    assembly = self.compile(source, options)
+                    self.assertNotRegex(assembly, r"call __l(?:gu|ku|tu|eu)\b")
+        # Signed negatives and bounds with nonzero low bytes need a real compare.
+        source = "#include <stdint.h>\nint probe(int32_t x) { return x>65535L; }"
+        self.assertNotIn("ld a,e\n\tor d\n\tld hl,0", self.compile(source))
+
+    def test_repeated_wide_predicate_shares_one_comparison(self):
+        source = ("#include <stdint.h>\nint probe(uint32_t a,uint32_t b) { int n=0; "
+                  "if(a==b)n+=1; if(a!=b)n+=2; if(!(a==b))n+=4; "
+                  "if(!(a!=b))n+=8; return n; }")
+        for options in ((), ("-fstack-check",), ("-gline",)):
+            assembly = self.compile(source, options)
+            self.assertLessEqual(assembly.count("xor (ix"), 4)
+            self.assertLessEqual(assembly.count("xor l"), 1)
+
     def test_nested_wide_increment_compare_reads_the_incremented_home(self):
         for typename in ("int32_t", "uint32_t"):
             source = ("#include <stdint.h>\n" + typename + " limit = 3; " +

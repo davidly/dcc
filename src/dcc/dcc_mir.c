@@ -17818,6 +17818,70 @@ int mir_optimize_byte_checks(void)
     return changed;
 }
 
+/* Keep a dominating long equality as a Boolean SSA value when it is
+ * tested repeatedly. Only exact SSA operands (possibly commuted) qualify:
+ * fresh memory reads, volatile reads and changed loop values cannot be
+ * confused with the earlier snapshot. The normal candidate cost gate
+ * decides whether extending this Boolean's lifetime is worthwhile. */
+int mir_reuse_wide_equality_predicates(void)
+{
+    int i, j, changed = 0, scope = mir_use_cache_scope_active;
+    if (mir.count > 1000) return 0;
+    mir_use_cache_scope_active = 0;
+    mir_invalidate_use_cache();
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *current = &mir.insns[i];
+        if (current->opcode != MIR_BINARY || current->memory_flags != 0 ||
+            !type_is_long(current->secondary_offset) ||
+            type_ptr_depth(current->secondary_offset) ||
+            (current->immediate != TOK_EQ && current->immediate != TOK_NE))
+            continue;
+        for (j = 0; j < i; ++j) {
+            const struct MirInsn *prior = &mir.insns[j];
+            if (prior->opcode != MIR_BINARY || prior->memory_flags != 0 ||
+                prior->secondary_offset != current->secondary_offset ||
+                prior->type != current->type ||
+                (prior->immediate != TOK_EQ && prior->immediate != TOK_NE) ||
+                !((prior->src1 == current->src1 && prior->src2 == current->src2) ||
+                  (prior->src1 == current->src2 && prior->src2 == current->src1)) ||
+                !mir_instruction_dominates_by_reachability(j, i))
+                continue;
+            if (prior->immediate == current->immediate) {
+                mir_replace_value_uses(current->dst, prior->dst);
+                mir_make_nop(current);
+            } else {
+                current->opcode = MIR_UNARY;
+                current->immediate = '!';
+                current->src1 = prior->dst;
+                current->src2 = -1;
+                current->secondary_offset = 0;
+            }
+            mir_invalidate_use_cache();
+            ++changed;
+            break;
+        }
+    }
+    /* Reusing an opposite predicate may expose !!comparison. Comparison
+     * results are exactly 0/1, so the double negation is an identity. */
+    if (changed) for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *outer = &mir.insns[i];
+        const struct MirInsn *inner, *source;
+        if (outer->opcode != MIR_UNARY || outer->immediate != '!') continue;
+        inner = mir_definition(outer->src1);
+        if (inner == NULL || inner->opcode != MIR_UNARY || inner->immediate != '!') continue;
+        source = mir_definition(inner->src1);
+        if (source == NULL || source->opcode != MIR_BINARY ||
+            !is_cmp_op((int)source->immediate) ||
+            !type_is_long(source->secondary_offset) || source->type != outer->type) continue;
+        mir_replace_value_uses(outer->dst, source->dst);
+        mir_make_nop(outer);
+        mir_invalidate_use_cache();
+        ++changed;
+    }
+    mir_use_cache_scope_active = scope;
+    return changed;
+}
+
 int mir_optimize_integer_expressions(void)
 {
     int changed = 0;
