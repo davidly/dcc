@@ -30869,7 +30869,10 @@ static int mir_match_dense_byte_switch(
         int width = dispatch->maximum_case -
                     dispatch->minimum_case + 1;
         int blocks = mir_cfg_block_count();
-        int minimum_cases =
+        /* A genuine unsigned-byte selector needs no high-byte rejection.
+         * Eight dense cases justify a table on code size and expected
+         * dispatch cost, independently of the containing function size. */
+        int minimum_cases = dispatch->condition_size == 1 ? 8 :
             blocks >= 80 && blocks <= 95 ? 11 :
             blocks >= 100 ? 30 : 32;
 
@@ -31176,7 +31179,16 @@ static int mir_emit_dense_byte_switch_condition_load(
         !mir_emit_named_word_load_to_hl(
             out, &mir.insns[instruction]))
         return 0;
-    if (dispatch->condition_size == 1) {
+    if (dispatch->condition_size == 1 &&
+        dispatch->maximum_case - dispatch->minimum_case + 1 <
+            MIR_DENSE_SWITCH_WIDEN_THRESHOLD) {
+        /* A bounded table normalizes and doubles the index in A. Avoid
+         * zero-extending into HL only to copy back to A for the bounds
+         * checks and then zero-extend a second time. */
+        mir_stream_puts("\tld a,(hl)\n", out);
+        dispatch->condition_in_a = 1;
+        dispatch->condition_in_hl = 0;
+    } else if (dispatch->condition_size == 1) {
         /* The table dispatcher needs the zero-extended condition in HL.
          * Load its low byte there directly instead of routing it through A
          * and immediately copying A to L. This also lets dccpeep's mutable

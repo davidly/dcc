@@ -108,6 +108,11 @@ retain the same benchmark bodies with these target-specific additions:
   that backend retains the documented relative-epsilon approximation. Its
   termination threshold and floating-point precision therefore differ from dcc.
 
+`fixtures/TTT.COB` is byte-identical to `../tests/TTT.COB`. It maintains the
+player by toggling `PM` instead of recomputing depth parity through division.
+The older division-based program remains in `../tests/TTTPAR.COB` as a separate
+cobint regression scenario.
+
 The assembly RNG was checked against 1,280 independently generated values for
 each backend. The binary32 step passed 16 boundary/NaN cases, and zsdcc pihex
 passed both the 128- and 1,024-digit reference checks. To repeat the latter after

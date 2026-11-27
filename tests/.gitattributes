@@ -3,3 +3,7 @@
 # on all platforms so a Windows checkout with core.autocrlf=true does not rewrite
 # it to CRLF.
 DATA.TXT -text eol=lf
+
+# Preserve the shared COBOL benchmark and the legacy parity regression exactly.
+TTT.COB -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
+TTTPAR.COB -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol

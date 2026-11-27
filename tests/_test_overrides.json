@@ -16,6 +16,7 @@
       "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.cob", "fixtures": ["TTT.COB"] },
+        { "suffix": "tttpar", "args": "tttpar.cob", "fixtures": ["TTTPAR.COB"] },
         { "suffix": "sieve", "args": "sieve.cob", "fixtures": ["SIEVE.COB"] }
       ] },
     { "name": "forint", "args": "e.for", "fixtures": ["E.FOR"],

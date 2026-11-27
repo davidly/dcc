@@ -63,6 +63,7 @@
              MOVE FIRSTMOVE TO X
              MOVE 2 TO ALPHA
              MOVE 9 TO BETA
+             MOVE 2 TO PM
              PERFORM MINMAX.
              MOVE 0 TO B( FIRSTMOVE ).
 
@@ -98,17 +99,6 @@
              DISPLAY 'board: '.
              PERFORM SHOWPOS VARYING Z FROM 1 BY 1 UNTIL Z>9.
 
-         INITVALPM.
-             DIVIDE DEPTH BY 2 GIVING D.
-             MULTIPLY D BY 2 GIVING M.
-
-             IF DEPTH NOT = M
-                 MOVE 2 TO VAL
-                 MOVE 1 TO PM
-             ELSE
-                 MOVE 9 TO VAL
-                 MOVE 2 TO PM.
-
          MINMAX.
              ADD 1 TO MOVECOUNT.
              MOVE 0 TO VAL.
@@ -120,7 +110,7 @@
                  ELSE IF DEPTH = 8 MOVE 5 TO VAL.
 
              IF 0 = VAL
-                 PERFORM INITVALPM
+                 COMPUTE VAL = 7 * PM - 5
 
                  ADD 1 TO DEPTH
                  PERFORM MAKEMOVE VARYING X FROM 1 BY 1 UNTIL (X>9)
@@ -154,6 +144,7 @@
                  MOVE ALPHA TO ALPHAST( DEPTH )
                  MOVE BETA TO BETAST( DEPTH )
 
+                 COMPUTE PM = 3 - PM
                  PERFORM MINMAX
 
                  MOVE BETAST( DEPTH ) TO BETA
