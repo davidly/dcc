@@ -53,6 +53,10 @@ REPO = Path(__file__).resolve().parent.parent
 # -ffp-contract=off: clang would otherwise fuse a*b+c into one rounding
 HOST_FLAGS = ['-std=gnu99', '-w', '-fsigned-char', '-fno-common', '-ffp-contract=off']
 SANITIZE = ['-fsanitize=address,undefined', '-fno-sanitize-recover=all']
+# Older Linux/WSL ASan runtimes can crash before main in PIE executables.
+if sys.platform.startswith('linux'):
+    SANITIZE += ['-fno-pie', '-no-pie']
+
 CANDIDATES = ['homed', 'homed-lazy', 'hybrid', 'regional', 'spilled-baseline', 'spilled-all',
               'spilled-all-no-prepack', 'spilled-address-remat', 'spilled-boolean-phi-branch',
               'spilled-boolean-phi-branch-no-prepack', 'spilled-global-argument',

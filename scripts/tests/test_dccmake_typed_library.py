@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -870,20 +871,23 @@ unsigned int bank_library_call_bound(bank_library_binding_t *binding,
 }
 """
         (self.folder / "HARNESS.C").write_text(harness)
+        # Match the Linux sanitizer workaround used by prepush and host oracles.
+        compile_flags = ["-fno-pie"] if sys.platform.startswith("linux") else []
+        link_flags = ["-no-pie"] if sys.platform.startswith("linux") else []
         for source, output, rename in (
                 ("LIB.C", "lib.o", True),
                 ("build/B1ADAPT.C", "adapter.o", True),
                 ("generated/B1HOST.C", "host.o", False),
                 ("HARNESS.C", "harness.o", False)):
             command = [NATIVE_CLANG, "-x", "c", "-std=c99", "-Wno-unknown-pragmas",
-                       "-fsanitize=address,undefined",
+                       "-fsanitize=address,undefined", *compile_flags,
                        "-I", str(self.folder), "-c", source, "-o", output]
             if rename:
                 command += [f"-D{name}=lib_{name}" for name in names]
             process = subprocess.run(command, cwd=self.folder, capture_output=True, text=True)
             self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
         process = subprocess.run(
-            [NATIVE_CLANG, "-fsanitize=address,undefined",
+            [NATIVE_CLANG, "-fsanitize=address,undefined", *link_flags,
              "lib.o", "adapter.o", "host.o", "harness.o", "-o", "verify"],
             cwd=self.folder, capture_output=True, text=True)
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)

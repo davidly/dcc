@@ -43,6 +43,9 @@ REPO = Path(__file__).resolve().parent.parent
 BUGS = REPO / 'tests' / 'known-bugs'
 HOST_FLAGS = ['-std=gnu99', '-w', '-fsigned-char', '-fno-common']
 SANITIZE = ['-O1', '-fsanitize=address,undefined', '-fno-sanitize-recover=all']
+# Older Linux/WSL ASan runtimes can crash before main in PIE executables.
+if sys.platform.startswith('linux'):
+    SANITIZE += ['-fno-pie', '-no-pie']
 
 
 def select_host_compiler():
@@ -71,7 +74,7 @@ def host_output(source, work, flags, timeout):
     except subprocess.TimeoutExpired:
         return None, 'host run timed out'
     if r.returncode:
-        return None, 'host run failed: ' + r.stderr.strip()[-200:]
+        return None, 'host run failed (exit %d): ' % r.returncode + r.stderr.strip()[-200:]
     return r.stdout, None
 
 
