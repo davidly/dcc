@@ -537,6 +537,60 @@ static int looks_like_boolean_leaf(void)
     return ok;
 }
 
+/* Tiny read-only byte predicates are useful to expose at the call site:
+ * one byte dereference and pure arithmetic over byte parameters. The token
+ * gate excludes declarations/calls before any speculative AST allocation. */
+static int looks_like_byte_predicate(void)
+{
+    LexState saved = lex_save();
+    int tokens = 0, returns = 0, conditions = 0, ok = 1;
+    next_token();
+    if (g_lex.tok.kind != TOK_IF)
+        ok = 0;
+    while (ok && g_lex.tok.kind != '}' && g_lex.tok.kind != TOK_EOF && ++tokens <= 40) {
+        int kind = g_lex.tok.kind;
+        if (kind == TOK_RETURN) ++returns;
+        else if (kind == TOK_IF) ++conditions;
+        else if (kind != TOK_ID && kind != TOK_NUM && kind != '(' && kind != ')' &&
+                 kind != '*' && kind != '+' && kind != '-' && kind != '~' &&
+                 kind != '!' && kind != '&' && kind != '|' && kind != '^' &&
+                 kind != ';' && !is_cmp_op(kind))
+            ok = 0;
+        next_token();
+    }
+    ok = ok && tokens <= 40 && returns == 2 && conditions == 1 && g_lex.tok.kind == '}';
+    lex_restore(&saved);
+    return ok;
+}
+
+static int byte_predicate_tree(struct Sym *fn, const struct AstNode *node,
+                               int *budget, int *reads)
+{
+    int parameter;
+    if (node == NULL || --*budget < 0)
+        return 0;
+    if (node->kind == AST_INT_LIT)
+        return type_size(node->type) <= 2;
+    if (node->kind == AST_IDENT) {
+        parameter = inline_param_index(fn, node->sval);
+        return parameter >= 0 && fn->proto_types[parameter] == (TYPE_CHAR | TYPE_UNSIGNED);
+    }
+    if (node->kind == AST_UNARY && node->op == '*' && node->a != NULL &&
+        node->a->kind == AST_IDENT) {
+        parameter = inline_param_index(fn, node->a->sval);
+        if (parameter < 0 || fn->proto_types[parameter] != type_add_ptr(TYPE_CHAR | TYPE_UNSIGNED))
+            return 0;
+        ++*reads;
+        return *reads == 1;
+    }
+    if (node->kind != AST_BINARY ||
+        (node->op != '+' && node->op != '-' && node->op != '&' &&
+         node->op != '|' && node->op != '^' && !is_cmp_op(node->op)))
+        return 0;
+    return byte_predicate_tree(fn, node->a, budget, reads) &&
+           byte_predicate_tree(fn, node->b, budget, reads);
+}
+
 static void record_inline_function_if_simple(struct Sym *s)
 {
     LexState _ls;
@@ -548,13 +602,17 @@ static void record_inline_function_if_simple(struct Sym *s)
     int has_local;
     int automatic;
     int boolean_leaf;
+    int byte_predicate;
 
     if (s == NULL || g_lex.tok.kind != '{')
         return;
     automatic = !s->is_inline;
     boolean_leaf = s->type == TYPE_INT && s->proto_nargs == 0 && !s->proto_variadic &&
         looks_like_boolean_leaf();
-    if ((!s->is_static && (!boolean_leaf || !automatic)) || (automatic && !boolean_leaf &&
+    byte_predicate = automatic && s->is_static && s->type == TYPE_INT &&
+        s->proto_nargs >= 2 && s->proto_nargs <= 3 && !s->proto_variadic &&
+        looks_like_byte_predicate();
+    if ((!s->is_static && (!boolean_leaf || !automatic)) || (automatic && !boolean_leaf && !byte_predicate &&
         (type_size(s->type)!=1 || type_is_bool(s->type) ||
          s->proto_nargs<1 || s->proto_nargs>3 || !looks_like_pure_byte_return())))
         return;
@@ -567,8 +625,11 @@ static void record_inline_function_if_simple(struct Sym *s)
     for (i = 0; i < g_frame.nlocals && nparams < MAX_PROTO_PARAMS; ++i) {
         if (locals[i].storage == SC_PARAM) {
             if (automatic && (locals[i].is_volatile ||
-                (!boolean_leaf && (type_size(locals[i].type)>2 ||
-                 type_ptr_depth(locals[i].type)!=0 || type_is_float(locals[i].type)))))
+                (!boolean_leaf && !byte_predicate && (type_size(locals[i].type)>2 ||
+                 type_ptr_depth(locals[i].type)!=0 || type_is_float(locals[i].type))) ||
+                (byte_predicate && (locals[i].pointee_volatile_mask != 0 ||
+                 (locals[i].type != (TYPE_CHAR | TYPE_UNSIGNED) &&
+                  locals[i].type != type_add_ptr(TYPE_CHAR | TYPE_UNSIGNED))))))
                 return;
             if (!(type_size(locals[i].type) == 1 || type_size(locals[i].type) == 2 ||
                   type_size(locals[i].type) == 4) ||
@@ -602,6 +663,34 @@ static void record_inline_function_if_simple(struct Sym *s)
     lex_restore(&_ls);
     for (i = 0; i < MAX_PROTO_PARAMS; ++i)
         s->inline_param_use_count[i] = 0;
+
+    if (byte_predicate) {
+        struct AstNode *first, *last, *result;
+        int budget = 12, reads = 0;
+        if (body == NULL || body->kind != AST_COMPOUND || body->list_len != 2)
+            return;
+        first = body->list[0]; last = body->list[1];
+        if (first == NULL || first->kind != AST_IF || first->c != NULL ||
+            first->a == NULL || first->a->kind != AST_BINARY || !is_cmp_op(first->a->op) ||
+            first->b == NULL || first->b->kind != AST_RETURN || first->b->a == NULL ||
+            first->b->a->kind != AST_INT_LIT || last == NULL || last->kind != AST_RETURN ||
+            last->a == NULL || last->a->kind != AST_INT_LIT ||
+            (first->b->a->ival != 0 && first->b->a->ival != 1) ||
+            last->a->ival != 1 - first->b->a->ival ||
+            !byte_predicate_tree(s, first->a, &budget, &reads) || reads != 1 ||
+            !inline_expr_is_simple(s, first->a))
+            return;
+        result = first->a;
+        if (first->b->a->ival == 0) {
+            result = ast_new(&g_ast_inline_arena, AST_UNARY);
+            result->op = '!';
+            result->a = first->a;
+            result->type = TYPE_INT;
+        }
+        s->inline_return_expr = result;
+        s->auto_inline_byte_predicate = 1;
+        return;
+    }
 
     if (automatic && boolean_leaf) {
         struct AstNode *first, *last, *condition, *comparison;
@@ -808,7 +897,8 @@ static void inline_temp_name(char *dst, int dstsz, int index)
 
 int is_inline_substitutable(struct Sym *s)
 {
-    return s != NULL && s->is_static && s->is_inline &&
+    return s != NULL && s->is_static &&
+           (s->is_inline || s->auto_inline_byte_predicate) &&
            (s->inline_return_expr != NULL || s->inline_stmt_expr != NULL ||
             s->inline_stmt_body != NULL);
 }

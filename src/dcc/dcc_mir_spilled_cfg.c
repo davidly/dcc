@@ -14516,6 +14516,8 @@ struct MirByteAffineLoop {
     int failure_first;
     int failure_last;
     int index_offset;
+    int index_size;
+    int wrapping_sum;
 };
 
 static int mir_affine_byte_operand(int value, struct MirLowByteIndexLoop *slice)
@@ -14556,23 +14558,32 @@ static int mir_match_byte_affine_loop(int head, struct MirByteAffineLoop *plan)
             break;
         }
     }
-    if (branch < 0 || phi == NULL || phi->type != (TYPE_CHAR | TYPE_UNSIGNED) ||
+    if (branch < 0 || phi == NULL ||
+        (phi->type != (TYPE_CHAR | TYPE_UNSIGNED) && phi->type != TYPE_INT &&
+         phi->type != (TYPE_INT | TYPE_UNSIGNED)) ||
         phi->object < 0 || mir_object_address_taken(phi->object) ||
         !mir_scalar_memory_location(phi, &type, &storage, &plan->index_offset) ||
         storage != SC_LOCAL || plan->index_offset < -128 || plan->index_offset > 127)
+        return 0;
+    plan->index_size = type_size(phi->type);
+    if (plan->index_offset + plan->index_size - 1 > 127)
         return 0;
     initial = mir_definition(phi->src1);
     condition = mir_definition(mir.insns[branch].src1);
     if (initial == NULL || initial->opcode != MIR_CONST || initial >= &mir.insns[head] ||
         initial->immediate < 0 || initial->immediate > 254 ||
         condition == NULL || condition->opcode != MIR_BINARY || condition->immediate != '<' ||
-        condition->secondary_offset != TYPE_INT || mir_value_use_count(condition->dst) != 1)
+        (condition->secondary_offset != TYPE_INT &&
+         condition->secondary_offset != (TYPE_INT | TYPE_UNSIGNED)) ||
+        mir_value_use_count(condition->dst) != 1)
         return 0;
     promote = mir_definition(condition->src1);
     bound = mir_definition(condition->src2);
-    if (promote == NULL || promote->opcode != MIR_UNARY || promote->immediate != 0 ||
-        promote->type != TYPE_INT || promote->src1 != phi->dst ||
-        mir_value_use_count(promote->dst) != 1 ||
+    if ((plan->index_size == 1 &&
+         (promote == NULL || promote->opcode != MIR_UNARY || promote->immediate != 0 ||
+          promote->type != TYPE_INT || promote->src1 != phi->dst ||
+          mir_value_use_count(promote->dst) != 1)) ||
+        (plan->index_size == 2 && condition->src1 != phi->dst) ||
         bound == NULL || bound->opcode != MIR_CONST || bound->immediate <= initial->immediate ||
         bound->immediate > 255 || mir_value_use_count(bound->dst) != 1)
         return 0;
@@ -14593,7 +14604,7 @@ static int mir_match_byte_affine_loop(int head, struct MirByteAffineLoop *plan)
         step->src1 != phi->dst || step->src2 != one->dst || step->dst != phi->src2 ||
         step->type != phi->type || step->secondary_offset != phi->type ||
         store->opcode != MIR_STORE || store->object != phi->object ||
-        store->src1 != step->dst || store->memory_size != 1 || store->memory_flags != 0 ||
+        store->src1 != step->dst || store->memory_size != plan->index_size || store->memory_flags != 0 ||
         jump->opcode != MIR_JUMP || jump->label != mir.insns[head].label)
         return 0;
     for (i = branch + 1; i < latch; ++i) {
@@ -14622,8 +14633,17 @@ static int mir_match_byte_affine_loop(int head, struct MirByteAffineLoop *plan)
             return 0;
         base = mir_definition(base->src1);
     }
-    if (base == NULL || base >= &mir.insns[head] || type_ptr_depth(base->type) == 0)
+    if (base == NULL || type_ptr_depth(base->type) == 0)
         return 0;
+    if (base >= &mir.insns[head]) {
+        /* A fixed array address is pure and rematerializable at loop entry.
+         * A pointer load or computed address within the body is not. */
+        if (base->opcode != MIR_ADDRESS || base->memory_flags != 0 ||
+            base >= &mir.insns[latch] || mir_value_use_count(base->dst) != 1 ||
+            !mir_address_is_rematerializable(base->dst) ||
+            !mir_low_byte_loop_add_component(slice, (int)(base - mir.insns)))
+            return 0;
+    }
     plan->base_value = base->dst;
     slice->kind = memory->opcode == MIR_STORE_INDIRECT ? MIR_LOW_BYTE_INDEX_STORE : MIR_LOW_BYTE_INDEX_COMPARE;
     if (slice->kind == MIR_LOW_BYTE_INDEX_STORE) {
@@ -14653,6 +14673,20 @@ static int mir_match_byte_affine_loop(int head, struct MirByteAffineLoop *plan)
         }
         if (loaded != memory->dst)
             return 0;
+        cast = mir_definition(sum_value);
+        if (cast != NULL && cast->opcode == MIR_UNARY && cast->immediate == 0 &&
+            cast->type == TYPE_INT && mir_value_use_count(cast->dst) == 1) {
+            const struct MirInsn *byte_cast = mir_definition(cast->src1);
+            if (byte_cast != NULL && byte_cast->opcode == MIR_UNARY &&
+                byte_cast->immediate == 0 && byte_cast->type == (TYPE_CHAR | TYPE_UNSIGNED) &&
+                mir_value_use_count(byte_cast->dst) == 1) {
+                if (!mir_low_byte_loop_add_component(slice, (int)(cast - mir.insns)) ||
+                    !mir_low_byte_loop_add_component(slice, (int)(byte_cast - mir.insns)))
+                    return 0;
+                sum_value = byte_cast->src1;
+                plan->wrapping_sum = 1;
+            }
+        }
         at = mir_low_byte_loop_next_effective(cmp_at);
         if (at >= latch || mir.insns[at].opcode != MIR_BRANCH_FALSE ||
             mir.insns[at].src1 != compare->dst)
@@ -14677,11 +14711,28 @@ static int mir_match_byte_affine_loop(int head, struct MirByteAffineLoop *plan)
     }
     sum = mir_definition(sum_value);
     if (sum == NULL || sum->opcode != MIR_BINARY || sum->immediate != '+' ||
-        sum->type != TYPE_INT || sum->secondary_offset != TYPE_INT ||
+        (sum->type != TYPE_INT && sum->type != (TYPE_INT | TYPE_UNSIGNED)) ||
+        sum->secondary_offset != sum->type ||
         mir_value_use_count(sum->dst) != 1)
         return 0;
     left = mir_affine_byte_operand(sum->src1, slice);
     right = mir_affine_byte_operand(sum->src2, slice);
+    if (slice->kind == MIR_LOW_BYTE_INDEX_STORE || plan->wrapping_sum) {
+        const struct MirInsn *operand = mir_definition(sum->src1);
+        if (left < 0 && operand != NULL && type_size(operand->type) == 2 &&
+            !type_is_float(operand->type) && !type_ptr_depth(operand->type))
+            left = operand->dst;
+        operand = mir_definition(sum->src2);
+        if (right < 0 && operand != NULL && type_size(operand->type) == 2 &&
+            !type_is_float(operand->type) && !type_ptr_depth(operand->type))
+            right = operand->dst;
+    } else if (plan->index_size == 2) {
+        /* The loop bounds prove the word counter itself fits a byte. */
+        if (sum->src1 == phi->dst)
+            left = phi->dst;
+        if (sum->src2 == phi->dst)
+            right = phi->dst;
+    }
     index = phi->dst;
     plan->invariant_value = left == index ? right : right == index ? left : -1;
     cast = mir_definition(plan->invariant_value);
@@ -14693,7 +14744,8 @@ static int mir_match_byte_affine_loop(int head, struct MirByteAffineLoop *plan)
     slice->skip_through = back;
     plan->exit_label = mir.insns[branch].label;
     if (!mir_low_byte_loop_add_component(slice, (int)(phi - mir.insns)) ||
-        !mir_low_byte_loop_add_component(slice, (int)(promote - mir.insns)) ||
+        (plan->index_size == 1 &&
+         !mir_low_byte_loop_add_component(slice, (int)(promote - mir.insns))) ||
         !mir_low_byte_loop_add_component(slice, (int)(condition - mir.insns)) ||
         !mir_low_byte_loop_add_component(slice, (int)(bound - mir.insns)) ||
         !mir_low_byte_loop_add_component(slice, branch) ||
@@ -17894,10 +17946,15 @@ static void mir_emit_byte_affine_loop(MirStream *out, const int *labels,
     mir_stream_printf(out, "\tld e,%d\nL%d:\n\tld a,h\n\tadd a,e\n", loop->initial, top);
     if (loop->kind == MIR_LOW_BYTE_INDEX_STORE)
         mir_stream_puts("\tld (bc),a\n", out);
-    else
-        mir_stream_printf(out, "\tjp c,L%d\n\tld d,a\n\tld a,(bc)\n\tcp d\n\tjp nz,L%d\n", failure, failure);
+    else {
+        if (!plan->wrapping_sum)
+            mir_stream_printf(out, "\tjp c,L%d\n", failure);
+        mir_stream_printf(out, "\tld d,a\n\tld a,(bc)\n\tcp d\n\tjp nz,L%d\n", failure);
+    }
     mir_stream_printf(out, "\tinc bc\n\tinc e\n\tld a,e\n\tcp %d\n\tjp c,L%d\n"
                           "\tld (ix%+d),%d\n", loop->limit, top, plan->index_offset, loop->limit);
+    if (plan->index_size == 2)
+        mir_stream_printf(out, "\tld (ix%+d),0\n", plan->index_offset + 1);
     if (loop->kind == MIR_LOW_BYTE_INDEX_COMPARE)
         mir_stream_printf(out, "\tjp L%d\nL%d:\n", labels[plan->exit_label], failure);
 }

@@ -4477,7 +4477,7 @@ void mir_end_function(void)
     }
     for (normalization_pass = 0;
          failure_reason == NULL && generated != NULL && !opt_debug &&
-             normalization_pass < 4;
+             normalization_pass < 9;
          ++normalization_pass) {
         struct MirInsn *original_insns = NULL;
         MirStream *alternative = NULL;
@@ -4563,8 +4563,22 @@ void mir_end_function(void)
             integer_changed += mir_optimize_integer_expressions();
         } else if (normalization_pass == 2) {
             stores_changed = mir_combine_little_endian_byte_stores();
-        } else {
+        } else if (normalization_pass == 3) {
             divmod_changed = mir_canonicalize_divmod_operands();
+        } else if (normalization_pass == 4) {
+            integer_changed = mir_narrow_demanded_loads();
+        } else if (normalization_pass == 5) {
+            integer_changed = mir_optimize_boolean_multiplication();
+        } else if (normalization_pass == 6) {
+            integer_changed = mir_fold_normalized_byte_conversions();
+        } else if (normalization_pass == 7) {
+            integer_changed = mir_optimize_byte_checks();
+        } else {
+            int range_pass;
+            for (range_pass = 0; range_pass < 8 && mir_fold_byte_range_checks(); ++range_pass) {
+                integer_changed = 1;
+                if (!mir_verify_and_dump()) break;
+            }
         }
         if ((boolean_phi_changed || integer_changed || stores_changed ||
              divmod_changed) &&

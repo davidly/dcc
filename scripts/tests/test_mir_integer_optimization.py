@@ -72,6 +72,57 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertNotIn("MIR byte-affine-loop", self.compile(source))
 
+    def test_affine_word_counter_and_wrapped_sum(self):
+        for counter in ("int", "unsigned"):
+            source = ("int probe(const unsigned char *p, unsigned char first) { " +
+                      counter + " i; for(i=3;i<13;++i) "
+                      "if(p[i]!=(unsigned char)(first+i)) return 0; return 1; }")
+            with self.subTest(counter=counter):
+                assembly = self.compile(source)
+                self.assertIn("MIR byte-affine-loop", assembly)
+                # Explicitly wrapped sums must not reject carry.
+                loop = assembly.split("MIR byte-affine-loop", 1)[1]
+                self.assertNotRegex(loop.split("ret", 1)[0], r"add a,e\n\s*jp c,")
+        for start, end in (("13", "13"), ("255", "256")):
+            source = ("void probe(unsigned char *p, unsigned char first) { "
+                      "unsigned i; for(i=" + start + ";i<" + end +
+                      ";++i) p[i]=first+i; }")
+            self.assertNotIn("MIR byte-affine-loop", self.compile(source))
+
+    def test_demanded_load_keeps_volatile_and_shared_consumers(self):
+        source = ("#include <stdint.h>\n"
+                  "uint8_t probe(const uint32_t *p) { return (uint8_t)*p; }")
+        narrow = self.compile(source)
+        volatile = self.compile(source.replace("const uint32_t", "volatile uint32_t"))
+        # The byte-only load does not need the long-value register pair.
+        self.assertNotIn("ld e,(hl)", narrow)
+        self.assertIn("ld e,(hl)", volatile)
+        shared = self.compile("#include <stdint.h>\nuint32_t probe(const uint32_t *p) {"
+                              "uint32_t n=*p; return n ^ (uint8_t)n; }")
+        self.assertIn("ld e,(hl)", shared)
+
+    def test_auto_byte_predicate_inlining_has_narrow_contract(self):
+        predicate = ("static int pred(const unsigned char *p, unsigned char a, "
+                     "unsigned char b) { if(*p!=a+b) return 0; return 1; }\n")
+        caller = ("int probe(const unsigned char *p, unsigned char a, unsigned char b) "
+                  "{ return pred(p,a,b); }")
+        self.assertNotIn("; static function pred", self.compile(predicate + caller))
+        local = caller.replace("return pred(p,a,b);",
+                               "{ unsigned local=b; return pred(p,a,(unsigned char)local); }")
+        self.assertNotIn("; static function pred", self.compile(predicate + local))
+        cases = (
+            predicate.replace("const unsigned char *p", "const volatile unsigned char *p") + caller,
+            predicate + caller.replace("unsigned char a,", "unsigned a,"),
+            "extern unsigned char once(unsigned char); " + predicate +
+                caller.replace("pred(p,a,b)", "pred(p,once(a),b)"),
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                assembly = self.compile(source)
+                label = re.search(r"; static function pred\n(\w+):", assembly)
+                self.assertIsNotNone(label, assembly)
+                self.assertRegex(assembly, r"call\s+" + label.group(1) + r"\b")
+
     def test_nested_wide_increment_compare_reads_the_incremented_home(self):
         for typename in ("int32_t", "uint32_t"):
             source = ("#include <stdint.h>\n" + typename + " limit = 3; " +

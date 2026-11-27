@@ -371,6 +371,7 @@ struct Sym {
     unsigned char predicate_masks[8], predicate_less[8];
     unsigned short predicate_bounds[8];
     int auto_inline_byte; /* bounded pure byte-return tree, MIR-only substitution */
+    int auto_inline_byte_predicate; /* one read-only byte access and pure byte arguments */
     struct AstNode *inline_return_expr; /* simple static inline body, if captured */
     struct AstNode *inline_stmt_expr;   /* simple void inline expression body */
     struct AstNode *inline_stmt_body;   /* simple void inline statement body */
