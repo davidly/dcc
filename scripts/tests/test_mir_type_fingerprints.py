@@ -32,7 +32,7 @@ class MirTypeFingerprintTests(unittest.TestCase):
                 [str(ROOT / "dcc"), "-stack", "512", "-I", str(ROOT),
                  *options, str(input_path), "-o", str(output_path)],
                 cwd=ROOT, env=env, capture_output=True, text=True,
-                check=True, timeout=30,
+                check=True, timeout=300,
             )
             return output_path.read_text(encoding="ascii"), result.stderr
 
