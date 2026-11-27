@@ -25,7 +25,10 @@ class EndpointTests(unittest.TestCase):
             self.assertEqual(endpoint.read_text(), "127.0.0.1 12345 test-token\n")
             self.assertEqual(list(Path(directory).iterdir()), [endpoint])
 
-    @unittest.skipUnless(hasattr(os, "fchmod"), "Unix file permissions required")
+    # Newer Windows Python provides fchmod, but Windows mode bits do not
+    # express Unix owner-only permissions.
+    @unittest.skipUnless(os.name == "posix" and hasattr(os, "fchmod"),
+                         "Unix file permissions required")
     def test_published_endpoint_is_private(self):
         with tempfile.TemporaryDirectory() as directory:
             endpoint = Path(directory) / "terminal.endpoint"
