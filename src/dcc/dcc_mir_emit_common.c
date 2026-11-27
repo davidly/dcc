@@ -3861,15 +3861,6 @@ static int mir_homed_scalar_dag_preflight(int *uses_iy_out,
     return 1;
 }
 
-int mir_has_phi_instruction(void)
-{
-    int instruction;
-
-    for (instruction = 0; instruction < mir.count; ++instruction)
-        if (mir.insns[instruction].opcode == MIR_PHI)
-            return 1;
-    return 0;
-}
 
 int mir_general_comparison_count(void)
 {

@@ -814,6 +814,7 @@ int mir_combine_little_endian_byte_stores(void);
 void mir_record_call_signature(int call_id, const struct Sym *prototype);
 int mir_prune_constant_unreachable(void);
 int mir_extended_integer_constant_conversion_folds(void);
+const struct MirInsn *mir_find_compound_address(const char *name);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
 int mir_inline_temp_slot(const char *name);

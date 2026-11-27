@@ -11879,6 +11879,176 @@ static int mir_use_cache_verify_enabled(void)
         mir_use_cache_verify_flag = getenv("DCC_MIR_CACHE_VERIFY") != NULL;
     return mir_use_cache_verify_flag;
 }
+/* These read-only queries share the def-use cache's audited mutation
+ * epoch. Mutating passes which suspend that cache retain reference scans. */
+struct MirQueryIndex {
+    unsigned generation;
+    int valid;
+    int count;
+    int objects;
+    int has_phi;
+    int compound_count;
+    unsigned char unpromoted[256];
+    int *compound_buckets;
+    size_t compound_capacity;
+};
+static struct MirQueryIndex mir_query_index;
+
+static unsigned mir_query_name_hash(const char *name)
+{
+    unsigned hash = 0;
+    while (*name != 0)
+        hash = hash * 131u + (unsigned char)*name++;
+    return hash;
+}
+
+static int mir_query_cache_verify_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0)
+        enabled = getenv("DCC_MIR_QUERY_CACHE_VERIFY") != NULL;
+    return enabled;
+}
+
+static void mir_ensure_query_index(void)
+{
+    int i;
+    size_t capacity;
+    if (mir_query_index.valid &&
+        mir_query_index.generation == mir_use_cache_generation &&
+        mir_query_index.count == mir.count &&
+        mir_query_index.objects == mir.object_count)
+        return;
+    mir_query_index.has_phi = 0;
+    mir_query_index.compound_count = 0;
+    memset(mir_query_index.unpromoted, 0, sizeof(mir_query_index.unpromoted));
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_PHI)
+            mir_query_index.has_phi = 1;
+        if (insn->opcode == MIR_LOAD && insn->object >= 0 &&
+            insn->object < mir.object_count)
+            mir_query_index.unpromoted[insn->object] = 1;
+        if (insn->opcode == MIR_COMPOUND_ADDRESS && insn->name[0] != 0)
+            ++mir_query_index.compound_count;
+    }
+    if (mir_query_index.compound_count != 0) {
+        capacity = 16;
+        while (capacity < (size_t)mir_query_index.compound_count * 2)
+            capacity *= 2;
+        if (capacity > mir_query_index.compound_capacity) {
+            int *buckets = (int *)realloc(mir_query_index.compound_buckets,
+                                         capacity * sizeof(*buckets));
+            if (buckets == NULL)
+                fatal("out of memory indexing MIR compound addresses");
+            mir_query_index.compound_buckets = buckets;
+            mir_query_index.compound_capacity = capacity;
+        }
+        memset(mir_query_index.compound_buckets, 0,
+               mir_query_index.compound_capacity * sizeof(int));
+        for (i = 0; i < mir.count; ++i) {
+            const struct MirInsn *insn = &mir.insns[i];
+            size_t slot;
+            if (insn->opcode != MIR_COMPOUND_ADDRESS || insn->name[0] == 0)
+                continue;
+            slot = mir_query_name_hash(insn->name) &
+                   (mir_query_index.compound_capacity - 1);
+            while (mir_query_index.compound_buckets[slot] != 0 &&
+                   strcmp(mir.insns[mir_query_index.compound_buckets[slot] - 1].name,
+                          insn->name) != 0)
+                slot = (slot + 1) & (mir_query_index.compound_capacity - 1);
+            /* The original scan chooses the first matching instruction. */
+            if (mir_query_index.compound_buckets[slot] == 0)
+                mir_query_index.compound_buckets[slot] = i + 1;
+        }
+    }
+    mir_query_index.generation = mir_use_cache_generation;
+    mir_query_index.count = mir.count;
+    mir_query_index.objects = mir.object_count;
+    mir_query_index.valid = 1;
+}
+
+static int mir_object_is_fully_promoted_reference(int object)
+{
+    int i;
+    if (object < 0 || object >= mir.object_count)
+        return 0;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_LOAD && mir.insns[i].object == object)
+            return 0;
+    return 1;
+}
+
+int mir_object_is_fully_promoted(int object)
+{
+    int result;
+    if (!mir_use_cache_scope_active || object < 0 || object >= mir.object_count)
+        return mir_object_is_fully_promoted_reference(object);
+    mir_ensure_query_index();
+    result = !mir_query_index.unpromoted[object];
+    if (mir_query_cache_verify_enabled() &&
+        result != mir_object_is_fully_promoted_reference(object))
+        fatal("MIR promotion query cache mismatch");
+    return result;
+}
+
+static int mir_has_phi_instruction_reference(void)
+{
+    int i;
+    for (i = 0; i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_PHI)
+            return 1;
+    return 0;
+}
+
+int mir_has_phi_instruction(void)
+{
+    int result;
+    if (!mir_use_cache_scope_active)
+        return mir_has_phi_instruction_reference();
+    mir_ensure_query_index();
+    result = mir_query_index.has_phi;
+    if (mir_query_cache_verify_enabled() &&
+        result != mir_has_phi_instruction_reference())
+        fatal("MIR phi query cache mismatch");
+    return result;
+}
+
+static const struct MirInsn *mir_find_compound_address_reference(const char *name)
+{
+    int i;
+    for (i = 0; name[0] != 0 && i < mir.count; ++i)
+        if (mir.insns[i].opcode == MIR_COMPOUND_ADDRESS &&
+            strcmp(mir.insns[i].name, name) == 0)
+            return &mir.insns[i];
+    return NULL;
+}
+
+const struct MirInsn *mir_find_compound_address(const char *name)
+{
+    const struct MirInsn *result = NULL;
+    if (!mir_use_cache_scope_active)
+        return mir_find_compound_address_reference(name);
+    mir_ensure_query_index();
+    if (mir_query_index.compound_count != 0 && name[0] != 0) {
+        size_t slot = mir_query_name_hash(name) &
+                      (mir_query_index.compound_capacity - 1);
+        while (mir_query_index.compound_buckets[slot] != 0) {
+            const struct MirInsn *insn =
+                &mir.insns[mir_query_index.compound_buckets[slot] - 1];
+            if (strcmp(insn->name, name) == 0) {
+                result = insn;
+                break;
+            }
+            slot = (slot + 1) & (mir_query_index.compound_capacity - 1);
+        }
+    }
+    if (mir_query_cache_verify_enabled() &&
+        result != mir_find_compound_address_reference(name))
+        fatal("MIR compound address query cache mismatch");
+    return result;
+}
+
 static int mir_use_cache_dirty = 1;
 static int *mir_use_cache_arg_head;
 static unsigned char *mir_use_cache_arg_odd;
@@ -13412,6 +13582,110 @@ int mir_iy_home_live_across_caller_clobber(void)
     return 0;
 }
 
+struct MirAllocationPriority {
+    int degree;
+    unsigned flags;
+};
+
+static int mir_allocation_order_best(int left, int right, const int *order,
+                                     const struct MirAllocationPriority *priority)
+{
+    const struct MirAllocationPriority *a;
+    const struct MirAllocationPriority *b;
+    if (left < 0) return right;
+    if (right < 0) return left;
+    a = &priority[order[left]];
+    b = &priority[order[right]];
+    if (a->flags != b->flags) return a->flags > b->flags ? left : right;
+    if (a->degree != b->degree) return a->degree > b->degree ? left : right;
+    return left < right ? left : right;
+}
+
+static void mir_allocation_order_update(int *tree, size_t base, int position,
+                                         int present, const int *order,
+                                         const struct MirAllocationPriority *priority)
+{
+    size_t node = base + (size_t)position;
+    tree[node] = present ? position : -1;
+    while (node > 1) {
+        node /= 2;
+        tree[node] = mir_allocation_order_best(tree[node * 2],
+                                               tree[node * 2 + 1], order, priority);
+    }
+}
+
+static void mir_sort_allocation_order(int *order, int count, const int *degree,
+                                      const unsigned char *cross_call,
+                                      const unsigned char *cross_guarded_call,
+                                      const unsigned char *register_value,
+                                      int prioritize_wide)
+{
+    struct MirAllocationPriority *priority;
+    int *tree;
+    int *reference = NULL;
+    size_t base = 1;
+    size_t node;
+    int i;
+    static int verify = -1;
+
+    if (count < 2)
+        return;
+    if (verify < 0)
+        verify = getenv("DCC_MIR_ALLOCATION_ORDER_VERIFY") != NULL;
+    while (base < (size_t)count)
+        base *= 2;
+    tree = (int *)malloc(base * 2 * sizeof(*tree));
+    priority = (struct MirAllocationPriority *)malloc((size_t)count * sizeof(*priority));
+    if (tree == NULL || priority == NULL)
+        fatal("out of memory sorting MIR allocation order");
+    for (i = 0; i < count; ++i) {
+        const struct MirInsn *definition = prioritize_wide ? mir_definition(i) : NULL;
+        unsigned wide = definition != NULL && type_size(definition->type) == 4;
+        unsigned crosses = cross_call[i] || cross_guarded_call[i];
+        priority[i].flags = (crosses << 2) | (wide << 1) | (register_value[i] != 0);
+        priority[i].degree = degree[i];
+    }
+    if (verify) {
+        reference = (int *)malloc((size_t)count * sizeof(*reference));
+        if (reference == NULL)
+            fatal("out of memory checking MIR allocation order");
+        memcpy(reference, order, (size_t)count * sizeof(*reference));
+        for (i = 0; i < count; ++i) {
+            int best = i;
+            int candidate;
+            for (candidate = i + 1; candidate < count; ++candidate)
+                best = mir_allocation_order_best(best, candidate, reference, priority);
+            if (best != i) {
+                int temporary = reference[i];
+                reference[i] = reference[best];
+                reference[best] = temporary;
+            }
+        }
+    }
+    for (node = 0; node < base; ++node)
+        tree[base + node] = node < (size_t)count ? (int)node : -1;
+    for (node = base - 1; node > 0; --node)
+        tree[node] = mir_allocation_order_best(tree[node * 2], tree[node * 2 + 1],
+                                               order, priority);
+    /* Reproduce selection sort's swaps and earliest-current-position ties,
+     * rather than changing allocation order with a stable/value-id sort. */
+    for (i = 0; i < count; ++i) {
+        int best = tree[1];
+        if (best != i) {
+            int temporary = order[i];
+            order[i] = order[best];
+            order[best] = temporary;
+            mir_allocation_order_update(tree, base, best, 1, order, priority);
+        }
+        mir_allocation_order_update(tree, base, i, 0, order, priority);
+    }
+    if (reference != NULL && memcmp(reference, order, (size_t)count * sizeof(*order)))
+        fatal("MIR allocation order mismatch");
+    free(reference);
+    free(priority);
+    free(tree);
+}
+
 static void mir_allocate_registers_stable(
     const MirLiveWord *live_in,
     const MirLiveWord *live_out,
@@ -13487,9 +13761,26 @@ static void mir_allocate_registers_stable(
         live_out_list == NULL)
         fatal("out of memory simulating MIR allocation");
 
-    for (i = 0; i < value_count; ++i)
-        register_value[i] = (unsigned char)
-            mir_value_backs_declared_register_object(i);
+    /* Keep definition lookup semantics (including retained no-op metadata)
+     * while indexing register stores once, instead of once per value. */
+    for (i = 0; i < value_count; ++i) {
+        const struct MirInsn *definition = mir_definition(i);
+        if (definition != NULL && definition->object >= 0 &&
+            definition->object < mir.object_count &&
+            mir.objects[definition->object].is_register)
+            register_value[i] = 1;
+    }
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode == MIR_STORE && insn->src1 >= 0 &&
+            insn->object >= 0 && insn->object < mir.object_count &&
+            mir.objects[insn->object].is_register)
+            register_value[insn->src1] = 1;
+    }
+    if (getenv("DCC_MIR_ALLOCATION_ORDER_VERIFY") != NULL)
+        for (i = 0; i < value_count; ++i)
+            if (register_value[i] != mir_value_backs_declared_register_object(i))
+                fatal("MIR register-object discovery mismatch");
 
     for (i = 0; i < mir.count; ++i) {
         const MirLiveWord *in = MIR_LIVE_ROW(live_in, i);
@@ -13577,43 +13868,8 @@ static void mir_allocate_registers_stable(
             preferences[(size_t)i * MIR_COLOR_COUNT + MIR_COLOR_BC] +=
                 mir.count + 1;
     }
-    /* Preserve the allocator's historical selection order exactly. The
-     * sparse graph still avoids the former quadratic degree scan. */
-    for (i = 0; i < value_count; ++i) {
-        int best = i;
-        int candidate;
-        for (candidate = i + 1; candidate < value_count; ++candidate) {
-            int left = order[best];
-            int right = order[candidate];
-            const struct MirInsn *left_definition =
-                prioritize_wide ? mir_definition(left) : NULL;
-            const struct MirInsn *right_definition =
-                prioritize_wide ? mir_definition(right) : NULL;
-            int left_wide = left_definition != NULL &&
-                type_size(left_definition->type) == 4;
-            int right_wide = right_definition != NULL &&
-                type_size(right_definition->type) == 4;
-            int left_register = register_value[left];
-            int right_register = register_value[right];
-            int left_crosses_call =
-                cross_call[left] || cross_guarded_call[left];
-            int right_crosses_call =
-                cross_call[right] || cross_guarded_call[right];
-            if (right_crosses_call > left_crosses_call ||
-                (right_crosses_call == left_crosses_call &&
-                 (right_wide > left_wide ||
-                  (right_wide == left_wide &&
-                   (right_register > left_register ||
-                    (right_register == left_register &&
-                     degree[right] > degree[left]))))))
-                best = candidate;
-        }
-        if (best != i) {
-            int temporary = order[i];
-            order[i] = order[best];
-            order[best] = temporary;
-        }
-    }
+    mir_sort_allocation_order(order, value_count, degree, cross_call,
+                              cross_guarded_call, register_value, prioritize_wide);
     for (i = 0; i < value_count; ++i) {
         int value = order[i];
         int is_wide = 0;

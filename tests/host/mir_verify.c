@@ -3417,6 +3417,52 @@ static void add_deferred_debug_event(int point, const char *text)
     ++mir.debug_event_count;
 }
 
+static void verify_cached_mir_metadata_queries(void)
+{
+    int ok;
+    setup(8, 1, 1);
+    if (!mir_verify_and_dump()) {
+        fprintf(stderr, "FAIL metadata query fixture verification\n");
+        ++failures;
+        return;
+    }
+    mir.object_count = 2;
+    mir.insns[2].opcode = MIR_LOAD;
+    mir.insns[2].object = 1;
+    mir.insns[3].opcode = MIR_PHI;
+    mir.insns[4].opcode = MIR_COMPOUND_ADDRESS;
+    strcpy(mir.insns[4].name, "query_compound");
+    mir.insns[4].immediate = -4;
+    mir.insns[5].opcode = MIR_COMPOUND_ADDRESS;
+    strcpy(mir.insns[5].name, "query_compound");
+    mir.insns[5].immediate = -8;
+    mir_invalidate_use_cache();
+    ok = mir_object_is_fully_promoted(0) &&
+         !mir_object_is_fully_promoted(1) &&
+         !mir_object_is_fully_promoted(-1) &&
+         !mir_object_is_fully_promoted(2) &&
+         mir_has_phi_instruction() &&
+         mir_find_compound_address("query_compound") == &mir.insns[4] &&
+         mir_find_compound_address("missing") == NULL &&
+         mir_find_compound_address("") == NULL;
+    mir.insns[2].opcode = MIR_NOP;
+    mir.insns[3].opcode = MIR_NOP;
+    mir.insns[4].opcode = MIR_NOP;
+    mir_invalidate_use_cache();
+    ok = ok && mir_object_is_fully_promoted(1) &&
+         !mir_has_phi_instruction() &&
+         mir_find_compound_address("query_compound") == &mir.insns[5];
+    strcpy(mir.insns[5].name, "renamed_compound");
+    mir_invalidate_use_cache();
+    ok = ok && mir_find_compound_address("query_compound") == NULL &&
+         mir_find_compound_address("renamed_compound") == &mir.insns[5];
+    if (!ok) {
+        fprintf(stderr, "FAIL cached MIR metadata queries/invalidation\n");
+        ++failures;
+    }
+    clear_liveness();
+}
+
 static void verify_indexed_debug_events(void)
 {
     int saved_debug = opt_debug;
@@ -9651,6 +9697,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "unknown MIR verifier test arguments\n");
         return 2;
     }
+    set_test_environment("DCC_MIR_ALLOCATION_ORDER_VERIFY", "1");
+    set_test_environment("DCC_MIR_QUERY_CACHE_VERIFY", "1");
     verify_frontend_token_paths();
     verify_preprocessor_characters();
     verify_global_pointer_write_ownership();
@@ -9692,6 +9740,7 @@ int main(int argc, char **argv)
     verify_call_argument_liveness();
     verify_mir_stream_io();
     verify_indexed_debug_events();
+    verify_cached_mir_metadata_queries();
     verify_mir_stream_seek_transaction();
     verify_ast_kind_names();
     verify_simple_mir_feature_queries();

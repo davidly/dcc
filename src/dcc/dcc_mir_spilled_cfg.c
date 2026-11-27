@@ -3155,7 +3155,8 @@ static int mir_binary_only_constant(int value)
     if (definition == NULL ||
         definition->opcode != MIR_CONST)
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         const struct MirInsn *insn = &mir.insns[instruction];
         if (insn->opcode == MIR_BINARY &&
             (insn->src1 == value || insn->src2 == value) &&
@@ -3174,7 +3175,8 @@ static int mir_binary_only_constant(int value)
     }
     if (binary_count != 1)
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction)
+    for (instruction = mir_next_use(binary_result, -1); instruction >= 0;
+         instruction = mir_next_use(binary_result, instruction))
         if (mir.insns[instruction].opcode == MIR_VLA_ALLOC &&
             mir.insns[instruction].src1 == binary_result)
             return 0;
@@ -4124,18 +4126,6 @@ int mir_call_is_bdos_family_fastcall(int call_index,
     return 0;
 }
 
-int mir_object_is_fully_promoted(int object)
-{
-    int instruction;
-
-    if (object < 0 || object >= mir.object_count)
-        return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction)
-        if (mir.insns[instruction].opcode == MIR_LOAD &&
-            mir.insns[instruction].object == object)
-            return 0;
-    return 1;
-}
 
 int mir_object_address_taken(int object)
 {
@@ -4765,6 +4755,14 @@ static void mir_emit_prepacked_constant_arguments(
 
     if (!mir_constant_argument_prepacking_enabled || mir.has_vla ||
         mir.backend_slots == NULL || mir_prepacked_call_instruction >= 0)
+        return;
+    /* A match below requires the immediately preceding instruction to be
+     * the outer call's argument at cached_argument - 1. Keep trigger zero's
+     * historical no-previous-argument case, but reject other impossible
+     * trigger positions before searching the whole remaining function. */
+    if (trigger_instruction > 0 &&
+        (mir.insns[trigger_instruction - 1].opcode != MIR_ARG ||
+         mir.insns[trigger_instruction - 1].immediate < 0))
         return;
     for (definition_instruction = trigger_instruction;
          definition_instruction < mir.count; ++definition_instruction) {
@@ -26086,7 +26084,8 @@ static int mir_value_is_nested_truth_comparison_input(int value)
 {
     int instruction;
 
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (instruction = mir_next_use(value, -1); instruction >= 0;
+         instruction = mir_next_use(value, instruction)) {
         int left_parameter;
         int right_parameter;
         const struct MirInsn *outer = &mir.insns[instruction];
@@ -31985,7 +31984,7 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset)
 {
     struct Sym *global;
-    int instruction;
+    const struct MirInsn *compound;
     if (insn->object >= 0 && insn->object < mir.object_count) {
         const struct MirObject *object = &mir.objects[insn->object];
         *type = object->type;
@@ -32021,16 +32020,13 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
         *offset += (int)insn->immediate;
         return 1;
     }
-    for (instruction = 0; insn->name[0] != '\0' &&
-         instruction < mir.count; ++instruction)
-        if (mir.insns[instruction].opcode == MIR_COMPOUND_ADDRESS &&
-            strcmp(mir.insns[instruction].name, insn->name) == 0) {
-            *type = insn->type;
-            *storage = SC_LOCAL;
-            *offset = (int)mir.insns[instruction].immediate +
-                      (int)insn->immediate;
-            return 1;
-        }
+    compound = mir_find_compound_address(insn->name);
+    if (compound != NULL) {
+        *type = insn->type;
+        *storage = SC_LOCAL;
+        *offset = (int)compound->immediate + (int)insn->immediate;
+        return 1;
+    }
     global = find_global(insn->name);
     if (global != NULL) {
         *type = global->type;
