@@ -3623,6 +3623,7 @@ static int mir_homed_scalar_dag_preflight(int *uses_iy_out,
     int return_value = -1;
     int terminated = 0;
     int saw_body = 0;
+    long long local_bytes;
     int effective_local_bytes;
     int uses_iy = 0;
     int frameless;
@@ -3642,14 +3643,13 @@ static int mir_homed_scalar_dag_preflight(int *uses_iy_out,
         mir.allocation_colors == NULL ||
         mir.aggregate_temp_bytes != 0)
         return 0;
-    if ((long)mir.local_bytes - (long)mir.dead_local_suffix_bytes < 0 ||
-        (long)mir.local_bytes - (long)mir.dead_local_suffix_bytes >
-            MIR_MAX_FRAME_BYTES ||
+    local_bytes = (long long)mir.local_bytes - mir.dead_local_suffix_bytes;
+    if (local_bytes < 0 || local_bytes > MIR_MAX_FRAME_BYTES ||
         (mir.return_type & 15) != TYPE_INT ||
         type_ptr_depth(mir.return_type) != 0 ||
         !mir_scalar_dag_type_is_emittable(mir.return_type))
         return 0;
-    effective_local_bytes = mir.local_bytes - mir.dead_local_suffix_bytes;
+    effective_local_bytes = (int)local_bytes;
     for (i = 0; i < mir.declared_count; ++i)
         if (!mir_homed_scalar_dag_name_is_terminated(
                 mir.declared_names[i]))

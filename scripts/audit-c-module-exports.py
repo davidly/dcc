@@ -29,10 +29,15 @@ def command_words(value):
         raise AuditError("could not parse command %r: %s" % (value, exc)) from exc
 
 
-def find_command(words, description):
+def find_command(value, description):
+    # An absolute path may already be a single argument despite its spaces.
+    executable = shutil.which(value)
+    if executable is not None:
+        return [executable]
+    words = command_words(value)
     if not words:
         raise AuditError("%s command is empty" % description)
-    executable = shutil.which(words[0])
+    executable = shutil.which(words[0].strip('"') if os.name == "nt" else words[0])
     if executable is None:
         raise AuditError(
             "%s %r was not found on PATH; install it or pass the corresponding "
@@ -402,8 +407,8 @@ def main(argv=None):
     args = parse_args(argv)
     repo_root = Path(__file__).resolve().parent.parent
     try:
-        compiler = find_command(command_words(args.cc), "C compiler")
-        nm_command = find_command(command_words(args.nm), "nm")
+        compiler = find_command(args.cc, "C compiler")
+        nm_command = find_command(args.nm, "nm")
         sources = [resolve_source(path, repo_root) for path in args.modules]
         build_dir = repo_root / "build"
         build_dir_existed = build_dir.exists()

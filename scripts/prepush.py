@@ -125,6 +125,10 @@ def parallel_steps(args, out):
                 'mir-host-sanitize', 'src/dcc',
                 ['-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Debug', '-DDCC_BUILD_MIR_TESTS=ON',
                  '-DCMAKE_C_COMPILER=' + clang,
+                 # Use the release CRT with ASan but keep Debug code generation.
+                 '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW',
+                 '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL',
+                 '-DCMAKE_EXE_LINKER_FLAGS=-Xlinker /STACK:16777216',
                  '-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer',
                  '-DDCC_RUNTIME_OUTPUT_DIRECTORY=' + str(out / 'mir-host-sanitize' / 'bin')],
                 'Debug', True, numeric_jobs,
