@@ -615,6 +615,18 @@ class MirIntegerOptimizationTests(unittest.TestCase):
                          for line in assembly.splitlines()
                          if line.split(";", 1)[0].strip())
 
+    def promotion_code(self, assembly):
+        code = self.code(assembly)
+        # Promotion-equivalent expressions can take different forwarding paths.
+        # An adjacent push/pop changes neither HL nor flags. At a signed-long
+        # extension, flags from the word arithmetic are overwritten by rlca;
+        # add -N and subtract N therefore have the same observable result.
+        code = code.replace("push hl\npop hl\n", "")
+        return re.sub(
+            r"ld de,(\d+)\nadd hl,de(?=\nld a,h\nrlca\nsbc a,a)",
+            lambda match: "ld de,%d\nor a\nsbc hl,de" %
+            ((-int(match.group(1))) & 0xffff), code)
+
     def test_bitfield_promotions_match_explicit_signed_operands(self):
         prefix = ("struct S { unsigned int small:11; unsigned int full:16; "
                   "int signed_field:11; unsigned int ordinary; } s; int sel; ")
@@ -634,7 +646,7 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
                 with self.subTest(expression=actual, options=options):
                     def compile_expression(expression):
-                        return self.code(self.compile(
+                        return self.promotion_code(self.compile(
                             prefix + "long probe(void) { return " + expression + "; }",
                             options))
                     self.assertEqual(compile_expression(actual),
@@ -656,7 +668,7 @@ class MirIntegerOptimizationTests(unittest.TestCase):
             for options in ((), ("-fstack-check",), ("-gline",), ("-g",)):
                 with self.subTest(expression=actual, options=options):
                     def compile_expression(expression):
-                        return self.code(self.compile(
+                        return self.promotion_code(self.compile(
                             prefix + "void probe(void) { { unsigned char b = 0; "
                             "out = " + expression + "; } }", options))
                     self.assertEqual(compile_expression(actual),
@@ -951,6 +963,31 @@ class MirIntegerOptimizationTests(unittest.TestCase):
         source = r'''
 #include "stdio.h"
 #include "string.h"
+struct PromotionBits { unsigned int small:11; } promotion_bits;
+struct ScopedPromotionBits { unsigned int a:1; unsigned int b:6; } scoped_bits;
+long implicit_promotion(void) { return +(promotion_bits.small + 1) - 1000; }
+long explicit_promotion(void) { return +((int)promotion_bits.small + 1) - 1000; }
+long scoped_implicit(void) {
+    { unsigned char b=0; return (scoped_bits.b + 1) - 1000; }
+}
+long scoped_explicit(void) {
+    { unsigned char b=0; return ((int)scoped_bits.b + 1) - 1000; }
+}
+int promotion_checks(void) {
+    int v;
+    for (v=0; v<2048; ++v) {
+        long expected=(long)v + 1 - 1000;
+        promotion_bits.small=v;
+        if (implicit_promotion()!=expected || explicit_promotion()!=expected)
+            return 1;
+        if (v<64) {
+            scoped_bits.b=v;
+            if (scoped_implicit()!=expected || scoped_explicit()!=expected)
+                return 2;
+        }
+    }
+    return 0;
+}
 unsigned int bucket(long position, int identity) {
     return ((unsigned int)(position >> 7) + identity * 3) & 15;
 }
@@ -1163,6 +1200,8 @@ int main(void) {
         (int)65535U / 2 != 0 || (int)65529U % 3 != -1 ||
         -80000L / 7L != -11428L || -80000L % 7L != -4L)
         return 4;
+    if (promotion_checks())
+        return 13;
     if (addresses())
         return 6;
     if (writer_checks())
