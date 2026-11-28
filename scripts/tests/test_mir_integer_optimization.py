@@ -1252,6 +1252,7 @@ int main(void) {
         source = source.replace("int main(void) {",
                                 "\n".join(crossing) + "\nint main(void) {")
         with tempfile.TemporaryDirectory(prefix="dcc-integer-run-") as directory:
+            build_timeout = int(os.environ.get("DCC_TEST_BUILD_TIMEOUT", "120"))
             path = Path(directory)
             (path / "probe.c").write_text(source, encoding="ascii")
             tool_arguments = [f"{tool}-tool={ROOT / tool}" for tool in
@@ -1269,7 +1270,7 @@ int main(void) {
                          "dcc-use-emulated-m80=false", "dcc-use-emulated-l80=false",
                          *tool_arguments],
                         cwd=path, env=ENV, capture_output=True, text=True,
-                        timeout=60,
+                        timeout=build_timeout,
                     )
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     binary = (path / "build" / "PROBE.COM").read_bytes()

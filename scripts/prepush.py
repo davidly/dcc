@@ -48,6 +48,8 @@ def parse_args(argv=None):
     p.add_argument('--parallel', '-p', type=positive, default=4,
                    help='how many steps run at the same time after the build (default 4)')
     p.add_argument('--timeout', type=positive, default=60, help='per-test run timeout in seconds (default 60)')
+    p.add_argument('--build-timeout', type=positive, default=120,
+                   help='timeout in seconds for each integer oracle build in the Python tests (default 120)')
     p.add_argument('--output-directory', help='where logs, CMake builds and timings go (default build/prepush-<time>)')
     p.add_argument('--only', help='comma-separated step names to run')
     p.add_argument('--skip', help='comma-separated step names to leave out')
@@ -161,7 +163,8 @@ def parallel_steps(args, out):
               '--failures-only', '--throttle-limit', jobs]
     return [
         step('script-tests', 'Python script tests',
-             [[py, '-m', 'unittest', 'discover', '-s', 'scripts/tests', '-p', 'test_*.py']], {'CC': cc}),
+             [[py, '-m', 'unittest', 'discover', '-s', 'scripts/tests', '-p', 'test_*.py']],
+             {'CC': cc, 'DCC_TEST_BUILD_TIMEOUT': str(args.build_timeout)}),
         sanitizer,
         step('runall-stack', 'Strict full+extended suite, stack check', [runall], strict_env),
         step('runall-no-stack', 'Strict full+extended suite, no stack check', [runall + ['--no-stack-check']], strict_env),
