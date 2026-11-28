@@ -69,6 +69,7 @@
     {"name": "tcmpval", "host": true, "host-skip-reason": "Requires 16-bit int arithmetic, truncation and conversion to 32-bit long."},
     {"name": "tdivdom", "host": true, "host-skip-reason": "Requires 16-bit int promotions of unsigned short and unsigned division/comparison wraparound."},
     {"name": "tlongcnv", "host": true, "host-skip-reason": "Requires 16-bit unsigned int wraparound before widening to 32-bit long."},
+    {"name": "tmulfold", "host": true, "host-skip-reason": "Requires DCC's 16-bit unsigned int truncation and 32-bit long multiplication and wraparound."},
     {"name": "tphiadj", "host": true, "host-skip-reason": "Requires 16-bit unsigned int wraparound before widening branch-join values to 32-bit long."},
     {"name": "tgmtime", "host": true, "host-skip-reason": "Checks DCC time-library contracts: null input rejection, negative-time rejection, shared results and UTC localtime; host gmtime(NULL) may crash."},
     {"name": "tmallseq", "host": true, "host-skip-reason": "Checks DCC first-fit allocator layout, four-byte headers, exact hole reuse and in-place coalescing; host malloc has different policies."},

@@ -1,5 +1,6 @@
 """Host validation policy and failure paths, independent of installed compilers."""
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -29,6 +30,19 @@ class HostValidationTests(unittest.TestCase):
         self.assertEqual(skip({'requires-non-msvc-host-compiler':True},'msvc','Windows',False),'host')
         self.assertEqual(skip({'requires-non-macos-host-compiler':True},'unix','Darwin',False),'host')
         self.assertIsNone(skip({'requires-non-msvc-host-compiler':True},'unix','Linux',False))
+
+    def test_folded_narrow_multiply_remains_target_only(self):
+        apps = json.loads((ROOT/'tests/_test_overrides.json').read_text())['apps']
+        override = next(app for app in apps if app['name'] == 'tmulfold')
+        for kind, system, m32 in (('unix', 'Linux', False),
+                                  ('unix', 'Linux', True),
+                                  ('unix', 'Darwin', False),
+                                  ('msvc', 'Windows', False)):
+            with self.subTest(kind=kind, system=system, m32=m32):
+                self.assertEqual(validator.skip_config(override, kind, system, m32), 'host')
+        self.assertFalse(override.get('ignore', False))
+        self.assertIn('16-bit', override['host-skip-reason'])
+        self.assertIn('32-bit', override['host-skip-reason'])
 
     def test_cpm_only_features_remain_excluded(self):
         for code in ('#asm\nret\n#endasm','bdos(9, 0)','inp(0)','getch()','__BDOS','*((int *)6)'):
