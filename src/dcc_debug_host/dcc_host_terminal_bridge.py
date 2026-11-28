@@ -3,11 +3,9 @@
 
 import argparse
 import os
-import queue
 import secrets
 import select
 import signal
-import threading
 import socket
 import sys
 import tempfile
@@ -90,6 +88,39 @@ def bridge_posix(client):
             termios.tcsetattr(input_fd, termios.TCSADRAIN, saved)
 
 
+def windows_stdin_reader(input_fd):
+    """Poll pipe input without leaving a blocked reader during shutdown."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetFileType.argtypes = (wintypes.HANDLE,)
+    kernel32.GetFileType.restype = wintypes.DWORD
+    kernel32.PeekNamedPipe.argtypes = (
+        wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    kernel32.PeekNamedPipe.restype = wintypes.BOOL
+    handle = msvcrt.get_osfhandle(input_fd)
+    if kernel32.GetFileType(handle) != 3:  # FILE_TYPE_PIPE
+        # Regular files (and NUL) do not need a pipe readiness probe.
+        return lambda: os.read(input_fd, 1)
+
+    def read_ready():
+        available = wintypes.DWORD()
+        if not kernel32.PeekNamedPipe(handle, None, 0, None,
+                                     ctypes.byref(available), None):
+            error = ctypes.get_last_error()
+            if error in (109, 232):  # ERROR_BROKEN_PIPE / ERROR_NO_DATA
+                return b""
+            raise ctypes.WinError(error)
+        return os.read(input_fd, 1) if available.value else None
+
+    return read_ready
+
+
 def bridge_windows(client):
     import msvcrt
     import time
@@ -107,16 +138,7 @@ def bridge_windows(client):
     client.setblocking(False)
     output_fd = sys.stdout.fileno()
     if not os.isatty(sys.stdin.fileno()):
-        incoming = queue.Queue()
-
-        def read_pipe():
-            while True:
-                data = sys.stdin.buffer.read(1)
-                incoming.put(data)
-                if not data:
-                    return
-
-        threading.Thread(target=read_pipe, daemon=True).start()
+        read_input = windows_stdin_reader(sys.stdin.fileno())
         while True:
             readable, _, _ = select.select((client,), (), (), 0.05)
             if readable:
@@ -124,10 +146,7 @@ def bridge_windows(client):
                 if not data:
                     return
                 os.write(output_fd, data)
-            try:
-                data = incoming.get_nowait()
-            except queue.Empty:
-                data = None
+            data = read_input()
             if data == b"" or data == b"\x1d":
                 return
             if data:

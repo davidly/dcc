@@ -147,7 +147,8 @@ class TerminalBridge:
         address, port, token = self.endpoint.read_text(encoding="ascii").split()
         with socket.create_connection((address, int(port)), timeout=5) as client:
             client.sendall((token + "\n").encode("ascii"))
-        self.process.wait(timeout=5)
+        result = self.process.wait(timeout=5)
+        assert result == 0, self.process.stderr.read().decode(errors="replace")
 
 
 class DAPSession:
