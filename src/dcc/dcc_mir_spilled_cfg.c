@@ -28369,7 +28369,7 @@ static const char *mir_wide_runtime_helper(const struct MirInsn *insn)
         if (src2_definition != NULL &&
             src2_definition->opcode == MIR_CONST &&
             mir_plan_wide_constant_multiply(
-                (unsigned long)src2_definition->immediate, NULL)) {
+                mir_wide_and_constant_mask(src2_definition), NULL)) {
             /* The existing immediate 3/5/9 emitter predates this query's
              * fast paths. Preserve its conservative allocation contract;
              * changing it also changes unrelated long-PHI schedules. */
@@ -28381,7 +28381,7 @@ static const char *mir_wide_runtime_helper(const struct MirInsn *insn)
         if (src1_definition != NULL &&
             src1_definition->opcode == MIR_CONST &&
             mir_plan_wide_constant_multiply(
-                (unsigned long)src1_definition->immediate, NULL))
+                mir_wide_and_constant_mask(src1_definition), NULL))
             return NULL;
         return "__lmul";
     }
@@ -28514,7 +28514,7 @@ static int mir_wide_operation_is_integer_immediate(const struct MirInsn *insn)
              (insn->secondary_offset & TYPE_UNSIGNED) &&
              mir_ulong_log2_pow2(mir_wide_and_constant_mask(right)) >= 0) ||
             (insn->immediate == '*' && mir_plan_wide_constant_multiply(
-                (unsigned long)right->immediate, NULL)));
+                mir_wide_and_constant_mask(right), NULL)));
 }
 
 /* Only the bytes touched by a logical shift need XORing back. Process
@@ -28891,13 +28891,13 @@ int mir_emit_wide_operation(MirStream *out, const struct MirInsn *insn)
             const struct MirInsn *left = mir_definition(insn->src1);
             struct MirWideMultiplyPlan plan;
             if (right != NULL && right->opcode == MIR_CONST &&
-                mir_plan_wide_constant_multiply((unsigned long)right->immediate, &plan)) {
+                mir_plan_wide_constant_multiply(mir_wide_and_constant_mask(right), &plan)) {
                 mir_stream_puts("\tpop hl\n\tpop de\n", out);
                 mir_emit_wide_constant_multiply(out, &plan);
                 return 1;
             }
             if (left != NULL && left->opcode == MIR_CONST &&
-                mir_plan_wide_constant_multiply((unsigned long)left->immediate, &plan)) {
+                mir_plan_wide_constant_multiply(mir_wide_and_constant_mask(left), &plan)) {
                 mir_stream_puts("\tpop bc\n\tpop bc\n", out);
                 mir_emit_wide_constant_multiply(out, &plan);
                 return 1;
