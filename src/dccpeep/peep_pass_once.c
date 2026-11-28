@@ -637,6 +637,30 @@ static int try_small_const_eq_at(int i)
         int imm;
         char loff[32], hoff[32], newline[128];
 
+        /* dcc may load the local straight into DE instead:
+         *   ld hl,N / ld e,(ix-K) / ld d,(ix-K+1) / or a / sbc hl,de / jp
+         * Restore the push/ex/pop form so the rewrite below applies. */
+        if (i + 5 < nlines &&
+            peep_parse_ld_hl_0_to_255(lines[i], &imm) &&
+            peep_parse_ld_e_ix(lines[i + 1], loff) &&
+            peep_parse_ld_d_ix(lines[i + 2], hoff) &&
+            eq(i + 3, "or a") &&
+            eq(i + 4, "sbc hl,de") &&
+            (strncmp(lines[i + 5], "jp z,", 5) == 0 ||
+             strncmp(lines[i + 5], "jp nz,", 6) == 0) &&
+            !(strncmp(lines[i + 5], "jp z,", 5) == 0 &&
+              i + 6 < nlines &&
+              strncmp(lines[i + 6], "jp c,", 5) == 0 &&
+              strcmp(lines[i + 5] + 5, lines[i + 6] + 5) == 0)) {
+            replace1(i + 1, "push hl");
+            sprintf(newline, "ld l,(ix%s)", loff);
+            replace1(i + 2, newline);
+            sprintf(newline, "ld h,(ix%s)", hoff);
+            insert_line(i + 3, newline);
+            insert_line(i + 4, "ex de,hl");
+            insert_line(i + 5, "pop hl");
+        }
+
         if (peep_parse_ld_hl_0_to_255(lines[i], &imm) &&
             eq(i + 1, "push hl") &&
             peep_parse_ld_l_ix(lines[i + 2], loff) &&

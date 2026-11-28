@@ -852,6 +852,23 @@ static int mir_value_only_used_by_dynamic_absolute_index(int value)
     return uses > 0;
 }
 
+/* Add a member offset to the address in HL. Small offsets use inc/dec hl,
+ * which is faster than ld de,n / add hl,de; neither form's flags or DE are
+ * consumed by the address users. */
+static void mir_emit_hl_add_offset(MirStream *out, long offset)
+{
+    offset &= 0xffffL;
+    if (offset >= 1 && offset <= 3) {
+        while (offset-- > 0)
+            mir_stream_puts("\tinc hl\n", out);
+    } else if (offset >= 0xfffdL) {
+        while (offset++ < 0x10000L)
+            mir_stream_puts("\tdec hl\n", out);
+    } else if (offset != 0) {
+        mir_stream_printf(out, "\tld de,%ld\n\tadd hl,de\n", offset);
+    }
+}
+
 static int mir_emit_address_value_to_hl(MirStream *out, int value)
 {
     const struct MirInsn *insn = mir_definition(value);
@@ -880,9 +897,7 @@ static int mir_emit_address_value_to_hl(MirStream *out, int value)
     case MIR_MEMBER_ADDRESS:
         if (!mir_emit_address_value_to_hl(out, insn->src1))
             return 0;
-        if (insn->immediate != 0)
-            mir_stream_printf(out, "\tld de,%ld\n\tadd hl,de\n",
-                    insn->immediate & 0xffffL);
+        mir_emit_hl_add_offset(out, insn->immediate);
         return 1;
     case MIR_INDEX_ADDRESS:
         {
@@ -974,6 +989,11 @@ static int mir_const_is_transparent_zero_rhs_operand(int instruction)
          mir_fused_compare_small_word_equality(instruction + 1) ||
          mir_fused_compare_is_signed_zero_sign_test(instruction + 1)))
         return 1;
+    if ((binary->immediate == '+' || binary->immediate == '-') &&
+        !mir.has_vla && type_size(binary->type) == 2 &&
+        type_size(binary->secondary_offset) == 2 &&
+        mir_binary_only_constant(constant->dst))
+        return 1; /* `len + 1`: the binary loads the constant itself. */
     return constant->immediate == 0 &&
            (binary->immediate == TOK_EQ ||
             binary->immediate == TOK_NE) &&
@@ -12932,9 +12952,12 @@ static int mir_match_byte_verify_loop(
         const struct MirInsn *conversion =
             mir_definition(stored_value);
 
+        /* Skip only the widening of the stored byte. Normalization can
+         * compare that byte directly, leaving no widening to skip. */
         if (conversion != NULL &&
             conversion->opcode == MIR_UNARY &&
-            conversion->immediate == 0)
+            conversion->immediate == 0 &&
+            type_size(conversion->type) != 1)
             stored_value = conversion->src1;
     }
     {
@@ -16660,6 +16683,100 @@ void mir_emit_virtual_load(MirStream *out, int value)
         } else
             mir_stream_puts("\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
     }
+}
+
+/* Where a word value can be read in place: its plain IX/IY-relative word
+ * home. Forwarded, handoff, cached, byte, constant, and out-of-range forms
+ * return 0 so callers keep mir_emit_virtual_load's full logic. */
+static int mir_value_word_frame_location(int value, const char **base,
+                                         int *offset)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int bool_offset;
+    int bool_store_instruction;
+    int slot_offset;
+    int iy_offset;
+
+    if (definition == NULL || type_size(definition->type) != 2 ||
+        type_is_float(definition->type) ||
+        mir_planned_stack_matches_consumer(value, mir_emit_instruction_index) ||
+        mir_forwarded_hl_value == value || mir_forwarded_de_value == value ||
+        mir_forwarded_stack_value == value || mir_cached_call_value == value ||
+        mir_bool_call_named_home(value, &bool_store_instruction, &bool_offset) ||
+        mir_value_uses_iy_parameter_home(value) ||
+        (mir_register_iy_slot >= 0 && mir.backend_slots != NULL &&
+         mir.backend_slots[value] == mir_register_iy_slot) ||
+        mir_scalar_constant_is_rematerializable(value) ||
+        mir_string_address_is_rematerializable(value) ||
+        mir_address_is_rematerializable(value))
+        return 0;
+    if (mir_value_has_direct_named_home(value)) {
+        int object_storage;
+        int object_offset;
+        int object_iy_offset;
+
+        if (!mir_direct_named_home_location(
+                definition, &object_storage, &object_offset))
+            return 0;
+        object_iy_offset = object_offset + mir_effective_local_bytes() +
+                           mir.aggregate_temp_bytes;
+        if (mir_virtual_iy_base && object_iy_offset >= -128 &&
+            object_iy_offset + 1 <= 127) {
+            *base = "iy";
+            *offset = object_iy_offset;
+        } else if (object_offset >= -128 && object_offset + 1 <= 127) {
+            *base = "ix";
+            *offset = object_offset;
+        } else {
+            return 0;
+        }
+        return 1;
+    }
+    if (mir.backend_slots == NULL || mir.backend_slots[value] < 0)
+        return 0;
+    slot_offset = mir_virtual_offset(value);
+    iy_offset = mir_virtual_iy_offset(value);
+    if (mir_virtual_iy_base && iy_offset >= -128 && iy_offset + 1 <= 127) {
+        *base = "iy";
+        *offset = iy_offset;
+    } else if (slot_offset >= -128 && slot_offset + 1 <= 127) {
+        *base = "ix";
+        *offset = slot_offset;
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
+static int mir_value_loads_from_iy(int value)
+{
+    return mir_value_uses_iy_parameter_home(value) ||
+           (mir_register_iy_slot >= 0 && mir.backend_slots != NULL &&
+            mir.backend_slots[value] == mir_register_iy_slot &&
+            !mir_value_has_direct_named_home(value));
+}
+
+/* Load a word straight into DE, leaving HL untouched. A binary operator's
+ * right operand otherwise costs push hl / load HL / ex de,hl / pop hl. */
+static int mir_emit_virtual_load_de(MirStream *out, int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const char *base;
+    int offset;
+
+    if (definition != NULL && type_size(definition->type) == 2 &&
+        mir_scalar_constant_is_rematerializable(value) &&
+        !mir_planned_stack_matches_consumer(value, mir_emit_instruction_index) &&
+        mir_forwarded_hl_value != value && mir_forwarded_de_value != value &&
+        mir_forwarded_stack_value != value) {
+        mir_stream_printf(out, "\tld de,%ld\n", definition->immediate & 0xffffL);
+        return 1;
+    }
+    if (!mir_value_word_frame_location(value, &base, &offset))
+        return 0;
+    mir_stream_printf(out, "\tld e,(%s%+d)\n\tld d,(%s%+d)\n",
+                      base, offset, base, offset + 1);
+    return 1;
 }
 
 /* Item T15 (mir-text-size-plan.md): a value's definition immediately
@@ -25672,6 +25789,8 @@ static const char *mir_invert_z80_condition(const char *condition)
     if (strcmp(condition, "nz") == 0) return "z";
     if (strcmp(condition, "c") == 0) return "nc";
     if (strcmp(condition, "nc") == 0) return "c";
+    if (strcmp(condition, "m") == 0) return "p";
+    if (strcmp(condition, "p") == 0) return "m";
     return NULL;
 }
 
@@ -27160,6 +27279,61 @@ static int mir_emit_fused_comparison_branch(MirStream *out, const int *labels,
     return mir_emit_conditional_branch_with_phi_copies(
         out, labels, true_condition, compare_index + 1 + negate, target,
         branch->label);
+}
+
+/* A signed word relational branch whose operands both sit in frame homes
+ * compares them in place: the subtract's sign, corrected for overflow,
+ * is the result. This skips loading HL and DE, biasing both sign bits,
+ * and the 16-bit sbc. Returns -1 on an emission failure, 0 to decline. */
+static int mir_emit_frame_signed_compare_branch(MirStream *out,
+                                                const int *labels,
+                                                int compare_index,
+                                                int negate)
+{
+    const struct MirInsn *compare = &mir.insns[compare_index];
+    const struct MirInsn *branch = &mir.insns[compare_index + 1 + negate];
+    int operation = negate ? mir_negate_comparison_operator(
+                                 (int)compare->immediate)
+                           : (int)compare->immediate;
+    const char *left_base, *right_base;
+    int left_offset, right_offset;
+    int left = compare->src1, right = compare->src2;
+    int target, sign_ready;
+
+    if (opt_debug || mir.has_vla ||
+        type_size(compare->secondary_offset) != 2 ||
+        type_is_float(compare->secondary_offset) ||
+        mir_type_uses_unsigned_comparison(compare->secondary_offset) ||
+        (operation != '<' && operation != '>' &&
+         operation != TOK_LE && operation != TOK_GE) ||
+        branch->label < 0 || branch->label >= mir.next_label ||
+        (mir_value_has_unsigned_byte_range(left, 0) &&
+         mir_value_has_unsigned_byte_range(right, 0)))
+        return 0;
+    target = mir_find_label(branch->label);
+    if (target < 0)
+        return 0;
+    if (operation == '>' || operation == TOK_LE) {
+        left = compare->src2;
+        right = compare->src1;
+        operation = operation == '>' ? '<' : TOK_GE;
+    }
+    if (!mir_value_word_frame_location(left, &left_base, &left_offset) ||
+        !mir_value_word_frame_location(right, &right_base, &right_offset))
+        return 0;
+    sign_ready = new_label();
+    mir_stream_printf(out,
+            "\tld a,(%s%+d)\n\tsub (%s%+d)\n"
+            "\tld a,(%s%+d)\n\tsbc a,(%s%+d)\n"
+            "\tjp po, L%d\n\txor 128\nL%d:\n",
+            left_base, left_offset, right_base, right_offset,
+            left_base, left_offset + 1, right_base, right_offset + 1,
+            sign_ready, sign_ready);
+    if (!mir_emit_conditional_branch_with_phi_copies(
+            out, labels, operation == '<' ? "m" : "p",
+            compare_index + 1 + negate, target, branch->label))
+        return -1;
+    return 1;
 }
 
 static int mir_unsigned_byte_origin(int value)
@@ -28821,6 +28995,15 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
         }
         if (mir_named_home_phi_source_is_authoritative(
                 source, phi, predecessor)) {
+            instruction =
+                mir_next_phi_in_block(successor, instruction + 1);
+            continue;
+        }
+        /* `pc = start;` before a loop: the predecessor's last store to the
+         * PHI's object home already wrote this edge's value there. */
+        if (phi->object >= 0 && mir_phi_uses_scalar_object_home(phi->dst) &&
+            mir_phi_edge_stores_object_value(
+                predecessor_label, phi->object, source)) {
             instruction =
                 mir_next_phi_in_block(successor, instruction + 1);
             continue;
@@ -36492,8 +36675,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             if (mir_emit_constant_absolute_address_value(out, insn))
                 break;
             mir_emit_virtual_load(out, insn->src1);
-            if (insn->immediate != 0)
-                mir_stream_printf(out, "\tld de,%ld\n\tadd hl,de\n", insn->immediate);
+            mir_emit_hl_add_offset(out, insn->immediate);
             mir_emit_virtual_store(out, insn->dst);
             break;
         case MIR_INDEX_ADDRESS:
@@ -37523,6 +37705,19 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             if (insn->word_divmod_partner > 0 &&
                 insn->word_divmod_partner - 1 < i)
                 break;
+            if (mir_binary_is_fusable_comparison(i) > 0) {
+                int fuse_skip = mir_binary_is_fusable_comparison(i);
+                int fused = mir_emit_frame_signed_compare_branch(
+                    out, labels, i, fuse_skip - 1);
+
+                if (fused < 0)
+                    goto done;
+                if (fused > 0) {
+                    ++mir_fuse_report_fused_count;
+                    i += fuse_skip;
+                    continue;
+                }
+            }
             if (mir_match_indexed_stack_unary_reduction(
                     i, &inline_postincrement_helper, &stack_unary)) {
                 mir_emit_indexed_stack_unary_reduction(
@@ -38045,7 +38240,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     right_definition->opcode == MIR_CONST &&
                     (mir_binary_const_rhs_mask_fast_path(insn) ||
                      (mir_binary_is_fusable_comparison(i) > 0 &&
-                      mir_fused_compare_uses_byte_immediate(i)))) {
+                      mir_fused_compare_uses_byte_immediate(i)) ||
+                     ((insn->immediate == '+' || insn->immediate == '-') &&
+                      !mir.has_vla && type_size(insn->type) == 2 &&
+                      mir_binary_only_constant(insn->src2)))) {
                     /* Immediate mask and byte-constant comparison paths
                      * below need the lhs in HL; nothing was emitted
                      * between the push and this consumer, so pop it here
@@ -38334,8 +38532,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 if (fused_zero_lhs) {
                     /* EQ/NE is symmetric and HL already holds src2. */
                 } else if (swapped_left_constant != NULL) {
-                    if (mir_cfg_block_count() >= 300 &&
-                        insn->immediate == '+' &&
+                    if (insn->immediate == '+' &&
                         (swapped_left_constant->immediate == 1 ||
                          swapped_left_constant->immediate == 2))
                         small_positive_increment =
@@ -38446,8 +38643,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                            mir_binary_only_constant(insn->src2)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src2);
-                    if (mir_cfg_block_count() >= 300 &&
-                        insn->immediate == '+' &&
+                    if (insn->immediate == '+' &&
                         (constant->immediate == 1 ||
                          constant->immediate == 2))
                         small_positive_increment =
@@ -38455,6 +38651,13 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     else
                         mir_stream_printf(out, "\tld de,%ld\n",
                                 constant->immediate & 0xffffL);
+                } else if (!stack_forwarded_left &&
+                           !planned_stack_forwarded_left &&
+                           !mir_value_loads_from_iy(insn->src1) &&
+                           mir_emit_virtual_load_de(out, insn->src2)) {
+                    /* HL still holds the left operand. An IY-homed left
+                     * keeps the push/ex/pop form, which dccpeep folds with
+                     * a just-stored right operand still in HL. */
                 } else {
                     /* Item T15: when stack_forwarded_left, the left
                      * operand was already pushed at its definition site

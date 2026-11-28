@@ -1840,6 +1840,196 @@ static unsigned long mir_copy_selected_stream(MirStream *source, FILE *destinati
     return mir_stream_copy_to_file(source, destination);
 }
 
+/* The compiler-label name ("L123") that a `jp` line targets, or NULL. When
+ * condition is non-NULL it receives the "cc," prefix (empty for jp nn). */
+static const char *mir_thread_jump_target(const char *line, char *condition,
+                                          size_t condition_size)
+{
+    const char *operand;
+    const char *comma;
+    const char *target;
+    const char *scan;
+
+    if (strncmp(line, "\tjp ", 4) != 0)
+        return NULL;
+    operand = line + 4;
+    comma = strchr(operand, ',');
+    target = comma != NULL ? comma + 1 : operand;
+    while (*target == ' ')
+        ++target;
+    if (target[0] != 'L' || !isdigit((unsigned char)target[1]))
+        return NULL;
+    for (scan = target + 1; isdigit((unsigned char)*scan); ++scan)
+        ;
+    if (*scan != 0)
+        return NULL;
+    if (comma != NULL) {
+        size_t length = (size_t)(comma - operand);
+
+        if (length == 0 || length > 2 || length + 2 > condition_size)
+            return NULL;
+        memcpy(condition, operand, length);
+        condition[length] = ',';
+        condition[length + 1] = 0;
+    } else if (condition != NULL) {
+        condition[0] = 0;
+    }
+    return target;
+}
+
+/* Retarget jumps to a compiler label whose first instruction is itself an
+ * unconditional jump, so the taken path skips the second jump. Emitters
+ * create these chains when an edge's copy block or a byte-carry fixup ends
+ * at a loop's continue label. Only `jp` operands change; every label, its
+ * other references, and the fall-through path stay as they were. */
+static MirStream *mir_thread_selected_jumps(MirStream *source)
+{
+    char **lines = NULL;
+    int count = 0, capacity = 0, changed = 0;
+    int *label_lines = NULL;
+    long label_capacity = 0;
+    int i;
+    MirStream *result;
+    char *line = NULL;
+    size_t length = 0, line_capacity = 0;
+    int character;
+
+    if (opt_debug)
+        return source;
+    mir_stream_rewind(source);
+    for (;;) {
+        character = mir_stream_getc(source);
+        if (character != EOF) {
+            if (length + 2 > line_capacity) {
+                line_capacity = line_capacity == 0 ? 128 : line_capacity * 2;
+                line = (char *)realloc(line, line_capacity);
+                if (line == NULL)
+                    fatal("out of memory threading MIR jumps");
+            }
+            line[length++] = (char)character;
+            if (character != '\n')
+                continue;
+        }
+        if (length == 0)
+            break;
+        line[length] = 0;
+        if (count == capacity) {
+            capacity = capacity == 0 ? 256 : capacity * 2;
+            lines = (char **)realloc(lines, (size_t)capacity * sizeof(*lines));
+            if (lines == NULL)
+                fatal("out of memory threading MIR jumps");
+        }
+        lines[count] = (char *)malloc(length + 1);
+        if (lines[count] == NULL)
+            fatal("out of memory threading MIR jumps");
+        memcpy(lines[count], line, length + 1);
+        if (length > 0 && lines[count][length - 1] == '\n')
+            lines[count][length - 1] = 0;
+        ++count;
+        length = 0;
+        if (character == EOF)
+            break;
+    }
+    free(line);
+
+    for (i = 0; i < count; ++i) {
+        const char *text = lines[i];
+        const char *scan;
+        long number;
+
+        if (text[0] != 'L' || !isdigit((unsigned char)text[1]))
+            continue;
+        number = strtol(text + 1, (char **)&scan, 10);
+        if (scan[0] != ':' || scan[1] != 0 || number < 0 || number > 1000000L)
+            continue;
+        if (number >= label_capacity) {
+            long next_capacity = label_capacity == 0 ? 1024 : label_capacity;
+            long index;
+
+            while (next_capacity <= number)
+                next_capacity *= 2;
+            label_lines = (int *)realloc(
+                label_lines, (size_t)next_capacity * sizeof(*label_lines));
+            if (label_lines == NULL)
+                fatal("out of memory threading MIR jumps");
+            for (index = label_capacity; index < next_capacity; ++index)
+                label_lines[index] = -1;
+            label_capacity = next_capacity;
+        }
+        label_lines[number] = i;
+    }
+
+    for (i = 0; i < count; ++i) {
+        char condition[4];
+        const char *target = mir_thread_jump_target(
+            lines[i], condition, sizeof(condition));
+        const char *visited[16];
+        int hops = 0;
+        const char *final = target;
+
+        while (final != NULL && hops < 16) {
+            const char *next = NULL;
+            long number = strtol(final + 1, NULL, 10);
+            int j, k, cycle = 0;
+
+            if (number < 0 || number >= label_capacity ||
+                label_lines[number] < 0)
+                break;
+            j = label_lines[number];
+            for (++j; j < count; ++j) {
+                const char *text = lines[j];
+                size_t text_length = strlen(text);
+
+                if (text_length == 0 || text[0] == ';' ||
+                    (text[0] != '\t' && text[text_length - 1] == ':'))
+                    continue;
+                next = mir_thread_jump_target(text, NULL, 0);
+                if (next != NULL && strncmp(text, "\tjp L", 5) != 0)
+                    next = NULL;
+                break;
+            }
+            if (next == NULL)
+                break;
+            visited[hops++] = final;
+            for (k = 0; k < hops; ++k)
+                if (strcmp(visited[k], next) == 0)
+                    cycle = 1;
+            if (cycle)
+                break;
+            final = next;
+        }
+        if (target != NULL && final != target) {
+            char *rewritten = (char *)malloc(strlen(final) + 16);
+
+            if (rewritten == NULL)
+                fatal("out of memory threading MIR jumps");
+            sprintf(rewritten, "\tjp %s%s%s", condition,
+                    condition[0] != 0 ? " " : "", final);
+            free(lines[i]);
+            lines[i] = rewritten;
+            changed = 1;
+        }
+    }
+    free(label_lines);
+    if (!changed) {
+        for (i = 0; i < count; ++i)
+            free(lines[i]);
+        free(lines);
+        return source;
+    }
+    result = mir_stream_open();
+    if (result == NULL)
+        fatal("cannot create MIR jump-threading stream");
+    for (i = 0; i < count; ++i) {
+        mir_stream_puts(lines[i], result);
+        mir_stream_putc('\n', result);
+        free(lines[i]);
+    }
+    free(lines);
+    mir_stream_close(source);
+    return result;
+}
+
 int mir_stream_instruction_count(MirStream *stream)
 {
     char line[512];
@@ -4705,6 +4895,7 @@ void mir_end_function(void)
         mir_stream_close(generated);
         generated = annotated;
     }
+    generated = mir_thread_selected_jumps(generated);
     generated_size = mir_stream_size(generated);
     generated_instructions = mir_stream_instruction_count(generated);
     mir_mark_selected_inline_call_bodies_needed(generated);
